@@ -328,6 +328,10 @@ def live_moves_snapshot(move):
 
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
+    # Hold the storage lifecycle lock for the full tournament: otherwise the
+    # manual cleanup endpoint can unlink a model after preparation but before
+    # a later turn reloads it. cleanup_version uses the same re-entrant lock.
+    model_store.MODEL_LIFECYCLE_LOCK.acquire()
     try:
         with league.connect() as c:
             tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
@@ -419,13 +423,19 @@ def tournament_loop(tournament_id):
         with league.connect() as c:
             c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
     finally:
-        if tournament_runtime:
-            tournament_runtime.stop()
-        tournament_runtime = None
         try:
-            cleanup_unneeded_models()
-        except Exception as cleanup_exc:
-            tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+            if tournament_runtime:
+                try:
+                    tournament_runtime.stop()
+                except Exception as cleanup_exc:
+                    tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Runner shutdown failed: ' + str(cleanup_exc)
+            tournament_runtime = None
+            try:
+                cleanup_unneeded_models()
+            except Exception as cleanup_exc:
+                tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+        finally:
+            model_store.MODEL_LIFECYCLE_LOCK.release()
 
 
 def start_tournament(tournament_id):
@@ -679,7 +689,12 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path == '/api/models/cleanup':
                     if payload.get('confirm_delete') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
-                    result = model_store.cleanup_version(int(payload.get('version_id',0)))
+                    if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
+                        raise RuntimeError('Nie można usuwać modeli podczas aktywnego turnieju; spróbuj po jego zakończeniu')
+                    try:
+                        result = model_store.cleanup_version(int(payload.get('version_id',0)))
+                    finally:
+                        model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
                 self.send_json(result, 200 if self.path == '/api/models/verify-license' else 201)
