@@ -1,0 +1,104 @@
+import hashlib
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import league
+import model_store
+import server
+
+
+class PerGameStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_db = league.DB
+        self.old_managed = model_store.MANAGED_DIR
+        league.DB = Path(self.tmp.name) / 'arena.sqlite3'
+        model_store.MANAGED_DIR = Path(self.tmp.name) / 'managed-models'
+        model_store.MANAGED_DIR.mkdir(mode=0o700)
+        league.init()
+        self.players = []
+        for index, name in enumerate(('Alpha', 'Beta', 'Unused'), 1):
+            payload = f'GGUF model {name}'.encode()
+            filename = f'{name.lower()}.gguf'
+            digest = hashlib.sha256(payload).hexdigest()
+            with league.connect() as c:
+                c.execute('INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)',
+                          (name, 'PURE_AI', 'now'))
+                c.execute('''INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,status,managed_copy,license_verified,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                    (index, digest, filename, digest, len(payload), f'https://example.test/{filename}',
+                     'Apache-2.0', 'catalogued', 0, 1, 'now'))
+            self.players.append({'name': name, 'version_id': index})
+        self.old_download = model_store.download_version
+
+    def tearDown(self):
+        league.DB = self.old_db
+        model_store.MANAGED_DIR = self.old_managed
+        self.tmp.cleanup()
+
+    def _fake_download(self, version_id, url, filename, sha, size, license_verified):
+        payload = f'GGUF model {self.players[version_id - 1]["name"]}'.encode()
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), sha)
+        self.assertEqual(len(payload), size)
+        path = model_store.MANAGED_DIR / filename
+        path.write_bytes(payload)
+        with league.connect() as c:
+            c.execute("UPDATE model_versions SET status='downloaded',managed_copy=1 WHERE id=?", (version_id,))
+        return {'path': str(path), 'filename': filename, 'managed_copy': True}
+
+    def test_pair_downloads_only_needed_models_and_cleanup_is_per_game(self):
+        calls = []
+        def download(*args):
+            calls.append(args[0])
+            return self._fake_download(*args)
+        with patch.object(model_store, 'download_version', side_effect=download), \
+             patch('shutil.disk_usage') as disk:
+            disk.return_value.free = 10**10
+            white_path, black_path = server._prepare_game_models(self.players[0], self.players[1])
+        self.assertEqual(calls, [1, 2])
+        self.assertTrue(Path(white_path).is_file())
+        self.assertTrue(Path(black_path).is_file())
+        self.assertFalse((model_store.MANAGED_DIR / 'unused.gguf').exists())
+        server.cleanup_unneeded_models()
+        self.assertFalse(Path(white_path).exists())
+        self.assertFalse(Path(black_path).exists())
+        with league.connect() as c:
+            rows = c.execute('SELECT id,filename,status,managed_copy FROM model_versions ORDER BY id').fetchall()
+        self.assertEqual([r['filename'] for r in rows], ['alpha.gguf', 'beta.gguf', 'unused.gguf'])
+        self.assertTrue(all(r['status'] == 'catalogued' and r['managed_copy'] == 0 for r in rows))
+
+    def test_existing_pair_is_kept_without_redownload(self):
+        for player in self.players[:2]:
+            self._fake_download(player['version_id'], '', f"{player['name'].lower()}.gguf",
+                                hashlib.sha256(f"GGUF model {player['name']}".encode()).hexdigest(),
+                                len(f"GGUF model {player['name']}".encode()), True)
+        with patch.object(model_store, 'download_version', side_effect=AssertionError('unexpected download')):
+            with patch('shutil.disk_usage') as disk:
+                disk.return_value.free = 10**10
+                paths = server._prepare_game_models(self.players[0], self.players[1])
+        self.assertTrue(all(Path(path).is_file() for path in paths))
+
+    def test_existing_same_size_model_is_rejected_when_sha256_changed(self):
+        player = self.players[0]
+        original = f'GGUF model {player["name"]}'.encode()
+        self._fake_download(player['version_id'], '', f"{player['name'].lower()}.gguf",
+                            hashlib.sha256(original).hexdigest(), len(original), True)
+        path = model_store.MANAGED_DIR / f"{player['name'].lower()}.gguf"
+        path.write_bytes(b'X' * len(original))
+        with patch.object(model_store, 'download_version', side_effect=AssertionError('must not redownload')):
+            with self.assertRaisesRegex(RuntimeError, 'SHA-256/rozmiaru'):
+                server._ensure_version_file(player['version_id'])
+
+    def test_space_check_is_for_missing_models_in_this_game(self):
+        with patch('shutil.disk_usage') as disk, \
+             patch.object(model_store, 'download_version') as download:
+            disk.return_value.free = 1
+            with self.assertRaises(OSError):
+                server._prepare_game_models(self.players[0], self.players[1])
+        download.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
