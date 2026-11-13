@@ -5,7 +5,7 @@ explicitly verified free-use license. Only files inside MANAGED_DIR are arena
 owned; shared model directories are never cleanup targets.
 """
 from __future__ import annotations
-import hashlib, os, re, shutil, sqlite3, stat, urllib.request
+import hashlib, os, re, shutil, sqlite3, stat, threading, urllib.request
 from pathlib import Path
 import league
 
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent
 MANAGED_DIR = ROOT / 'managed-models'
 MIN_FREE_MARGIN = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
+MODEL_LIFECYCLE_LOCK = threading.RLock()
 
 
 def _safe_filename(name: str) -> str:
@@ -21,8 +22,8 @@ def _safe_filename(name: str) -> str:
     return name
 
 
-def download_version(version_id: int, url: str, filename: str, expected_sha256: str,
-                     expected_size: int, license_verified: bool = False) -> dict:
+def _download_version_locked(version_id: int, url: str, filename: str, expected_sha256: str,
+                              expected_size: int, license_verified: bool = False) -> dict:
     """Download a catalogued model only after explicit provenance/license checks."""
     filename = _safe_filename(filename)
     if not license_verified:
@@ -88,6 +89,13 @@ def download_version(version_id: int, url: str, filename: str, expected_sha256: 
         try: part.unlink()
         except FileNotFoundError: pass
         raise
+
+
+def download_version(version_id: int, url: str, filename: str, expected_sha256: str,
+                    expected_size: int, license_verified: bool = False) -> dict:
+    with MODEL_LIFECYCLE_LOCK:
+        return _download_version_locked(version_id, url, filename, expected_sha256,
+                                        expected_size, license_verified)
 
 
 def _open_by_process(path: Path) -> tuple[list[int], bool]:
@@ -168,7 +176,7 @@ def _open_by_process(path: Path) -> tuple[list[int], bool]:
 
 def cleanup_version(version_id: int) -> dict:
     """Remove only a confirmed arena-owned file that no process currently has open."""
-    with league.connect() as c:
+    with MODEL_LIFECYCLE_LOCK, league.connect() as c:
         row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
         if row is None:
             raise ValueError('Nieznana wersja modelu')

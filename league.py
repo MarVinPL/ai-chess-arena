@@ -53,6 +53,16 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
    size=actual_size; digest=actual_digest; status='downloaded'
  if any(value is not None for value in (filename,digest,size)) and not all(value is not None for value in (filename,digest,size)):
   raise ValueError('Manifest modelu musi zawierać nazwę pliku, rozmiar i SHA-256')
+ # Different repositories often publish a generic basename such as model.gguf.
+ # Keep the original upstream path in metadata, but make the local cache name
+ # content-specific whenever that basename is already assigned to other bytes.
+ if filename and digest:
+  with connect() as c:
+   collision=c.execute('SELECT 1 FROM model_versions WHERE filename=? AND sha256<>? LIMIT 1',(filename,digest)).fetchone()
+  if collision:
+   metadata.setdefault('source_path', filename)
+   stem=Path(filename).stem
+   filename=f'{stem}-{digest[:16]}.gguf'
  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
  with connect() as c:
   c.execute('INSERT OR IGNORE INTO league_models(name,format,created_at) VALUES(?,?,?)',(name,format,now)); m=c.execute('SELECT id,format FROM league_models WHERE name=?',(name,)).fetchone()

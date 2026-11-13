@@ -254,6 +254,7 @@ def live_moves_snapshot(move):
 
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
+    model_store.MODEL_LIFECYCLE_LOCK.acquire()
     try:
         with league.connect() as c:
             tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
@@ -354,6 +355,8 @@ def tournament_loop(tournament_id):
             cleanup_unneeded_models()
         except Exception as cleanup_exc:
             tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+        finally:
+            model_store.MODEL_LIFECYCLE_LOCK.release()
 
 
 def start_tournament(tournament_id):
@@ -697,7 +700,12 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path == '/api/models/cleanup':
                     if payload.get('confirm_delete') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
-                    result = model_store.cleanup_version(int(payload.get('version_id',0)))
+                    if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
+                        raise RuntimeError('Nie można usuwać modeli podczas aktywnego turnieju lub pobierania; spróbuj później')
+                    try:
+                        result = model_store.cleanup_version(int(payload.get('version_id',0)))
+                    finally:
+                        model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
                 self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)

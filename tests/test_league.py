@@ -46,6 +46,16 @@ class LeagueTests(unittest.TestCase):
   with self.assertRaises(ValueError):
    league.register_model('Incomplete GGUF',source='https://huggingface.co/example/model',
     license='Apache-2.0',metadata={'filename':'only-name.gguf'})
+ def test_duplicate_upstream_filename_gets_content_specific_cache_name(self):
+  first=league.register_model('Remote One',source='https://huggingface.co/example/one',license='Apache-2.0',
+   metadata={'filename':'model.gguf','sha256':'1'*64,'size_bytes':100},license_verified=True)
+  second=league.register_model('Remote Two',source='https://huggingface.co/example/two',license='Apache-2.0',
+   metadata={'filename':'model.gguf','sha256':'2'*64,'size_bytes':200},license_verified=True)
+  a=first['versions'][0]; b=second['versions'][0]
+  self.assertEqual(a['filename'],'model.gguf')
+  self.assertEqual(b['filename'],'model-'+'2'*16+'.gguf')
+  import json
+  self.assertEqual(json.loads(b['metadata_json'])['source_path'],'model.gguf')
  def test_elo_starts_at_1200_without_games(self):
   rows=league.elo_ratings()
   self.assertEqual({x['name']:x['elo'] for x in rows},{'Alpha':1200,'Beta':1200})
