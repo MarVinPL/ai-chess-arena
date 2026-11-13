@@ -69,7 +69,7 @@ Aktualne publiczne karty modeli pozwalają ustalić deklarowane oznaczenia licen
 
 Odczyt hosta:
 - x86_64, Intel Haswell, 2 vCPU;
-- 4 012 273 664 B RAM (ok. 3,74,01 GB (3,74 GiB)), około 2,06 GiB dostępne w chwili odczytu;
+- 4 012 273 664 B RAM (ok. 3,74 GiB), około 2,06 GiB dostępne w chwili odczytu;
 - 2 GiB swapu;
 - binarium llamafile istnieje i ma SHA-256 `756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50`;
 - endpoint `127.0.0.1:8088/health` nie odpowiadał.
