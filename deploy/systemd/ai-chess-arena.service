@@ -1,0 +1,45 @@
+[Unit]
+Description=AI Chess Arena API
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=debian
+Group=debian
+WorkingDirectory=/home/debian/ai-chess-arena
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/home/debian/ai-chess-arena
+ReadOnlyPaths=/home/debian/ai-agent/bin/llamafile
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-chess-arena
+
+[Install]
+WantedBy=multi-user.target
