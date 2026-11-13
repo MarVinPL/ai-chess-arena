@@ -23,6 +23,36 @@ class LeagueTests(unittest.TestCase):
    pairings=c.execute('SELECT white_model_id,black_model_id FROM tournament_pairings').fetchall()
    self.assertTrue(all(row['white_model_id'] != row['black_model_id'] for row in pairings))
 
+ def test_ten_entrants_all_reach_draft_and_bracket_advances_to_champion(self):
+  for i in range(8):
+   league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
+    license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
+  tournament=league.create_round_robin('Ten player championship')
+  self.assertEqual(tournament['players'],10)
+  self.assertEqual(tournament['games_planned'],90)
+  self.assertEqual(tournament['draft_games_planned'],9)
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
+   for p in pairings:
+    c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",
+     (f'Model {p["white_model_id"]}',f'Model {p["black_model_id"]}','1-0'))
+    c.execute("UPDATE tournament_pairings SET status='completed' WHERE id=?",(p['id'],))
+  first=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(first)
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],10)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=0",(tournament['id'],)).fetchone()[0],2)
+  # Both play-in winners advance; the top six get byes into the eight-player bracket.
+  current=first
+  while current:
+   league.record_draft_result(current['id'],'1-0')
+   current=league.next_draft_match(tournament['id'])
+  champion=league.draft_champion(tournament['id'])
+  self.assertIsNotNone(champion)
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft'",(tournament['id'],)).fetchone()[0],9)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND white_model_id=black_model_id",(tournament['id'],)).fetchone()[0],0)
+
  def test_catalogued_models_are_tournament_eligible_without_local_gguf(self):
   tournament=league.create_round_robin('Remote cache test')
   with league.connect() as c:
