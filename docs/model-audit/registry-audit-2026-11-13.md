@@ -8,7 +8,7 @@ W bazie znajduje się 10 aktywnych wpisów wersji, ale **nie oznacza to 10 gotow
 - Wersje 1–3 mają komplet podstawowych danych artefaktu (nazwa pliku, SHA-256, rozmiar) i były już wpisane do turniejów. Są warunkowo gotowe, ale bieżąca dostępność plików i runtime nie została potwierdzona.
 - Wersje 4–10 nie mają w DB nazwy pliku w polu `filename`, SHA-256 ani rozmiaru. Są katalogowymi wpisami bez kompletnego manifestu artefaktu.
 - Wszystkie 10 rekordów mają `license_verified=1`, ale zapisane `license_evidence` jest puste albo sprzeczne z tym flagiem. Nie należy traktować samego flagu jako wystarczającego dowodu.
-- VPS ma 4 GiB RAM, 2 vCPU i 2 GiB swapu; w chwili audytu dostępne było około 2,06 GiB RAM. Większość większych kandydatów nie mieści się w tej konfiguracji.
+- VPS ma 4,01 GB (3,74 GiB) RAM, 2 vCPU i 2 GiB swapu; w chwili audytu dostępne było około 2,06 GiB RAM. Większość większych kandydatów nie mieści się w tej konfiguracji.
 - Wersja #9 jest wpisana jako sam plik MTP draft, a nie pełny model docelowy. Nie jest poprawną samodzielną konfiguracją target.
 - Nie potwierdzono zgodności modeli #4–10 z zainstalowanym buildem llamafile. Endpoint runtime `127.0.0.1:8088/health` nie odpowiadał.
 
@@ -39,15 +39,15 @@ Wszystkie rekordy mają `active=1`, `status=catalogued`, `runtime=llamafile` i `
 
 **Wersje 4–7**
 - Wersje #4–7 mają nazwę pliku tylko w `version_key`; nie mają kompletnego manifestu w kolumnach artefaktu ani zapisanego SHA-256/rozmiaru.
-- #4: karta bartowski wskazuje wariant Q3_K_S o rozmiarze ok. 3,66 GB. To niemal cała pamięć RAM hosta (4 GiB), jeszcze przed runtime i cache. Licencja jest oznaczona jako `llama3.1`, a nie Apache-2.0.
+- #4: karta bartowski wskazuje wariant Q3_K_S o rozmiarze ok. 3,66 GB. To niemal cała pamięć RAM hosta (4,01 GB (3,74 GiB)), jeszcze przed runtime i cache. Licencja jest oznaczona jako `llama3.1`, a nie Apache-2.0.
 - #5: karta Unsloth podaje ok. 1,37 GB dla UD-IQ3_XXS. To jedyny z większych kandydatów, który może być sprzętowo możliwy do sprawdzenia na tym hoście, ale pozostaje mały margines pamięci, brak manifestu i konieczność sprawdzenia warunków Llama 3.2 Community License oraz Acceptable Use Policy.
-- #6: karta SpeakLeash opisuje model 11B i wariant Q4_K_M. Taka konfiguracja przekracza możliwości hosta z 4 GiB RAM. Publiczna karta wskazuje Apache 2.0, ale zapisane dowody licencji w DB mówią `license_not_declared`.
-- #7: karta SpeakLeash podaje 3,16 GB dla Q3_K_S. Po doliczeniu runtime i cache nie jest to bezpieczny rozmiar dla hosta z 4 GiB RAM. CC BY-NC 4.0 ogranicza użycie do niekomercyjnego; trzeba uwzględnić ten warunek przed ewentualnym zatwierdzeniem.
+- #6: karta SpeakLeash opisuje model 11B i wariant Q4_K_M. Taka konfiguracja przekracza możliwości hosta z 4,01 GB (3,74 GiB) RAM. Publiczna karta wskazuje Apache 2.0, ale zapisane dowody licencji w DB mówią `license_not_declared`.
+- #7: karta SpeakLeash podaje 3,16 GB dla Q3_K_S. Po doliczeniu runtime i cache nie jest to bezpieczny rozmiar dla hosta z 4,01 GB (3,74 GiB) RAM. CC BY-NC 4.0 ogranicza użycie do niekomercyjnego; trzeba uwzględnić ten warunek przed ewentualnym zatwierdzeniem.
 
 **Wersje 8–10**
 - #8: karta Unsloth wskazuje 27B, architekturę `qwen35` i 6,19 GB dla UD-IQ1_S. Sam plik jest większy niż cała fizyczna pamięć VPS; zgodność z obecnym buildem llamafile nie została potwierdzona.
 - #9: plik `Qwen3.8-27B-Uncensored-draft-Q8_0.gguf` ma ok. 3,2 GB, ale jest głowicą MTP draft, a nie pełnym modelem docelowym. Dokumentacja źródłowa rozróżnia plik target od pliku draft. W rekordzie DB nie ma ani `filename`, ani `draft_filename`, więc ta pozycja nie jest poprawną konfiguracją target/draft.
-- #10: karta mradermacher wskazuje ok. 15,9 GB dla Q4_K_S. To wielokrotnie przekracza 4 GiB RAM VPS. Wpis DB nie zawiera manifestu pliku.
+- #10: karta mradermacher wskazuje ok. 15,9 GB dla Q4_K_S. To wielokrotnie przekracza 4,01 GB (3,74 GiB) RAM VPS. Wpis DB nie zawiera manifestu pliku.
 
 ## Spójność licencji
 
@@ -69,7 +69,7 @@ Aktualne publiczne karty modeli pozwalają ustalić deklarowane oznaczenia licen
 
 Odczyt hosta:
 - x86_64, Intel Haswell, 2 vCPU;
-- 4 012 273 664 B RAM (ok. 3,74 GiB), około 2,06 GiB dostępne w chwili odczytu;
+- 4 012 273 664 B RAM (ok. 3,74,01 GB (3,74 GiB)), około 2,06 GiB dostępne w chwili odczytu;
 - 2 GiB swapu;
 - binarium llamafile istnieje i ma SHA-256 `756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50`;
 - endpoint `127.0.0.1:8088/health` nie odpowiadał.
