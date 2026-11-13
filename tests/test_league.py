@@ -30,13 +30,14 @@ class LeagueTests(unittest.TestCase):
   tournament=league.create_round_robin('Ten player championship')
   self.assertEqual(tournament['players'],10)
   self.assertEqual(tournament['games_planned'],90)
-  self.assertEqual(tournament['draft_games_planned'],9)
+  self.assertEqual(tournament['draft_games_planned'],7)
+  self.assertEqual(tournament['total_games_planned'],97)
   with league.connect() as c:
    pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
    for p in pairings:
-    c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",
+    cur=c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",
      (f'Model {p["white_model_id"]}',f'Model {p["black_model_id"]}','1-0'))
-    c.execute("UPDATE tournament_pairings SET status='completed' WHERE id=?",(p['id'],))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,p['id']))
   first=league.next_draft_match(tournament['id'])
   self.assertIsNotNone(first)
   with league.connect() as c:
@@ -52,6 +53,34 @@ class LeagueTests(unittest.TestCase):
   with league.connect() as c:
    self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft'",(tournament['id'],)).fetchone()[0],9)
    self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND white_model_id=black_model_id",(tournament['id'],)).fetchone()[0],0)
+
+ def test_draft_qualification_keeps_all_winners_then_best_remaining(self):
+  for i in range(8):
+   league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
+    license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
+  tournament=league.create_round_robin('Selective draft',qualification_percent=80)
+  self.assertEqual(tournament['expected_qualifiers'],8)
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
+   for p in pairings:
+    w,b=p['white_model_id'],p['black_model_id']
+    if w<=4 and b<=4: result='1-0'
+    elif w<=4: result='1-0'
+    elif b<=4: result='0-1'
+    else: result='1/2-1/2'
+    cur=c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",(f'Model {w}',f'Model {b}',result))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,p['id']))
+  first=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(first)
+  with league.connect() as c:
+   qualified={r['model_id'] for r in c.execute("SELECT model_id FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],))}
+  self.assertEqual(qualified,{1,2,3,4,5,6,7,8})
+  self.assertEqual(len(qualified),8)
+
+ def test_draft_qualification_percent_must_be_between_75_and_90(self):
+  for invalid in (74,91,True,80.0):
+   with self.assertRaises(ValueError):
+    league.create_round_robin('Invalid qualification',qualification_percent=invalid)
 
  def test_catalogued_models_are_tournament_eligible_without_local_gguf(self):
   tournament=league.create_round_robin('Remote cache test')
