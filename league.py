@@ -22,6 +22,10 @@ def init():
    PRIMARY KEY(tournament_id,model_id),
    UNIQUE(tournament_id,seed)
   );
+  CREATE TABLE IF NOT EXISTS token_budget_profiles(config_key TEXT PRIMARY KEY,current_max_tokens INTEGER NOT NULL,pending_max_tokens INTEGER,low_usage_samples INTEGER NOT NULL DEFAULT 0,last_reason TEXT,last_tournament_id INTEGER,updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS tournament_entry_budgets(tournament_id INTEGER NOT NULL REFERENCES tournaments(id),model_id INTEGER NOT NULL REFERENCES league_models(id),version_id INTEGER NOT NULL REFERENCES model_versions(id),config_key TEXT NOT NULL,base_max_tokens INTEGER NOT NULL,effective_max_tokens INTEGER NOT NULL,PRIMARY KEY(tournament_id,model_id));
+  CREATE TABLE IF NOT EXISTS token_budget_observations(id INTEGER PRIMARY KEY,tournament_id INTEGER NOT NULL,model_id INTEGER NOT NULL,config_key TEXT NOT NULL,max_tokens INTEGER NOT NULL,completion_tokens INTEGER,finish_reason TEXT,truncated INTEGER NOT NULL,valid_move INTEGER NOT NULL,attempt INTEGER NOT NULL,observed_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS idx_token_budget_observations_config ON token_budget_observations(config_key,tournament_id);
 
   """)
   cols={r[1] for r in c.execute('PRAGMA table_info(model_versions)')}
@@ -33,8 +37,7 @@ def init():
   if 'stage' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN stage TEXT NOT NULL DEFAULT 'league'")
   if 'round_no' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN round_no INTEGER")
   if 'match_no' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN match_no INTEGER")
-  if 'winner_model_id' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN winner_model_id INTEGER REFERENCES league_models(id)")
-  for name, declaration in (('draft_filename','TEXT'),('draft_sha256','TEXT'),('draft_size_bytes','INTEGER'),('draft_status',"TEXT NOT NULL DEFAULT 'catalogued'"),('draft_managed_copy','INTEGER NOT NULL DEFAULT 0'),('draft_download_url','TEXT'),('draft_source_path','TEXT')):
+  if 'winner_model_id' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN winner_model_id INTEGER REFERENCES league_models(id)")for name, declaration in (('draft_filename','TEXT'),('draft_sha256','TEXT'),('draft_size_bytes','INTEGER'),('draft_status',"TEXT NOT NULL DEFAULT 'catalogued'"),('draft_managed_copy','INTEGER NOT NULL DEFAULT 0'),('draft_download_url','TEXT'),('draft_source_path','TEXT')):
    if name not in cols:
     c.execute(f'ALTER TABLE model_versions ADD COLUMN {name} {declaration}')
 def normalize_inference_config(metadata):
@@ -54,7 +57,104 @@ def normalize_inference_config(metadata):
   raise ValueError('Parametr max_tokens musi być liczbą całkowitą od 1 do 8192')
  return {'thinking': thinking, 'temperature': float(temperature), 'max_tokens': max_tokens}
 
-def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
+
+def adaptive_budget_config_key(model_sha256, draft_sha256, metadata):
+ inference = normalize_inference_config(metadata)
+ payload = {'model_sha256': (model_sha256 or '').lower(),
+            'draft_sha256': (draft_sha256 or '').lower(),
+            'inference': inference}
+ return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def prepare_tournament_budgets(tournament_id):
+ snapshots={}
+ with connect() as c:
+  entries=c.execute("SELECT e.model_id,e.version_id,v.sha256,v.draft_sha256,v.metadata_json FROM tournament_entries e JOIN model_versions v ON v.id=e.version_id WHERE e.tournament_id=?",(tournament_id,)).fetchall()
+  for row in entries:
+   metadata=json.loads(row['metadata_json'] or '{}')
+   inference=normalize_inference_config(metadata)
+   base=inference['max_tokens']
+   key=adaptive_budget_config_key(row['sha256'],row['draft_sha256'],metadata)
+   existing=c.execute('SELECT effective_max_tokens FROM tournament_entry_budgets WHERE tournament_id=? AND model_id=?',(tournament_id,row['model_id'])).fetchone()
+   if existing:snapshots[row['model_id']]=int(existing['effective_max_tokens'])
+    continue
+   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+   c.execute('INSERT OR IGNORE INTO token_budget_profiles(config_key,current_max_tokens,updated_at) VALUES(?,?,?)',(key,base,now))
+   profile=c.execute('SELECT current_max_tokens,pending_max_tokens FROM token_budget_profiles WHERE config_key=?',(key,)).fetchone()
+   effective=int(profile['pending_max_tokens'] if profile['pending_max_tokens'] is not None else profile['current_max_tokens'])
+   if profile['pending_max_tokens'] is not None:
+    c.execute('UPDATE token_budget_profiles SET current_max_tokens=?,pending_max_tokens=NULL,updated_at=? WHERE config_key=?',(effective,now,key))
+   c.execute('INSERT INTO tournament_entry_budgets(tournament_id,model_id,version_id,config_key,base_max_tokens,effective_max_tokens) VALUES(?,?,?,?,?,?)',(tournament_id,row['model_id'],row['version_id'],key,base,effective))
+   snapshots[row['model_id']]=effective
+ return snapshots
+
+
+def token_budget_info(model_sha256, draft_sha256, metadata):
+ inference=normalize_inference_config(metadata)
+ base=inference['max_tokens']
+ key=adaptive_budget_config_key(model_sha256,draft_sha256,metadata)
+ with connect() as c:
+  row=c.execute('SELECT current_max_tokens,pending_max_tokens,last_reason,low_usage_samples FROM token_budget_profiles WHERE config_key=?',(key,)).fetchone()
+ if row is None:
+  return {'config_key':key,'current_max_tokens':base,'pending_max_tokens':None,'last_reason':None,'low_usage_samples':0}
+ return {'config_key':key,'current_max_tokens':int(row['current_max_tokens']),'pending_max_tokens':int(row['pending_max_tokens']) if row['pending_max_tokens'] is not None else None,'last_reason':row['last_reason'],'low_usage_samples':int(row['low_usage_samples'])}
+
+
+def record_token_budget_observations(tournament_id, model_id, model_sha256, draft_sha256, metadata, observations):
+ if not observations:
+  return None
+ key=adaptive_budget_config_key(model_sha256,draft_sha256,metadata)
+ now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+ with connect() as c:
+  snapshot=c.execute('SELECT effective_max_tokens FROM tournament_entry_budgets WHERE tournament_id=? AND model_id=?',(tournament_id,model_id)).fetchone()
+  if snapshot is None:
+   return None
+  current=int(snapshot['effective_max_tokens'])
+  c.execute('INSERT OR IGNORE INTO token_budget_profiles(config_key,current_max_tokens,updated_at) VALUES(?,?,?)',(key,current,now))
+  profile=c.execute('SELECT current_max_tokens,pending_max_tokens,low_usage_samples FROM token_budget_profiles WHERE config_key=?',(key,)).fetchone()
+  pending=int(profile['pending_max_tokens']) if profile['pending_max_tokens'] is not None else None
+  low_samples=int(profile['low_usage_samples'])
+  has_truncation=False
+  low_count=0clear_non_low=False
+  for obs in observations:
+   max_tokens=int(obs.get('max_tokens') or current)
+   completion=obs.get('completion_tokens')
+   finish=obs.get('finish_reason')
+   truncated=bool(obs.get('truncated'))
+   valid=bool(obs.get('valid_move'))
+   attempt=int(obs.get('attempt') or 1)
+   c.execute('INSERT INTO token_budget_observations(tournament_id,model_id,config_key,max_tokens,completion_tokens,finish_reason,truncated,valid_move,attempt,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+    (tournament_id,model_id,key,max_tokens,int(completion) if isinstance(completion,int) and completion>=0 else None,str(finish)[:40] if finish is not None else None,int(truncated),int(valid),attempt,now))
+   if truncated:
+    has_truncation=True
+   elif valid and isinstance(completion,int) and finish in ('stop','eos','end_turn'):
+    if completion <= max(1,int(max_tokens*0.25)):
+     low_count+=1
+    else:
+     clear_non_low=True
+  reason=None
+  if has_truncation:
+   pending=min(8192,max(current*2,pending or current))
+   low_samples=0
+   reason='Odpowiedź osiągnęła limit tokenów lub finish_reason=length'
+  elif low_count:
+   low_samples=0 if clear_non_low else low_samples+low_count
+   if low_samples>=20:
+    next_budget=max(8,int(current*0.75))
+    if next_budget<current and not (pending is not None and pending>current):
+     pending=next_budget
+     reason=f'{low_samples} poprawnych odpowiedzi zużyło nie więcej niż 25% budżetu'
+    low_samples=0
+  elif clear_non_low:
+   low_samples=0
+   if pending is not None and pending<current:
+    pending=None
+    reason='Wykorzystanie budżetu nie potwierdza bezpiecznego zmniejszenia'
+  if reason:
+   c.execute('UPDATE token_budget_profiles SET pending_max_tokens=?,low_usage_samples=?,last_reason=?,last_tournament_id=?,updated_at=? WHERE config_key=?',(pending,low_samples,reason,tournament_id,now,key))
+  else:
+   c.execute('UPDATE token_budget_profiles SET low_usage_samples=?,updated_at=? WHERE config_key=?',(low_samples,now,key))
+ return {'config_key':key,'current_max_tokens':current,'pending_max_tokens':pending,'reason':reason,'low_usage_samples':low_samples}def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
  if not name or format not in ('PURE_AI','AI_ENGINE'): raise ValueError('Nieprawidłowa nazwa lub format')
  if license_verified:
   normalized_license=(license or '').strip().lower()
@@ -92,8 +192,7 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
  if size is not None and (not isinstance(size,int) or size <= 0):
   raise ValueError('Nieprawidłowy rozmiar manifestu modelu')
  p=(MODEL_DIR/filename).resolve() if filename else None; status='catalogued'
- if p:
-  if p.parent!=MODEL_DIR.resolve() or p.suffix.lower()!='.gguf': raise ValueError('Nieprawidłowa ścieżka GGUF')
+ if p:if p.parent!=MODEL_DIR.resolve() or p.suffix.lower()!='.gguf': raise ValueError('Nieprawidłowa ścieżka GGUF')
   if p.is_file():
    actual_size=p.stat().st_size; h=hashlib.sha256()
    with p.open('rb') as f:
@@ -132,8 +231,7 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
  with connect() as c:
   c.execute('INSERT OR IGNORE INTO league_models(name,format,created_at) VALUES(?,?,?)',(name,format,now)); m=c.execute('SELECT id,format FROM league_models WHERE name=?',(name,)).fetchone()
   if m['format']!=format: raise ValueError('Model istnieje w innym formacie')
-  version_key=config_key if digest else (filename or ('catalog:'+name))
-  c.execute('''INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at,draft_filename,draft_sha256,draft_size_bytes,draft_download_url,draft_source_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now,draft_filename if draft else None,draft.get('sha256') if draft else None,draft.get('size_bytes') if draft else None,draft.get('download_url') if draft else None,draft.get('source_path') if draft else None))
+  version_key=config_key if digest else (filename or ('catalog:'+name))c.execute('''INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at,draft_filename,draft_sha256,draft_size_bytes,draft_download_url,draft_source_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now,draft_filename if draft else None,draft.get('sha256') if draft else None,draft.get('size_bytes') if draft else None,draft.get('download_url') if draft else None,draft.get('source_path') if draft else None))
   vs=c.execute('SELECT * FROM model_versions WHERE model_id=? ORDER BY id DESC',(m['id'],)).fetchall()
   return {'id':m['id'],'name':name,'format':format,'versions':[dict(v) for v in vs]}
 def create_round_robin(name,format='PURE_AI',qualification_percent=80):
@@ -172,8 +270,7 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   return {'id':tid,'name':name,'format':format,'players':len(ms),'qualification_percent':qualification_percent,'expected_qualifiers':expected_qualifiers,'games_planned':len(ms)*(len(ms)-1),'draft_games_planned':expected_qualifiers-1,'total_games_planned':len(ms)*(len(ms)-1)+expected_qualifiers-1,'draft_format':'ALL_WINNERS_PLUS_TOP_SCORING_REMAINDER','status':'planned'}
 
 def _seed_order(size):
- order=[1,2]
- while len(order)<size:
+ order=[1,2]while len(order)<size:
   last=len(order)*2+1
   order=[x for seed in order for x in (seed,last-seed)]
  return order
@@ -212,8 +309,7 @@ def _insert_draft_matches(c,tournament_id,round_no,pairs):
   c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage,round_no,match_no) VALUES(?,?,?,?, 'pending','draft',?,?)",
    (tournament_id,white,black,leg,round_no,match_no))
 
-def next_draft_match(tournament_id):
- # Create each knockout round only after every match in the preceding round is complete.
+def next_draft_match(tournament_id):# Create each knockout round only after every match in the preceding round is complete.
  with connect() as c:
   entries=c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament_id,)).fetchone()[0]
   if entries<2: raise ValueError('Drabinka wymaga co najmniej dwóch zawodników')
@@ -252,8 +348,7 @@ def next_draft_match(tournament_id):
   existing=c.execute("SELECT 1 FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=? LIMIT 1",(tournament_id,next_no)).fetchone()
   if not existing:
    if last==0:
-    n=len(seeds); size=1
-    while size<n: size*=2
+    n=len(seeds); size=1while size<n: size*=2
     byes=n-(2*n-size)
     reduced={i:seed_map[i] for i in range(1,byes+1)}
     for i,winner in enumerate(winners,byes+1): reduced[i]=winner
@@ -292,8 +387,7 @@ def draft_champion(tournament_id):
 
 def elo_ratings(format='PURE_AI',k=32.0):
  with connect() as c:
-  ps=c.execute('SELECT id,name FROM league_models WHERE active=1 AND format=? ORDER BY name',(format,)).fetchall(); ratings={p['id']:INITIAL_ELO for p in ps}; stats={p['id']:{'wins':0,'draws':0,'losses':0,'games':0,'score':0.0} for p in ps}
-  rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
+  ps=c.execute('SELECT id,name FROM league_models WHERE active=1 AND format=? ORDER BY name',(format,)).fetchall(); ratings={p['id']:INITIAL_ELO for p in ps}; stats={p['id']:{'wins':0,'draws':0,'losses':0,'games':0,'score':0.0} for p in ps}rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
   for g in rows:
    w=ids.get(g['white_model']); b=ids.get(g['black_model'])
    if w is None or b is None: continue
@@ -307,4 +401,3 @@ def elo_ratings(format='PURE_AI',k=32.0):
 def storage_status():
  MODEL_DIR.mkdir(mode=0o700,parents=True,exist_ok=True)
  u=shutil.disk_usage(MODEL_DIR); files=[{'filename':p.name,'size_bytes':p.stat().st_size,'managed_copy':True} for p in sorted(MODEL_DIR.glob('*.gguf')) if p.is_file()]
- return {'free_bytes':u.free,'total_bytes':u.total,'models':files,'managed_directory':str(MODEL_DIR),'policy':'Arena odczytuje i usuwa wyłącznie własne pliki z managed-models.'}
