@@ -383,3 +383,4 @@ class SequentialChessRunner:
         game.headers['White'] = white
         game.headers['Black'] = black
         game.headers['Result'] = result
+        return str(game)
