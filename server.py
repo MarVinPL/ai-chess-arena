@@ -381,14 +381,14 @@ def tournament_loop(tournament_id):
             tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
             if tournament is None:
                 raise RuntimeError('Nie znaleziono turnieju')
+            draft_enabled = tournament['rules_version'] == '2'
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
             players = {r['model_id']: {'name': r['name'], 'version_id': r['version_id']} for r in entries}
-            pairings = c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND status='pending' ORDER BY id", (tournament_id,)).fetchall()
+            pairings = c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id", (tournament_id,)).fetchall()
             if any(row['white_model_id'] == row['black_model_id'] for row in pairings):
                 raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
-            if not pairings:
-                c.execute("UPDATE tournaments SET status='completed' WHERE id=?", (tournament_id,))
-                return
+            if not pairings and c.execute("SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?", (tournament_id,)).fetchone()[0] < 2:
+                raise RuntimeError('Turniej nie ma wystarczającej liczby zawodników')
             c.execute("UPDATE tournaments SET status='running' WHERE id=?", (tournament_id,))
         set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id)
         tournament_runtime = engine_runner.LlamafileRuntime(on_status=set_live)
@@ -427,9 +427,21 @@ def tournament_loop(tournament_id):
                 break
 
         game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
-        for pairing in pairings:
+        while True:
             if tournament_stop_event.is_set():
                 break
+            with league.connect() as c:
+                league_pairing = c.execute("SELECT id,white_model_id,black_model_id,'league' AS stage FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id LIMIT 1", (tournament_id,)).fetchone()
+            if league_pairing:
+                pairing = dict(league_pairing)
+            else:
+                if not draft_enabled:
+                    break
+                pairing = league.next_draft_match(tournament_id)
+                if pairing is None:
+                    break
+            if pairing['white_model_id'] == pairing['black_model_id']:
+                raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
             white = players.get(pairing['white_model_id']); black = players.get(pairing['black_model_id'])
             if not white or not black:
                 raise RuntimeError('Brak wersji zawodnika przypisanej do pary turniejowej')
@@ -460,7 +472,12 @@ def tournament_loop(tournament_id):
                 game_id = cur.lastrowid
             with league.connect() as c:
                 c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?", (game_id, pairing['id']))
-            set_live('game_finished',f'Partia zakończona: {result["result"]}', white=white['name'], black=black['name'], result=result['result'], game_id=game_id, move_count=len(result['moves']), fen=result['fen'], moves=result['moves'], generation_started_at=None)
+            if pairing.get('stage') == 'draft':
+                league.record_draft_result(pairing['id'], result['result'])
+                champion = league.draft_champion(tournament_id)
+                if champion:
+                    set_live('draft_champion', f'Zwycięzca draftu: {players[champion]["name"]}', tournament_id=tournament_id, champion=players[champion]['name'])
+            set_live('game_finished',f'Partia zakończona: {result["result"]}', white=white['name'], black=black['name'], result=result['result'], game_id=game_id, move_count=len(result['moves']), fen=result['fen'], moves=result['moves'], generation_started_at=None, stage=pairing.get('stage','league'))
         with league.connect() as c:
             pending = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
             status = 'stopped' if tournament_stop_event.is_set() else ('completed' if pending == 0 else 'failed')
@@ -777,7 +794,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(status)
         elif self.path == '/api/tournaments':
             with league.connect() as c:
-                rows = c.execute('SELECT t.id,t.name,t.format,t.status,t.created_at,COUNT(p.id) AS games_planned FROM tournaments t LEFT JOIN tournament_pairings p ON p.tournament_id=t.id GROUP BY t.id ORDER BY t.id DESC').fetchall()
+                rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
+                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
+                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
+                    (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
+                    t.qualification_percent,
+                    CASE WHEN t.rules_version='2' THEN
+                      (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
+                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
+                      MAX(1,COALESCE((SELECT COUNT(*) FROM tournament_seeds q WHERE q.tournament_id=t.id),CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER)))-1
+                    ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
+                    FROM tournaments t ORDER BY t.id DESC''').fetchall()
             self.send_json([dict(x) for x in rows])
         elif self.path.startswith('/api/passkey-tests'):
             from urllib.parse import urlparse, parse_qs
@@ -876,7 +903,7 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
-                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
+                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
                 self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)

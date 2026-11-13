@@ -23,6 +23,99 @@ class LeagueTests(unittest.TestCase):
    pairings=c.execute('SELECT white_model_id,black_model_id FROM tournament_pairings').fetchall()
    self.assertTrue(all(row['white_model_id'] != row['black_model_id'] for row in pairings))
 
+ def test_ten_entrants_all_reach_draft_and_bracket_advances_to_champion(self):
+  for i in range(8):
+   league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
+    license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
+  tournament=league.create_round_robin('Ten player championship')
+  self.assertEqual(tournament['players'],10)
+  self.assertEqual(tournament['games_planned'],90)
+  self.assertEqual(tournament['draft_games_planned'],7)
+  self.assertEqual(tournament['total_games_planned'],97)
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
+   for p in pairings:
+    cur=c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",
+     (f'Model {p["white_model_id"]}',f'Model {p["black_model_id"]}','1-0'))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,p['id']))
+  first=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(first)
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],10)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=0",(tournament['id'],)).fetchone()[0],2)
+  # Both play-in winners advance; the top six get byes into the eight-player bracket.
+  current=first
+  while current:
+   league.record_draft_result(current['id'],'1-0')
+   current=league.next_draft_match(tournament['id'])
+  champion=league.draft_champion(tournament['id'])
+  self.assertIsNotNone(champion)
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft'",(tournament['id'],)).fetchone()[0],9)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND white_model_id=black_model_id",(tournament['id'],)).fetchone()[0],0)
+
+ def test_nine_qualifiers_get_one_play_in_and_seven_byes(self):
+  for i in range(8):
+   league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
+    license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
+  tournament=league.create_round_robin('Nine qualifier bracket',qualification_percent=80)
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
+   for p in pairings:
+    w,b=p['white_model_id'],p['black_model_id']
+    # Entrants 1-9 each win; entrant 10 loses every league game.
+    result='0-1' if w==10 else '1-0'
+    cur=c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",(f'Model {w}',f'Model {b}',result))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,p['id']))
+  first=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(first)
+  with league.connect() as c:
+   seeds=c.execute("SELECT model_id,seed FROM tournament_seeds WHERE tournament_id=? ORDER BY seed",(tournament['id'],)).fetchall()
+   play_in=c.execute("SELECT * FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=0",(tournament['id'],)).fetchall()
+  self.assertEqual(len(seeds),9)
+  self.assertEqual({r['model_id'] for r in seeds},{1,2,3,4,5,6,7,8,9})
+  self.assertEqual(len(play_in),1)
+  self.assertEqual({play_in[0]['white_model_id'],play_in[0]['black_model_id']},{8,9})
+  # A drawn match advances the higher seed (lower seed number).
+  higher_seed_id=next(r['model_id'] for r in seeds if r['seed']==8)
+  winner=league.record_draft_result(first['id'],'1/2-1/2')
+  self.assertEqual(winner,higher_seed_id)
+  current=league.next_draft_match(tournament['id'])
+  while current:
+   league.record_draft_result(current['id'],'1-0')
+   current=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(league.draft_champion(tournament['id']))
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft'",(tournament['id'],)).fetchone()[0],8)
+
+ def test_draft_qualification_keeps_all_winners_then_best_remaining(self):
+  for i in range(8):
+   league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
+    license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
+  tournament=league.create_round_robin('Selective draft',qualification_percent=80)
+  self.assertEqual(tournament['expected_qualifiers'],8)
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchall()
+   for p in pairings:
+    w,b=p['white_model_id'],p['black_model_id']
+    if w<=4 and b<=4: result='1-0'
+    elif w<=4: result='1-0'
+    elif b<=4: result='0-1'
+    else: result='1/2-1/2'
+    cur=c.execute("INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)",(f'Model {w}',f'Model {b}',result))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,p['id']))
+  first=league.next_draft_match(tournament['id'])
+  self.assertIsNotNone(first)
+  with league.connect() as c:
+   qualified={r['model_id'] for r in c.execute("SELECT model_id FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],))}
+  self.assertEqual(qualified,{1,2,3,4,5,6,7,8})
+  self.assertEqual(len(qualified),8)
+
+ def test_draft_qualification_percent_must_be_between_75_and_90(self):
+  for invalid in (74,91,True,80.0):
+   with self.assertRaises(ValueError):
+    league.create_round_robin('Invalid qualification',qualification_percent=invalid)
+
  def test_catalogued_models_are_tournament_eligible_without_local_gguf(self):
   tournament=league.create_round_robin('Remote cache test')
   with league.connect() as c:
