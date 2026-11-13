@@ -145,6 +145,27 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertTrue(meta['budget_observations'][1]['valid_move'])
         self.assertEqual(meta['budget_observations'][1]['completion_tokens'],3)
 
+    def test_valid_move_is_not_treated_as_token_blocked(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+            def read(self):
+                return json.dumps({'choices':[{'message':{'content':'e2e4'},
+                    'finish_reason':'length'}],
+                    'usage':{'completion_tokens':16}}).encode()
+        runtime=LlamafileRuntime()
+        try:
+            with patch.object(runtime,'ensure_loaded'), patch('urllib.request.urlopen',return_value=Response()):
+                move,meta=runtime.generate('/tmp/model.gguf',chess.Board(),max_tokens=16)
+        finally:
+            runtime.shutdown()
+        self.assertEqual(move.uci(),'e2e4')
+        self.assertFalse(meta['budget_observations'][0]['truncated'])
+        self.assertTrue(meta['budget_observations'][0]['valid_move'])
+
     def test_failed_token_limited_generation_exposes_evidence(self):
         import json
         from unittest.mock import patch
