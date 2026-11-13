@@ -475,7 +475,7 @@ def tournament_loop(tournament_id):
         try:
             if tournament_runtime:
                 try:
-                    tournament_runtime.stop()
+                    tournament_runtime.shutdown()
                 except Exception as cleanup_exc:
                     tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Runner shutdown failed: ' + str(cleanup_exc)
             tournament_runtime = None
