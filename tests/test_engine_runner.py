@@ -119,5 +119,51 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertNotIn(bad, board.legal_moves)
 
 
+    def test_generate_retries_when_model_returns_only_uci_label(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter(['UCI', 'g1h3'])
+        requests = []
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response(next(outputs))
+        events = []
+        runtime = LlamafileRuntime(on_status=lambda stage, message, **fields: events.append((stage, fields)))
+        board = chess.Board()
+        with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
+            move, meta = runtime.generate('/tmp/model.gguf', board)
+        self.assertEqual(move.uci(), 'g1h3')
+        self.assertEqual(len(requests), 2)
+        self.assertIn('Poprzednia odpowiedź', requests[1]['messages'][0]['content'])
+        self.assertIn('retrying', [stage for stage, _ in events])
+        self.assertEqual(meta['response'], 'g1h3')
+
+    def test_generate_retries_illegal_move_and_never_accepts_it(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter(['e2e5', 'e2e5'])
+        def fake_urlopen(request, timeout=None):
+            return Response(next(outputs))
+        runtime = LlamafileRuntime()
+        with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
+            with self.assertRaisesRegex(RunnerError, 'po 2 próbach'):
+                runtime.generate('/tmp/model.gguf', chess.Board())
+
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

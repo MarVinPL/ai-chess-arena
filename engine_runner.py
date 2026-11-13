@@ -126,31 +126,52 @@ class LlamafileRuntime:
         legal = [move.uci() for move in board.legal_moves]
         if not legal:
             raise RunnerError('Pozycja nie zawiera legalnych ruchów')
-        prompt = ('Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-                  'Zwróć wyłącznie ruch UCI.\n'
-                  f'FEN: {board.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:')
-        payload = json.dumps({'messages': [{'role': 'user', 'content': prompt}],
-                              'temperature': 0, 'max_tokens': 24, 'stream': False,
-                              'chat_template_kwargs': {'enable_thinking': False}}).encode()
-        request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
-                                         headers={'Content-Type': 'application/json'})
         color = 'white' if board.turn == chess.WHITE else 'black'
+        legal_text = ", ".join(legal)
+        prompts = [
+            ('Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
+             'Zwróć wyłącznie ruch UCI.\n'
+             f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:'),
+            ('Poprzednia odpowiedź była nieprawidłowa. Teraz zwróć DOKŁADNIE jeden token '
+             'skopiowany z listy legalnych ruchów poniżej. Nie dodawaj wyjaśnień ani słowa UCI. '
+             'Nie wymyślaj ruchu.\n'
+             f'LEGAL MOVES: {legal_text}\n'
+             'Odpowiedź musi być jednym z powyższych tokenów.\nMOVE:')
+        ]
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
         started = time.monotonic()
+        content = ''
+        move = None
+        # One bounded retry handles malformed model output without inventing a move.
         # No per-move timeout: user-requested timing is measured, not forfeited.
-        with urllib.request.urlopen(request, timeout=None) as response:
-            data = json.loads(response.read().decode())
+        for attempt, prompt in enumerate(prompts):
+            if attempt and stop_event and stop_event.is_set():
+                raise RunnerError('Turniej zatrzymany przez operatora')
+            payload = json.dumps({'messages': [{'role': 'user', 'content': prompt}],
+                                  'temperature': 0, 'max_tokens': 16, 'stream': False,
+                                  'chat_template_kwargs': {'enable_thinking': False}}).encode()
+            request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
+                                             headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request, timeout=None) as response:
+                data = json.loads(response.read().decode())
+            try:
+                content = data['choices'][0]['message'].get('content', '')
+            except (KeyError, IndexError, TypeError) as exc:
+                raise RunnerError('Nieprawidłowa odpowiedź API llamafile') from exc
+            if not isinstance(content, str):
+                content = str(content or '')
+            match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
+            if match:
+                candidate = chess.Move.from_uci(match.group(1))
+                if candidate in board.legal_moves:
+                    move = candidate
+                    break
+            if attempt == 0:
+                self._notify('retrying', 'Nieprawidłowa odpowiedź modelu — ponawiam zapytanie', model=Path(model_path).name,
+                             color=color, fen=board.fen(), legal_moves=legal, response=content[:300], attempt=2)
         elapsed = time.monotonic() - started
-        try:
-            content = data['choices'][0]['message'].get('content', '')
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RunnerError('Nieprawidłowa odpowiedź API llamafile') from exc
-        match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-        if not match:
-            raise RunnerError(f'Model nie zwrócił ruchu UCI: {content[:120]!r}')
-        move = chess.Move.from_uci(match.group(1))
-        if move not in board.legal_moves:
-            raise RunnerError(f'Model zwrócił nielegalny ruch: {move.uci()}')
+        if move is None:
+            raise RunnerError(f'Model nie zwrócił legalnego ruchu UCI po 2 próbach: {content[:120]!r}')
         self._notify('move_generated', f'Model zaproponował ruch: {move.uci()}', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=content[:300], proposed_move=move.uci(), elapsed_seconds=round(elapsed,4))
         return move, {'seconds': round(elapsed, 4), 'runtime': 'llamafile',
                       'model_path': str(Path(model_path).resolve()),
