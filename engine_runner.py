@@ -35,6 +35,7 @@ class LlamafileRuntime:
         self._popen = popen
         self._process = None
         self._model_path: Path | None = None
+        self._draft_model_path: Path | None = None
         self._lock = threading.RLock()
         self.on_status = on_status
 
@@ -61,6 +62,7 @@ class LlamafileRuntime:
         with self._lock:
             proc, self._process = self._process, None
             self._model_path = None
+            self._draft_model_path = None
             if proc is None:
                 return
             if proc.poll() is None:
@@ -71,14 +73,17 @@ class LlamafileRuntime:
                     proc.kill()
                     proc.wait(timeout=5)
 
-    def ensure_loaded(self, model_path: str | Path) -> None:
+    def ensure_loaded(self, model_path: str | Path, draft_model_path: str | Path | None = None) -> None:
         path = Path(model_path).resolve(strict=True)
+        draft_path = Path(draft_model_path).resolve(strict=True) if draft_model_path else None
         if not path.is_file() or path.suffix.lower() != '.gguf':
             raise RunnerError(f'Nieprawidłowy plik modelu GGUF: {path}')
+        if draft_path and (not draft_path.is_file() or draft_path.suffix.lower() != '.gguf' or draft_path == path):
+            raise RunnerError(f'Nieprawidłowy plik pomocniczy draft GGUF: {draft_path}')
         if not self.binary.is_file() or not self.binary.stat().st_mode & 0o111:
             raise RunnerError(f'Brak wykonywalnego llamafile: {self.binary}')
         with self._lock:
-            if self.loaded_model == str(path) and self._healthy():
+            if self.loaded_model == str(path) and self._draft_model_path == draft_path and self._healthy():
                 return
             self.stop()
             self._notify('model_loading', f'Ładowanie modelu: {path.name}', model=path.name)
@@ -92,15 +97,18 @@ class LlamafileRuntime:
             args = command + ['-m', str(path), '--server', '--host', '127.0.0.1',
                     '--port', '8088', '--threads', str(self.threads), '--ctx-size', str(self.context),
                     '--parallel', '1', '--temp', '0', '--no-ui', '--no-warmup']
+            if draft_path:
+                args += ['--spec-type', 'draft-mtp', '--model-draft', str(draft_path)]
             self._process = self._popen(args, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                         start_new_session=True)
             self._model_path = path
+            self._draft_model_path = draft_path
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
                 if self._process.poll() is not None:
                     code = self._process.returncode
-                    self._process = None; self._model_path = None
+                    self._process = None; self._model_path = None; self._draft_model_path = None
                     raise RunnerError(f'llamafile zakończył start kodem {code}')
                 if self._healthy():
                     self._notify('model_ready', f'Model gotowy: {path.name}', model=path.name)
@@ -110,8 +118,9 @@ class LlamafileRuntime:
             raise RunnerError('Przekroczono czas oczekiwania na gotowość llamafile (to nie jest limit czasu ruchu)')
 
     def generate(self, model_path: str | Path, board: chess.Board,
-                 stop_event: threading.Event | None = None) -> tuple[chess.Move, dict]:
-        self.ensure_loaded(model_path)
+                 stop_event: threading.Event | None = None,
+                 draft_model_path: str | Path | None = None) -> tuple[chess.Move, dict]:
+        self.ensure_loaded(model_path, draft_model_path)
         if stop_event and stop_event.is_set():
             raise RunnerError('Turniej zatrzymany przez operatora')
         legal = [move.uci() for move in board.legal_moves]
@@ -144,7 +153,9 @@ class LlamafileRuntime:
             raise RunnerError(f'Model zwrócił nielegalny ruch: {move.uci()}')
         self._notify('move_generated', f'Model zaproponował ruch: {move.uci()}', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=content[:300], proposed_move=move.uci(), elapsed_seconds=round(elapsed,4))
         return move, {'seconds': round(elapsed, 4), 'runtime': 'llamafile',
-                      'model_path': str(Path(model_path).resolve()), 'response': content[:160]}
+                      'model_path': str(Path(model_path).resolve()),
+                      'draft_model_path': str(Path(draft_model_path).resolve()) if draft_model_path else None,
+                      'response': content[:160]}
 
 
 class SequentialChessRunner:
@@ -164,7 +175,10 @@ class SequentialChessRunner:
                         'move_times': times}
             player = white if board.turn == chess.WHITE else black
             color = 'white' if board.turn == chess.WHITE else 'black'
-            move, meta = self.runtime.generate(player['path'], board, stop_event)
+            if player.get('draft_path'):
+                move, meta = self.runtime.generate(player['path'], board, stop_event, draft_model_path=player['draft_path'])
+            else:
+                move, meta = self.runtime.generate(player['path'], board, stop_event)
             san = board.san(move)
             board.push(move)
             record = {'ply': len(move_records) + 1, 'color': color,

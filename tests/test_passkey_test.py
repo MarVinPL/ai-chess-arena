@@ -19,6 +19,41 @@ class PasskeyTestTests(unittest.TestCase):
         self.assertIn('RP ID', passkey_test.QUESTIONS[1])
         self.assertIn('Telegram', passkey_test.QUESTIONS[2])
 
+    def test_first_time_competitor_gets_all_three_knowledge_questions(self):
+        self.assertEqual([n for n,_ in passkey_test.questions_for_tournament([])], [1,2,3])
+
+    def test_known_answers_are_reused_and_only_one_random_check_is_scheduled(self):
+        class Chooser:
+            def choice(self, values): return values[1]
+        known=[passkey_test.question_fingerprint(q) for q in passkey_test.QUESTIONS]
+        scheduled=passkey_test.questions_for_tournament(known,False,Chooser())
+        self.assertEqual(len(scheduled),1)
+        self.assertEqual(scheduled[0][0],0)
+        self.assertEqual(scheduled[0][1],passkey_test.QUESTIONS[1])
+        self.assertEqual(passkey_test.questions_for_tournament(known,True,Chooser()),[])
+
+    def test_only_missing_knowledge_questions_are_repeated(self):
+        known=[passkey_test.question_fingerprint(passkey_test.QUESTIONS[i]) for i in (0,2)]
+        scheduled=passkey_test.questions_for_tournament(known)
+        self.assertEqual(scheduled,[(2,passkey_test.QUESTIONS[1])])
+
+    def test_modified_question_is_asked_again_even_if_old_question_number_was_answered(self):
+        old=passkey_test.question_fingerprint(passkey_test.QUESTIONS[0])
+        changed=passkey_test.QUESTIONS[0]+' Include attestation and user verification.'
+        scheduled=passkey_test.questions_for_tournament([old])
+        self.assertEqual([number for number,_ in scheduled],[2,3])
+        current=[passkey_test.question_fingerprint(q) for q in passkey_test.QUESTIONS[1:]]
+        revised_questions=(changed,)+passkey_test.QUESTIONS[1:]
+        with patch.object(passkey_test,'QUESTIONS',revised_questions):
+            scheduled=passkey_test.questions_for_tournament(current)
+        self.assertEqual(scheduled,[(1,changed)])
+
+    def test_question_fingerprint_is_independent_of_order_and_position(self):
+        fingerprints={passkey_test.question_fingerprint(q) for q in passkey_test.QUESTIONS}
+        reordered=tuple(reversed(passkey_test.QUESTIONS))
+        with patch.object(passkey_test,'QUESTIONS',reordered):
+            self.assertEqual(passkey_test.questions_for_tournament(fingerprints,True),[])
+
     def test_answer_uses_no_response_timeout_and_measures_time(self):
         runtime=FakeRuntime()
         with patch.object(passkey_test.urllib.request, 'urlopen', return_value=FakeResponse()) as opened:

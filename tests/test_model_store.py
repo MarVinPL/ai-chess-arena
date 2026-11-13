@@ -49,6 +49,11 @@ class ModelStoreTests(unittest.TestCase):
             with self.assertRaises(ValueError): model_store.download_version(1,'https://example.test/model.gguf','bad.gguf','0'*64,len(payload),True)
         self.assertFalse((model_store.MANAGED_DIR/'bad.gguf.part').exists())
         self.assertFalse((model_store.MANAGED_DIR/'bad.gguf').exists())
+    def test_model_lifecycle_lock_is_reentrant(self):
+        with model_store.MODEL_LIFECYCLE_LOCK:
+            self.assertTrue(model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False))
+            model_store.MODEL_LIFECYCLE_LOCK.release()
+
     def test_cleanup_lifecycle_lock_is_reentrant_for_tournament_worker(self):
         lock = model_store.MODEL_LIFECYCLE_LOCK
         with lock:
