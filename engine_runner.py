@@ -174,20 +174,58 @@ class LlamafileRuntime:
             self.stop()
             raise RunnerError('Przekroczono czas oczekiwania na gotowość llamafile (to nie jest limit czasu ruchu)')
 
+    @staticmethod
+    def _allowed_moves(board: chess.Board, recent_moves: list[dict] | None = None) -> tuple[list[chess.Move], list[str]]:
+        legal = list(board.legal_moves)
+        # Defensive evasions take priority over the anti-oscillation heuristic.
+        if board.is_check():
+            return legal, []
+        blocked = set()
+        # Avoid a non-forced immediate reversal by the same piece. Keep a short
+        # per-game history so a model cannot alternate a rook/queen between two
+        # squares every other turn. Captures and checking moves remain available.
+        for record in (recent_moves or [])[-8:]:
+            if record.get('color') != ('white' if board.turn == chess.WHITE else 'black'):
+                continue
+            try:
+                previous = chess.Move.from_uci(record.get('uci', ''))
+            except (ValueError, TypeError):
+                continue
+            piece = board.piece_at(previous.to_square)
+            if not piece or piece.color != board.turn:
+                continue
+            expected_piece = record.get('piece')
+            if expected_piece and piece.symbol() != expected_piece:
+                continue
+            reverse = chess.Move(previous.to_square, previous.from_square)
+            if reverse in legal and not board.is_capture(reverse) and not board.gives_check(reverse):
+                blocked.add(reverse)
+        allowed = [move for move in legal if move not in blocked]
+        # Never dead-end a position: if every legal move would be a reversal,
+        # permit the legal set rather than inventing or forcing an illegal move.
+        if not allowed:
+            allowed = legal
+            blocked.clear()
+        return allowed, sorted(move.uci() for move in blocked)
+
     def generate(self, model_path: str | Path, board: chess.Board,
                  stop_event: threading.Event | None = None,
-                 draft_model_path: str | Path | None = None) -> tuple[chess.Move, dict]:
+                 draft_model_path: str | Path | None = None,
+                 recent_moves: list[dict] | None = None) -> tuple[chess.Move, dict]:
         self.ensure_loaded(model_path, draft_model_path)
         if stop_event and stop_event.is_set():
             raise RunnerError('Turniej zatrzymany przez operatora')
-        legal = [move.uci() for move in board.legal_moves]
+        allowed_moves, blocked_reversals = self._allowed_moves(board, recent_moves)
+        legal = [move.uci() for move in allowed_moves]
         if not legal:
             raise RunnerError('Pozycja nie zawiera legalnych ruchów')
         color = 'white' if board.turn == chess.WHITE else 'black'
         legal_text = ", ".join(legal)
+        anti_loop_note = (' Nie cofaj tej samej figury na poprzednie pole, jeśli masz inną legalną możliwość.'
+                          if blocked_reversals else '')
         initial_prompt = (
             'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-            'Zwróć wyłącznie ruch UCI.\n'
+            'Zwróć wyłącznie ruch UCI.' + anti_loop_note + '\n'
             f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:')
         retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
@@ -215,14 +253,21 @@ class LlamafileRuntime:
                 content = str(content or '')
             match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
             illegal_uci = None
+            blocked_uci = None
             if match:
                 candidate = chess.Move.from_uci(match.group(1))
-                if candidate in board.legal_moves:
+                if candidate in allowed_moves:
                     move = candidate
                     break
-                illegal_uci = candidate.uci()
+                if candidate in board.legal_moves and candidate.uci() in blocked_reversals:
+                    blocked_uci = candidate.uci()
+                else:
+                    illegal_uci = candidate.uci()
             if attempt == 0:
-                if illegal_uci:
+                if blocked_uci:
+                    feedback = (f'Ruch {blocked_uci} jest legalny w szachach, ale powtarza cofnięcie tej samej figury. '
+                                'Wybierz inny ruch z listy LEGAL MOVES.')
+                elif illegal_uci:
                     feedback = (f'Twój poprzedni ruch {illegal_uci} jest NIELEGALNY w tej pozycji. '
                                 'Nie wolno go wykonać. Wybierz inny ruch WYŁĄCZNIE z poniższej listy.')
                 else:
@@ -262,13 +307,19 @@ class SequentialChessRunner:
             player = white if board.turn == chess.WHITE else black
             color = 'white' if board.turn == chess.WHITE else 'black'
             if player.get('draft_path'):
-                move, meta = self.runtime.generate(player['path'], board, stop_event, draft_model_path=player['draft_path'])
+                move, meta = self.runtime.generate(player['path'], board, stop_event,
+                                                   draft_model_path=player['draft_path'],
+                                                   recent_moves=move_records)
             else:
-                move, meta = self.runtime.generate(player['path'], board, stop_event)
+                move, meta = self.runtime.generate(player['path'], board, stop_event,
+                                                   recent_moves=move_records)
             san = board.san(move)
+            piece = board.piece_at(move.from_square)
+            piece_symbol = piece.symbol() if piece else None
             board.push(move)
             record = {'ply': len(move_records) + 1, 'color': color,
                       'model': player['name'], 'uci': move.uci(), 'san': san,
+                      'piece': piece_symbol,
                       'seconds': meta['seconds'], 'fen': board.fen()}
             move_records.append(record); times.append(meta['seconds'])
             if progress:
