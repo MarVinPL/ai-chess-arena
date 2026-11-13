@@ -98,7 +98,7 @@ class LeagueTests(unittest.TestCase):
     license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
   tournament=league.create_round_robin('Ten player championship')
   self.assertEqual(tournament['players'],10)
-self.assertEqual(tournament['games_planned'],90)
+  self.assertEqual(tournament['games_planned'],90)
   self.assertEqual(tournament['draft_games_planned'],7)
   self.assertEqual(tournament['total_games_planned'],97)
   with league.connect() as c:
@@ -198,7 +198,7 @@ self.assertEqual(tournament['games_planned'],90)
  def test_registration_stores_remote_manifest_without_downloading_file(self):
   result=league.register_model('Remote GGUF',source='https://huggingface.co/example/model',
    license='Apache-2.0',license_verified=True,
-metadata={'filename':'remote.gguf','sha256':'c'*64,'size_bytes':12345})
+   metadata={'filename':'remote.gguf','sha256':'c'*64,'size_bytes':12345})
   version=result['versions'][0]
   self.assertEqual(version['status'],'catalogued')
   self.assertEqual(version['managed_copy'],0)
@@ -298,7 +298,7 @@ metadata={'filename':'remote.gguf','sha256':'c'*64,'size_bytes':12345})
 
  def test_inference_config_rejects_non_boolean_thinking(self):
   with self.assertRaisesRegex(ValueError,'true albo false'):
-league.register_model('Bad thinking',metadata={'inference':{'thinking':'yes'}})
+   league.register_model('Bad thinking',metadata={'inference':{'thinking':'yes'}})
 
  def test_inference_config_defaults_and_validates_generation_parameters(self):
   self.assertEqual(league.normalize_inference_config({}),{'thinking':False,'temperature':0.0,'max_tokens':16})
