@@ -80,7 +80,7 @@ Nie uruchamiano binarium, nie pobierano modeli i nie wykonywano prób ładowania
 
 1. Pozostawić turniej #5 bez zmian; jego roster nadal obejmuje wyłącznie wersje 1–3.
 2. Traktować wersje 1–3 wyłącznie jako wpisy z kompletnym manifestem. Żadna z 10 wersji nie jest obecnie runtime-ready dla aktualnego `main`; wymagane jest osobno zatwierdzone pobranie do `managed-models`, kontrola SHA/rozmiaru i health-check runtime.
-3. Nie dopuszczać #4, #6–#10 do nowego turnieju na obecnym VPS.
+3. Nie dopuszczać #4–#10 do nowego turnieju na obecnym VPS; #5 może być rozważony dopiero po uzupełnieniu manifestu, weryfikacji licencji i osobno zatwierdzonym teście stagingowym.
 4. Dla #5 (Llama 3.2 3B) przed jakąkolwiek decyzją uzupełnić manifest SHA/size/filename, ręcznie sprawdzić licencję i wykonać test na kopii/stagingu po odzyskaniu runtime.
 5. Nie oznaczać #9 jako samodzielnego zawodnika. Najpierw wymaga poprawnej definicji pary target/draft i kompletnego manifestu obu plików; obecny host i tak nie ma zasobów na target 27B.
 6. Dla każdego wpisu bez SHA-256 nie zatwierdzać użycia ani deduplikacji.
