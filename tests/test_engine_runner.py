@@ -141,7 +141,7 @@ class EngineRunnerTests(unittest.TestCase):
             move, meta = runtime.generate('/tmp/model.gguf', board)
         self.assertEqual(move.uci(), 'g1h3')
         self.assertEqual(len(requests), 2)
-        self.assertIn('Poprzednia odpowiedź', requests[1]['messages'][0]['content'])
+        self.assertIn('poprzednia odpowiedź', requests[1]['messages'][0]['content'])
         self.assertIn('retrying', [stage for stage, _ in events])
         self.assertEqual(meta['response'], 'g1h3')
 
