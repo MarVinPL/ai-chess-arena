@@ -412,3 +412,9 @@ def elo_ratings(format='PURE_AI',k=32.0):
     elif score==.5:s['draws']+=1
     else:s['losses']+=1
   return [dict(name=p['name'],elo=round(ratings[p['id']]),**stats[p['id']],win_rate=round(100*stats[p['id']]['score']/stats[p['id']]['games'],1) if stats[p['id']]['games'] else 0.0) for p in sorted(ps,key=lambda p:ratings[p['id']],reverse=True)]
+
+
+def storage_status():
+ MODEL_DIR.mkdir(mode=0o700,parents=True,exist_ok=True)
+ u=shutil.disk_usage(MODEL_DIR); files=[{'filename':p.name,'size_bytes':p.stat().st_size,'managed_copy':True} for p in sorted(MODEL_DIR.glob('*.gguf')) if p.is_file()]
+ return {'free_bytes':u.free,'total_bytes':u.total,'models':files,'managed_directory':str(MODEL_DIR),'policy':'Arena odczytuje i usuwa wyłącznie własne pliki z managed-models.'}
