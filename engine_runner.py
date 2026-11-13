@@ -26,7 +26,8 @@ class LlamafileRuntime:
 
     def __init__(self, binary: Path = LLAMAFILE, api_base: str = API_BASE,
                  threads: int = 2, context: int = 2048, startup_timeout: float = 90,
-                 popen: Callable = subprocess.Popen, on_status: Callable | None = None):
+                 popen: Callable = subprocess.Popen, on_status: Callable | None = None,
+                 monitor_interval: float = 30):
         self.binary = Path(binary)
         self.api_base = api_base.rstrip('/')
         self.threads = max(1, int(threads))
@@ -38,6 +39,13 @@ class LlamafileRuntime:
         self._draft_model_path: Path | None = None
         self._lock = threading.RLock()
         self.on_status = on_status
+        self.monitor_interval = max(5.0, float(monitor_interval))
+        self._desired_model_path: Path | None = None
+        self._desired_draft_model_path: Path | None = None
+        self._monitor_stop = threading.Event()
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop, name='llamafile-watchdog', daemon=True)
+        self._monitor_thread.start()
 
     @property
     def loaded_model(self) -> str | None:
@@ -58,8 +66,47 @@ class LlamafileRuntime:
         except Exception:
             return False
 
+    def _monitor_once(self) -> None:
+        """Restart only the child this runtime owns, and only while a model is expected."""
+        with self._lock:
+            model_path = self._desired_model_path
+            draft_path = self._desired_draft_model_path
+            if model_path is None:
+                return
+            proc = self._process
+            process_alive = proc is not None and proc.poll() is None
+            if process_alive and self._healthy():
+                return
+            self._notify('model_watchdog_restart',
+                         'Watchdog wykrył niedostępny llamafile; ponawiam uruchomienie',
+                         model=model_path.name)
+            try:
+                # RLock keeps this check/restart atomic relative to an intentional stop().
+                self.ensure_loaded(model_path, draft_path)
+            except Exception as exc:
+                # A failed recovery attempt must remain eligible for the next
+                # watchdog cycle. Preserve the desired model unless stop() was
+                # explicitly requested after this recovery attempt.
+                if self._desired_model_path is None:
+                    self._desired_model_path = model_path
+                    self._desired_draft_model_path = draft_path
+                self._notify('model_watchdog_error',
+                             'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
+                             model=model_path.name, error=str(exc))
+
+    def _monitor_loop(self) -> None:
+        while not self._monitor_stop.wait(self.monitor_interval):
+            try:
+                self._monitor_once()
+            except Exception as exc:
+                self._notify('model_watchdog_error',
+                             'Błąd watchdog llamafile: ' + str(exc), error=str(exc))
+
     def stop(self) -> None:
         with self._lock:
+            # Clearing the desired model disables watchdog restarts for intentional stops.
+            self._desired_model_path = None
+            self._desired_draft_model_path = None
             proc, self._process = self._process, None
             self._model_path = None
             self._draft_model_path = None
@@ -72,6 +119,13 @@ class LlamafileRuntime:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=5)
+
+    def shutdown(self) -> None:
+        """Stop the owned process and terminate the watchdog thread at runtime end."""
+        self._monitor_stop.set()
+        self.stop()
+        if threading.current_thread() is not self._monitor_thread:
+            self._monitor_thread.join(timeout=self.startup_timeout + 2)
 
     def ensure_loaded(self, model_path: str | Path, draft_model_path: str | Path | None = None) -> None:
         path = Path(model_path).resolve(strict=True)
@@ -104,11 +158,14 @@ class LlamafileRuntime:
                                         start_new_session=True)
             self._model_path = path
             self._draft_model_path = draft_path
+            self._desired_model_path = path
+            self._desired_draft_model_path = draft_path
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
                 if self._process.poll() is not None:
                     code = self._process.returncode
                     self._process = None; self._model_path = None; self._draft_model_path = None
+                    self._desired_model_path = None; self._desired_draft_model_path = None
                     raise RunnerError(f'llamafile zakończył start kodem {code}')
                 if self._healthy():
                     self._notify('model_ready', f'Model gotowy: {path.name}', model=path.name)

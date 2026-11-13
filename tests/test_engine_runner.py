@@ -171,5 +171,77 @@ class EngineRunnerTests(unittest.TestCase):
 
 
 
+    def test_watchdog_restarts_an_unexpectedly_stopped_owned_process(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / 'llamafile'; model = root / 'model.gguf'
+            binary.write_text('#!/bin/sh\\n'); binary.chmod(0o700); model.write_bytes(b'model')
+            calls = []
+            class Process:
+                def __init__(self): self.returncode = None
+                def poll(self): return self.returncode
+                def terminate(self): self.returncode = 0
+                def wait(self, timeout=None): return 0
+                def kill(self): self.returncode = -9
+            first = Process()
+            runtime = LlamafileRuntime(binary=binary, popen=lambda args, **kwargs: (calls.append(args) or Process()))
+            runtime._process = first
+            runtime._model_path = model.resolve()
+            runtime._desired_model_path = model.resolve()
+            first.returncode = 1
+            with patch.object(runtime, '_healthy', return_value=True):
+                runtime._monitor_once()
+            self.assertEqual(len(calls), 1)
+            self.assertIsNot(runtime._process, first)
+            self.assertEqual(runtime.loaded_model, str(model.resolve()))
+            runtime.stop()
+            runtime._monitor_stop.set()
+
+    def test_watchdog_does_not_restart_after_intentional_stop(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / 'llamafile'; model = root / 'model.gguf'
+            binary.write_text('#!/bin/sh\\n'); binary.chmod(0o700); model.write_bytes(b'model')
+            calls = []
+            runtime = LlamafileRuntime(binary=binary, popen=lambda args, **kwargs: (calls.append(args) or object()))
+            runtime._desired_model_path = model.resolve()
+            runtime.stop()
+            with patch.object(runtime, 'ensure_loaded') as ensure_loaded:
+                runtime._monitor_once()
+                ensure_loaded.assert_not_called()
+            self.assertEqual(calls, [])
+            runtime._monitor_stop.set()
+
+
+    def test_watchdog_keeps_retrying_after_failed_recovery_attempt(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime, RunnerError
+        runtime = LlamafileRuntime(monitor_interval=30)
+        model = Path('/tmp/arena-managed-model.gguf')
+        runtime._desired_model_path = model
+        def failed_recovery(path, draft_path=None):
+            runtime.stop()
+            raise RunnerError('startup failed')
+        with patch.object(runtime, 'ensure_loaded', side_effect=failed_recovery):
+            runtime._monitor_once()
+        self.assertEqual(runtime._desired_model_path, model)
+        runtime.shutdown()
+        self.assertFalse(runtime._monitor_thread.is_alive())
+
+    def test_shutdown_stops_watchdog_thread(self):
+        from engine_runner import LlamafileRuntime
+        runtime = LlamafileRuntime(monitor_interval=30)
+        runtime.shutdown()
+        self.assertTrue(runtime._monitor_stop.is_set())
+        self.assertFalse(runtime._monitor_thread.is_alive())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
