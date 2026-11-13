@@ -798,10 +798,11 @@ class Handler(BaseHTTPRequestHandler):
                     (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
                     (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
                     (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
+                    t.qualification_percent,
                     CASE WHEN t.rules_version='2' THEN
                       (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
                       ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
-                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1)
+                      MAX(1,CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER))-1
                     ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
                     FROM tournaments t ORDER BY t.id DESC''').fetchall()
             self.send_json([dict(x) for x in rows])
@@ -902,7 +903,7 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
-                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
+                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
                 self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
