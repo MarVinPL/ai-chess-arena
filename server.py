@@ -87,7 +87,8 @@ def _read_jsonl(path, limit, retention_seconds):
 def set_live(stage, message, **fields):
     with live_lock:
         now = time.time()
-        if stage == 'generating':fields.setdefault('generation_started_at', now)
+        if stage == 'generating':
+            fields.setdefault('generation_started_at', now)
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
@@ -97,7 +98,7 @@ def set_live(stage, message, **fields):
                  **{k:v for k,v in fields.items() if k in event_fields}}
         live_status['events'] = ([event] + live_status.get('events', []))[:40]
         try:
-            _append_jsonl(LIVE_EVENTS_LOG, event, 500, LIVE_EVENT_RETENTION_SECONDS)
+_append_jsonl(LIVE_EVENTS_LOG, event, 500, LIVE_EVENT_RETENTION_SECONDS)
             response = fields.get('response')
             if isinstance(response, str) and response.strip():
                 _append_jsonl(MODEL_RESPONSES_LOG, {
@@ -176,7 +177,8 @@ def db_init():
 
 def llm_health():
     try:
-        req = urllib.request.Request('http://127.0.0.1:8088/health')with urllib.request.urlopen(req, timeout=2) as r:
+        req = urllib.request.Request('http://127.0.0.1:8088/health')
+        with urllib.request.urlopen(req, timeout=2) as r:
             return r.status == 200
     except Exception:
         return False
@@ -196,7 +198,7 @@ def ask_model(model, b):
     }).encode()
     req = urllib.request.Request(LLM, data=payload, headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=90) as r:
-        data = json.loads(r.read().decode())
+data = json.loads(r.read().decode())
     content = data['choices'][0]['message'].get('content', '')
     match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
     if not match:
@@ -265,7 +267,8 @@ def _version_record(version_id):
 
 
 def _ensure_version_file(version_id):
-    version = _version_record(version_id)expected = model_store.MANAGED_DIR / version['filename']
+    version = _version_record(version_id)
+    expected = model_store.MANAGED_DIR / version['filename']
     if expected.exists():
         if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
             raise RuntimeError('Znaleziony plik nie jest oznaczoną kopią zarządzaną przez Arenę')
@@ -295,7 +298,7 @@ def _ensure_version_assets(version_id):
                 raise RuntimeError('Znaleziony plik draft nie jest kopią zarządzaną przez Arenę')
             digest = hashlib.sha256()
             actual_size = 0
-            with expected.open('rb') as draft_file:
+with expected.open('rb') as draft_file:
                 for chunk in iter(lambda: draft_file.read(1024 * 1024), b''):
                     actual_size += len(chunk); digest.update(chunk)
             if actual_size != version['draft_size_bytes'] or digest.hexdigest().lower() != version['draft_sha256'].lower():
@@ -354,7 +357,8 @@ def _prepare_game_models(white, black):
     try:
         for player in (white, black):
             prepared.append(_ensure_version_assets(player['version_id']))
-    except Exception:cleanup_unneeded_models()
+    except Exception:
+        cleanup_unneeded_models()
         raise
     return prepared
 
@@ -394,7 +398,7 @@ def tournament_loop(tournament_id):
             if any(row['white_model_id'] == row['black_model_id'] for row in pairings):
                 raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
             if not pairings and c.execute("SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?", (tournament_id,)).fetchone()[0] < 2:
-                raise RuntimeError('Turniej nie ma wystarczającej liczby zawodników')
+raise RuntimeError('Turniej nie ma wystarczającej liczby zawodników')
             c.execute("UPDATE tournaments SET status='running' WHERE id=?", (tournament_id,))
         set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id)
         tournament_runtime = engine_runner.LlamafileRuntime(on_status=set_live)
@@ -443,7 +447,8 @@ def tournament_loop(tournament_id):
             else:
                 if not draft_enabled:
                     break
-                pairing = league.next_draft_match(tournament_id)if pairing is None:
+                pairing = league.next_draft_match(tournament_id)
+                if pairing is None:
                     break
             if pairing['white_model_id'] == pairing['black_model_id']:
                 raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
@@ -493,7 +498,7 @@ def tournament_loop(tournament_id):
             with sqlite3.connect(DB) as db:
                 cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
-                     len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
+len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
                      json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
                 game_id = cur.lastrowid
             with league.connect() as c:
@@ -532,7 +537,8 @@ def tournament_loop(tournament_id):
 
 def start_tournament(tournament_id):
     global tournament_thread, tournament_error
-    with lock:if tournament_thread and tournament_thread.is_alive():
+    with lock:
+        if tournament_thread and tournament_thread.is_alive():
             raise RuntimeError('Inny turniej jest już uruchomiony')
         with league.connect() as c:
             row = c.execute('SELECT status FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
@@ -592,7 +598,7 @@ def do_step():
             last_error = 'Brak pliku GGUF w katalogu modeli.'
             raise RuntimeError(last_error)
         if not llm_health():
-            last_error = 'Lokalny serwer modelu nie odpowiada na 127.0.0.1:8088.'
+last_error = 'Lokalny serwer modelu nie odpowiada na 127.0.0.1:8088.'
             raise RuntimeError(last_error)
         t0 = time.monotonic()
         try:
@@ -621,7 +627,8 @@ def autoplay_loop():
             break
         try:
             do_step()
-        except Exception:with lock:
+        except Exception:
+            with lock:
                 running = False
             break
         time.sleep(0.15)
@@ -691,7 +698,7 @@ def search_hf_models(query):
 def fetch_hf_license_evidence(source):
     """Fetch pinned HF metadata plus bounded README/LICENSE excerpts; never approve."""
     import urllib.parse
-    from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError, URLError
     parsed = urllib.parse.urlparse((source or '').strip())
     if parsed.scheme != 'https' or parsed.hostname != 'huggingface.co' or parsed.port or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('Automatyczne pobieranie dowodów obsługuje wyłącznie repozytoria huggingface.co przez HTTPS')
@@ -710,7 +717,8 @@ def fetch_hf_license_evidence(source):
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ValueError(f'Nie udało się pobrać metadanych repozytorium Hugging Face: {exc}') from exc
     card_data = card.get('cardData') or {}
-    tags = card.get('tags') or []license_name = card_data.get('license') or next((t.split(':', 1)[1] for t in tags if isinstance(t, str) and t.startswith('license:')), '')
+    tags = card.get('tags') or []
+    license_name = card_data.get('license') or next((t.split(':', 1)[1] for t in tags if isinstance(t, str) and t.startswith('license:')), '')
     license_url = card_data.get('license_link') or ''
     siblings = card.get('siblings') or []
     filenames = sorted({item.get('rfilename') for item in siblings if isinstance(item, dict) and isinstance(item.get('rfilename'), str)})
@@ -790,7 +798,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
                   FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
                   ORDER BY m.name''').fetchall()
-            models = []
+models = []
             for row in rows:
                 item = dict(row)
                 try:
@@ -799,7 +807,8 @@ class Handler(BaseHTTPRequestHandler):
                     item['inference'] = league.normalize_inference_config(metadata)
                     item['token_budget'] = league.token_budget_info(
                         item.get('sha256'), item.get('draft_sha256'), metadata)
-                except (TypeError, json.JSONDecodeError, ValueError):item['license_evidence'] = None
+                except (TypeError, json.JSONDecodeError, ValueError):
+                    item['license_evidence'] = None
                     item['inference'] = {'thinking': False}
                     item.pop('metadata_json', None)
                 models.append(item)
@@ -888,7 +897,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path == '/api/models/verify-license':
                     if payload.get('confirm_review') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
-                    version_id = int(payload.get('version_id', 0))if version_id < 1:
+                    version_id = int(payload.get('version_id', 0))
+if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
                     with league.connect() as c:
                         row = c.execute('SELECT id,source,license,metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
