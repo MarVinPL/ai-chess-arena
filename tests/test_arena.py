@@ -17,6 +17,8 @@ class ArenaSmokeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tempdir = tempfile.TemporaryDirectory()
         server.DB = Path(cls.tempdir.name) / 'test.sqlite3'
+        cls.old_league_db = server.league.DB
+        server.league.DB = server.DB
         server.db_init()
         pgn = '[Event "Automated export test"]\n[Result "1-0"]\n\n1. e4 e5 1-0'
         with sqlite3.connect(server.DB) as db:
@@ -34,6 +36,7 @@ class ArenaSmokeTests(unittest.TestCase):
         cls.http.shutdown()
         cls.http.server_close()
         cls.thread.join(timeout=2)
+        server.league.DB = cls.old_league_db
         cls.tempdir.cleanup()
 
     def test_python_chess_legal_start_position(self):
@@ -68,6 +71,53 @@ class ArenaSmokeTests(unittest.TestCase):
         with urllib.request.urlopen(self.base + '/api/models') as response:
             self.assertEqual(response.status, 200)
             self.assertIsInstance(__import__('json').loads(response.read()), list)
+
+    def _post_json(self, path, payload):
+        request = urllib.request.Request(
+            self.base + path,
+            data=__import__('json').dumps(payload).encode(),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        return urllib.request.urlopen(request)
+
+    def test_license_verification_requires_explicit_confirmation(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('License Test','PURE_AI','now')")
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,license,created_at) VALUES((SELECT id FROM league_models WHERE name='License Test'),'license-test','https://huggingface.co/example/model','MIT','now')")
+            version_id = db.execute("SELECT id FROM model_versions WHERE version_key='license-test'").fetchone()[0]
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post_json('/api/models/verify-license', {'version_id': version_id})
+        self.assertEqual(ctx.exception.code, 422)
+        with sqlite3.connect(server.DB) as db:
+            self.assertEqual(db.execute('SELECT license_verified FROM model_versions WHERE id=?', (version_id,)).fetchone()[0], 0)
+
+    def test_license_verification_marks_only_selected_version(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('License Approved','PURE_AI','now')")
+            model_id = db.execute("SELECT id FROM league_models WHERE name='License Approved'").fetchone()[0]
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,license,created_at) VALUES(?,?,?,?,?)", (model_id, 'approved-test', 'https://huggingface.co/example/approved', 'Apache-2.0', 'now'))
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,license,created_at) VALUES(?,?,?,?,?)", (model_id, 'sibling-test', 'https://huggingface.co/example/sibling', 'MIT', 'now'))
+            version_id = db.execute("SELECT id FROM model_versions WHERE version_key='approved-test'").fetchone()[0]
+            sibling_id = db.execute("SELECT id FROM model_versions WHERE version_key='sibling-test'").fetchone()[0]
+        with self._post_json('/api/models/verify-license', {'version_id': version_id, 'confirm_review': True}) as response:
+            data = __import__('json').loads(response.read())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data, {'version_id': version_id, 'license_verified': True})
+        with sqlite3.connect(server.DB) as db:
+            self.assertEqual(db.execute('SELECT license_verified FROM model_versions WHERE id=?', (version_id,)).fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT license_verified FROM model_versions WHERE id=?', (sibling_id,)).fetchone()[0], 0)
+
+    def test_license_verification_rejects_unknown_license(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('Unknown License','PURE_AI','now')")
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,license,created_at) VALUES((SELECT id FROM league_models WHERE name='Unknown License'),'unknown-license','https://huggingface.co/example/unknown','nieustalona','now')")
+            version_id = db.execute("SELECT id FROM model_versions WHERE version_key='unknown-license'").fetchone()[0]
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post_json('/api/models/verify-license', {'version_id': version_id, 'confirm_review': True})
+        self.assertEqual(ctx.exception.code, 422)
+        with sqlite3.connect(server.DB) as db:
+            self.assertEqual(db.execute('SELECT license_verified FROM model_versions WHERE id=?', (version_id,)).fetchone()[0], 0)
 
     def test_download_requires_explicit_confirmation(self):
         request = urllib.request.Request(self.base + '/api/models/download', data=b'{"version_id":1}', headers={'Content-Type':'application/json'}, method='POST')
