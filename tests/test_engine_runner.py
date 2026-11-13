@@ -1,0 +1,83 @@
+import threading
+import unittest
+import chess
+from engine_runner import SequentialChessRunner, RunnerError
+
+
+class FakeRuntime:
+    def __init__(self):
+        self.calls = []
+    def generate(self, model_path, board, stop_event=None):
+        if stop_event and stop_event.is_set():
+            raise RunnerError('stopped')
+        move = next(iter(board.legal_moves))
+        self.calls.append((str(model_path), board.turn, move.uci()))
+        return move, {'seconds': 0.01, 'runtime': 'fake'}
+
+
+class EngineRunnerTests(unittest.TestCase):
+    def test_models_alternate_and_each_side_uses_own_identity(self):
+        runtime = FakeRuntime()
+        runner = SequentialChessRunner(runtime)
+        # Fool's mate from the standard position, supplied as deterministic fake moves.
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class FoolRuntime:
+            def __init__(self): self.calls = []
+            def generate(self, path, board, stop_event=None):
+                uci = sequence[len(self.calls)]
+                self.calls.append((str(path), board.turn))
+                return chess.Move.from_uci(uci), {'seconds': 0.01}
+        fake = FoolRuntime()
+        result = SequentialChessRunner(fake).play_game(
+            {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
+            {'name': 'Beta', 'path': '/tmp/beta.gguf'})
+        self.assertEqual(result['status'], 'finished')
+        self.assertEqual(result['result'], '0-1')
+        self.assertEqual([x[0] for x in fake.calls], ['/tmp/alpha.gguf', '/tmp/beta.gguf'] * 2)
+        self.assertEqual([m['model'] for m in result['moves']], ['Alpha', 'Beta', 'Alpha', 'Beta'])
+        self.assertIn('[White "Alpha"]', result['pgn'])
+        self.assertIn('[Black "Beta"]', result['pgn'])
+
+    def test_progress_callback_receives_each_validated_move_and_position(self):
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class FoolRuntime:
+            def __init__(self): self.calls = []
+            def generate(self, path, board, stop_event=None):
+                uci = sequence[len(self.calls)]
+                self.calls.append(uci)
+                return chess.Move.from_uci(uci), {'seconds': 0.02}
+        progress = []
+        result = SequentialChessRunner(FoolRuntime()).play_game(
+            {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
+            {'name': 'Beta', 'path': '/tmp/beta.gguf'}, progress=progress.append)
+        self.assertEqual(len(progress), 4)
+        self.assertEqual([item['uci'] for item in progress], sequence)
+        self.assertTrue(all(item.get('fen') for item in progress))
+        self.assertEqual(progress[-1]['san'], 'Qh4#')
+        self.assertEqual(progress[-1]['fen'], result['fen'])
+
+    def test_stop_before_first_move_returns_stopped(self):
+        event = threading.Event(); event.set()
+        result = SequentialChessRunner(FakeRuntime()).play_game(
+            {'name': 'A', 'path': '/tmp/a.gguf'},
+            {'name': 'B', 'path': '/tmp/b.gguf'}, event)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['moves'], [])
+
+    def test_runtime_status_callback_is_optional_and_receives_events(self):
+        from engine_runner import LlamafileRuntime
+        events = []
+        runtime = LlamafileRuntime(on_status=lambda stage, message, **fields: events.append((stage, message, fields)))
+        runtime._notify('generating', 'Model generuje ruch', model='test.gguf', color='white')
+        self.assertEqual(events[0][0], 'generating')
+        self.assertEqual(events[0][2]['model'], 'test.gguf')
+        self.assertEqual(events[0][2]['color'], 'white')
+
+    def test_runtime_never_returns_an_unvalidated_move_from_fake(self):
+        board = chess.Board()
+        bad = chess.Move.from_uci('e2e5')
+        self.assertNotIn(bad, board.legal_moves)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
