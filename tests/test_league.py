@@ -207,6 +207,38 @@ class LeagueTests(unittest.TestCase):
   self.assertTrue(any(r['name']=='Alpha target + MTP' for r in entries))
   self.assertEqual(paired['versions'][0]['draft_filename'],'alpha-draft.gguf')
 
+ def test_same_weights_with_thinking_on_and_off_are_distinct_competitors(self):
+  league.register_model('Alpha thinking ON',source='https://example.test/alpha',license='Apache-2.0',
+   license_verified=True,metadata={'filename':'alpha-on.gguf','sha256':'a'*64,'size_bytes':100,
+                                   'inference':{'thinking':True}})
+  # An exact duplicate of the ON configuration is still deduplicated.
+  league.register_model('Alpha thinking ON duplicate',source='https://example.test/alpha',license='Apache-2.0',
+   license_verified=True,metadata={'filename':'alpha-on-duplicate.gguf','sha256':'a'*64,'size_bytes':100,
+                                   'inference':{'thinking':True}})
+  tournament=league.create_round_robin('Thinking variants')
+  self.assertEqual(tournament['players'],3)
+  self.assertEqual(tournament['games_planned'],6)
+  with league.connect() as c:
+   rows=c.execute('''SELECT m.name,json_extract(v.metadata_json,'$.inference.thinking') AS thinking
+    FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
+    JOIN model_versions v ON v.id=e.version_id WHERE e.tournament_id=?''',(tournament['id'],)).fetchall()
+   pairings=c.execute('SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND white_model_id=black_model_id',(tournament['id'],)).fetchone()[0]
+  self.assertEqual({(r['name'],bool(r['thinking'])) for r in rows if r['name'].startswith('Alpha')},
+                   {('Alpha',False),('Alpha thinking ON',True)})
+  self.assertEqual(pairings,0)
+
+ def test_inference_config_rejects_non_boolean_thinking(self):
+  with self.assertRaisesRegex(ValueError,'true albo false'):
+   league.register_model('Bad thinking',metadata={'inference':{'thinking':'yes'}})
+
+ def test_inference_config_defaults_and_validates_generation_parameters(self):
+  self.assertEqual(league.normalize_inference_config({}),{'thinking':False,'temperature':0.0,'max_tokens':16})
+  self.assertEqual(league.normalize_inference_config({'inference':{'thinking':True}}),
+                   {'thinking':True,'temperature':0.0,'max_tokens':512})
+  for invalid in ({'temperature':2.1},{'temperature':True},{'max_tokens':0},{'max_tokens':8193},{'max_tokens':2.5}):
+   with self.assertRaises(ValueError):
+    league.register_model('Bad config '+str(invalid),metadata={'inference':invalid})
+
  def test_identical_weights_under_different_names_are_not_two_competitors(self):
   with league.connect() as c:
    c.execute("UPDATE model_versions SET sha256=? WHERE model_id=2", ('a'*64,))

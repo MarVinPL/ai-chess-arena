@@ -37,6 +37,23 @@ def init():
   for name, declaration in (('draft_filename','TEXT'),('draft_sha256','TEXT'),('draft_size_bytes','INTEGER'),('draft_status',"TEXT NOT NULL DEFAULT 'catalogued'"),('draft_managed_copy','INTEGER NOT NULL DEFAULT 0'),('draft_download_url','TEXT'),('draft_source_path','TEXT')):
    if name not in cols:
     c.execute(f'ALTER TABLE model_versions ADD COLUMN {name} {declaration}')
+def normalize_inference_config(metadata):
+ metadata = metadata or {}
+ inference = metadata.get('inference', {})
+ if inference is None: inference = {}
+ if not isinstance(inference, dict): raise ValueError('Parametry inferencji muszą być obiektem')
+ unknown = set(inference) - {'thinking', 'temperature', 'max_tokens'}
+ if unknown: raise ValueError('Nieobsługiwane parametry inferencji: ' + ', '.join(sorted(unknown)))
+ thinking = inference.get('thinking', False)
+ if not isinstance(thinking, bool): raise ValueError('Parametr thinking musi mieć wartość true albo false')
+ temperature = inference.get('temperature', 0.0)
+ if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+  raise ValueError('Parametr temperature musi być liczbą od 0 do 2')
+ max_tokens = inference.get('max_tokens', 512 if thinking else 16)
+ if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 8192:
+  raise ValueError('Parametr max_tokens musi być liczbą całkowitą od 1 do 8192')
+ return {'thinking': thinking, 'temperature': float(temperature), 'max_tokens': max_tokens}
+
 def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
  if not name or format not in ('PURE_AI','AI_ENGINE'): raise ValueError('Nieprawidłowa nazwa lub format')
  if license_verified:
@@ -46,6 +63,9 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
   if not normalized_license or normalized_license in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
    raise ValueError('Nie można zatwierdzić nieustalonej licencji')
  metadata = dict(metadata or {})
+ inference_config = normalize_inference_config(metadata)
+ metadata['inference'] = inference_config
+ inference_key = json.dumps(inference_config, sort_keys=True, separators=(',', ':'))
  draft = metadata.get('draft_model')
  if draft is not None:
   if not isinstance(draft, dict): raise ValueError('Nieprawidłowy manifest modelu draft')
@@ -95,23 +115,24 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
    filename=f'{stem}-{digest[:16]}.gguf'
  # Cache paths are unique per catalog entry/configuration. This prevents a
  # cleanup of a standalone target from deleting a shared file used by a pair.
- config_key = hashlib.sha256(f"{digest or ''}:{draft_sha if draft else ''}".encode()).hexdigest()[:16]
+ asset_key = hashlib.sha256(f"{digest or ''}:{draft_sha if draft else ''}".encode()).hexdigest()[:16]
+ config_key = hashlib.sha256(f"{digest or ''}:{draft_sha if draft else ''}:{inference_key}".encode()).hexdigest()[:16]
  if filename:
   with connect() as c:
    collision=c.execute('SELECT 1 FROM model_versions WHERE filename IN (?,?) OR draft_filename IN (?,?) LIMIT 1',(filename,filename,filename,filename)).fetchone()
   if collision:
    metadata.setdefault('source_path', metadata.get('filename') or filename)
-   filename=f'{Path(filename).stem}-{config_key}.gguf'
+   filename=f'{Path(filename).stem}-{asset_key}.gguf'
  if draft:
   with connect() as c:
    collision=c.execute('SELECT 1 FROM model_versions WHERE filename=? OR draft_filename=? LIMIT 1',(draft_filename,draft_filename)).fetchone()
   if collision:
-   draft_filename=f'{Path(draft_filename).stem}-{config_key}.gguf'
+   draft_filename=f'{Path(draft_filename).stem}-{asset_key}.gguf'
  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
  with connect() as c:
   c.execute('INSERT OR IGNORE INTO league_models(name,format,created_at) VALUES(?,?,?)',(name,format,now)); m=c.execute('SELECT id,format FROM league_models WHERE name=?',(name,)).fetchone()
   if m['format']!=format: raise ValueError('Model istnieje w innym formacie')
-  version_key=(config_key if draft else digest) if digest else (filename or ('catalog:'+name))
+  version_key=config_key if digest else (filename or ('catalog:'+name))
   c.execute('''INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at,draft_filename,draft_sha256,draft_size_bytes,draft_download_url,draft_source_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now,draft_filename if draft else None,draft.get('sha256') if draft else None,draft.get('size_bytes') if draft else None,draft.get('download_url') if draft else None,draft.get('source_path') if draft else None))
   vs=c.execute('SELECT * FROM model_versions WHERE model_id=? ORDER BY id DESC',(m['id'],)).fetchall()
   return {'id':m['id'],'name':name,'format':format,'versions':[dict(v) for v in vs]}
@@ -119,24 +140,24 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
  if isinstance(qualification_percent,bool) or not isinstance(qualification_percent,int) or not 75<=qualification_percent<=90:
   raise ValueError('Procent awansu do draftu musi wynosić od 75 do 90')
  with connect() as c:
-  candidates=c.execute('''SELECT m.id,
-      (SELECT v.id FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
-       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
-       ORDER BY v.id DESC LIMIT 1) AS version_id,
-      (SELECT v.sha256 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
-       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
-       ORDER BY v.id DESC LIMIT 1) AS model_sha256
-      FROM league_models m WHERE m.active=1 AND m.format=?
-      AND EXISTS(SELECT 1 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
-       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0)
-      ORDER BY m.id''',(format,)).fetchall()
-  # A target-only configuration and a target+draft configuration are distinct entrants; exact duplicates are not.
-  ms=[]; seen_hashes=set()
+  candidates=c.execute('''SELECT m.id,v.id AS version_id,v.sha256 AS model_sha256,
+      COALESCE(v.draft_sha256,'') AS draft_sha256,v.metadata_json
+      FROM league_models m JOIN model_versions v ON v.id=(
+       SELECT v2.id FROM model_versions v2 WHERE v2.model_id=m.id AND v2.license_verified=1
+       AND v2.source<>'' AND v2.filename IS NOT NULL AND v2.sha256 IS NOT NULL AND v2.size_bytes>0
+       ORDER BY v2.id DESC LIMIT 1)
+      WHERE m.active=1 AND m.format=? ORDER BY m.id''',(format,)).fetchall()
+  # A competitor is an immutable model+draft+inference configuration. The same
+  # GGUF may therefore enter twice when thinking differs, but exact duplicates do not.
+  ms=[]; seen_configs=set()
   for candidate in candidates:
-   version=c.execute('SELECT draft_sha256 FROM model_versions WHERE id=?',(candidate['version_id'],)).fetchone()
-   identity=((candidate['model_sha256'] or '').lower(), (version['draft_sha256'] or '').lower())
-   if identity in seen_hashes: continue
-   seen_hashes.add(identity); ms.append(candidate)
+   metadata=json.loads(candidate['metadata_json'] or '{}')
+   inference=normalize_inference_config(metadata)
+   identity=((candidate['model_sha256'] or '').lower(),
+             (candidate['draft_sha256'] or '').lower(),
+             json.dumps(inference,sort_keys=True,separators=(',',':')))
+   if identity in seen_configs: continue
+   seen_configs.add(identity); ms.append(candidate)
   if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch różnych modeli z jawnie zweryfikowaną licencją')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid

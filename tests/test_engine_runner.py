@@ -296,6 +296,50 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(blocked, [])
         self.assertIn(chess.Move.from_uci('e1d1'), allowed)
 
+    def test_thinking_setting_is_passed_per_competitor_and_saved_with_moves(self):
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class ThinkingRuntime:
+            def __init__(self): self.settings=[]
+            def generate(self, path, board, stop_event=None, recent_moves=None, enable_thinking=False, temperature=0.0, max_tokens=16):
+                self.settings.append((bool(enable_thinking),float(temperature),int(max_tokens)))
+                uci=sequence[len(self.settings)-1]
+                return chess.Move.from_uci(uci), {'seconds':0.01,'thinking':bool(enable_thinking)}
+        fake=ThinkingRuntime()
+        result=SequentialChessRunner(fake).play_game(
+            {'name':'Alpha · thinking ON','path':'/tmp/a.gguf','thinking':True,
+             'inference':{'thinking':True,'temperature':0.25,'max_tokens':512}},
+            {'name':'Alpha · thinking OFF','path':'/tmp/a.gguf','thinking':False,
+             'inference':{'thinking':False,'temperature':0.0,'max_tokens':16}})
+        self.assertEqual(fake.settings,[(True,0.25,512),(False,0.0,16),(True,0.25,512),(False,0.0,16)])
+        self.assertEqual([m['thinking'] for m in result['moves']],[True,False,True,False])
+        self.assertEqual(result['moves'][0]['inference']['max_tokens'],512)
+
+    def test_llamafile_payload_enables_thinking_for_selected_competitor(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            status=200
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+            def read(self): return b'{"choices":[{"message":{"content":"e2e4"}}]}'
+        runtime=LlamafileRuntime()
+        runtime.ensure_loaded=lambda *args,**kwargs: None
+        captured={}
+        def fake_open(request,timeout=None):
+            captured['payload']=json.loads(request.data.decode())
+            return Response()
+        try:
+            with patch('engine_runner.urllib.request.urlopen',side_effect=fake_open):
+                move,meta=runtime.generate('/tmp/model.gguf',chess.Board(),enable_thinking=True,max_tokens=512,temperature=0.25)
+        finally:
+            runtime.shutdown()
+        self.assertEqual(move.uci(),'e2e4')
+        self.assertTrue(captured['payload']['chat_template_kwargs']['enable_thinking'])
+        self.assertEqual(captured['payload']['max_tokens'],512)
+        self.assertEqual(captured['payload']['temperature'],0.25)
+        self.assertTrue(meta['thinking'])
+
     def test_sequential_runner_passes_move_history_to_both_models(self):
         sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
         class HistoryRuntime:

@@ -384,6 +384,11 @@ def tournament_loop(tournament_id):
             draft_enabled = tournament['rules_version'] == '2'
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
             players = {r['model_id']: {'name': r['name'], 'version_id': r['version_id']} for r in entries}
+            for player in players.values():
+                manifest = _version_record(player['version_id'])
+                player['inference'] = league.normalize_inference_config(
+                    json.loads(manifest.get('metadata_json') or '{}'))
+                player['thinking'] = player['inference']['thinking']
             pairings = c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id", (tournament_id,)).fetchall()
             if any(row['white_model_id'] == row['black_model_id'] for row in pairings):
                 raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
@@ -413,7 +418,7 @@ def tournament_loop(tournament_id):
                     set_live('passkey_question',f'Test Passkey: {label}', model=player['name'], question_no=question_no)
                     if tournament_stop_event.is_set():
                         break
-                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'))
+                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900)
                     with sqlite3.connect(DB) as db:
                         db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at,question_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (tournament_id, player_id, player['name'], question_no, question,
@@ -771,9 +776,12 @@ class Handler(BaseHTTPRequestHandler):
             for row in rows:
                 item = dict(row)
                 try:
-                    item['license_evidence'] = json.loads(item.pop('metadata_json') or '{}').get('license_evidence')
-                except (TypeError, json.JSONDecodeError):
+                    metadata = json.loads(item.pop('metadata_json') or '{}')
+                    item['license_evidence'] = metadata.get('license_evidence')
+                    item['inference'] = league.normalize_inference_config(metadata)
+                except (TypeError, json.JSONDecodeError, ValueError):
                     item['license_evidence'] = None
+                    item['inference'] = {'thinking': False}
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)

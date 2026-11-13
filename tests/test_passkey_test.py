@@ -64,6 +64,31 @@ class PasskeyTestTests(unittest.TestCase):
         self.assertIsNone(opened.call_args.kwargs['timeout'])
         self.assertEqual(runtime.loaded, ['/models/a.gguf'])
 
+    def test_thinking_mode_and_token_budget_are_used_for_passkey_answers(self):
+        runtime=FakeRuntime()
+        captured={}
+        def fake_open(request, timeout=None):
+            captured['payload']=json.loads(request.data.decode())
+            return FakeResponse()
+        with patch.object(passkey_test.urllib.request,'urlopen',side_effect=fake_open):
+            result=passkey_test.ask_passkey_question(runtime,'/tmp/model.gguf','Pytanie',
+                enable_thinking=True,temperature=0.25,max_tokens=1800)
+        self.assertEqual(result['status'],'answered')
+        self.assertTrue(captured['payload']['chat_template_kwargs']['enable_thinking'])
+        self.assertEqual(captured['payload']['temperature'],0.25)
+        self.assertEqual(captured['payload']['max_tokens'],1800)
+
+    def test_default_mode_keeps_thinking_disabled(self):
+        runtime=FakeRuntime()
+        captured={}
+        def fake_open(request, timeout=None):
+            captured['payload']=json.loads(request.data.decode())
+            return FakeResponse()
+        with patch.object(passkey_test.urllib.request,'urlopen',side_effect=fake_open):
+            passkey_test.ask_passkey_question(runtime,'/tmp/model.gguf','Pytanie')
+        self.assertFalse(captured['payload']['chat_template_kwargs']['enable_thinking'])
+        self.assertEqual(captured['payload']['max_tokens'],900)
+
     def test_stop_does_not_submit_question(self):
         event=threading.Event(); event.set(); runtime=FakeRuntime()
         with patch.object(passkey_test.urllib.request, 'urlopen') as opened:
