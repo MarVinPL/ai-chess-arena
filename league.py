@@ -98,7 +98,7 @@ def token_budget_info(model_sha256, draft_sha256, metadata):
  with connect() as c:
   row=c.execute('SELECT current_max_tokens,pending_max_tokens,last_reason,low_usage_samples FROM token_budget_profiles WHERE config_key=?',(key,)).fetchone()
  if row is None:
-return {'config_key':key,'current_max_tokens':base,'pending_max_tokens':None,'last_reason':None,'low_usage_samples':0}
+  return {'config_key':key,'current_max_tokens':base,'pending_max_tokens':None,'last_reason':None,'low_usage_samples':0}
  return {'config_key':key,'current_max_tokens':int(row['current_max_tokens']),'pending_max_tokens':int(row['pending_max_tokens']) if row['pending_max_tokens'] is not None else None,'last_reason':row['last_reason'],'low_usage_samples':int(row['low_usage_samples'])}
 
 
@@ -198,7 +198,7 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
   raise ValueError('Nieprawidłowy rozmiar manifestu modelu')
  p=(MODEL_DIR/filename).resolve() if filename else None; status='catalogued'
  if p:
-if p.parent!=MODEL_DIR.resolve() or p.suffix.lower()!='.gguf': raise ValueError('Nieprawidłowa ścieżka GGUF')
+  if p.parent!=MODEL_DIR.resolve() or p.suffix.lower()!='.gguf': raise ValueError('Nieprawidłowa ścieżka GGUF')
   if p.is_file():
    actual_size=p.stat().st_size; h=hashlib.sha256()
    with p.open('rb') as f:
@@ -298,7 +298,7 @@ def _league_standings(c,tournament_id):
  return sorted((dict(r) for r in rows),key=lambda r:(-r['points'],-r['wins'],-r['draws'],r['name'].casefold()))
 
 def _draft_qualifiers(standings,qualification_percent):
-target=max(2,math.ceil(len(standings)*qualification_percent/100))
+ target=max(2,math.ceil(len(standings)*qualification_percent/100))
  winners=[row for row in standings if row['wins']>0]
  non_winners=[row for row in standings if row['wins']==0]
  selected_ids={row['model_id'] for row in winners}
@@ -398,7 +398,7 @@ def draft_champion(tournament_id):
 def elo_ratings(format='PURE_AI',k=32.0):
  with connect() as c:
   ps=c.execute('SELECT id,name FROM league_models WHERE active=1 AND format=? ORDER BY name',(format,)).fetchall(); ratings={p['id']:INITIAL_ELO for p in ps}; stats={p['id']:{'wins':0,'draws':0,'losses':0,'games':0,'score':0.0} for p in ps}
-rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
+  rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
   for g in rows:
    w=ids.get(g['white_model']); b=ids.get(g['black_model'])
    if w is None or b is None: continue
