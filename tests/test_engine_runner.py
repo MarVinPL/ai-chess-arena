@@ -237,6 +237,48 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('LEGAL MOVES:', retry_prompt)
 
 
+    def test_reported_g6d8_failure_preserves_both_uci_attempts(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+
+        fen = '8/2pp2pp/b1n3rk/1p3n2/p3qP2/b7/PPPPP1PP/R1BQKBR1 b Q - 11 30'
+        board = chess.Board(fen)
+        original_fen = board.fen()
+
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{
+                    'message': {'content': content}, 'finish_reason': 'stop'
+                }]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+
+        outputs = iter(['g6d8', 'g6d8'])
+        def fake_urlopen(request, timeout=None):
+            return Response(next(outputs))
+
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch(
+                    'urllib.request.urlopen', side_effect=fake_urlopen):
+                with self.assertRaisesRegex(RunnerError, 'po 2 próbach') as caught:
+                    runtime.generate('/tmp/model.gguf', board)
+        finally:
+            runtime.shutdown()
+
+        self.assertEqual(board.fen(), original_fen)
+        self.assertEqual(len(caught.exception.uci_attempts), 2)
+        self.assertEqual(
+            [item['candidate_uci'] for item in caught.exception.uci_attempts],
+            ['g6d8', 'g6d8'])
+        self.assertEqual(
+            [item['classification'] for item in caught.exception.uci_attempts],
+            ['illegal_uci', 'illegal_uci'])
+        self.assertTrue(all(not item['valid_move']
+                            for item in caught.exception.budget_observations))
+
 
     def test_watchdog_restarts_an_unexpectedly_stopped_owned_process(self):
         import tempfile

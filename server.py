@@ -516,7 +516,16 @@ def tournament_loop(tournament_id):
         set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
     except Exception as exc:
         tournament_error = str(exc)
-        set_live('error','Błąd turnieju: '+str(exc), error=str(exc))
+        diagnostics = {}
+        if isinstance(exc, engine_runner.RunnerError):
+            diagnostics = {
+                'model': exc.model_name,
+                'color': exc.color,
+                'fen': exc.fen,
+                'legal_moves': exc.legal_moves,
+                'uci_attempts': exc.uci_attempts,
+            }
+        set_live('error','Błąd turnieju: '+str(exc), error=str(exc), **diagnostics)
         with league.connect() as c:
             c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
     finally:
