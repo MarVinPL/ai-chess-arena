@@ -84,6 +84,12 @@ class LlamafileRuntime:
                 # RLock keeps this check/restart atomic relative to an intentional stop().
                 self.ensure_loaded(model_path, draft_path)
             except Exception as exc:
+                # A failed recovery attempt must remain eligible for the next
+                # watchdog cycle. Preserve the desired model unless stop() was
+                # explicitly requested after this recovery attempt.
+                if self._desired_model_path is None:
+                    self._desired_model_path = model_path
+                    self._desired_draft_model_path = draft_path
                 self._notify('model_watchdog_error',
                              'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
                              model=model_path.name, error=str(exc))
@@ -113,6 +119,13 @@ class LlamafileRuntime:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=5)
+
+    def shutdown(self) -> None:
+        """Stop the owned process and terminate the watchdog thread at runtime end."""
+        self._monitor_stop.set()
+        self.stop()
+        if threading.current_thread() is not self._monitor_thread:
+            self._monitor_thread.join(timeout=self.startup_timeout + 2)
 
     def ensure_loaded(self, model_path: str | Path, draft_model_path: str | Path | None = None) -> None:
         path = Path(model_path).resolve(strict=True)
