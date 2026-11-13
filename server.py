@@ -648,7 +648,7 @@ def search_hf_models(query):
 
 
 def fetch_hf_license_evidence(source):
-    """Fetch provenance evidence from Hugging Face without approving a license."""
+    """Fetch pinned HF metadata plus bounded README/LICENSE excerpts; never approve."""
     import urllib.parse
     from urllib.error import HTTPError, URLError
     parsed = urllib.parse.urlparse((source or '').strip())
@@ -663,7 +663,7 @@ def fetch_hf_license_evidence(source):
     req = urllib.request.Request(api_url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=12) as response:
-            if response.geturl().split('/')[2] != 'huggingface.co':
+            if urllib.parse.urlparse(response.geturl()).hostname != 'huggingface.co':
                 raise ValueError('Nieoczekiwane przekierowanie podczas pobierania metadanych')
             card = json.loads(response.read(1_000_000))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
@@ -673,17 +673,48 @@ def fetch_hf_license_evidence(source):
     license_name = card_data.get('license') or next((t.split(':', 1)[1] for t in tags if isinstance(t, str) and t.startswith('license:')), '')
     license_url = card_data.get('license_link') or ''
     siblings = card.get('siblings') or []
-    license_files = sorted({item.get('rfilename') for item in siblings if isinstance(item, dict) and item.get('rfilename') and item.get('rfilename').split('/')[-1].lower() in ('license', 'license.md', 'license.txt', 'copying', 'copying.md', 'notice', 'notice.md')})
+    filenames = sorted({item.get('rfilename') for item in siblings if isinstance(item, dict) and isinstance(item.get('rfilename'), str)})
+    license_files = [name for name in filenames if name.split('/')[-1].lower() in ('license', 'license.md', 'license.txt', 'copying', 'copying.md', 'notice', 'notice.md')]
+    readme_file = next((name for name in filenames if name.lower() == 'readme.md'), None)
+    revision = card.get('sha') if isinstance(card.get('sha'), str) and re.fullmatch(r'[0-9a-fA-F]{40}', card.get('sha')) else 'main'
+
+    def fetch_document(filename, limit):
+        quoted_path = '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/'))
+        raw_url = 'https://huggingface.co/' + repo + '/raw/' + revision + '/' + quoted_path
+        request = urllib.request.Request(raw_url, headers={'User-Agent': 'LocalAIChessArena/0.1', 'Accept': 'text/plain'})
+        try:
+            with urllib.request.urlopen(request, timeout=12) as response:
+                if urllib.parse.urlparse(response.geturl()).hostname != 'huggingface.co':
+                    raise ValueError('Nieoczekiwane przekierowanie dokumentu poza huggingface.co')
+                payload = response.read(limit + 1)
+            truncated = len(payload) > limit
+            payload = payload[:limit]
+            decoded = payload.decode('utf-8', errors='replace')
+            return {
+                'path': filename, 'url': raw_url, 'sha256': hashlib.sha256(payload).hexdigest(),
+                'bytes': len(payload), 'truncated': truncated, 'excerpt': decoded
+            }
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            return {'path': filename, 'url': raw_url, 'fetch_error': str(exc)[:300]}
+
+    documents = []
+    if readme_file:
+        documents.append(fetch_document(readme_file, 32768))
+    for filename in license_files[:3]:
+        documents.append(fetch_document(filename, 65536))
+    successful_docs = [doc for doc in documents if 'excerpt' in doc]
     evidence = {
         'provider': 'Hugging Face', 'repo_id': repo, 'repo_url': 'https://huggingface.co/' + repo,
-        'api_url': api_url, 'revision': card.get('sha'), 'readme_url': 'https://huggingface.co/' + repo + '/blob/' + (card.get('sha') or 'main') + '/README.md',
+        'api_url': api_url, 'revision': revision,
+        'readme_url': 'https://huggingface.co/' + repo + '/blob/' + revision + '/README.md',
         'license': license_name or None, 'license_link': license_url or None,
-        'license_files': ['https://huggingface.co/' + repo + '/blob/' + (card.get('sha') or 'main') + '/' + '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/')) for filename in license_files],
+        'license_files': ['https://huggingface.co/' + repo + '/blob/' + revision + '/' + '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/')) for filename in license_files],
         'license_name': card_data.get('license_name'), 'base_model': card_data.get('base_model'),
         'tags': [t for t in tags if isinstance(t, str) and t.startswith('license:')],
+        'documents': documents,
         'fetched_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'evidence_status': 'metadata_found' if license_name else 'license_not_declared',
-        'approval_note': 'Metadane źródłowe nie stanowią opinii prawnej ani automatycznej zgody na użycie.'
+        'evidence_status': 'metadata_and_documents_found' if license_name and successful_docs else ('documents_found_metadata_missing' if successful_docs else ('metadata_found' if license_name else 'license_not_declared')),
+        'approval_note': 'Treść dokumentów jest dowodem źródłowym, nie opinią prawną ani automatyczną zgodą. Weryfikacja wymaga ludzkiego przeglądu warunków.'
     }
     return evidence
 
