@@ -262,6 +262,8 @@ def tournament_loop(tournament_id):
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
             players = {r['model_id']: {'name': r['name'], 'version_id': r['version_id']} for r in entries}
             pairings = c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND status='pending' ORDER BY id", (tournament_id,)).fetchall()
+            if any(row['white_model_id'] == row['black_model_id'] for row in pairings):
+                raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
             if not pairings:
                 c.execute("UPDATE tournaments SET status='completed' WHERE id=?", (tournament_id,))
                 return

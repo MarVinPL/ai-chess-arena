@@ -19,6 +19,9 @@ class LeagueTests(unittest.TestCase):
   with league.connect() as c:
    self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_pairings').fetchone()[0],2)
    self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_entries').fetchone()[0],2)
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_pairings WHERE white_model_id=black_model_id').fetchone()[0],0)
+   pairings=c.execute('SELECT white_model_id,black_model_id FROM tournament_pairings').fetchall()
+   self.assertTrue(all(row['white_model_id'] != row['black_model_id'] for row in pairings))
 
  def test_catalogued_models_are_tournament_eligible_without_local_gguf(self):
   tournament=league.create_round_robin('Remote cache test')
