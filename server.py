@@ -383,12 +383,17 @@ def tournament_loop(tournament_id):
                 raise RuntimeError('Nie znaleziono turnieju')
             draft_enabled = tournament['rules_version'] == '2'
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
-            players = {r['model_id']: {'name': r['name'], 'version_id': r['version_id']} for r in entries}
-            for player in players.values():
+            players = {r['model_id']: {'model_id': r['model_id'], 'name': r['name'], 'version_id': r['version_id']} for r in entries}
+            budget_snapshots = league.prepare_tournament_budgets(tournament_id)
+            for model_id, player in players.items():
                 manifest = _version_record(player['version_id'])
-                player['inference'] = league.normalize_inference_config(
+                player['base_inference'] = league.normalize_inference_config(
                     json.loads(manifest.get('metadata_json') or '{}'))
+                player['inference'] = dict(player['base_inference'])
+                player['inference']['max_tokens'] = budget_snapshots[model_id]
                 player['thinking'] = player['inference']['thinking']
+                player['model_sha256'] = manifest.get('sha256')
+                player['draft_sha256'] = manifest.get('draft_sha256')
             pairings = c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id", (tournament_id,)).fetchall()
             if any(row['white_model_id'] == row['black_model_id'] for row in pairings):
                 raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
@@ -456,13 +461,34 @@ def tournament_loop(tournament_id):
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
+            def publish_move(move):
+                set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
+                         model=move['model'], color=move['color'], pairing_id=pairing['id'],
+                         fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
+                observations = move.get('budget_observations') or []
+                player = players.get(move.get('model_id'))
+                if player and observations:
+                    try:
+                        league.record_token_budget_observations(
+                            tournament_id, move['model_id'], player['model_sha256'],
+                            player['draft_sha256'], player['base_inference'], observations)
+                    except Exception as budget_error:
+                        set_live('token_budget_record_error',
+                                 'Nie zapisano obserwacji limitu tokenów: ' + str(budget_error),
+                                 model=move.get('model'))
             try:
-                result = game_runner.play_game(
-                    game_white, game_black, tournament_stop_event,
-                    progress=lambda move: set_live(
-                        'move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
-                        model=move['model'], color=move['color'], pairing_id=pairing['id'],
-                        fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move)))
+                try:
+                    result = game_runner.play_game(
+                        game_white, game_black, tournament_stop_event,
+                        progress=publish_move)
+                except engine_runner.RunnerError as exc:
+                    failed_player = players.get(exc.model_id)
+                    if failed_player and exc.budget_observations:
+                        league.record_token_budget_observations(
+                            tournament_id, exc.model_id, failed_player['model_sha256'],
+                            failed_player['draft_sha256'], failed_player['base_inference'],
+                            exc.budget_observations)
+                    raise
             finally:
                 tournament_runtime.stop()
                 cleanup_unneeded_models()
@@ -779,6 +805,8 @@ class Handler(BaseHTTPRequestHandler):
                     metadata = json.loads(item.pop('metadata_json') or '{}')
                     item['license_evidence'] = metadata.get('license_evidence')
                     item['inference'] = league.normalize_inference_config(metadata)
+                    item['token_budget'] = league.token_budget_info(
+                        item.get('sha256'), item.get('draft_sha256'), metadata)
                 except (TypeError, json.JSONDecodeError, ValueError):
                     item['license_evidence'] = None
                     item['inference'] = {'thinking': False}

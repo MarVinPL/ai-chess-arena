@@ -13,6 +13,77 @@ class LeagueTests(unittest.TestCase):
    c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(2,'beta-v1','beta.gguf',?,100,'https://example.test/beta','Apache-2.0',1,'now')", ('b'*64,))
  def tearDown(self):
   league.DB=self.old; self.tmp.cleanup()
+ def test_truncated_move_schedules_larger_budget_only_for_next_tournament(self):
+  first=league.create_round_robin('First budget tournament')
+  first_snapshot=league.prepare_tournament_budgets(first['id'])
+  self.assertEqual(first_snapshot[1],16)
+  outcome=league.record_token_budget_observations(first['id'],1,'a'*64,'',{},
+   [{'max_tokens':16,'completion_tokens':16,'finish_reason':'length',
+     'truncated':True,'valid_move':False,'attempt':1}])
+  self.assertEqual(outcome['current_max_tokens'],16)
+  self.assertEqual(outcome['pending_max_tokens'],32)
+  second=league.create_round_robin('Second budget tournament')
+  second_snapshot=league.prepare_tournament_budgets(second['id'])
+  self.assertEqual(second_snapshot[1],32)
+  self.assertEqual(second_snapshot[2],16)
+  self.assertEqual(league.prepare_tournament_budgets(first['id'])[1],16)
+  info=league.token_budget_info('a'*64,'',{})
+  self.assertEqual(info['current_max_tokens'],32)
+  self.assertIsNone(info['pending_max_tokens'])
+
+ def test_repeated_low_usage_schedules_bounded_reduction_for_next_tournament(self):
+  with league.connect() as c:
+   c.execute("UPDATE model_versions SET metadata_json=? WHERE model_id=1",
+    ('{"inference":{"thinking":true,"temperature":0,"max_tokens":512}}',))
+  first=league.create_round_robin('Large budget tournament')
+  snapshot=league.prepare_tournament_budgets(first['id'])
+  self.assertEqual(snapshot[1],512)
+  observations=[{'max_tokens':512,'completion_tokens':5,'finish_reason':'stop',
+                 'truncated':False,'valid_move':True,'attempt':1} for _ in range(20)]
+  outcome=league.record_token_budget_observations(first['id'],1,'a'*64,'',
+   {'inference':{'thinking':True,'temperature':0,'max_tokens':512}},observations)
+  self.assertEqual(outcome['pending_max_tokens'],384)
+  second=league.create_round_robin('Reduced budget tournament')
+  self.assertEqual(league.prepare_tournament_budgets(second['id'])[1],384)
+
+ def test_high_usage_cancels_a_pending_reduction(self):
+  with league.connect() as c:
+   c.execute("UPDATE model_versions SET metadata_json=? WHERE model_id=1",
+    ('{"inference":{"thinking":true,"temperature":0,"max_tokens":512}}',))
+  tournament=league.create_round_robin('Conflicting evidence')
+  league.prepare_tournament_budgets(tournament['id'])
+  low=[{'max_tokens':512,'completion_tokens':5,'finish_reason':'stop',
+        'truncated':False,'valid_move':True,'attempt':1} for _ in range(20)]
+  league.record_token_budget_observations(tournament['id'],1,'a'*64,'',
+   {'inference':{'thinking':True,'temperature':0,'max_tokens':512}},low)
+  self.assertEqual(league.token_budget_info('a'*64,'',
+   {'inference':{'thinking':True,'temperature':0,'max_tokens':512}})['pending_max_tokens'],384)
+  high=[{'max_tokens':512,'completion_tokens':5,'finish_reason':'stop',
+         'truncated':False,'valid_move':True,'attempt':1},
+        {'max_tokens':512,'completion_tokens':300,'finish_reason':'stop',
+         'truncated':False,'valid_move':True,'attempt':2}]
+  result=league.record_token_budget_observations(tournament['id'],1,'a'*64,'',
+   {'inference':{'thinking':True,'temperature':0,'max_tokens':512}},high)
+  self.assertIsNone(result['pending_max_tokens'])
+
+ def test_missing_usage_or_invalid_move_does_not_adjust_budget(self):
+  tournament=league.create_round_robin('No evidence tournament')
+  league.prepare_tournament_budgets(tournament['id'])
+  outcome=league.record_token_budget_observations(tournament['id'],1,'a'*64,'',{},
+   [{'max_tokens':16,'completion_tokens':None,'finish_reason':None,
+     'truncated':False,'valid_move':False,'attempt':1}])
+  self.assertIsNone(outcome['pending_max_tokens'])
+  self.assertEqual(league.token_budget_info('a'*64,'',{})['low_usage_samples'],0)
+
+ def test_adaptive_budget_identity_includes_base_token_budget(self):
+  key_a=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':True,'temperature':0.2,'max_tokens':512}})
+  key_b=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':True,'temperature':0.2,'max_tokens':1024}})
+  key_c=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':False,'temperature':0.2,'max_tokens':512}})
+  key_d=league.adaptive_budget_config_key('a'*64,'c'*64,{'inference':{'thinking':True,'temperature':0.2,'max_tokens':512}})
+  self.assertNotEqual(key_a,key_b)
+  self.assertNotEqual(key_a,key_c)
+  self.assertNotEqual(key_a,key_d)
+
  def test_round_robin_has_two_legs_per_pair(self):
   t=league.create_round_robin('Test Cup')
   self.assertEqual(t['games_planned'],2)
