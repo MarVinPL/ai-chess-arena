@@ -17,6 +17,9 @@ class ArenaSmokeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tempdir = tempfile.TemporaryDirectory()
         server.DB = Path(cls.tempdir.name) / 'test.sqlite3'
+        server.LOG_DIR = Path(cls.tempdir.name) / 'logs'
+        server.MODEL_RESPONSES_LOG = server.LOG_DIR / 'model-responses.jsonl'
+        server.LIVE_EVENTS_LOG = server.LOG_DIR / 'recent-events.jsonl'
         cls.old_league_db = server.league.DB
         server.league.DB = server.DB
         server.db_init()
@@ -62,6 +65,30 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertEqual(rows[1][3], 'Model A')
             self.assertEqual(rows[1][5], '1-0')
             self.assertIn('text/csv', response.headers['Content-Type'])
+
+    def test_live_logs_persist_model_responses_and_recent_events(self):
+        server.set_live('move_generated', 'Model zaproponował ruch: e2e4',
+                        model='TestModel.gguf', color='white', response='e2e4',
+                        proposed_move='e2e4', elapsed_seconds=1.25)
+        self.assertTrue(server.MODEL_RESPONSES_LOG.is_file())
+        self.assertTrue(server.LIVE_EVENTS_LOG.is_file())
+        response_record = __import__('json').loads(server.MODEL_RESPONSES_LOG.read_text(encoding='utf-8').splitlines()[-1])
+        event_record = __import__('json').loads(server.LIVE_EVENTS_LOG.read_text(encoding='utf-8').splitlines()[-1])
+        self.assertEqual(response_record['response'], 'e2e4')
+        self.assertEqual(response_record['model'], 'TestModel.gguf')
+        self.assertEqual(event_record['stage'], 'move_generated')
+        self.assertEqual(event_record['proposed_move'], 'e2e4')
+
+    def test_live_api_restores_logs_when_memory_history_is_empty(self):
+        server.set_live('move_generated', 'Model zaproponował ruch: d2d4',
+                        model='RestartTest.gguf', response='d2d4', proposed_move='d2d4')
+        with server.live_lock:
+            server.live_status['events'] = []
+            server.live_status['response'] = None
+        with urllib.request.urlopen(self.base + '/api/live') as response:
+            payload = __import__('json').loads(response.read())
+        self.assertEqual(payload['response'], 'd2d4')
+        self.assertEqual(payload['events'][0]['stage'], 'move_generated')
 
     def test_game_history_api(self):
         with urllib.request.urlopen(self.base + '/api/games') as response:

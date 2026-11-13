@@ -10,6 +10,7 @@ __pycache__/
 *.db
 *.db-*
 *.log
+logs/
 *.pid
 managed-models/
 backups/
