@@ -449,6 +449,20 @@ def autoplay_loop():
         time.sleep(0.15)
 
 
+def random_hf_model():
+    """Return one randomly selected GGUF candidate from varied public model families."""
+    import random
+    queries = ['Qwen GGUF', 'Llama GGUF', 'Gemma GGUF', 'Phi GGUF',
+               'Mistral GGUF', 'SmolLM GGUF', 'DeepSeek GGUF', 'GLM GGUF']
+    randomizer = random.SystemRandom()
+    randomizer.shuffle(queries)
+    for query in queries:
+        candidates = search_hf_models(query)
+        if candidates:
+            return [randomizer.choice(candidates)]
+    return []
+
+
 def search_hf_models(query):
     import urllib.parse, urllib.request
     query = (query or '').strip()[:100]
@@ -493,7 +507,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if self.path.startswith('/api/models/search'):
+        if self.path == '/api/models/random':
+            try:
+                self.send_json(random_hf_model())
+            except Exception as e: self.send_json({'error':str(e)},422)
+        elif self.path.startswith('/api/models/search'):
             try:
                 from urllib.parse import urlparse, parse_qs
                 query = parse_qs(urlparse(self.path).query).get('q',[''])[0]

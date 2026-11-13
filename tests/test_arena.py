@@ -67,6 +67,13 @@ class ArenaSmokeTests(unittest.TestCase):
         with urllib.request.urlopen(self.base + '/api/games') as response:
             self.assertIn(b'"result": "1-0"', response.read())
 
+    def test_random_model_endpoint_returns_random_candidate(self):
+        candidate = {'name': 'Test/Random-GGUF', 'files': []}
+        with __import__('unittest').mock.patch.object(server, 'random_hf_model', return_value=[candidate]):
+            with urllib.request.urlopen(self.base + '/api/models/random') as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(__import__('json').loads(response.read()), [candidate])
+
     def test_model_registry_exposes_version_and_ownership_fields(self):
         with urllib.request.urlopen(self.base + '/api/models') as response:
             self.assertEqual(response.status, 200)
