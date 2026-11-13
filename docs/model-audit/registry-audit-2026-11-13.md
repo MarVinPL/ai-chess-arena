@@ -34,7 +34,7 @@ Wszystkie rekordy mają `active=1`, `status=catalogued`, `runtime=llamafile` i `
 **Wersje 1–3**
 - Wpisy mają dokładny rozmiar i SHA-256; źródła #1 i #2 są przypięte do rewizji repozytorium, a #3 ma przypiętą rewizję w `download_url`.
 - Wszystkie trzy mają odrębne SHA-256, więc nie są duplikatami na podstawie zapisanych hashy.
-- Były używane jako zawodnicy w turniejach #1–5. Nie oznacza to jednak, że pliki są obecnie dostępne: `managed_copy=0`, a współdzielonego katalogu modeli nie sprawdzano.
+- Wpisy tych wersji występują w historii turniejów #1–5, a roster turnieju #5 obejmuje wszystkie trzy. Nie oznacza to jednak, że pliki są obecnie dostępne: `managed_copy=0`, a współdzielonego katalogu modeli nie sprawdzano.
 - Publiczne karty Qwen2.5, SmolLM2 i Qwen2 oznaczają licencję Apache-2.0.
 
 **Wersje 4–7**
