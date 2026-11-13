@@ -345,13 +345,17 @@ def tournament_loop(tournament_id):
         with league.connect() as c:
             c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
     finally:
-        if tournament_runtime:
-            tournament_runtime.stop()
-        tournament_runtime = None
         try:
-            cleanup_unneeded_models()
-        except Exception as cleanup_exc:
-            tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+            if tournament_runtime:
+                try:
+                    tournament_runtime.stop()
+                except Exception as cleanup_exc:
+                    tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Runner shutdown failed: ' + str(cleanup_exc)
+            tournament_runtime = None
+            try:
+                cleanup_unneeded_models()
+            except Exception as cleanup_exc:
+                tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
         finally:
             model_store.MODEL_LIFECYCLE_LOCK.release()
 
