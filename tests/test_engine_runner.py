@@ -171,5 +171,53 @@ class EngineRunnerTests(unittest.TestCase):
 
 
 
+    def test_watchdog_restarts_an_unexpectedly_stopped_owned_process(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / 'llamafile'; model = root / 'model.gguf'
+            binary.write_text('#!/bin/sh\\n'); binary.chmod(0o700); model.write_bytes(b'model')
+            calls = []
+            class Process:
+                def __init__(self): self.returncode = None
+                def poll(self): return self.returncode
+                def terminate(self): self.returncode = 0
+                def wait(self, timeout=None): return 0
+                def kill(self): self.returncode = -9
+            first = Process()
+            runtime = LlamafileRuntime(binary=binary, popen=lambda args, **kwargs: (calls.append(args) or Process()))
+            runtime._process = first
+            runtime._model_path = model.resolve()
+            runtime._desired_model_path = model.resolve()
+            first.returncode = 1
+            with patch.object(runtime, '_healthy', return_value=True):
+                runtime._monitor_once()
+            self.assertEqual(len(calls), 1)
+            self.assertIsNot(runtime._process, first)
+            self.assertEqual(runtime.loaded_model, str(model.resolve()))
+            runtime.stop()
+            runtime._monitor_stop.set()
+
+    def test_watchdog_does_not_restart_after_intentional_stop(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); binary = root / 'llamafile'; model = root / 'model.gguf'
+            binary.write_text('#!/bin/sh\\n'); binary.chmod(0o700); model.write_bytes(b'model')
+            calls = []
+            runtime = LlamafileRuntime(binary=binary, popen=lambda args, **kwargs: (calls.append(args) or object()))
+            runtime._desired_model_path = model.resolve()
+            runtime.stop()
+            with patch.object(runtime, 'ensure_loaded') as ensure_loaded:
+                runtime._monitor_once()
+                ensure_loaded.assert_not_called()
+            self.assertEqual(calls, [])
+            runtime._monitor_stop.set()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
