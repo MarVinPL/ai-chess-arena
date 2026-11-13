@@ -694,7 +694,7 @@ def fetch_hf_license_evidence(source):
                 'path': filename, 'url': raw_url, 'sha256': hashlib.sha256(payload).hexdigest(),
                 'bytes': len(payload), 'truncated': truncated, 'excerpt': decoded
             }
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
             return {'path': filename, 'url': raw_url, 'fetch_error': str(exc)[:300]}
 
     documents = []
