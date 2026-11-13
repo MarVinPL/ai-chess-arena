@@ -87,7 +87,8 @@ class LlamafileRuntime:
             self._notify('model_watchdog_restart',
                          'Watchdog wykrył niedostępny llamafile; ponawiam uruchomienie',
                          model=model_path.name)
-            try:# RLock keeps this check/restart atomic relative to an intentional stop().
+            try:
+                # RLock keeps this check/restart atomic relative to an intentional stop().
                 self.ensure_loaded(model_path, draft_path)
             except Exception as exc:
                 # A failed recovery attempt must remain eligible for the next
@@ -97,7 +98,7 @@ class LlamafileRuntime:
                     self._desired_model_path = model_path
                     self._desired_draft_model_path = draft_path
                 self._notify('model_watchdog_error',
-                             'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
+'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
                              model=model_path.name, error=str(exc))
 
     def _monitor_loop(self) -> None:
@@ -176,7 +177,8 @@ class LlamafileRuntime:
                 if self._healthy():
                     self._notify('model_ready', f'Model gotowy: {path.name}', model=path.name)
                     return
-                time.sleep(0.5)self.stop()
+                time.sleep(0.5)
+            self.stop()
             raise RunnerError('Przekroczono czas oczekiwania na gotowość llamafile (to nie jest limit czasu ruchu)')
 
     @staticmethod
@@ -196,7 +198,7 @@ class LlamafileRuntime:
                 previous = chess.Move.from_uci(record.get('uci', ''))
             except (ValueError, TypeError):
                 continue
-            piece = board.piece_at(previous.to_square)
+piece = board.piece_at(previous.to_square)
             if not piece or piece.color != board.turn:
                 continue
             expected_piece = record.get('piece')
@@ -265,7 +267,8 @@ class LlamafileRuntime:
             if not isinstance(content, str):
                 content = str(content or '')
             match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-            illegal_uci = Noneblocked_uci = None
+            illegal_uci = None
+            blocked_uci = None
             candidate_valid = False
             if match:
                 candidate = chess.Move.from_uci(match.group(1))
@@ -295,7 +298,7 @@ class LlamafileRuntime:
                                 'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
                 retry_prompt = (f'{feedback}\n'
                                 f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
-                                'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
+'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
                 self._notify('retrying', feedback, model=Path(model_path).name,
                              color=color, fen=board.fen(), legal_moves=legal, response=content[:300],
                              illegal_move=illegal_uci, attempt=2)
@@ -354,7 +357,8 @@ class SequentialChessRunner:
             san = board.san(move)
             piece = board.piece_at(move.from_square)
             piece_symbol = piece.symbol() if piece else None
-            board.push(move)record = {'ply': len(move_records) + 1, 'color': color,
+            board.push(move)
+            record = {'ply': len(move_records) + 1, 'color': color,
                       'model': player['name'], 'model_id': player.get('model_id'),
                       'thinking': bool(inference.get('thinking', False)),
                       'inference': dict(inference),
