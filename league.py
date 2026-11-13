@@ -412,3 +412,4 @@ def elo_ratings(format='PURE_AI',k=32.0):
 def storage_status():
  MODEL_DIR.mkdir(mode=0o700,parents=True,exist_ok=True)
  u=shutil.disk_usage(MODEL_DIR); files=[{'filename':p.name,'size_bytes':p.stat().st_size,'managed_copy':True} for p in sorted(MODEL_DIR.glob('*.gguf')) if p.is_file()]
+ return {'free_bytes':u.free,'total_bytes':u.total,'models':files,'managed_directory':str(MODEL_DIR),'policy':'Arena odczytuje i usuwa wyłącznie własne pliki z managed-models.'}
