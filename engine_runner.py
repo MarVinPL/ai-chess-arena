@@ -18,7 +18,14 @@ API_BASE = 'http://127.0.0.1:8088'
 
 
 class RunnerError(RuntimeError):
-    pass
+    def __init__(self, message, budget_observations=None):
+        super().__init__(message)
+        self.budget_observations = list(budget_observations or [])
+        self.model_id = None
+        self.model_name = None
+        self.inference = None
+        self.model_sha256 = None
+        self.draft_sha256 = None
 
 
 class LlamafileRuntime:
@@ -80,8 +87,7 @@ class LlamafileRuntime:
             self._notify('model_watchdog_restart',
                          'Watchdog wykrył niedostępny llamafile; ponawiam uruchomienie',
                          model=model_path.name)
-            try:
-                # RLock keeps this check/restart atomic relative to an intentional stop().
+            try:# RLock keeps this check/restart atomic relative to an intentional stop().
                 self.ensure_loaded(model_path, draft_path)
             except Exception as exc:
                 # A failed recovery attempt must remain eligible for the next
@@ -170,8 +176,7 @@ class LlamafileRuntime:
                 if self._healthy():
                     self._notify('model_ready', f'Model gotowy: {path.name}', model=path.name)
                     return
-                time.sleep(0.5)
-            self.stop()
+                time.sleep(0.5)self.stop()
             raise RunnerError('Przekroczono czas oczekiwania na gotowość llamafile (to nie jest limit czasu ruchu)')
 
     @staticmethod
@@ -233,6 +238,7 @@ class LlamafileRuntime:
         started = time.monotonic()
         content = ''
         move = None
+        budget_observations = []
         # One bounded retry handles malformed model output without inventing a move.
         # No per-move timeout: user-requested timing is measured, not forfeited.
         for attempt in range(2):
@@ -247,23 +253,36 @@ class LlamafileRuntime:
             with urllib.request.urlopen(request, timeout=None) as response:
                 data = json.loads(response.read().decode())
             try:
-                content = data['choices'][0]['message'].get('content', '')
+                choice = data['choices'][0]
+                content = choice['message'].get('content', '')
+                finish_reason = choice.get('finish_reason')
             except (KeyError, IndexError, TypeError) as exc:
                 raise RunnerError('Nieprawidłowa odpowiedź API llamafile') from exc
+            usage = data.get('usage') if isinstance(data, dict) else None
+            completion_tokens = usage.get('completion_tokens') if isinstance(usage, dict) else None
+            if isinstance(completion_tokens, bool) or not isinstance(completion_tokens, int) or completion_tokens < 0:
+                completion_tokens = None
             if not isinstance(content, str):
                 content = str(content or '')
             match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-            illegal_uci = None
-            blocked_uci = None
+            illegal_uci = Noneblocked_uci = None
+            candidate_valid = False
             if match:
                 candidate = chess.Move.from_uci(match.group(1))
                 if candidate in allowed_moves:
                     move = candidate
-                    break
-                if candidate in board.legal_moves and candidate.uci() in blocked_reversals:
+                    candidate_valid = True
+                elif candidate in board.legal_moves and candidate.uci() in blocked_reversals:
                     blocked_uci = candidate.uci()
                 else:
                     illegal_uci = candidate.uci()
+            truncated = (str(finish_reason).lower() in ('length','max_tokens','max_output_tokens')
+                         or (completion_tokens is not None and completion_tokens >= int(max_tokens)))
+            budget_observations.append({'max_tokens':int(max_tokens),'completion_tokens':completion_tokens,
+                'finish_reason':finish_reason,'truncated':bool(truncated),
+                'valid_move':bool(candidate_valid),'attempt':attempt+1})
+            if candidate_valid:
+                break
             if attempt == 0:
                 if blocked_uci:
                     feedback = (f'Ruch {blocked_uci} jest legalny w szachach, ale powtarza cofnięcie tej samej figury. '
@@ -282,13 +301,15 @@ class LlamafileRuntime:
                              illegal_move=illegal_uci, attempt=2)
         elapsed = time.monotonic() - started
         if move is None:
-            raise RunnerError(f'Model nie zwrócił legalnego ruchu UCI po 2 próbach: {content[:120]!r}')
+            raise RunnerError(f'Model nie zwrócił legalnego ruchu UCI po 2 próbach: {content[:120]!r}',
+                              budget_observations=budget_observations)
         self._notify('move_generated', f'Model zaproponował ruch: {move.uci()}', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=content[:300], proposed_move=move.uci(), elapsed_seconds=round(elapsed,4))
         return move, {'seconds': round(elapsed, 4), 'runtime': 'llamafile',
                       'model_path': str(Path(model_path).resolve()),
                       'draft_model_path': str(Path(draft_model_path).resolve()) if draft_model_path else None,
                       'response': content[:160], 'thinking': bool(enable_thinking),
-                      'temperature': float(temperature), 'max_tokens': int(max_tokens)}
+                      'temperature': float(temperature), 'max_tokens': int(max_tokens),
+                      'budget_observations': budget_observations}
 
 
 class SequentialChessRunner:
@@ -321,14 +342,23 @@ class SequentialChessRunner:
                 kwargs['temperature'] = float(inference['temperature'])
             if inference.get('max_tokens', 16) != 16:
                 kwargs['max_tokens'] = int(inference['max_tokens'])
-            move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+            try:
+                move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+            except RunnerError as exc:
+                exc.model_id = player.get('model_id')
+                exc.model_name = player.get('name')
+                exc.inference = dict(inference)
+                exc.model_sha256 = player.get('model_sha256')
+                exc.draft_sha256 = player.get('draft_sha256')
+                raise
             san = board.san(move)
             piece = board.piece_at(move.from_square)
             piece_symbol = piece.symbol() if piece else None
-            board.push(move)
-            record = {'ply': len(move_records) + 1, 'color': color,
-                      'model': player['name'], 'thinking': bool(inference.get('thinking', False)),
+            board.push(move)record = {'ply': len(move_records) + 1, 'color': color,
+                      'model': player['name'], 'model_id': player.get('model_id'),
+                      'thinking': bool(inference.get('thinking', False)),
                       'inference': dict(inference),
+                      'budget_observations': meta.get('budget_observations', []),
                       'uci': move.uci(), 'san': san, 'piece': piece_symbol,
                       'seconds': meta['seconds'], 'fen': board.fen()}
             move_records.append(record); times.append(meta['seconds'])
@@ -349,4 +379,3 @@ class SequentialChessRunner:
         game.headers['White'] = white
         game.headers['Black'] = black
         game.headers['Result'] = result
-        return str(game)
