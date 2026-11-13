@@ -25,3 +25,10 @@ backups/
 .DS_Store
 .idea/
 .vscode/
+
+# Generated exports and pre-change local copies
+*.pgn
+*.csv
+*.bak-*
+*-wal
+*-shm
