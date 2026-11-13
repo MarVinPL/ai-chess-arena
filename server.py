@@ -305,23 +305,24 @@ def tournament_loop(tournament_id):
         set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id)
         tournament_runtime = engine_runner.LlamafileRuntime(on_status=set_live)
 
-        # Passkey checks run per model; its GGUF is removed after the three questions.
+        # Reuse completed answers for this competitor across tournaments. Once its
+        # three knowledge answers are known, run at most one random health check per tournament.
         for player_id, player in players.items():
-            missing = []
-            for question_no, question in enumerate(passkey_test.QUESTIONS, 1):
-                with sqlite3.connect(DB) as db:
-                    already = db.execute('SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND question_no=?',
-                                         (tournament_id, player_id, question_no)).fetchone()
-                if not already:
-                    missing.append((question_no, question))
-            if not missing or tournament_stop_event.is_set():
+            with sqlite3.connect(DB) as db:
+                known_rows = db.execute("SELECT DISTINCT question_no FROM passkey_test_answers WHERE model_id=? AND status='answered' AND question_no BETWEEN 1 AND ?",
+                                        (player_id, len(passkey_test.QUESTIONS))).fetchall()
+                random_done = db.execute('SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND question_no=0',
+                                          (tournament_id, player_id)).fetchone() is not None
+            questions = passkey_test.questions_for_tournament([row[0] for row in known_rows], random_done)
+            if not questions or tournament_stop_event.is_set():
                 continue
             set_live('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'])
             assets = _prepare_single_model(player)
             player.update(assets)
             try:
-                for question_no, question in missing:
-                    set_live('passkey_question',f'Test Passkey: pytanie {question_no}/3', model=player['name'], question_no=question_no)
+                for question_no, question in questions:
+                    label=f'kontrola losowa' if question_no == 0 else f'pytanie {question_no}/3'
+                    set_live('passkey_question',f'Test Passkey: {label}', model=player['name'], question_no=question_no)
                     if tournament_stop_event.is_set():
                         break
                     answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'))

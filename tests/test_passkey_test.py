@@ -19,6 +19,22 @@ class PasskeyTestTests(unittest.TestCase):
         self.assertIn('RP ID', passkey_test.QUESTIONS[1])
         self.assertIn('Telegram', passkey_test.QUESTIONS[2])
 
+    def test_first_time_competitor_gets_all_three_knowledge_questions(self):
+        self.assertEqual([n for n,_ in passkey_test.questions_for_tournament([])], [1,2,3])
+
+    def test_known_answers_are_reused_and_only_one_random_check_is_scheduled(self):
+        class Chooser:
+            def choice(self, values): return values[1]
+        scheduled=passkey_test.questions_for_tournament([1,2,3],False,Chooser())
+        self.assertEqual(len(scheduled),1)
+        self.assertEqual(scheduled[0][0],0)
+        self.assertEqual(scheduled[0][1],passkey_test.QUESTIONS[1])
+        self.assertEqual(passkey_test.questions_for_tournament([1,2,3],True,Chooser()),[])
+
+    def test_only_missing_knowledge_questions_are_repeated(self):
+        scheduled=passkey_test.questions_for_tournament([1,3])
+        self.assertEqual(scheduled,[(2,passkey_test.QUESTIONS[1])])
+
     def test_answer_uses_no_response_timeout_and_measures_time(self):
         runtime=FakeRuntime()
         with patch.object(passkey_test.urllib.request, 'urlopen', return_value=FakeResponse()) as opened:

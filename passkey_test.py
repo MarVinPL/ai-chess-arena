@@ -1,6 +1,6 @@
 """Fixed Passkey knowledge test for every model entered in a tournament."""
 from __future__ import annotations
-import json, time, urllib.request
+import json, random, time, urllib.request
 
 LLM = "http://127.0.0.1:8088/v1/chat/completions"
 QUESTIONS = (
@@ -8,6 +8,19 @@ QUESTIONS = (
     "Użytkownik rejestruje Passkey na Androidzie w Chrome i w Telegramie. Wyjaśnij znaczenie RP ID, origin, WebAuthn i możliwe problemy przeglądarki wbudowanej.",
     "Zaprojektuj bezpieczne zaproszenie współadministratora do Browser VPS z weryfikacją właściciela przez Telegram i rejestracją własnego Passkey. Uwzględnij jednorazowość, wygaśnięcie i odrzucenie zaproszenia.",
 )
+
+
+def questions_for_tournament(known_question_numbers, random_check_done=False, chooser=None):
+    """Return unanswered knowledge questions, or one random health check once all are known."""
+    known=set(known_question_numbers)
+    missing=[(number,question) for number,question in enumerate(QUESTIONS,1) if number not in known]
+    if missing:
+        return missing
+    if random_check_done:
+        return []
+    chooser=chooser or random.SystemRandom()
+    return [(0,chooser.choice(QUESTIONS))]
+
 
 def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None):
     if draft_model_path:
