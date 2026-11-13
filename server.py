@@ -802,7 +802,7 @@ class Handler(BaseHTTPRequestHandler):
                     CASE WHEN t.rules_version='2' THEN
                       (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
                       ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
-                      MAX(1,CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER))-1
+                      MAX(1,COALESCE((SELECT COUNT(*) FROM tournament_seeds q WHERE q.tournament_id=t.id),CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER)))-1
                     ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
                     FROM tournaments t ORDER BY t.id DESC''').fetchall()
             self.send_json([dict(x) for x in rows])
