@@ -188,7 +188,11 @@ def _ensure_version_file(version_id):
         if expected.stat().st_size != version['size_bytes']:
             raise RuntimeError(f'Rozmiar istniejącego modelu {version_id} nie zgadza się z manifestem')
         return str(_version_path(version))
-    model_store.download_version(version_id, version['source'], version['filename'],
+    import urllib.parse
+    metadata = json.loads(version.get('metadata_json') or '{}')
+    download_url = metadata.get('download_url') or (
+        version['source'].rstrip('/') + '/resolve/main/' + urllib.parse.quote(version['filename'], safe=''))
+    model_store.download_version(version_id, download_url, version['filename'],
                                  version['sha256'], int(version['size_bytes']), True)
     with league.connect() as c:
         refreshed = c.execute("SELECT id,filename,status,license_verified,managed_copy,sha256,size_bytes FROM model_versions WHERE id=?", (version_id,)).fetchone()

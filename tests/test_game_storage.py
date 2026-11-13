@@ -53,6 +53,9 @@ class PerGameStorageTests(unittest.TestCase):
         def download(*args):
             calls.append(args[0])
             return self._fake_download(*args)
+        with league.connect() as c:
+            before = c.execute("SELECT COUNT(*) FROM model_versions WHERE status='catalogued' AND managed_copy=0").fetchone()[0]
+        self.assertEqual(before, 3)
         with patch.object(model_store, 'download_version', side_effect=download), \
              patch('shutil.disk_usage') as disk:
             disk.return_value.free = 10**10
@@ -68,6 +71,11 @@ class PerGameStorageTests(unittest.TestCase):
             rows = c.execute('SELECT id,filename,status,managed_copy FROM model_versions ORDER BY id').fetchall()
         self.assertEqual([r['filename'] for r in rows], ['alpha.gguf', 'beta.gguf', 'unused.gguf'])
         self.assertTrue(all(r['status'] == 'catalogued' and r['managed_copy'] == 0 for r in rows))
+        # Removing the local cache never removes tournament eligibility.
+        tournament = league.create_round_robin('After cache cleanup')
+        with league.connect() as c:
+            entries = c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?', (tournament['id'],)).fetchone()[0]
+        self.assertEqual(entries, 3)
 
     def test_existing_pair_is_kept_without_redownload(self):
         for player in self.players[:2]:

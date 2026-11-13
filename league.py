@@ -1,4 +1,4 @@
-import hashlib,json,shutil,sqlite3,time
+import hashlib,json,re,shutil,sqlite3,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 DB=ROOT/'arena.sqlite3'
@@ -28,27 +28,48 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
    raise ValueError('Zatwierdzona licencja wymaga źródła HTTPS')
   if not normalized_license or normalized_license in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
    raise ValueError('Nie można zatwierdzić nieustalonej licencji')
- p=(MODEL_DIR/filename).resolve() if filename else None; digest=None; size=None; status='catalogued'
+ metadata = dict(metadata or {})
+ # A catalog entry carries an immutable remote manifest; the GGUF itself is
+ # optional and is fetched into the private cache only when a game needs it.
+ if filename is None:
+  filename = metadata.get('filename')
+ digest = metadata.get('sha256')
+ size = metadata.get('size_bytes')
+ if filename is not None and (not isinstance(filename,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf',filename)):
+  raise ValueError('Wymagana bezpieczna nazwa pliku GGUF')
+ if digest is not None and (not isinstance(digest,str) or not re.fullmatch(r'[0-9a-fA-F]{64}',digest)):
+  raise ValueError('Nieprawidłowy SHA-256 manifestu modelu')
+ if size is not None and (not isinstance(size,int) or size <= 0):
+  raise ValueError('Nieprawidłowy rozmiar manifestu modelu')
+ p=(MODEL_DIR/filename).resolve() if filename else None; status='catalogued'
  if p:
-  if p.parent!=MODEL_DIR.resolve() or not p.is_file() or p.suffix.lower()!='.gguf': raise ValueError('Wymagany istniejący GGUF w katalogu managed-models Areny')
-  size=p.stat().st_size; h=hashlib.sha256()
-  with p.open('rb') as f:
-   for chunk in iter(lambda:f.read(1048576),b''): h.update(chunk)
-  digest=h.hexdigest(); status='downloaded'
+  if p.parent!=MODEL_DIR.resolve() or p.suffix.lower()!='.gguf': raise ValueError('Nieprawidłowa ścieżka GGUF')
+  if p.is_file():
+   actual_size=p.stat().st_size; h=hashlib.sha256()
+   with p.open('rb') as f:
+    for chunk in iter(lambda:f.read(1048576),b''): h.update(chunk)
+   actual_digest=h.hexdigest()
+   if size is not None and actual_size != size or digest is not None and actual_digest.lower() != digest.lower(): raise ValueError('Lokalny GGUF nie zgadza się z manifestem SHA-256/rozmiaru')
+   size=actual_size; digest=actual_digest; status='downloaded'
+ if any(value is not None for value in (filename,digest,size)) and not all(value is not None for value in (filename,digest,size)):
+  raise ValueError('Manifest modelu musi zawierać nazwę pliku, rozmiar i SHA-256')
  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
  with connect() as c:
   c.execute('INSERT OR IGNORE INTO league_models(name,format,created_at) VALUES(?,?,?)',(name,format,now)); m=c.execute('SELECT id,format FROM league_models WHERE name=?',(name,)).fetchone()
   if m['format']!=format: raise ValueError('Model istnieje w innym formacie')
   version_key=digest or filename or ('catalog:'+name)
-  c.execute('INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata or {},ensure_ascii=False),status,int(bool(license_verified and source and license)),now))
+  c.execute('INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now))
   vs=c.execute('SELECT * FROM model_versions WHERE model_id=? ORDER BY id DESC',(m['id'],)).fetchall()
   return {'id':m['id'],'name':name,'format':format,'versions':[dict(v) for v in vs]}
 def create_round_robin(name,format='PURE_AI'):
  with connect() as c:
   ms=c.execute('''SELECT m.id,
-      (SELECT v.id FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1 ORDER BY v.id DESC LIMIT 1) AS version_id
+      (SELECT v.id FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
+       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
+       ORDER BY v.id DESC LIMIT 1) AS version_id
       FROM league_models m WHERE m.active=1 AND m.format=?
-      AND EXISTS(SELECT 1 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1)
+      AND EXISTS(SELECT 1 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
+       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0)
       ORDER BY m.id''',(format,)).fetchall()
   if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch aktywnych modeli z jawnie zweryfikowaną licencją')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); tid=c.execute('INSERT INTO tournaments(name,format,created_at) VALUES(?,?,?)',(name,format,now)).lastrowid

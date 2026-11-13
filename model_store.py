@@ -175,8 +175,13 @@ def cleanup_version(version_id: int) -> dict:
         if row['managed_copy'] != 1 or not row['filename']:
             raise PermissionError('Plik nie jest oznaczony jako kopia zarządzana przez arenę')
         path = (MANAGED_DIR / row['filename']).resolve()
-        if path.parent != MANAGED_DIR.resolve() or not path.is_file():
-            raise PermissionError('Ścieżka poza katalogiem zarządzanym lub brak pliku')
+        if path.parent != MANAGED_DIR.resolve():
+            raise PermissionError('Ścieżka poza katalogiem zarządzanym')
+        if not path.exists():
+            c.execute("UPDATE model_versions SET status='catalogued',managed_copy=0 WHERE id=?", (version_id,))
+            return {'version_id': version_id, 'removed': False, 'already_absent': True, 'metadata_retained': True}
+        if not path.is_file():
+            raise PermissionError('Ścieżka kopii areny nie jest zwykłym plikiem')
         users, uncertain = _open_by_process(path)
         if users or uncertain:
             raise RuntimeError(f'Nie można bezpiecznie potwierdzić braku użycia pliku; procesy={users}, niepewność={uncertain}')
