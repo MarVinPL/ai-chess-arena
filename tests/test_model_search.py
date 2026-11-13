@@ -46,5 +46,58 @@ class ModelSearchTests(unittest.TestCase):
         self.assertEqual(result, [])
         self.assertGreater(search.call_count, 1)
 
+    def test_license_evidence_fetches_revision_pinned_readme_and_license_text_without_approving(self):
+        import json
+        class Response:
+            def __init__(self, payload, url):
+                self.payload = payload
+                self.url = url
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, n=-1): return self.payload[:n] if n >= 0 else self.payload
+            def geturl(self): return self.url
+        card = {
+            'sha': 'a' * 40,
+            'cardData': {'license': None, 'base_model': ['Qwen/Qwen2']},
+            'tags': [],
+            'siblings': [{'rfilename': 'README.md'}, {'rfilename': 'LICENSE'}]
+        }
+        def open_url(request, timeout=None):
+            url = request.full_url
+            if '/api/models/' in url:
+                return Response(json.dumps(card).encode(), url)
+            if '/raw/' in url and url.endswith('/README.md'):
+                return Response(b'## Model card\\nEducational notes.', url)
+            if '/raw/' in url and url.endswith('/LICENSE'):
+                return Response(b'License terms: non-commercial.', url)
+            raise AssertionError(url)
+        with patch('urllib.request.urlopen', side_effect=open_url):
+            evidence = server.fetch_hf_license_evidence('https://huggingface.co/example/model')
+        self.assertEqual(evidence['revision'], 'a' * 40)
+        self.assertEqual(evidence['evidence_status'], 'documents_found_metadata_missing')
+        self.assertEqual(len(evidence['documents']), 2)
+        self.assertIn('Educational notes', evidence['documents'][0]['excerpt'])
+        self.assertIn('non-commercial', evidence['documents'][1]['excerpt'])
+        self.assertEqual(evidence['documents'][1]['sha256'], __import__('hashlib').sha256(b'License terms: non-commercial.').hexdigest())
+        self.assertNotIn('license_verified', evidence)
+
+    def test_license_evidence_rejects_document_redirect_outside_huggingface(self):
+        import json
+        class Response:
+            def __init__(self, payload, url): self.payload, self.url = payload, url
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, n=-1): return self.payload[:n] if n >= 0 else self.payload
+            def geturl(self): return self.url
+        card = {'sha': 'b' * 40, 'cardData': {'license': 'apache-2.0'}, 'tags': [], 'siblings': [{'rfilename': 'LICENSE'}]}
+        def open_url(request, timeout=None):
+            url = request.full_url
+            if '/api/models/' in url: return Response(json.dumps(card).encode(), url)
+            return Response(b'not trusted', 'https://evil.example/license')
+        with patch('urllib.request.urlopen', side_effect=open_url):
+            evidence = server.fetch_hf_license_evidence('https://huggingface.co/example/model')
+        self.assertIn('fetch_error', evidence['documents'][0])
+        self.assertEqual(evidence['evidence_status'], 'metadata_found')
+
 if __name__ == '__main__':
     unittest.main()
