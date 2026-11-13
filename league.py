@@ -225,7 +225,8 @@ def next_draft_match(tournament_id):
   if pending: return pending
   winners=[r['winner_model_id'] for r in rows]
   if not rows or any(w is None for w in winners): return None
-  if len(winners)==1: return None
+  # A single play-in winner still advances when the rest received byes.
+  if len(winners)==1 and last != 0: return None
   next_no=last+1
   existing=c.execute("SELECT 1 FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=? LIMIT 1",(tournament_id,next_no)).fetchone()
   if not existing:
@@ -254,7 +255,9 @@ def record_draft_result(pairing_id,result):
   if not p: raise ValueError('Nie znaleziono meczu draft')
   if result=='1-0': winner=p['white_model_id']
   elif result=='0-1': winner=p['black_model_id']
-  else: winner=p['white_model_id'] if p['white_seed']<p['black_seed'] else p['black_model_id']
+  else:
+   # A drawn knockout game is decided in favor of the higher seed (lower seed number).
+   winner=p['white_model_id'] if p['white_seed']<p['black_seed'] else p['black_model_id']
   c.execute("UPDATE tournament_pairings SET status='completed',winner_model_id=? WHERE id=?",(winner,pairing_id))
   return winner
 
