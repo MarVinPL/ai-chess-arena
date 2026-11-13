@@ -141,7 +141,7 @@ class EngineRunnerTests(unittest.TestCase):
             move, meta = runtime.generate('/tmp/model.gguf', board)
         self.assertEqual(move.uci(), 'g1h3')
         self.assertEqual(len(requests), 2)
-        self.assertIn('Poprzednia odpowiedź', requests[1]['messages'][0]['content'])
+        self.assertIn('poprzednia odpowiedź', requests[1]['messages'][0]['content'])
         self.assertIn('retrying', [stage for stage, _ in events])
         self.assertEqual(meta['response'], 'g1h3')
 
@@ -156,12 +156,18 @@ class EngineRunnerTests(unittest.TestCase):
             def __exit__(self, *args): return False
             def read(self): return self.body
         outputs = iter(['e2e5', 'e2e5'])
+        requests = []
         def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
             return Response(next(outputs))
         runtime = LlamafileRuntime()
         with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
             with self.assertRaisesRegex(RunnerError, 'po 2 próbach'):
                 runtime.generate('/tmp/model.gguf', chess.Board())
+        retry_prompt = requests[1]['messages'][0]['content']
+        self.assertIn('e2e5', retry_prompt)
+        self.assertIn('NIELEGALNY', retry_prompt)
+        self.assertIn('LEGAL MOVES:', retry_prompt)
 
 
 

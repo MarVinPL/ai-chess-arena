@@ -128,25 +128,21 @@ class LlamafileRuntime:
             raise RunnerError('Pozycja nie zawiera legalnych ruchów')
         color = 'white' if board.turn == chess.WHITE else 'black'
         legal_text = ", ".join(legal)
-        prompts = [
-            ('Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-             'Zwróć wyłącznie ruch UCI.\n'
-             f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:'),
-            ('Poprzednia odpowiedź była nieprawidłowa. Teraz zwróć DOKŁADNIE jeden token '
-             'skopiowany z listy legalnych ruchów poniżej. Nie dodawaj wyjaśnień ani słowa UCI. '
-             'Nie wymyślaj ruchu.\n'
-             f'LEGAL MOVES: {legal_text}\n'
-             'Odpowiedź musi być jednym z powyższych tokenów.\nMOVE:')
-        ]
+        initial_prompt = (
+            'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
+            'Zwróć wyłącznie ruch UCI.\n'
+            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:')
+        retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
         started = time.monotonic()
         content = ''
         move = None
         # One bounded retry handles malformed model output without inventing a move.
         # No per-move timeout: user-requested timing is measured, not forfeited.
-        for attempt, prompt in enumerate(prompts):
+        for attempt in range(2):
             if attempt and stop_event and stop_event.is_set():
                 raise RunnerError('Turniej zatrzymany przez operatora')
+            prompt = initial_prompt if attempt == 0 else retry_prompt
             payload = json.dumps({'messages': [{'role': 'user', 'content': prompt}],
                                   'temperature': 0, 'max_tokens': 16, 'stream': False,
                                   'chat_template_kwargs': {'enable_thinking': False}}).encode()
@@ -161,14 +157,26 @@ class LlamafileRuntime:
             if not isinstance(content, str):
                 content = str(content or '')
             match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
+            illegal_uci = None
             if match:
                 candidate = chess.Move.from_uci(match.group(1))
                 if candidate in board.legal_moves:
                     move = candidate
                     break
+                illegal_uci = candidate.uci()
             if attempt == 0:
-                self._notify('retrying', 'Nieprawidłowa odpowiedź modelu — ponawiam zapytanie', model=Path(model_path).name,
-                             color=color, fen=board.fen(), legal_moves=legal, response=content[:300], attempt=2)
+                if illegal_uci:
+                    feedback = (f'Twój poprzedni ruch {illegal_uci} jest NIELEGALNY w tej pozycji. '
+                                'Nie wolno go wykonać. Wybierz inny ruch WYŁĄCZNIE z poniższej listy.')
+                else:
+                    feedback = ('Twoja poprzednia odpowiedź nie zawierała poprawnego ruchu UCI. '
+                                'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
+                retry_prompt = (f'{feedback}\n'
+                                f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+                                'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
+                self._notify('retrying', feedback, model=Path(model_path).name,
+                             color=color, fen=board.fen(), legal_moves=legal, response=content[:300],
+                             illegal_move=illegal_uci, attempt=2)
         elapsed = time.monotonic() - started
         if move is None:
             raise RunnerError(f'Model nie zwrócił legalnego ruchu UCI po 2 próbach: {content[:120]!r}')
