@@ -426,4 +426,508 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
 
-        game_runner = engine_runner.SequentialChessRu
+        game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
+        while True:
+            if tournament_stop_event.is_set():
+                break
+            with league.connect() as c:
+                league_pairing = c.execute("SELECT id,white_model_id,black_model_id,'league' AS stage FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id LIMIT 1", (tournament_id,)).fetchone()
+            if league_pairing:
+                pairing = dict(league_pairing)
+            else:
+                if not draft_enabled:
+                    break
+                pairing = league.next_draft_match(tournament_id)
+                if pairing is None:
+                    break
+            if pairing['white_model_id'] == pairing['black_model_id']:
+                raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
+            white = players.get(pairing['white_model_id']); black = players.get(pairing['black_model_id'])
+            if not white or not black:
+                raise RuntimeError('Brak wersji zawodnika przypisanej do pary turniejowej')
+            set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None, response=None, proposed_move=None, legal_moves=[])
+            white_assets, black_assets = _prepare_game_models(white, black)
+            set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
+            game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
+            game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
+            try:
+                result = game_runner.play_game(
+                    game_white, game_black, tournament_stop_event,
+                    progress=lambda move: set_live(
+                        'move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
+                        model=move['model'], color=move['color'], pairing_id=pairing['id'],
+                        fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move)))
+            finally:
+                tournament_runtime.stop()
+                cleanup_unneeded_models()
+            if result['status'] == 'stopped':
+                break
+            game_ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            with sqlite3.connect(DB) as db:
+                cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
+                     len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
+                     json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
+                game_id = cur.lastrowid
+            with league.connect() as c:
+                c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?", (game_id, pairing['id']))
+            if pairing.get('stage') == 'draft':
+                league.record_draft_result(pairing['id'], result['result'])
+                champion = league.draft_champion(tournament_id)
+                if champion:
+                    set_live('draft_champion', f'Zwycięzca draftu: {players[champion]["name"]}', tournament_id=tournament_id, champion=players[champion]['name'])
+            set_live('game_finished',f'Partia zakończona: {result["result"]}', white=white['name'], black=black['name'], result=result['result'], game_id=game_id, move_count=len(result['moves']), fen=result['fen'], moves=result['moves'], generation_started_at=None, stage=pairing.get('stage','league'))
+        with league.connect() as c:
+            pending = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
+            status = 'stopped' if tournament_stop_event.is_set() else ('completed' if pending == 0 else 'failed')
+            c.execute('UPDATE tournaments SET status=? WHERE id=?', (status, tournament_id))
+        set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
+    except Exception as exc:
+        tournament_error = str(exc)
+        set_live('error','Błąd turnieju: '+str(exc), error=str(exc))
+        with league.connect() as c:
+            c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
+    finally:
+        try:
+            if tournament_runtime:
+                try:
+                    tournament_runtime.shutdown()
+                except Exception as cleanup_exc:
+                    tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Runner shutdown failed: ' + str(cleanup_exc)
+            tournament_runtime = None
+            try:
+                cleanup_unneeded_models()
+            except Exception as cleanup_exc:
+                tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+        finally:
+            model_store.MODEL_LIFECYCLE_LOCK.release()
+
+
+def start_tournament(tournament_id):
+    global tournament_thread, tournament_error
+    with lock:
+        if tournament_thread and tournament_thread.is_alive():
+            raise RuntimeError('Inny turniej jest już uruchomiony')
+        with league.connect() as c:
+            row = c.execute('SELECT status FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+            if not row:
+                raise ValueError('Nie znaleziono turnieju')
+            if row['status'] not in ('planned', 'stopped', 'failed'):
+                raise RuntimeError(f'Nie można uruchomić turnieju ze statusem: {row["status"]}')
+            entries = c.execute('''SELECT e.model_id,e.version_id,m.name,v.id,v.filename,v.status,v.license_verified,v.managed_copy
+                FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
+                JOIN model_versions v ON v.id=e.version_id WHERE e.tournament_id=?''', (tournament_id,)).fetchall()
+            pairings = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
+        if len(entries) < 2 or pairings < 1:
+            raise RuntimeError('Turniej nie ma co najmniej dwóch zawodników i oczekujących par')
+        # Validate immutable manifests now; GGUF files are fetched only for each game.
+        for version in entries:
+            manifest = _version_record(version['version_id'])
+            if manifest['license_verified'] != 1:
+                raise RuntimeError('Model bez jawnie zweryfikowanej licencji')
+        tournament_stop_event.clear()
+        tournament_error = ''
+        tournament_thread = threading.Thread(target=tournament_loop, args=(tournament_id,), daemon=True)
+        tournament_thread.start()
+        return {'id': tournament_id, 'status': 'starting'}
+
+
+def state():
+    outcome = board.outcome(claim_draw=True)
+    try:
+        mem = {}
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith(('MemAvailable:', 'MemTotal:')):
+                k, v = line.split(':', 1); mem[k] = int(v.strip().split()[0]) // 1024
+    except Exception:
+        mem = {}
+    return {
+        'fen': board.fen(), 'moves': moves[:], 'turn': 'white' if board.turn else 'black',
+        'game_over': bool(outcome), 'result': outcome.result() if outcome else None,
+        'termination': outcome.termination.name if outcome else None,
+        'models': models(), 'active_model': active_model(), 'llm_online': llm_health(), 'running': running,
+        'illegal_attempts': illegal_moves,
+        'avg_move_seconds': round(sum(timings)/len(timings), 3) if timings else None,
+        'last_move': last_move, 'error': last_error, 'memory_mb': mem,
+        'games_saved': sqlite3.connect(DB).execute('SELECT COUNT(*) FROM games').fetchone()[0],
+        'tournament_error': tournament_error,
+        'tournament_running': bool(tournament_thread and tournament_thread.is_alive()),
+        'live': get_live()
+    }
+
+
+def do_step():
+    global illegal_moves, last_error, last_move
+    with lock:
+        if board.is_game_over(claim_draw=True):
+            finish_game(); return
+        model = active_model()
+        if not model:
+            last_error = 'Brak pliku GGUF w katalogu modeli.'
+            raise RuntimeError(last_error)
+        if not llm_health():
+            last_error = 'Lokalny serwer modelu nie odpowiada na 127.0.0.1:8088.'
+            raise RuntimeError(last_error)
+        t0 = time.monotonic()
+        try:
+            move = ask_model(model, board)
+        except Exception as e:
+            illegal_moves += 1
+            last_error = str(e)
+            raise
+        elapsed = time.monotonic() - t0
+        san = board.san(move)
+        board.push(move)
+        moves.append({'uci': move.uci(), 'san': san, 'by': 'white' if not board.turn else 'black', 'seconds': round(elapsed, 3)})
+        timings.append(elapsed)
+        last_move = move.uci()
+        last_error = ''
+        if board.is_game_over(claim_draw=True):
+            finish_game()
+
+
+def autoplay_loop():
+    global running, last_error
+    while True:
+        with lock:
+            active = running
+        if not active:
+            break
+        try:
+            do_step()
+        except Exception:
+            with lock:
+                running = False
+            break
+        time.sleep(0.15)
+
+
+def random_hf_model():
+    """Return one randomly selected GGUF candidate from varied public model families."""
+    import random
+    queries = ['Qwen GGUF', 'Llama GGUF', 'Gemma GGUF', 'Phi GGUF',
+               'Mistral GGUF', 'SmolLM GGUF', 'DeepSeek GGUF', 'GLM GGUF']
+    randomizer = random.SystemRandom()
+    randomizer.shuffle(queries)
+    for query in queries:
+        candidates = search_hf_models(query)
+        if candidates:
+            return [randomizer.choice(candidates)]
+    return []
+
+
+def search_hf_models(query):
+    import urllib.parse, urllib.request
+    query = (query or '').strip()[:100]
+    if len(query) < 2:
+        raise ValueError('Wpisz co najmniej 2 znaki')
+    params = urllib.parse.urlencode([('search',query),('filter','gguf'),('sort','downloads'),('direction','-1'),('limit','12'),('expand[]','siblings'),('expand[]','cardData')])
+    headers={'User-Agent':'LocalAIChessArena/0.1','Accept':'application/json'}
+    req=urllib.request.Request('https://huggingface.co/api/models?'+params,headers=headers)
+    with urllib.request.urlopen(req,timeout=12) as response:
+        data=json.loads(response.read(2_000_000))
+    results=[]
+    for item in data:
+        repo=item.get('id') or ''
+        if not repo: continue
+        card=item.get('cardData') or {}
+        tags=item.get('tags') or []
+        license_name=card.get('license') or next((t.split(':',1)[1] for t in tags if t.startswith('license:')),'')
+        tree_url='https://huggingface.co/api/models/'+urllib.parse.quote(repo,safe='/')+'/tree/main?recursive=true&expand=true'
+        try:
+            with urllib.request.urlopen(urllib.request.Request(tree_url,headers=headers),timeout=10) as response:
+                tree=json.loads(response.read(4_000_000))
+        except Exception:
+            tree=[]
+        files=[]; draft_files=[]
+        for f in tree:
+            name=f.get('path') or ''
+            base=name.rsplit('/',1)[-1].lower()
+            if f.get('type')!='file' or not name.lower().endswith('.gguf'): continue
+            lfs=f.get('lfs') or {}
+            asset={'filename':name,'size_bytes':lfs.get('size') or f.get('size'),'sha256':lfs.get('oid') if len(lfs.get('oid') or '')==64 else None}
+            if __import__('re').search(r'(?:^|[-_])draft[-_].*\.gguf$', base):
+                draft_files.append(asset); continue
+            if any(part.lower().startswith(('mmproj','imatrix','mtp-','patch-','adapter','projector')) for part in name.split('/')) or __import__('re').search(r'\d{5}-of-\d{5}\.gguf$',base): continue
+            files.append(asset)
+        for asset in files:
+            base=asset['filename'].rsplit('/',1)[-1]
+            lower=base.lower()
+            expected=lower.replace('nomtp-','draft-',1) if 'nomtp-' in lower else ''
+            companions=[d for d in draft_files if d['filename'].rsplit('/',1)[-1].lower()==expected]
+            if companions:
+                asset['draft_models']=sorted(companions,key=lambda d:d['filename'].lower())
+        files.sort(key=lambda f:(f['size_bytes'] is None,f['size_bytes'] or 10**30,f['filename']))
+        if files:
+            results.append({'repo_id':repo,'name':repo,'downloads':item.get('downloads',0),'likes':item.get('likes',0),'license':license_name or 'nieustalona','source':'https://huggingface.co/'+repo,'files':files[:8]})
+    return results
+
+
+def fetch_hf_license_evidence(source):
+    """Fetch pinned HF metadata plus bounded README/LICENSE excerpts; never approve."""
+    import urllib.parse
+    from urllib.error import HTTPError, URLError
+    parsed = urllib.parse.urlparse((source or '').strip())
+    if parsed.scheme != 'https' or parsed.hostname != 'huggingface.co' or parsed.port or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Automatyczne pobieranie dowodów obsługuje wyłącznie repozytoria huggingface.co przez HTTPS')
+    parts = [part for part in parsed.path.split('/') if part]
+    if len(parts) != 2 or any(part in ('.', '..') for part in parts):
+        raise ValueError('Źródło musi wskazywać dokładnie repozytorium autora/modelu na Hugging Face')
+    repo = '/'.join(parts)
+    headers = {'User-Agent': 'LocalAIChessArena/0.1', 'Accept': 'application/json'}
+    api_url = 'https://huggingface.co/api/models/' + urllib.parse.quote(repo, safe='/') + '?expand%5B%5D=siblings'
+    req = urllib.request.Request(api_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            if urllib.parse.urlparse(response.geturl()).hostname != 'huggingface.co':
+                raise ValueError('Nieoczekiwane przekierowanie podczas pobierania metadanych')
+            card = json.loads(response.read(1_000_000))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise ValueError(f'Nie udało się pobrać metadanych repozytorium Hugging Face: {exc}') from exc
+    card_data = card.get('cardData') or {}
+    tags = card.get('tags') or []
+    license_name = card_data.get('license') or next((t.split(':', 1)[1] for t in tags if isinstance(t, str) and t.startswith('license:')), '')
+    license_url = card_data.get('license_link') or ''
+    siblings = card.get('siblings') or []
+    filenames = sorted({item.get('rfilename') for item in siblings if isinstance(item, dict) and isinstance(item.get('rfilename'), str)})
+    license_files = [name for name in filenames if name.split('/')[-1].lower() in ('license', 'license.md', 'license.txt', 'copying', 'copying.md', 'notice', 'notice.md')]
+    readme_file = next((name for name in filenames if name.lower() == 'readme.md'), None)
+    revision = card.get('sha') if isinstance(card.get('sha'), str) and re.fullmatch(r'[0-9a-fA-F]{40}', card.get('sha')) else 'main'
+
+    def fetch_document(filename, limit):
+        quoted_path = '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/'))
+        raw_url = 'https://huggingface.co/' + repo + '/raw/' + revision + '/' + quoted_path
+        request = urllib.request.Request(raw_url, headers={'User-Agent': 'LocalAIChessArena/0.1', 'Accept': 'text/plain'})
+        try:
+            with urllib.request.urlopen(request, timeout=12) as response:
+                if urllib.parse.urlparse(response.geturl()).hostname != 'huggingface.co':
+                    raise ValueError('Nieoczekiwane przekierowanie dokumentu poza huggingface.co')
+                payload = response.read(limit + 1)
+            truncated = len(payload) > limit
+            payload = payload[:limit]
+            decoded = payload.decode('utf-8', errors='replace')
+            return {
+                'path': filename, 'url': raw_url, 'sha256': hashlib.sha256(payload).hexdigest(),
+                'bytes': len(payload), 'truncated': truncated, 'excerpt': decoded
+            }
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            return {'path': filename, 'url': raw_url, 'fetch_error': str(exc)[:300]}
+
+    documents = []
+    if readme_file:
+        documents.append(fetch_document(readme_file, 32768))
+    for filename in license_files[:3]:
+        documents.append(fetch_document(filename, 65536))
+    successful_docs = [doc for doc in documents if 'excerpt' in doc]
+    evidence = {
+        'provider': 'Hugging Face', 'repo_id': repo, 'repo_url': 'https://huggingface.co/' + repo,
+        'api_url': api_url, 'revision': revision,
+        'readme_url': 'https://huggingface.co/' + repo + '/blob/' + revision + '/README.md',
+        'license': license_name or None, 'license_link': license_url or None,
+        'license_files': ['https://huggingface.co/' + repo + '/blob/' + revision + '/' + '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/')) for filename in license_files],
+        'license_name': card_data.get('license_name'), 'base_model': card_data.get('base_model'),
+        'tags': [t for t in tags if isinstance(t, str) and t.startswith('license:')],
+        'documents': documents,
+        'fetched_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'evidence_status': 'metadata_and_documents_found' if license_name and successful_docs else ('documents_found_metadata_missing' if successful_docs else ('metadata_found' if license_name else 'license_not_declared')),
+        'approval_note': 'Treść dokumentów jest dowodem źródłowym, nie opinią prawną ani automatyczną zgodą. Weryfikacja wymaga ludzkiego przeglądu warunków.'
+    }
+    return evidence
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+    def send_json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        if self.path == '/api/models/random':
+            try:
+                self.send_json(random_hf_model())
+            except Exception as e: self.send_json({'error':str(e)},422)
+        elif self.path.startswith('/api/models/search'):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                query = parse_qs(urlparse(self.path).query).get('q',[''])[0]
+                self.send_json(search_hf_models(query))
+            except Exception as e:
+                self.send_json({'error':str(e)}, 422)
+        elif self.path == '/api/state':
+            with lock: self.send_json(state())
+        elif self.path == '/api/live':
+            self.send_json(get_live())
+        elif self.path == '/api/games':
+            with sqlite3.connect(DB) as c:
+                rows = c.execute('SELECT id,started_at,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
+            self.send_json([dict(id=x[0],started_at=x[1],result=x[2],moves=x[3],avg_seconds=round(x[4],3)) for x in rows])
+        elif self.path == '/api/models':
+            with league.connect() as c:
+                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
+                  FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
+                  ORDER BY m.name''').fetchall()
+            models = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item['license_evidence'] = json.loads(item.pop('metadata_json') or '{}').get('license_evidence')
+                except (TypeError, json.JSONDecodeError):
+                    item['license_evidence'] = None
+                    item.pop('metadata_json', None)
+                models.append(item)
+            self.send_json(models)
+        elif self.path == '/api/league':
+            self.send_json(league.elo_ratings('PURE_AI'))
+        elif self.path == '/api/league/engine':
+            self.send_json(league.elo_ratings('AI_ENGINE'))
+        elif self.path == '/api/storage':
+            status = league.storage_status()
+            managed = model_store.MANAGED_DIR
+            managed.mkdir(mode=0o700, parents=True, exist_ok=True)
+            status['managed_directory'] = str(managed)
+            status['managed_models'] = [
+                {'filename': p.name, 'size_bytes': p.stat().st_size}
+                for p in sorted(managed.glob('*.gguf')) if p.is_file()
+            ]
+            status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
+            self.send_json(status)
+        elif self.path == '/api/tournaments':
+            with league.connect() as c:
+                rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
+                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
+                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
+                    (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
+                    CASE WHEN t.rules_version='2' THEN
+                      (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
+                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
+                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1)
+                    ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
+                    FROM tournaments t ORDER BY t.id DESC''').fetchall()
+            self.send_json([dict(x) for x in rows])
+        elif self.path.startswith('/api/passkey-tests'):
+            from urllib.parse import urlparse, parse_qs
+            tid = parse_qs(urlparse(self.path).query).get('tournament_id', [None])[0]
+            with sqlite3.connect(DB) as c:
+                c.row_factory = sqlite3.Row
+                rows = c.execute('SELECT tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at FROM passkey_test_answers' + (' WHERE tournament_id=?' if tid else '') + ' ORDER BY tournament_id,model_name,question_no', ((int(tid),) if tid else ())).fetchall()
+            self.send_json([dict(x) for x in rows])
+        elif self.path == '/api/export/pgn':
+            with sqlite3.connect(DB) as c:
+                rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
+            body = ('\n\n'.join(row[0].strip() for row in rows if row[0].strip()) + ('\n' if rows else '')).encode('utf-8')
+            self.send_response(200); self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.pgn"')
+            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        elif self.path == '/api/export/csv':
+            output = io.StringIO(newline='')
+            writer = csv.writer(output)
+            writer.writerow(['id','started_at','ended_at','white_model','black_model','result','move_count','illegal_attempts','avg_move_seconds','pgn'])
+            with sqlite3.connect(DB) as c:
+                for row in c.execute('SELECT id,started_at,ended_at,white_model,black_model,result,move_count,illegal_attempts,avg_move_seconds,pgn FROM games ORDER BY id'):
+                    writer.writerow(row)
+            body = output.getvalue().encode('utf-8-sig')
+            self.send_response(200); self.send_header('Content-Type', 'text/csv; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.csv"')
+            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        elif self.path == '/':
+            data = (ROOT/'index.html').read_bytes(); self.send_response(200)
+            self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+        else: self.send_error(404)
+    def do_POST(self):
+        global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
+            try:
+                length = int(self.headers.get('Content-Length','0'))
+                payload = json.loads(self.rfile.read(length) or b'{}')
+                if self.path == '/api/models/license-evidence':
+                    version_id = int(payload.get('version_id', 0))
+                    if version_id < 1:
+                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
+                    with league.connect() as c:
+                        row = c.execute('SELECT id,source FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                    if row is None:
+                        raise ValueError('Nieznana wersja modelu')
+                    evidence = fetch_hf_license_evidence(row['source'])
+                    with league.connect() as c:
+                        current = c.execute('SELECT metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        if current is None:
+                            raise ValueError('Wersja modelu została usunięta podczas pobierania dowodów')
+                        metadata = json.loads(current['metadata_json'] or '{}')
+                        metadata['license_evidence'] = evidence
+                        c.execute('UPDATE model_versions SET metadata_json=? WHERE id=?', (json.dumps(metadata, ensure_ascii=False), version_id))
+                    result = {'version_id': version_id, 'evidence': evidence, 'license_verified': False}
+                elif self.path == '/api/models/verify-license':
+                    if payload.get('confirm_review') is not True:
+                        raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
+                    version_id = int(payload.get('version_id', 0))
+                    if version_id < 1:
+                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
+                    with league.connect() as c:
+                        row = c.execute('SELECT id,source,license,metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        if row is None:
+                            raise ValueError('Nieznana wersja modelu')
+                        source = (row['source'] or '').strip()
+                        license_name = (payload.get('license') or row['license'] or '').strip()
+                        metadata = json.loads(row['metadata_json'] or '{}')
+                        evidence = metadata.get('license_evidence') or {}
+                        has_license_document = bool(evidence.get('license_files') or evidence.get('license'))
+                        if not source or not source.startswith('https://') or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
+                            raise ValueError('Wersja wymaga źródła HTTPS i konkretnego identyfikatora licencji')
+                        if not row['license'] and not has_license_document:
+                            raise ValueError('Najpierw pobierz dowody z repozytorium; nie znaleziono deklaracji ani pliku licencji')
+                        c.execute('UPDATE model_versions SET license=?,license_verified=1 WHERE id=?', (license_name, version_id))
+                    result = {'version_id': version_id, 'license_verified': True}
+                elif self.path == '/api/models/register':
+                    result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
+                elif self.path == '/api/tournaments/start':
+                    result = start_tournament(int(payload.get('tournament_id', 0)))
+                elif self.path == '/api/tournaments/stop':
+                    tournament_stop_event.set()
+                    result = {'status': 'stop_requested'}
+                elif self.path == '/api/models/download':
+                    if payload.get('confirm_download') is not True:
+                        raise ValueError('Wymagane jawne potwierdzenie pobrania')
+                    result = model_store.download_version(
+                        int(payload.get('version_id',0)), payload.get('url',''), payload.get('filename',''),
+                        payload.get('sha256',''), int(payload.get('size_bytes',0)),
+                        bool(payload.get('license_verified',False)))
+                elif self.path == '/api/models/cleanup':
+                    if payload.get('confirm_delete') is not True:
+                        raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
+                    if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
+                        raise RuntimeError('Nie można usuwać modeli podczas aktywnego turnieju lub pobierania; spróbuj później')
+                    try:
+                        result = model_store.cleanup_version(int(payload.get('version_id',0)))
+                    finally:
+                        model_store.MODEL_LIFECYCLE_LOCK.release()
+                else:
+                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
+                self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)
+            except Exception as e:
+                self.send_json({'error':str(e)},422)
+        elif self.path == '/api/step':
+            try:
+                with lock: do_step(); self.send_json(state())
+            except Exception as e:
+                with lock: self.send_json({'error':str(e), **state()}, 422)
+        elif self.path == '/api/run':
+            with lock:
+                running = True
+                threading.Thread(target=autoplay_loop, daemon=True).start()
+                self.send_json(state())
+        elif self.path == '/api/stop':
+            with lock: running = False; self.send_json(state())
+        elif self.path == '/api/reset':
+            with lock:
+                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
+                started_at = time.time(); last_error = ''; last_move = None
+                self.send_json(state())
+        else: self.send_error(404)
+
+if __name__ == '__main__':
+    db_init()
+    _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+    _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
+    print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
