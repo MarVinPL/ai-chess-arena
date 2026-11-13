@@ -552,11 +552,27 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
+        if self.path in ('/api/models/register','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path == '/api/models/register':
+                if self.path == '/api/models/verify-license':
+                    if payload.get('confirm_review') is not True:
+                        raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
+                    version_id = int(payload.get('version_id', 0))
+                    if version_id < 1:
+                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
+                    with league.connect() as c:
+                        row = c.execute('SELECT id,source,license FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        if row is None:
+                            raise ValueError('Nieznana wersja modelu')
+                        source = (row['source'] or '').strip()
+                        license_name = (row['license'] or '').strip()
+                        if not source or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified'):
+                            raise ValueError('Wersja nie ma ustalonego źródła i nazwy licencji; najpierw sprawdź kartę modelu')
+                        c.execute('UPDATE model_versions SET license_verified=1 WHERE id=?', (version_id,))
+                    result = {'version_id': version_id, 'license_verified': True}
+                elif self.path == '/api/models/register':
                     result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
                 elif self.path == '/api/tournaments/start':
                     result = start_tournament(int(payload.get('tournament_id', 0)))
@@ -576,7 +592,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = model_store.cleanup_version(int(payload.get('version_id',0)))
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
-                self.send_json(result,201)
+                self.send_json(result, 200 if self.path == '/api/models/verify-license' else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif self.path == '/api/step':

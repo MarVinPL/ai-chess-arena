@@ -15,7 +15,7 @@ def init():
   CREATE TABLE IF NOT EXISTS tournament_entries(tournament_id INTEGER NOT NULL REFERENCES tournaments(id),model_id INTEGER NOT NULL REFERENCES league_models(id),version_id INTEGER REFERENCES model_versions(id),PRIMARY KEY(tournament_id,model_id));
   CREATE TABLE IF NOT EXISTS tournament_pairings(id INTEGER PRIMARY KEY,tournament_id INTEGER NOT NULL REFERENCES tournaments(id),white_model_id INTEGER NOT NULL REFERENCES league_models(id),black_model_id INTEGER NOT NULL REFERENCES league_models(id),leg INTEGER NOT NULL CHECK(leg IN (1,2)),status TEXT NOT NULL DEFAULT 'pending',game_id INTEGER,UNIQUE(tournament_id,white_model_id,black_model_id,leg));
   CREATE INDEX IF NOT EXISTS idx_pairings_tournament ON tournament_pairings(tournament_id,status);
-  
+
   """)
   cols={r[1] for r in c.execute('PRAGMA table_info(model_versions)')}
   if 'license_verified' not in cols:
