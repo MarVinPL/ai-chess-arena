@@ -1,1 +1,1 @@
-# -ai-chess-arena
+# ai-chess-arena
