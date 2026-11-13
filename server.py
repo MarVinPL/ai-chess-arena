@@ -967,3 +967,4 @@ if __name__ == '__main__':
     _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
     _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
     print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
