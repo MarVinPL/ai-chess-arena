@@ -80,6 +80,17 @@ class PerGameStorageTests(unittest.TestCase):
                 paths = server._prepare_game_models(self.players[0], self.players[1])
         self.assertTrue(all(Path(path).is_file() for path in paths))
 
+    def test_existing_same_size_model_is_rejected_when_sha256_changed(self):
+        player = self.players[0]
+        original = f'GGUF model {player["name"]}'.encode()
+        self._fake_download(player['version_id'], '', f"{player['name'].lower()}.gguf",
+                            hashlib.sha256(original).hexdigest(), len(original), True)
+        path = model_store.MANAGED_DIR / f"{player['name'].lower()}.gguf"
+        path.write_bytes(b'X' * len(original))
+        with patch.object(model_store, 'download_version', side_effect=AssertionError('must not redownload')):
+            with self.assertRaisesRegex(RuntimeError, 'SHA-256/rozmiaru'):
+                server._ensure_version_file(player['version_id'])
+
     def test_space_check_is_for_missing_models_in_this_game(self):
         with patch('shutil.disk_usage') as disk, \
              patch.object(model_store, 'download_version') as download:
