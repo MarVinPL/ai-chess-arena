@@ -9,8 +9,11 @@ QUESTIONS = (
     "Zaprojektuj bezpieczne zaproszenie współadministratora do Browser VPS z weryfikacją właściciela przez Telegram i rejestracją własnego Passkey. Uwzględnij jednorazowość, wygaśnięcie i odrzucenie zaproszenia.",
 )
 
-def ask_passkey_question(runtime, model_path, question, stop_event=None):
-    runtime.ensure_loaded(model_path)
+def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None):
+    if draft_model_path:
+        runtime.ensure_loaded(model_path, draft_model_path)
+    else:
+        runtime.ensure_loaded(model_path)
     if stop_event and stop_event.is_set():
         return {"status": "stopped", "answer": "", "seconds": None}
     payload=json.dumps({"messages":[{"role":"user","content":question}],"temperature":0,"max_tokens":900,"stream":False,"chat_template_kwargs":{"enable_thinking":False}}).encode()

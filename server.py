@@ -176,6 +176,8 @@ def _version_record(version_id):
         raise RuntimeError(f'Nieaktywna lub nieznana wersja modelu: {version_id}')
     if row['license_verified'] != 1 or not row['filename'] or not row['source'] or not row['sha256'] or not row['size_bytes']:
         raise RuntimeError(f'Wersja {version_id} nie ma kompletnego, zweryfikowanego manifestu pobrania')
+    if row['draft_filename'] and (not row['draft_sha256'] or not row['draft_size_bytes'] or not row['draft_download_url'] or not row['draft_source_path']):
+        raise RuntimeError(f'Wersja {version_id} ma niekompletny manifest modelu draft')
     return dict(row)
 
 
@@ -199,10 +201,34 @@ def _ensure_version_file(version_id):
     return str(_version_path(dict(refreshed)))
 
 
+def _ensure_version_assets(version_id):
+    """Return target/draft paths, fetching and verifying both assets on demand."""
+    target_path = _ensure_version_file(version_id)
+    version = _version_record(version_id)
+    draft_path = None
+    if version.get('draft_filename'):
+        expected = model_store.MANAGED_DIR / version['draft_filename']
+        if expected.exists():
+            if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
+                raise RuntimeError('Znaleziony plik draft nie jest kopią zarządzaną przez Arenę')
+            digest = hashlib.sha256()
+            actual_size = 0
+            with expected.open('rb') as draft_file:
+                for chunk in iter(lambda: draft_file.read(1024 * 1024), b''):
+                    actual_size += len(chunk); digest.update(chunk)
+            if actual_size != version['draft_size_bytes'] or digest.hexdigest().lower() != version['draft_sha256'].lower():
+                raise RuntimeError('Plik draft nie zgadza się z manifestem SHA-256/rozmiaru')
+        else:
+            model_store.download_draft_version(version_id, version['draft_download_url'],
+                version['draft_filename'], version['draft_sha256'], int(version['draft_size_bytes']), True)
+        draft_path = str(expected)
+    return {'path': target_path, 'draft_path': draft_path}
+
+
 def cleanup_unneeded_models(keep_version_ids=()):
     keep = {int(value) for value in keep_version_ids}
     with league.connect() as c:
-        rows = c.execute("SELECT id FROM model_versions WHERE managed_copy=1 AND filename IS NOT NULL ORDER BY id").fetchall()
+        rows = c.execute("SELECT id FROM model_versions WHERE (managed_copy=1 AND filename IS NOT NULL) OR (draft_managed_copy=1 AND draft_filename IS NOT NULL) ORDER BY id").fetchall()
     removed = []
     for row in rows:
         if row['id'] in keep:
@@ -220,25 +246,32 @@ def _prepare_single_model(player):
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
     required_bytes = 0 if expected.is_file() else int(version['size_bytes'])
+    if version['draft_filename'] and not (model_store.MANAGED_DIR / version['draft_filename']).is_file():
+        required_bytes += int(version['draft_size_bytes'])
     usage = shutil.disk_usage(model_store.MANAGED_DIR)
     if usage.free < required_bytes + model_store.MIN_FREE_MARGIN:
-        raise OSError('Za mało miejsca na model do testu tej partii; turniej pozostaje możliwy do wznowienia')
-    return _ensure_version_file(version_id)
+        raise OSError('Za mało miejsca na model i jego draft do testu tej partii; turniej pozostaje możliwy do wznowienia')
+    try:
+        return _ensure_version_assets(version_id)
+    except Exception:
+        cleanup_unneeded_models()
+        raise
 
 
 def _prepare_game_models(white, black):
     needed = {white['version_id'], black['version_id']}
     cleanup_unneeded_models(needed)
     versions = [_version_record(value) for value in (white['version_id'], black['version_id'])]
-    required_bytes = sum(int(v['size_bytes']) for v in versions
-                         if not (model_store.MANAGED_DIR / v['filename']).is_file())
+    required_bytes = sum((int(v['size_bytes']) if not (model_store.MANAGED_DIR / v['filename']).is_file() else 0) +
+                         (int(v['draft_size_bytes'] or 0) if v['draft_filename'] and not (model_store.MANAGED_DIR / v['draft_filename']).is_file() else 0)
+                         for v in versions)
     usage = shutil.disk_usage(model_store.MANAGED_DIR)
     if usage.free < required_bytes + model_store.MIN_FREE_MARGIN:
         raise OSError('Za mało miejsca na modele potrzebne w tej partii; turniej pozostaje możliwy do wznowienia')
     prepared = []
     try:
         for player in (white, black):
-            prepared.append(_ensure_version_file(player['version_id']))
+            prepared.append(_ensure_version_assets(player['version_id']))
     except Exception:
         cleanup_unneeded_models()
         raise
@@ -284,13 +317,14 @@ def tournament_loop(tournament_id):
             if not missing or tournament_stop_event.is_set():
                 continue
             set_live('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'])
-            player['path'] = _prepare_single_model(player)
+            assets = _prepare_single_model(player)
+            player.update(assets)
             try:
                 for question_no, question in missing:
                     set_live('passkey_question',f'Test Passkey: pytanie {question_no}/3', model=player['name'], question_no=question_no)
                     if tournament_stop_event.is_set():
                         break
-                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event)
+                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'))
                     with sqlite3.connect(DB) as db:
                         db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                             (tournament_id, player_id, player['name'], question_no, question,
@@ -310,9 +344,9 @@ def tournament_loop(tournament_id):
             if not white or not black:
                 raise RuntimeError('Brak wersji zawodnika przypisanej do pary turniejowej')
             set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
-            white_path, black_path = _prepare_game_models(white, black)
+            white_assets, black_assets = _prepare_game_models(white, black)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
-            game_white = {**white, 'path': white_path}; game_black = {**black, 'path': black_path}
+            game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
             try:
@@ -495,14 +529,24 @@ def search_hf_models(query):
                 tree=json.loads(response.read(4_000_000))
         except Exception:
             tree=[]
-        files=[]
+        files=[]; draft_files=[]
         for f in tree:
             name=f.get('path') or ''
             base=name.rsplit('/',1)[-1].lower()
             if f.get('type')!='file' or not name.lower().endswith('.gguf'): continue
-            if any(part.lower().startswith(('mmproj','imatrix','mtp-','patch-','adapter','projector')) for part in name.split('/')) or __import__('re').search(r'\d{5}-of-\d{5}\.gguf$',base): continue
             lfs=f.get('lfs') or {}
-            files.append({'filename':name,'size_bytes':lfs.get('size') or f.get('size'),'sha256':lfs.get('oid') if len(lfs.get('oid') or '')==64 else None})
+            asset={'filename':name,'size_bytes':lfs.get('size') or f.get('size'),'sha256':lfs.get('oid') if len(lfs.get('oid') or '')==64 else None}
+            if __import__('re').search(r'(?:^|[-_])draft[-_].*\.gguf$', base):
+                draft_files.append(asset); continue
+            if any(part.lower().startswith(('mmproj','imatrix','mtp-','patch-','adapter','projector')) for part in name.split('/')) or __import__('re').search(r'\d{5}-of-\d{5}\.gguf$',base): continue
+            files.append(asset)
+        for asset in files:
+            base=asset['filename'].rsplit('/',1)[-1]
+            lower=base.lower()
+            expected=lower.replace('nomtp-','draft-',1) if 'nomtp-' in lower else ''
+            companions=[d for d in draft_files if d['filename'].rsplit('/',1)[-1].lower()==expected]
+            if companions:
+                asset['draft_models']=sorted(companions,key=lambda d:d['filename'].lower())
         files.sort(key=lambda f:(f['size_bytes'] is None,f['size_bytes'] or 10**30,f['filename']))
         if files:
             results.append({'repo_id':repo,'name':repo,'downloads':item.get('downloads',0),'likes':item.get('likes',0),'license':license_name or 'nieustalona','source':'https://huggingface.co/'+repo,'files':files[:8]})
@@ -578,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json([dict(id=x[0],started_at=x[1],result=x[2],moves=x[3],avg_seconds=round(x[4],3)) for x in rows])
         elif self.path == '/api/models':
             with league.connect() as c:
-                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.metadata_json
+                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
                   FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
                   ORDER BY m.name''').fetchall()
             models = []

@@ -20,6 +20,9 @@ def init():
   cols={r[1] for r in c.execute('PRAGMA table_info(model_versions)')}
   if 'license_verified' not in cols:
    c.execute('ALTER TABLE model_versions ADD COLUMN license_verified INTEGER NOT NULL DEFAULT 0')
+  for name, declaration in (('draft_filename','TEXT'),('draft_sha256','TEXT'),('draft_size_bytes','INTEGER'),('draft_status',"TEXT NOT NULL DEFAULT 'catalogued'"),('draft_managed_copy','INTEGER NOT NULL DEFAULT 0'),('draft_download_url','TEXT'),('draft_source_path','TEXT')):
+   if name not in cols:
+    c.execute(f'ALTER TABLE model_versions ADD COLUMN {name} {declaration}')
 def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
  if not name or format not in ('PURE_AI','AI_ENGINE'): raise ValueError('Nieprawidłowa nazwa lub format')
  if license_verified:
@@ -29,6 +32,19 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
   if not normalized_license or normalized_license in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
    raise ValueError('Nie można zatwierdzić nieustalonej licencji')
  metadata = dict(metadata or {})
+ draft = metadata.get('draft_model')
+ if draft is not None:
+  if not isinstance(draft, dict): raise ValueError('Nieprawidłowy manifest modelu draft')
+  draft_filename = draft.get('filename')
+  draft_sha = draft.get('sha256')
+  draft_size = draft.get('size_bytes')
+  draft_url = draft.get('download_url')
+  if not isinstance(draft_filename,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf',draft_filename): raise ValueError('Nieprawidłowa nazwa pliku draft GGUF')
+  if not isinstance(draft_sha,str) or not re.fullmatch(r'[0-9a-fA-F]{64}',draft_sha): raise ValueError('Nieprawidłowy SHA-256 pliku draft')
+  if not isinstance(draft_size,int) or draft_size<=0: raise ValueError('Nieprawidłowy rozmiar pliku draft')
+  if not isinstance(draft_url,str) or not draft_url.startswith('https://'): raise ValueError('Plik draft wymaga źródła HTTPS')
+  if not isinstance(draft.get('source_path'),str) or not draft['source_path'] or any(part in ('.','..') for part in draft['source_path'].split('/')): raise ValueError('Brak lub nieprawidłowa ścieżka źródłowa pliku draft')
+  if draft_filename == metadata.get('filename'): raise ValueError('Target i draft muszą wskazywać różne pliki')
  # A catalog entry carries an immutable remote manifest; the GGUF itself is
  # optional and is fetched into the private cache only when a game needs it.
  if filename is None:
@@ -63,12 +79,26 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
    metadata.setdefault('source_path', filename)
    stem=Path(filename).stem
    filename=f'{stem}-{digest[:16]}.gguf'
+ # Cache paths are unique per catalog entry/configuration. This prevents a
+ # cleanup of a standalone target from deleting a shared file used by a pair.
+ config_key = hashlib.sha256(f"{digest or ''}:{draft_sha if draft else ''}".encode()).hexdigest()[:16]
+ if filename:
+  with connect() as c:
+   collision=c.execute('SELECT 1 FROM model_versions WHERE filename IN (?,?) OR draft_filename IN (?,?) LIMIT 1',(filename,filename,filename,filename)).fetchone()
+  if collision:
+   metadata.setdefault('source_path', metadata.get('filename') or filename)
+   filename=f'{Path(filename).stem}-{config_key}.gguf'
+ if draft:
+  with connect() as c:
+   collision=c.execute('SELECT 1 FROM model_versions WHERE filename=? OR draft_filename=? LIMIT 1',(draft_filename,draft_filename)).fetchone()
+  if collision:
+   draft_filename=f'{Path(draft_filename).stem}-{config_key}.gguf'
  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
  with connect() as c:
   c.execute('INSERT OR IGNORE INTO league_models(name,format,created_at) VALUES(?,?,?)',(name,format,now)); m=c.execute('SELECT id,format FROM league_models WHERE name=?',(name,)).fetchone()
   if m['format']!=format: raise ValueError('Model istnieje w innym formacie')
-  version_key=digest or filename or ('catalog:'+name)
-  c.execute('INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now))
+  version_key=(config_key if draft else digest) if digest else (filename or ('catalog:'+name))
+  c.execute('''INSERT OR IGNORE INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,metadata_json,status,license_verified,created_at,draft_filename,draft_sha256,draft_size_bytes,draft_download_url,draft_source_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(m['id'],version_key,filename,digest,size,source,license,json.dumps(metadata,ensure_ascii=False),status,int(bool(license_verified and source and license)),now,draft_filename if draft else None,draft.get('sha256') if draft else None,draft.get('size_bytes') if draft else None,draft.get('download_url') if draft else None,draft.get('source_path') if draft else None))
   vs=c.execute('SELECT * FROM model_versions WHERE model_id=? ORDER BY id DESC',(m['id'],)).fetchall()
   return {'id':m['id'],'name':name,'format':format,'versions':[dict(v) for v in vs]}
 def create_round_robin(name,format='PURE_AI'):
@@ -79,7 +109,10 @@ def create_round_robin(name,format='PURE_AI'):
        ORDER BY v.id DESC LIMIT 1) AS version_id,
       (SELECT v.sha256 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
        AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
-       ORDER BY v.id DESC LIMIT 1) AS model_sha256
+       ORDER BY v.id DESC LIMIT 1) AS model_sha256,
+      (SELECT COALESCE(v.draft_sha256,'') FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
+       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
+       ORDER BY v.id DESC LIMIT 1) AS draft_sha256
       FROM league_models m WHERE m.active=1 AND m.format=?
       AND EXISTS(SELECT 1 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
        AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0)
@@ -88,9 +121,11 @@ def create_round_robin(name,format='PURE_AI'):
   # competitor, not a meaningful self-match. Keep the first catalog entry.
   ms=[]; seen_hashes=set()
   for candidate in candidates:
-   if candidate['model_sha256'] in seen_hashes: continue
-   seen_hashes.add(candidate['model_sha256']); ms.append(candidate)
-  if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch różnych modeli (różnych plików SHA-256) z jawnie zweryfikowaną licencją')
+   # A target with and without a draft head is a distinct runtime configuration.
+   identity=(candidate['model_sha256'], candidate['draft_sha256'] or '')
+   if identity in seen_hashes: continue
+   seen_hashes.add(identity); ms.append(candidate)
+  if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch różnych modeli lub konfiguracji target/draft z jawnie zweryfikowaną licencją')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); tid=c.execute('INSERT INTO tournaments(name,format,created_at) VALUES(?,?,?)',(name,format,now)).lastrowid
   for m in ms:
    c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tid,m['id'],m['version_id']))

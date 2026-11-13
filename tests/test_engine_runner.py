@@ -38,6 +38,22 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('[White "Alpha"]', result['pgn'])
         self.assertIn('[Black "Beta"]', result['pgn'])
 
+    def test_target_with_draft_is_one_player_configuration(self):
+        sequence=['f2f3','e7e5','g2g4','d8h4']
+        class PairRuntime:
+            def __init__(self): self.calls=[]
+            def generate(self,path,board,stop_event=None,draft_model_path=None):
+                uci=sequence[len(self.calls)]
+                self.calls.append((str(path),str(draft_model_path) if draft_model_path else None))
+                return chess.Move.from_uci(uci),{'seconds':0.01}
+        fake=PairRuntime()
+        result=SequentialChessRunner(fake).play_game(
+            {'name':'Alpha + MTP','path':'/tmp/alpha.gguf','draft_path':'/tmp/alpha-draft.gguf'},
+            {'name':'Beta','path':'/tmp/beta.gguf'})
+        self.assertEqual(result['status'],'finished')
+        self.assertEqual(fake.calls,[('/tmp/alpha.gguf','/tmp/alpha-draft.gguf'),('/tmp/beta.gguf',None),
+                                     ('/tmp/alpha.gguf','/tmp/alpha-draft.gguf'),('/tmp/beta.gguf',None)])
+
     def test_progress_callback_receives_each_validated_move_and_position(self):
         sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
         class FoolRuntime:
@@ -72,6 +88,30 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(events[0][0], 'generating')
         self.assertEqual(events[0][2]['model'], 'test.gguf')
         self.assertEqual(events[0][2]['color'], 'white')
+
+    def test_llamafile_receives_mtp_draft_flags_for_pair_configuration(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); binary=root/'llamafile'; target=root/'target.gguf'; draft=root/'draft.gguf'
+            binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
+            target.write_bytes(b'target'); draft.write_bytes(b'draft')
+            calls=[]
+            class Process:
+                returncode=None
+                def poll(self): return None
+                def terminate(self): pass
+                def wait(self,timeout=None): return 0
+                def kill(self): pass
+            runtime=LlamafileRuntime(binary=binary,popen=lambda args,**kwargs:(calls.append(args) or Process()))
+            with patch.object(runtime,'_healthy',return_value=True):
+                runtime.ensure_loaded(target,draft)
+            args=calls[0]
+            self.assertIn('--spec-type',args); self.assertIn('draft-mtp',args)
+            self.assertIn('--model-draft',args); self.assertIn(str(draft.resolve()),args)
+            runtime.stop()
 
     def test_runtime_never_returns_an_unvalidated_move_from_fake(self):
         board = chess.Board()

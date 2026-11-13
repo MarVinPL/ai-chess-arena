@@ -97,6 +97,23 @@ class LeagueTests(unittest.TestCase):
  def test_registration_cannot_approve_without_https_source(self):
   with self.assertRaises(ValueError):
    league.register_model('Blocked Source',source='http://example.test/model',license='Apache-2.0',license_verified=True)
+ def test_target_solo_and_target_with_draft_are_distinct_competitors(self):
+  paired=league.register_model('Alpha target + MTP',source='https://huggingface.co/example/alpha',license='Apache-2.0',license_verified=True,
+   metadata={'filename':'alpha-pair.gguf','sha256':'a'*64,'size_bytes':100,
+    'draft_model':{'filename':'alpha-draft.gguf','sha256':'c'*64,'size_bytes':25,
+     'download_url':'https://huggingface.co/example/alpha/resolve/main/alpha-draft.gguf','source_path':'alpha-draft.gguf'}})
+  tournament=league.create_round_robin('Target variants')
+  with league.connect() as c:
+   entries=c.execute('''SELECT m.name,v.sha256,v.draft_sha256 FROM tournament_entries e
+    JOIN league_models m ON m.id=e.model_id JOIN model_versions v ON v.id=e.version_id
+    WHERE e.tournament_id=? ORDER BY m.name''',(tournament['id'],)).fetchall()
+  self.assertEqual(len(entries),3)
+  configs={(r['sha256'],r['draft_sha256'] or '') for r in entries}
+  self.assertIn(('a'*64,''),configs)
+  self.assertIn(('a'*64,'c'*64),configs)
+  self.assertTrue(any(r['name']=='Alpha target + MTP' for r in entries))
+  self.assertEqual(paired['versions'][0]['draft_filename'],'alpha-draft.gguf')
+
  def test_identical_weights_under_different_names_are_not_two_competitors(self):
   with league.connect() as c:
    c.execute("UPDATE model_versions SET sha256=? WHERE model_id=2", ('a'*64,))
