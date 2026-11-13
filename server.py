@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import csv, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import chess, chess.pgn
@@ -154,6 +154,18 @@ def _version_path(version):
     path = (base / version['filename']).resolve()
     if path.parent != base.resolve() or not path.is_file() or path.suffix.lower() != '.gguf':
         raise RuntimeError(f'Brak bezpiecznego pliku GGUF dla wersji {version["id"]}')
+    expected_size = version.get('size_bytes')
+    expected_sha256 = version.get('sha256')
+    if not isinstance(expected_size, int) or expected_size <= 0 or not expected_sha256:
+        raise RuntimeError(f'Brak kompletnego manifestu integralności dla wersji {version["id"]}')
+    digest = hashlib.sha256()
+    actual_size = 0
+    with path.open('rb') as model_file:
+        for chunk in iter(lambda: model_file.read(1024 * 1024), b''):
+            actual_size += len(chunk)
+            digest.update(chunk)
+    if actual_size != expected_size or digest.hexdigest().lower() != str(expected_sha256).lower():
+        raise RuntimeError(f'Plik GGUF wersji {version["id"]} nie zgadza się z manifestem SHA-256/rozmiaru; model nie zostanie uruchomiony')
     return path
 
 
@@ -179,7 +191,7 @@ def _ensure_version_file(version_id):
     model_store.download_version(version_id, version['source'], version['filename'],
                                  version['sha256'], int(version['size_bytes']), True)
     with league.connect() as c:
-        refreshed = c.execute("SELECT id,filename,status,license_verified,managed_copy FROM model_versions WHERE id=?", (version_id,)).fetchone()
+        refreshed = c.execute("SELECT id,filename,status,license_verified,managed_copy,sha256,size_bytes FROM model_versions WHERE id=?", (version_id,)).fetchone()
     return str(_version_path(dict(refreshed)))
 
 
