@@ -320,3 +320,4 @@ class LeagueTests(unittest.TestCase):
  def test_unverified_model_cannot_enter_tournament(self):
   with league.connect() as c: c.execute("UPDATE model_versions SET license_verified=0 WHERE model_id=2")
   with self.assertRaises(ValueError): league.create_round_robin('Blocked')
+if __name__=='__main__': unittest.main(verbosity=2)
