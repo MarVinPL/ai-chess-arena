@@ -83,6 +83,13 @@ def db_init():
             model_name TEXT NOT NULL, question_no INTEGER NOT NULL, question TEXT NOT NULL,
             status TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '', elapsed_seconds REAL,
             created_at TEXT NOT NULL, UNIQUE(tournament_id,model_id,question_no))''')
+        passkey_cols={r[1] for r in c.execute('PRAGMA table_info(passkey_test_answers)')}
+        if 'question_fingerprint' not in passkey_cols:
+            c.execute('ALTER TABLE passkey_test_answers ADD COLUMN question_fingerprint TEXT')
+        # Backfill historical answers by their stored exact question text.
+        for answer_id, question in c.execute('SELECT id,question FROM passkey_test_answers WHERE question_fingerprint IS NULL').fetchall():
+            c.execute('UPDATE passkey_test_answers SET question_fingerprint=? WHERE id=?',
+                      (passkey_test.question_fingerprint(question),answer_id))
         for name, declaration in (('tournament_id', 'INTEGER'), ('pairing_id', 'INTEGER'),
                                   ('move_times_json', "TEXT NOT NULL DEFAULT '[]'"),
                                   ('inference_metadata_json', "TEXT NOT NULL DEFAULT '{}'")):
@@ -309,9 +316,9 @@ def tournament_loop(tournament_id):
         # three knowledge answers are known, run at most one random health check per tournament.
         for player_id, player in players.items():
             with sqlite3.connect(DB) as db:
-                known_rows = db.execute("SELECT DISTINCT question_no FROM passkey_test_answers WHERE model_id=? AND status='answered' AND question_no BETWEEN 1 AND ?",
-                                        (player_id, len(passkey_test.QUESTIONS))).fetchall()
-                random_done = db.execute('SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND question_no=0',
+                known_rows = db.execute("SELECT DISTINCT question_fingerprint FROM passkey_test_answers WHERE model_id=? AND status='answered' AND question_no>0 AND question_fingerprint IS NOT NULL",
+                                        (player_id,)).fetchall()
+                random_done = db.execute("SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND question_no=0 AND status='answered'",
                                           (tournament_id, player_id)).fetchone() is not None
             questions = passkey_test.questions_for_tournament([row[0] for row in known_rows], random_done)
             if not questions or tournament_stop_event.is_set():
@@ -327,10 +334,11 @@ def tournament_loop(tournament_id):
                         break
                     answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'))
                     with sqlite3.connect(DB) as db:
-                        db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                        db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at,question_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (tournament_id, player_id, player['name'], question_no, question,
                              answer['status'], answer['answer'], answer['seconds'],
-                             time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())))
+                             time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                             passkey_test.question_fingerprint(question)))
             finally:
                 tournament_runtime.stop()
                 cleanup_unneeded_models()

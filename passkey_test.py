@@ -1,6 +1,6 @@
 """Fixed Passkey knowledge test for every model entered in a tournament."""
 from __future__ import annotations
-import json, random, time, urllib.request
+import hashlib, json, random, time, urllib.request
 
 LLM = "http://127.0.0.1:8088/v1/chat/completions"
 QUESTIONS = (
@@ -10,10 +10,17 @@ QUESTIONS = (
 )
 
 
-def questions_for_tournament(known_question_numbers, random_check_done=False, chooser=None):
-    """Return unanswered knowledge questions, or one random health check once all are known."""
-    known=set(known_question_numbers)
-    missing=[(number,question) for number,question in enumerate(QUESTIONS,1) if number not in known]
+def question_fingerprint(question):
+    """Stable identity for the exact question text, independent of its list position."""
+    normalized=question.strip()
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+
+def questions_for_tournament(known_question_fingerprints, random_check_done=False, chooser=None):
+    """Ask every current question whose exact text has not been answered by this model."""
+    known=set(known_question_fingerprints)
+    missing=[(number,question) for number,question in enumerate(QUESTIONS,1)
+             if question_fingerprint(question) not in known]
     if missing:
         return missing
     if random_check_done:
