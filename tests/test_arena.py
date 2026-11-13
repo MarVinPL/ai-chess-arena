@@ -88,6 +88,37 @@ class ArenaSmokeTests(unittest.TestCase):
         )
         return urllib.request.urlopen(request)
 
+
+    def test_license_evidence_endpoint_persists_provenance_without_approving(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('Evidence Test','PURE_AI','now')")
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,license,created_at) VALUES((SELECT id FROM league_models WHERE name='Evidence Test'),'evidence-test','https://huggingface.co/example/model','Apache-2.0','now')")
+            version_id = db.execute("SELECT id FROM model_versions WHERE version_key='evidence-test'").fetchone()[0]
+        evidence = {'provider': 'Hugging Face', 'repo_id': 'example/model', 'license': 'apache-2.0', 'evidence_status': 'metadata_found'}
+        with __import__('unittest').mock.patch.object(server, 'fetch_hf_license_evidence', return_value=evidence):
+            with self._post_json('/api/models/license-evidence', {'version_id': version_id}) as response:
+                payload = __import__('json').loads(response.read())
+                self.assertEqual(payload['evidence'], evidence)
+                self.assertFalse(payload['license_verified'])
+        with sqlite3.connect(server.DB) as db:
+            row = db.execute('SELECT metadata_json,license_verified FROM model_versions WHERE id=?', (version_id,)).fetchone()
+        self.assertEqual(__import__('json').loads(row[0])['license_evidence'], evidence)
+        self.assertEqual(row[1], 0)
+
+    def test_manual_license_review_can_record_license_from_discovered_license_file(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('Manual License Test','PURE_AI','now')")
+            db.execute("INSERT INTO model_versions(model_id,version_key,source,metadata_json,created_at) VALUES((SELECT id FROM league_models WHERE name='Manual License Test'),'manual-license','https://huggingface.co/example/model',?, 'now')", (__import__('json').dumps({'license_evidence': {'license_files': ['https://huggingface.co/example/model/blob/main/LICENSE']}}),))
+            version_id = db.execute("SELECT id FROM model_versions WHERE version_key='manual-license'").fetchone()[0]
+        with self._post_json('/api/models/verify-license', {'version_id': version_id, 'confirm_review': True, 'license': 'Apache-2.0'}) as response:
+            self.assertEqual(response.status, 200)
+        with sqlite3.connect(server.DB) as db:
+            self.assertEqual(db.execute('SELECT license,license_verified FROM model_versions WHERE id=?', (version_id,)).fetchone(), ('Apache-2.0', 1))
+
+    def test_license_evidence_rejects_non_huggingface_sources(self):
+        with self.assertRaises(ValueError):
+            server.fetch_hf_license_evidence('https://example.com/model')
+
     def test_license_verification_requires_explicit_confirmation(self):
         with sqlite3.connect(server.DB) as db:
             db.execute("INSERT INTO league_models(name,format,created_at) VALUES('License Test','PURE_AI','now')")

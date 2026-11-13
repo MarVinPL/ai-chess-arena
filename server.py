@@ -191,7 +191,7 @@ def _ensure_version_file(version_id):
     import urllib.parse
     metadata = json.loads(version.get('metadata_json') or '{}')
     download_url = metadata.get('download_url') or (
-        version['source'].rstrip('/') + '/resolve/main/' + urllib.parse.quote(version['filename'], safe=''))
+        version['source'].rstrip('/') + '/resolve/main/' + '/'.join(urllib.parse.quote(part, safe='') for part in (metadata.get('source_path') or version['filename']).split('/')))
     model_store.download_version(version_id, download_url, version['filename'],
                                  version['sha256'], int(version['size_bytes']), True)
     with league.connect() as c:
@@ -503,6 +503,47 @@ def search_hf_models(query):
             results.append({'repo_id':repo,'name':repo,'downloads':item.get('downloads',0),'likes':item.get('likes',0),'license':license_name or 'nieustalona','source':'https://huggingface.co/'+repo,'files':files[:8]})
     return results
 
+
+def fetch_hf_license_evidence(source):
+    """Fetch provenance evidence from Hugging Face without approving a license."""
+    import urllib.parse
+    from urllib.error import HTTPError, URLError
+    parsed = urllib.parse.urlparse((source or '').strip())
+    if parsed.scheme != 'https' or parsed.hostname != 'huggingface.co' or parsed.port or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Automatyczne pobieranie dowodów obsługuje wyłącznie repozytoria huggingface.co przez HTTPS')
+    parts = [part for part in parsed.path.split('/') if part]
+    if len(parts) != 2 or any(part in ('.', '..') for part in parts):
+        raise ValueError('Źródło musi wskazywać dokładnie repozytorium autora/modelu na Hugging Face')
+    repo = '/'.join(parts)
+    headers = {'User-Agent': 'LocalAIChessArena/0.1', 'Accept': 'application/json'}
+    api_url = 'https://huggingface.co/api/models/' + urllib.parse.quote(repo, safe='/') + '?expand%5B%5D=siblings'
+    req = urllib.request.Request(api_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            if response.geturl().split('/')[2] != 'huggingface.co':
+                raise ValueError('Nieoczekiwane przekierowanie podczas pobierania metadanych')
+            card = json.loads(response.read(1_000_000))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise ValueError(f'Nie udało się pobrać metadanych repozytorium Hugging Face: {exc}') from exc
+    card_data = card.get('cardData') or {}
+    tags = card.get('tags') or []
+    license_name = card_data.get('license') or next((t.split(':', 1)[1] for t in tags if isinstance(t, str) and t.startswith('license:')), '')
+    license_url = card_data.get('license_link') or ''
+    siblings = card.get('siblings') or []
+    license_files = sorted({item.get('rfilename') for item in siblings if isinstance(item, dict) and item.get('rfilename') and item.get('rfilename').split('/')[-1].lower() in ('license', 'license.md', 'license.txt', 'copying', 'copying.md', 'notice', 'notice.md')})
+    evidence = {
+        'provider': 'Hugging Face', 'repo_id': repo, 'repo_url': 'https://huggingface.co/' + repo,
+        'api_url': api_url, 'revision': card.get('sha'), 'readme_url': 'https://huggingface.co/' + repo + '/blob/' + (card.get('sha') or 'main') + '/README.md',
+        'license': license_name or None, 'license_link': license_url or None,
+        'license_files': ['https://huggingface.co/' + repo + '/blob/' + (card.get('sha') or 'main') + '/' + '/'.join(urllib.parse.quote(part, safe='') for part in filename.split('/')) for filename in license_files],
+        'license_name': card_data.get('license_name'), 'base_model': card_data.get('base_model'),
+        'tags': [t for t in tags if isinstance(t, str) and t.startswith('license:')],
+        'fetched_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'evidence_status': 'metadata_found' if license_name else 'license_not_declared',
+        'approval_note': 'Metadane źródłowe nie stanowią opinii prawnej ani automatycznej zgody na użycie.'
+    }
+    return evidence
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -532,10 +573,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json([dict(id=x[0],started_at=x[1],result=x[2],moves=x[3],avg_seconds=round(x[4],3)) for x in rows])
         elif self.path == '/api/models':
             with league.connect() as c:
-                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy
+                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.metadata_json
                   FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
                   ORDER BY m.name''').fetchall()
-            self.send_json([dict(x) for x in rows])
+            models = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item['license_evidence'] = json.loads(item.pop('metadata_json') or '{}').get('license_evidence')
+                except (TypeError, json.JSONDecodeError):
+                    item['license_evidence'] = None
+                    item.pop('metadata_json', None)
+                models.append(item)
+            self.send_json(models)
         elif self.path == '/api/league':
             self.send_json(league.elo_ratings('PURE_AI'))
         elif self.path == '/api/league/engine':
@@ -586,25 +636,47 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path == '/api/models/verify-license':
+                if self.path == '/api/models/license-evidence':
+                    version_id = int(payload.get('version_id', 0))
+                    if version_id < 1:
+                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
+                    with league.connect() as c:
+                        row = c.execute('SELECT id,source FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                    if row is None:
+                        raise ValueError('Nieznana wersja modelu')
+                    evidence = fetch_hf_license_evidence(row['source'])
+                    with league.connect() as c:
+                        current = c.execute('SELECT metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        if current is None:
+                            raise ValueError('Wersja modelu została usunięta podczas pobierania dowodów')
+                        metadata = json.loads(current['metadata_json'] or '{}')
+                        metadata['license_evidence'] = evidence
+                        c.execute('UPDATE model_versions SET metadata_json=? WHERE id=?', (json.dumps(metadata, ensure_ascii=False), version_id))
+                    result = {'version_id': version_id, 'evidence': evidence, 'license_verified': False}
+                elif self.path == '/api/models/verify-license':
                     if payload.get('confirm_review') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
                     with league.connect() as c:
-                        row = c.execute('SELECT id,source,license FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        row = c.execute('SELECT id,source,license,metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
                         if row is None:
                             raise ValueError('Nieznana wersja modelu')
                         source = (row['source'] or '').strip()
-                        license_name = (row['license'] or '').strip()
-                        if not source or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified'):
-                            raise ValueError('Wersja nie ma ustalonego źródła i nazwy licencji; najpierw sprawdź kartę modelu')
-                        c.execute('UPDATE model_versions SET license_verified=1 WHERE id=?', (version_id,))
+                        license_name = (payload.get('license') or row['license'] or '').strip()
+                        metadata = json.loads(row['metadata_json'] or '{}')
+                        evidence = metadata.get('license_evidence') or {}
+                        has_license_document = bool(evidence.get('license_files') or evidence.get('license'))
+                        if not source or not source.startswith('https://') or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
+                            raise ValueError('Wersja wymaga źródła HTTPS i konkretnego identyfikatora licencji')
+                        if not row['license'] and not has_license_document:
+                            raise ValueError('Najpierw pobierz dowody z repozytorium; nie znaleziono deklaracji ani pliku licencji')
+                        c.execute('UPDATE model_versions SET license=?,license_verified=1 WHERE id=?', (license_name, version_id))
                     result = {'version_id': version_id, 'license_verified': True}
                 elif self.path == '/api/models/register':
                     result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
@@ -626,7 +698,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = model_store.cleanup_version(int(payload.get('version_id',0)))
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'))
-                self.send_json(result, 200 if self.path == '/api/models/verify-license' else 201)
+                self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif self.path == '/api/step':
