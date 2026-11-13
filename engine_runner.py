@@ -383,5 +383,3 @@ class SequentialChessRunner:
         game.headers['Event'] = 'Local AI Chess Arena'
         game.headers['White'] = white
         game.headers['Black'] = black
-        game.headers['Result'] = result
-        return str(game)
