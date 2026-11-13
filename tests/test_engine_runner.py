@@ -7,7 +7,7 @@ from engine_runner import SequentialChessRunner, RunnerError
 class FakeRuntime:
     def __init__(self):
         self.calls = []
-    def generate(self, model_path, board, stop_event=None):
+    def generate(self, model_path, board, stop_event=None, recent_moves=None):
         if stop_event and stop_event.is_set():
             raise RunnerError('stopped')
         move = next(iter(board.legal_moves))
@@ -23,7 +23,7 @@ class EngineRunnerTests(unittest.TestCase):
         sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
         class FoolRuntime:
             def __init__(self): self.calls = []
-            def generate(self, path, board, stop_event=None):
+            def generate(self, path, board, stop_event=None, recent_moves=None):
                 uci = sequence[len(self.calls)]
                 self.calls.append((str(path), board.turn))
                 return chess.Move.from_uci(uci), {'seconds': 0.01}
@@ -42,7 +42,7 @@ class EngineRunnerTests(unittest.TestCase):
         sequence=['f2f3','e7e5','g2g4','d8h4']
         class PairRuntime:
             def __init__(self): self.calls=[]
-            def generate(self,path,board,stop_event=None,draft_model_path=None):
+            def generate(self,path,board,stop_event=None,draft_model_path=None,recent_moves=None):
                 uci=sequence[len(self.calls)]
                 self.calls.append((str(path),str(draft_model_path) if draft_model_path else None))
                 return chess.Move.from_uci(uci),{'seconds':0.01}
@@ -58,7 +58,7 @@ class EngineRunnerTests(unittest.TestCase):
         sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
         class FoolRuntime:
             def __init__(self): self.calls = []
-            def generate(self, path, board, stop_event=None):
+            def generate(self, path, board, stop_event=None, recent_moves=None):
                 uci = sequence[len(self.calls)]
                 self.calls.append(uci)
                 return chess.Move.from_uci(uci), {'seconds': 0.02}
@@ -241,6 +241,78 @@ class EngineRunnerTests(unittest.TestCase):
         runtime.shutdown()
         self.assertTrue(runtime._monitor_stop.is_set())
         self.assertFalse(runtime._monitor_thread.is_alive())
+
+
+    def test_recent_piece_reversal_is_excluded_when_an_alternative_exists(self):
+        from engine_runner import LlamafileRuntime
+        board = chess.Board('4k3/8/8/8/8/8/8/4K1R1 w - - 0 1')
+        history = [{'ply': 1, 'color': 'white', 'uci': 'h1g1', 'piece': 'R'}]
+        allowed, blocked = LlamafileRuntime._allowed_moves(board, history)
+        self.assertIn('g1h1', blocked)
+        self.assertNotIn('g1h1', [move.uci() for move in allowed])
+        self.assertTrue(allowed)
+
+    def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter(['g1h1', 'g1g2'])
+        requests = []
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response(next(outputs))
+        board = chess.Board('4k3/8/8/8/8/8/8/4K1R1 w - - 0 1')
+        history = [{'ply': 1, 'color': 'white', 'uci': 'h1g1', 'piece': 'R'}]
+        runtime = LlamafileRuntime()
+        with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
+            move, _ = runtime.generate('/tmp/model.gguf', board, recent_moves=history)
+        self.assertEqual(move.uci(), 'g1g2')
+        first_prompt = requests[0]['messages'][0]['content']
+        retry_prompt = requests[1]['messages'][0]['content']
+        self.assertNotIn('g1h1', first_prompt.split('LEGAL MOVES: ', 1)[1])
+        self.assertIn('powtarza cofnięcie', retry_prompt)
+        self.assertIn('g1g2', retry_prompt)
+
+    def test_piece_reversal_is_not_blocked_when_piece_is_no_longer_on_destination(self):
+        from engine_runner import LlamafileRuntime
+        board = chess.Board('4k3/8/8/8/8/6R1/8/4K3 w - - 0 1')
+        history = [{'ply': 1, 'color': 'white', 'uci': 'h1g1', 'piece': 'R'}]
+        allowed, blocked = LlamafileRuntime._allowed_moves(board, history)
+        self.assertNotIn('g1h1', blocked)
+        self.assertTrue(allowed)
+
+    def test_anti_oscillation_never_blocks_a_check_evasion(self):
+        from engine_runner import LlamafileRuntime
+        board = chess.Board('4r1k1/8/8/8/8/8/8/4K3 w - - 0 1')
+        self.assertTrue(board.is_check())
+        history = [{'ply': 1, 'color': 'white', 'uci': 'd1e1', 'piece': 'K'}]
+        allowed, blocked = LlamafileRuntime._allowed_moves(board, history)
+        self.assertEqual(blocked, [])
+        self.assertIn(chess.Move.from_uci('e1d1'), allowed)
+
+    def test_sequential_runner_passes_move_history_to_both_models(self):
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class HistoryRuntime:
+            def __init__(self): self.histories=[]
+            def generate(self, path, board, stop_event=None, recent_moves=None):
+                self.histories.append(list(recent_moves or []))
+                uci = sequence[len(self.histories)-1]
+                return chess.Move.from_uci(uci), {'seconds': 0.01}
+        fake = HistoryRuntime()
+        SequentialChessRunner(fake).play_game(
+            {'name':'Alpha','path':'/tmp/a.gguf'},
+            {'name':'Beta','path':'/tmp/b.gguf'})
+        self.assertEqual(fake.histories[0], [])
+        self.assertEqual(fake.histories[1][0]['uci'], 'f2f3')
+        self.assertEqual(fake.histories[1][0]['piece'], 'P')
+        self.assertEqual(fake.histories[2][1]['uci'], 'e7e5')
+        self.assertEqual(fake.histories[2][1]['piece'], 'p')
 
 
 if __name__ == '__main__':
