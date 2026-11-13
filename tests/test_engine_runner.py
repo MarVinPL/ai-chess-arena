@@ -287,6 +287,15 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertNotIn('g1h1', blocked)
         self.assertTrue(allowed)
 
+    def test_anti_oscillation_never_blocks_a_check_evasion(self):
+        from engine_runner import LlamafileRuntime
+        board = chess.Board('4r1k1/8/8/8/8/8/8/4K3 w - - 0 1')
+        self.assertTrue(board.is_check())
+        history = [{'ply': 1, 'color': 'white', 'uci': 'd1e1', 'piece': 'K'}]
+        allowed, blocked = LlamafileRuntime._allowed_moves(board, history)
+        self.assertEqual(blocked, [])
+        self.assertIn(chess.Move.from_uci('e1d1'), allowed)
+
     def test_sequential_runner_passes_move_history_to_both_models(self):
         sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
         class HistoryRuntime:

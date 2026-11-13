@@ -177,6 +177,9 @@ class LlamafileRuntime:
     @staticmethod
     def _allowed_moves(board: chess.Board, recent_moves: list[dict] | None = None) -> tuple[list[chess.Move], list[str]]:
         legal = list(board.legal_moves)
+        # Defensive evasions take priority over the anti-oscillation heuristic.
+        if board.is_check():
+            return legal, []
         blocked = set()
         # Avoid a non-forced immediate reversal by the same piece. Keep a short
         # per-game history so a model cannot alternate a rook/queen between two
