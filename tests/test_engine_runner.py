@@ -252,6 +252,33 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertNotIn('g1h1', [move.uci() for move in allowed])
         self.assertTrue(allowed)
 
+    def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter(['g1h1', 'g1g2'])
+        requests = []
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response(next(outputs))
+        board = chess.Board('4k3/8/8/8/8/8/8/4K1R1 w - - 0 1')
+        history = [{'ply': 1, 'color': 'white', 'uci': 'h1g1', 'piece': 'R'}]
+        runtime = LlamafileRuntime()
+        with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
+            move, _ = runtime.generate('/tmp/model.gguf', board, recent_moves=history)
+        self.assertEqual(move.uci(), 'g1g2')
+        first_prompt = requests[0]['messages'][0]['content']
+        retry_prompt = requests[1]['messages'][0]['content']
+        self.assertNotIn('g1h1', first_prompt.split('LEGAL MOVES: ', 1)[1])
+        self.assertIn('powtarza cofnięcie', retry_prompt)
+        self.assertIn('g1g2', retry_prompt)
+
     def test_piece_reversal_is_not_blocked_when_piece_is_no_longer_on_destination(self):
         from engine_runner import LlamafileRuntime
         board = chess.Board('4k3/8/8/8/8/6R1/8/4K3 w - - 0 1')
