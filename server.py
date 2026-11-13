@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import chess, chess.pgn
@@ -11,6 +11,12 @@ import passkey_test
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
 DB = ROOT / 'arena.sqlite3'
+LOG_DIR = ROOT / 'logs'
+MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
+LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
+MODEL_RESPONSE_RETENTION_SECONDS = 3 * 24 * 60 * 60
+LIVE_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
+LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
 HOST, PORT = '127.0.0.1', 8090
 lock = threading.RLock()
@@ -28,6 +34,56 @@ tournament_error = ''
 live_status = {'stage':'idle','message':'Oczekiwanie na turniej','model':None,'color':None,'fen':None,'legal_moves':[],'response':None,'updated_at':time.time(),'generation_started_at':None,'moves':[],'events':[]}
 live_lock = threading.RLock()
 
+def _prune_jsonl(path, retention_seconds, max_entries):
+    """Keep only recent, parseable records and atomically bound the diagnostic log."""
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except FileNotFoundError:
+        return
+    cutoff = time.time() - retention_seconds
+    kept = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+            stamp = record.get('at')
+            created = calendar.timegm(time.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ')) if stamp else 0
+            if created >= cutoff:
+                kept.append(line)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+    kept = kept[-max_entries:]
+    content = '\n'.join(kept) + ('\n' if kept else '')
+    if len(content.encode('utf-8')) > LOG_MAX_BYTES:
+        kept = kept[-max_entries // 4:]
+        content = '\n'.join(kept) + ('\n' if kept else '')
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(content, encoding='utf-8')
+    temporary.replace(path)
+
+
+def _append_jsonl(path, record, max_entries, retention_seconds):
+    """Append a diagnostic record and enforce age/count/size retention."""
+    LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '\n')
+    _prune_jsonl(path, retention_seconds, max_entries)
+
+
+def _read_jsonl(path, limit, retention_seconds):
+    _prune_jsonl(path, retention_seconds, limit)
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()[-limit:]
+    except OSError:
+        return []
+    records = []
+    for line in lines:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
 def set_live(stage, message, **fields):
     with live_lock:
         now = time.time()
@@ -36,13 +92,35 @@ def set_live(stage, message, **fields):
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
-        event_fields = ('model','color','response','proposed_move','last_move','pairing_id','question_no','error','result')
-        live_status['events'] = ([{'at':time.strftime('%H:%M:%S', time.localtime(now)),'stage':stage,'message':message,**{k:v for k,v in fields.items() if k in event_fields}}] + live_status.get('events',[]))[:40]
+        event_fields = ('model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds')
+        event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
+                 'stage':stage,'message':message,
+                 **{k:v for k,v in fields.items() if k in event_fields}}
+        live_status['events'] = ([event] + live_status.get('events', []))[:40]
+        try:
+            _append_jsonl(LIVE_EVENTS_LOG, event, 500, LIVE_EVENT_RETENTION_SECONDS)
+            response = fields.get('response')
+            if isinstance(response, str) and response.strip():
+                _append_jsonl(MODEL_RESPONSES_LOG, {
+                    'at': event['at'], 'stage': stage, 'model': fields.get('model'),
+                    'color': fields.get('color'), 'pairing_id': fields.get('pairing_id'),
+                    'response': response, 'proposed_move': fields.get('proposed_move'),
+                    'elapsed_seconds': fields.get('elapsed_seconds'),
+                }, 200, MODEL_RESPONSE_RETENTION_SECONDS)
+        except OSError as exc:
+            # Logging is best-effort and must never abort a running tournament.
+            live_status['log_write_error'] = str(exc)
+
 
 def get_live():
     with live_lock:
-        return dict(live_status)
-
+        snapshot = dict(live_status)
+        if not snapshot.get('events'):
+            snapshot['events'] = list(reversed(_read_jsonl(LIVE_EVENTS_LOG, 40, LIVE_EVENT_RETENTION_SECONDS)))
+            responses = _read_jsonl(MODEL_RESPONSES_LOG, 1, MODEL_RESPONSE_RETENTION_SECONDS)
+            if responses:
+                snapshot['response'] = responses[-1].get('response')
+        return snapshot
 
 
 def _is_managed_filename(filename):
@@ -628,5 +706,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+    _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
     print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
