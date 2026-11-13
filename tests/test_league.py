@@ -58,8 +58,10 @@ class LeagueTests(unittest.TestCase):
    {'inference':{'thinking':True,'temperature':0,'max_tokens':512}},low)
   self.assertEqual(league.token_budget_info('a'*64,'',
    {'inference':{'thinking':True,'temperature':0,'max_tokens':512}})['pending_max_tokens'],384)
-  high=[{'max_tokens':512,'completion_tokens':300,'finish_reason':'stop',
-         'truncated':False,'valid_move':True,'attempt':1}]
+  high=[{'max_tokens':512,'completion_tokens':5,'finish_reason':'stop',
+         'truncated':False,'valid_move':True,'attempt':1},
+        {'max_tokens':512,'completion_tokens':300,'finish_reason':'stop',
+         'truncated':False,'valid_move':True,'attempt':2}]
   result=league.record_token_budget_observations(tournament['id'],1,'a'*64,'',
    {'inference':{'thinking':True,'temperature':0,'max_tokens':512}},high)
   self.assertIsNone(result['pending_max_tokens'])
