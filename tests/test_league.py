@@ -77,7 +77,8 @@ class LeagueTests(unittest.TestCase):
   key_a=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':True,'temperature':0.2,'max_tokens':512}})
   key_b=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':True,'temperature':0.2,'max_tokens':1024}})
   key_c=league.adaptive_budget_config_key('a'*64,'',{'inference':{'thinking':False,'temperature':0.2,'max_tokens':512}})
-  key_d=league.adaptive_budget_config_key('a'*64,'c'*64,{'inference':{'thinking':True,'temperature':0.2,'max_tokens':512}})self.assertNotEqual(key_a,key_b)
+  key_d=league.adaptive_budget_config_key('a'*64,'c'*64,{'inference':{'thinking':True,'temperature':0.2,'max_tokens':512}})
+  self.assertNotEqual(key_a,key_b)
   self.assertNotEqual(key_a,key_c)
   self.assertNotEqual(key_a,key_d)
 
@@ -97,7 +98,7 @@ class LeagueTests(unittest.TestCase):
     license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
   tournament=league.create_round_robin('Ten player championship')
   self.assertEqual(tournament['players'],10)
-  self.assertEqual(tournament['games_planned'],90)
+self.assertEqual(tournament['games_planned'],90)
   self.assertEqual(tournament['draft_games_planned'],7)
   self.assertEqual(tournament['total_games_planned'],97)
   with league.connect() as c:
@@ -156,7 +157,8 @@ class LeagueTests(unittest.TestCase):
   with league.connect() as c:
    self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='draft'",(tournament['id'],)).fetchone()[0],8)
 
- def test_draft_qualification_keeps_all_winners_then_best_remaining(self):for i in range(8):
+ def test_draft_qualification_keeps_all_winners_then_best_remaining(self):
+  for i in range(8):
    league.register_model(f'Extra {i}',source=f'https://example.test/extra-{i}',license='Apache-2.0',
     license_verified=True,metadata={'filename':f'extra-{i}.gguf','sha256':format(i+10,'064x'),'size_bytes':100})
   tournament=league.create_round_robin('Selective draft',qualification_percent=80)
@@ -196,7 +198,7 @@ class LeagueTests(unittest.TestCase):
  def test_registration_stores_remote_manifest_without_downloading_file(self):
   result=league.register_model('Remote GGUF',source='https://huggingface.co/example/model',
    license='Apache-2.0',license_verified=True,
-   metadata={'filename':'remote.gguf','sha256':'c'*64,'size_bytes':12345})
+metadata={'filename':'remote.gguf','sha256':'c'*64,'size_bytes':12345})
   version=result['versions'][0]
   self.assertEqual(version['status'],'catalogued')
   self.assertEqual(version['managed_copy'],0)
@@ -235,7 +237,8 @@ class LeagueTests(unittest.TestCase):
   try:
    league.MODEL_DIR=Path(self.tmp.name)/'managed-models'; league.MODEL_DIR.mkdir()
    (league.MODEL_DIR/'gamma.gguf').write_bytes(b'GGUF test bytes')
-   result=league.register_model('Gamma','gamma.gguf',source='test source',license='test license')version=result['versions'][0]
+   result=league.register_model('Gamma','gamma.gguf',source='test source',license='test license')
+   version=result['versions'][0]
    self.assertEqual(version['size_bytes'],15)
    self.assertEqual(len(version['sha256']),64)
    self.assertEqual(version['license_verified'],0)
@@ -295,7 +298,7 @@ class LeagueTests(unittest.TestCase):
 
  def test_inference_config_rejects_non_boolean_thinking(self):
   with self.assertRaisesRegex(ValueError,'true albo false'):
-   league.register_model('Bad thinking',metadata={'inference':{'thinking':'yes'}})
+league.register_model('Bad thinking',metadata={'inference':{'thinking':'yes'}})
 
  def test_inference_config_defaults_and_validates_generation_parameters(self):
   self.assertEqual(league.normalize_inference_config({}),{'thinking':False,'temperature':0.0,'max_tokens':16})
@@ -314,5 +317,6 @@ class LeagueTests(unittest.TestCase):
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')
- def test_unverified_model_cannot_enter_tournament(self):with league.connect() as c: c.execute("UPDATE model_versions SET license_verified=0 WHERE model_id=2")
+ def test_unverified_model_cannot_enter_tournament(self):
+  with league.connect() as c: c.execute("UPDATE model_versions SET license_verified=0 WHERE model_id=2")
   with self.assertRaises(ValueError): league.create_round_robin('Blocked')
