@@ -29,14 +29,14 @@ def questions_for_tournament(known_question_fingerprints, random_check_done=Fals
     return [(0,chooser.choice(QUESTIONS))]
 
 
-def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None):
+def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None, enable_thinking=False, temperature=0.0, max_tokens=None):
     if draft_model_path:
         runtime.ensure_loaded(model_path, draft_model_path)
     else:
         runtime.ensure_loaded(model_path)
     if stop_event and stop_event.is_set():
         return {"status": "stopped", "answer": "", "seconds": None}
-    payload=json.dumps({"messages":[{"role":"user","content":question}],"temperature":0,"max_tokens":900,"stream":False,"chat_template_kwargs":{"enable_thinking":False}}).encode()
+    payload=json.dumps({"messages":[{"role":"user","content":question}],"temperature":float(temperature),"max_tokens":int(max_tokens or (1800 if enable_thinking else 900)),"stream":False,"chat_template_kwargs":{"enable_thinking":bool(enable_thinking)}}).encode()
     req=urllib.request.Request(LLM,data=payload,headers={"Content-Type":"application/json"})
     started=time.monotonic()
     # Intentionally no timeout: measure response duration, never fail on elapsed time.
