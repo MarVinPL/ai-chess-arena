@@ -46,6 +46,13 @@ The default backend listens on `127.0.0.1:8090`. Keep it bound to loopback; use 
 - Model downloads require a pinned source, expected size, SHA-256, and explicit licence verification. Adding a model to the catalogue does not automatically download or run it.
 - The runner handles one model process at a time. Tournament games have no hard response-time limit; inference time is recorded in results.
 
+## Llamafile watchdog
+
+- While a tournament runtime has a model loaded, a background watchdog checks its owned child process and the loopback health endpoint every 30 seconds.
+- If that child exits or its endpoint becomes unhealthy, the runtime attempts to restart the same model from the Arena-managed model path and emits a bounded live event.
+- An intentional `runtime.stop()` clears the desired model and disables automatic restart, so normal model switching and tournament cleanup are not undone.
+- The watchdog never searches for, signals, or adopts unrelated Llamafile processes. It does not start an arbitrary model when the Arena is idle; a tournament/runtime must first select and validate a model.
+
 ## Security and operational notes
 
 This project is a local prototype, not a hardened public service. Do not expose the API or model-runtime port directly to the Internet. Do not commit credentials, private keys, model binaries, local databases, or user runtime data.
