@@ -130,8 +130,8 @@ class LlamafileRuntime:
         legal_text = ", ".join(legal)
         initial_prompt = (
             'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-            'Zwróć wyłącznie ruch UCI.\\n'
-            f'FEN: {board.fen()}\\nLEGAL MOVES: {legal_text}\\nMOVE:')
+            'Zwróć wyłącznie ruch UCI.\n'
+            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:')
         retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
         started = time.monotonic()
@@ -171,9 +171,9 @@ class LlamafileRuntime:
                 else:
                     feedback = ('Twoja poprzednia odpowiedź nie zawierała poprawnego ruchu UCI. '
                                 'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
-                retry_prompt = (f'{feedback}\\n'
-                                f'FEN: {board.fen()}\\nLEGAL MOVES: {legal_text}\\n'
-                                'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\\nMOVE:')
+                retry_prompt = (f'{feedback}\n'
+                                f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+                                'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
                 self._notify('retrying', feedback, model=Path(model_path).name,
                              color=color, fen=board.fen(), legal_moves=legal, response=content[:300],
                              illegal_move=illegal_uci, attempt=2)
