@@ -73,15 +73,24 @@ def register_model(name,filename=None,source='',license='',metadata=None,format=
   return {'id':m['id'],'name':name,'format':format,'versions':[dict(v) for v in vs]}
 def create_round_robin(name,format='PURE_AI'):
  with connect() as c:
-  ms=c.execute('''SELECT m.id,
+  candidates=c.execute('''SELECT m.id,
       (SELECT v.id FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
        AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
-       ORDER BY v.id DESC LIMIT 1) AS version_id
+       ORDER BY v.id DESC LIMIT 1) AS version_id,
+      (SELECT v.sha256 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
+       AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0
+       ORDER BY v.id DESC LIMIT 1) AS model_sha256
       FROM league_models m WHERE m.active=1 AND m.format=?
       AND EXISTS(SELECT 1 FROM model_versions v WHERE v.model_id=m.id AND v.license_verified=1
        AND v.source<>'' AND v.filename IS NOT NULL AND v.sha256 IS NOT NULL AND v.size_bytes>0)
       ORDER BY m.id''',(format,)).fetchall()
-  if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch aktywnych modeli z jawnie zweryfikowaną licencją')
+  # Aliases or separately registered entries with identical weights are one
+  # competitor, not a meaningful self-match. Keep the first catalog entry.
+  ms=[]; seen_hashes=set()
+  for candidate in candidates:
+   if candidate['model_sha256'] in seen_hashes: continue
+   seen_hashes.add(candidate['model_sha256']); ms.append(candidate)
+  if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch różnych modeli (różnych plików SHA-256) z jawnie zweryfikowaną licencją')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); tid=c.execute('INSERT INTO tournaments(name,format,created_at) VALUES(?,?,?)',(name,format,now)).lastrowid
   for m in ms:
    c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tid,m['id'],m['version_id']))

@@ -97,6 +97,12 @@ class LeagueTests(unittest.TestCase):
  def test_registration_cannot_approve_without_https_source(self):
   with self.assertRaises(ValueError):
    league.register_model('Blocked Source',source='http://example.test/model',license='Apache-2.0',license_verified=True)
+ def test_identical_weights_under_different_names_are_not_two_competitors(self):
+  with league.connect() as c:
+   c.execute("UPDATE model_versions SET sha256=? WHERE model_id=2", ('a'*64,))
+  with self.assertRaisesRegex(ValueError, 'dwóch różnych modeli'):
+   league.create_round_robin('Duplicate weights')
+
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')
