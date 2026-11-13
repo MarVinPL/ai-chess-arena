@@ -219,5 +219,29 @@ class EngineRunnerTests(unittest.TestCase):
             runtime._monitor_stop.set()
 
 
+    def test_watchdog_keeps_retrying_after_failed_recovery_attempt(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime, RunnerError
+        runtime = LlamafileRuntime(monitor_interval=30)
+        model = Path('/tmp/arena-managed-model.gguf')
+        runtime._desired_model_path = model
+        def failed_recovery(path, draft_path=None):
+            runtime.stop()
+            raise RunnerError('startup failed')
+        with patch.object(runtime, 'ensure_loaded', side_effect=failed_recovery):
+            runtime._monitor_once()
+        self.assertEqual(runtime._desired_model_path, model)
+        runtime.shutdown()
+        self.assertFalse(runtime._monitor_thread.is_alive())
+
+    def test_shutdown_stops_watchdog_thread(self):
+        from engine_runner import LlamafileRuntime
+        runtime = LlamafileRuntime(monitor_interval=30)
+        runtime.shutdown()
+        self.assertTrue(runtime._monitor_stop.is_set())
+        self.assertFalse(runtime._monitor_thread.is_alive())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
