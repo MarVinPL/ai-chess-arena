@@ -279,8 +279,9 @@ class LlamafileRuntime:
                     blocked_uci = candidate.uci()
                 else:
                     illegal_uci = candidate.uci()
-            truncated = (str(finish_reason).lower() in ('length','max_tokens','max_output_tokens')
-                         or (completion_tokens is not None and completion_tokens >= int(max_tokens)))
+            truncated = (not candidate_valid and
+                         (str(finish_reason).lower() in ('length','max_tokens','max_output_tokens')
+                          or (completion_tokens is not None and completion_tokens >= int(max_tokens))))
             budget_observations.append({'max_tokens':int(max_tokens),'completion_tokens':completion_tokens,
                 'finish_reason':finish_reason,'truncated':bool(truncated),
                 'valid_move':bool(candidate_valid),'attempt':attempt+1})
