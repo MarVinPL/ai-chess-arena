@@ -211,7 +211,8 @@ class LlamafileRuntime:
     def generate(self, model_path: str | Path, board: chess.Board,
                  stop_event: threading.Event | None = None,
                  draft_model_path: str | Path | None = None,
-                 recent_moves: list[dict] | None = None) -> tuple[chess.Move, dict]:
+                 recent_moves: list[dict] | None = None, enable_thinking: bool = False,
+                 temperature: float = 0.0, max_tokens: int = 16) -> tuple[chess.Move, dict]:
         self.ensure_loaded(model_path, draft_model_path)
         if stop_event and stop_event.is_set():
             raise RunnerError('Turniej zatrzymany przez operatora')
@@ -239,8 +240,8 @@ class LlamafileRuntime:
                 raise RunnerError('Turniej zatrzymany przez operatora')
             prompt = initial_prompt if attempt == 0 else retry_prompt
             payload = json.dumps({'messages': [{'role': 'user', 'content': prompt}],
-                                  'temperature': 0, 'max_tokens': 16, 'stream': False,
-                                  'chat_template_kwargs': {'enable_thinking': False}}).encode()
+                                  'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
+                                  'chat_template_kwargs': {'enable_thinking': bool(enable_thinking)}}).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(request, timeout=None) as response:
@@ -286,7 +287,8 @@ class LlamafileRuntime:
         return move, {'seconds': round(elapsed, 4), 'runtime': 'llamafile',
                       'model_path': str(Path(model_path).resolve()),
                       'draft_model_path': str(Path(draft_model_path).resolve()) if draft_model_path else None,
-                      'response': content[:160]}
+                      'response': content[:160], 'thinking': bool(enable_thinking),
+                      'temperature': float(temperature), 'max_tokens': int(max_tokens)}
 
 
 class SequentialChessRunner:
@@ -306,20 +308,28 @@ class SequentialChessRunner:
                         'move_times': times}
             player = white if board.turn == chess.WHITE else black
             color = 'white' if board.turn == chess.WHITE else 'black'
+            kwargs = {'recent_moves': move_records}
             if player.get('draft_path'):
-                move, meta = self.runtime.generate(player['path'], board, stop_event,
-                                                   draft_model_path=player['draft_path'],
-                                                   recent_moves=move_records)
-            else:
-                move, meta = self.runtime.generate(player['path'], board, stop_event,
-                                                   recent_moves=move_records)
+                kwargs['draft_model_path'] = player['draft_path']
+            inference = player.get('inference') or {
+                'thinking': bool(player.get('thinking', False)),
+                'temperature': 0.0,
+                'max_tokens': 512 if player.get('thinking') else 16}
+            if inference.get('thinking') is True:
+                kwargs['enable_thinking'] = True
+            if inference.get('temperature', 0.0) != 0.0:
+                kwargs['temperature'] = float(inference['temperature'])
+            if inference.get('max_tokens', 16) != 16:
+                kwargs['max_tokens'] = int(inference['max_tokens'])
+            move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
             san = board.san(move)
             piece = board.piece_at(move.from_square)
             piece_symbol = piece.symbol() if piece else None
             board.push(move)
             record = {'ply': len(move_records) + 1, 'color': color,
-                      'model': player['name'], 'uci': move.uci(), 'san': san,
-                      'piece': piece_symbol,
+                      'model': player['name'], 'thinking': bool(inference.get('thinking', False)),
+                      'inference': dict(inference),
+                      'uci': move.uci(), 'san': san, 'piece': piece_symbol,
                       'seconds': meta['seconds'], 'fen': board.fen()}
             move_records.append(record); times.append(meta['seconds'])
             if progress:
