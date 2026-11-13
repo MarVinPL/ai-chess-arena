@@ -79,6 +79,28 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(event_record['stage'], 'move_generated')
         self.assertEqual(event_record['proposed_move'], 'e2e4')
 
+    def test_diagnostic_logs_apply_separate_age_retention(self):
+        import json
+        from datetime import datetime, timedelta, timezone
+        server.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        expired_response = (now - timedelta(days=4)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        recent_response = (now - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        expired_event = (now - timedelta(days=8)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        recent_event = (now - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        server.MODEL_RESPONSES_LOG.write_text('\n'.join([
+            json.dumps({'at': expired_response, 'response': 'old'}),
+            json.dumps({'at': recent_response, 'response': 'new'}),
+        ]) + '\n', encoding='utf-8')
+        server.LIVE_EVENTS_LOG.write_text('\n'.join([
+            json.dumps({'at': expired_event, 'message': 'old'}),
+            json.dumps({'at': recent_event, 'message': 'new'}),
+        ]) + '\n', encoding='utf-8')
+        responses = server._read_jsonl(server.MODEL_RESPONSES_LOG, 200, server.MODEL_RESPONSE_RETENTION_SECONDS)
+        events = server._read_jsonl(server.LIVE_EVENTS_LOG, 500, server.LIVE_EVENT_RETENTION_SECONDS)
+        self.assertEqual([item['response'] for item in responses], ['new'])
+        self.assertEqual([item['message'] for item in events], ['new'])
+
     def test_live_api_restores_logs_when_memory_history_is_empty(self):
         server.set_live('move_generated', 'Model zaproponował ruch: d2d4',
                         model='RestartTest.gguf', response='d2d4', proposed_move='d2d4')
