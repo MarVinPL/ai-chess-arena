@@ -83,7 +83,7 @@ Test prawdziwej inferencji na pozycji startowej, sekwencyjnie (bez równoczesneg
 
 ## Aktualny stan — magazyn per partia (2026-11-13)
 - Arena używa wyłącznie `/home/debian/ai-chess-arena/managed-models/`; katalog współdzielony nie jest ścieżką awaryjną.
-- Przed testem Passkey pobierany jest tylko model danego zawodnika; po trzech pytaniach runtime jest zatrzymywany i plik usuwany.
+- Odpowiedzi Passkey są zapamiętywane per zawodnik między turniejami. Zadawane są tylko brakujące pytania z puli trzech; po poznaniu wszystkich odpowiedzi można wykonać najwyżej jedno losowe pytanie kontrolne na turniej. Po teście runtime jest zatrzymywany, a pliki cache usuwane.
 - Przed partią przygotowywane są dwa modele tej partii. Po jej zakończeniu runtime Areny jest zatrzymywany, a obie kopie są usuwane, jeśli nie są używane. Kolejna partia pobiera je ponownie z tego samego źródła HTTPS i weryfikuje SHA-256.
 - Czyszczenie zachowuje manifest wersji w SQLite, dzięki czemu planowane/oczekujące parowania można wznowić bez utrzymywania GGUF na dysku.
 - Kontrola przestrzeni dyskowej jest wykonywana dla aktualnej partii: rozmiar brakujących modeli plus margines 512 MiB. Nie zmienia statusu turnieju ani zapisanych wyników.

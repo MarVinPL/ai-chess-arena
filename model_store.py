@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent
 MANAGED_DIR = ROOT / 'managed-models'
 MIN_FREE_MARGIN = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
-# Serializes destructive model cleanup against tournament model use.
+# Serializes model downloads and destructive cleanup against tournament model use.
 MODEL_LIFECYCLE_LOCK = threading.RLock()
 
 
@@ -23,8 +23,8 @@ def _safe_filename(name: str) -> str:
     return name
 
 
-def download_version(version_id: int, url: str, filename: str, expected_sha256: str,
-                     expected_size: int, license_verified: bool = False) -> dict:
+def _download_version_locked(version_id: int, url: str, filename: str, expected_sha256: str,
+                              expected_size: int, license_verified: bool = False) -> dict:
     """Download a catalogued model only after explicit provenance/license checks."""
     filename = _safe_filename(filename)
     if not license_verified:
@@ -90,6 +90,63 @@ def download_version(version_id: int, url: str, filename: str, expected_sha256: 
         try: part.unlink()
         except FileNotFoundError: pass
         raise
+
+
+def download_version(version_id: int, url: str, filename: str, expected_sha256: str,
+                    expected_size: int, license_verified: bool = False) -> dict:
+    with MODEL_LIFECYCLE_LOCK:
+        return _download_version_locked(version_id, url, filename, expected_sha256,
+                                        expected_size, license_verified)
+
+
+def download_draft_version(version_id: int, url: str, filename: str, expected_sha256: str,
+                           expected_size: int, license_verified: bool = False) -> dict:
+    """Download and pin the companion draft GGUF under the same model version."""
+    filename = _safe_filename(filename)
+    if not license_verified or not url.startswith('https://'):
+        raise ValueError('Pobieranie draft wymaga zatwierdzonej licencji i HTTPS')
+    if not re.fullmatch(r'[0-9a-fA-F]{64}', expected_sha256 or '') or not isinstance(expected_size, int) or expected_size <= 0:
+        raise ValueError('Niekompletny manifest SHA-256/rozmiaru pliku draft')
+    with MODEL_LIFECYCLE_LOCK, league.connect() as c:
+        row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
+        if row is None or row['license_verified'] != 1:
+            raise ValueError('Wersja modelu nie ma jawnie zatwierdzonej licencji')
+        if (row['draft_filename'], row['draft_sha256'], row['draft_size_bytes'], row['draft_download_url']) != (filename, expected_sha256, expected_size, url):
+            raise ValueError('Manifest draft nie zgadza się z przypiętą konfiguracją zawodnika')
+        if row['source'].startswith('https://huggingface.co/') and not url.startswith(row['source'].rstrip('/') + '/resolve/'):
+            raise ValueError('URL draft nie należy do repozytorium modelu')
+        MANAGED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = MANAGED_DIR / filename
+        part = MANAGED_DIR / (filename + '.part')
+        if target.exists() or part.exists():
+            raise FileExistsError('Plik draft już istnieje; odmowa nadpisania')
+        if shutil.disk_usage(MANAGED_DIR).free < expected_size + MIN_FREE_MARGIN:
+            raise OSError('Za mało wolnego miejsca na plik draft z marginesem bezpieczeństwa')
+        digest = hashlib.sha256(); received = 0
+        req = urllib.request.Request(url, headers={'User-Agent': 'LocalAIChessArena/0.1'})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response, part.open('xb') as out:
+                if not response.geturl().startswith('https://'):
+                    raise ValueError('Przekierowanie draft poza HTTPS zablokowane')
+                while True:
+                    block = response.read(CHUNK)
+                    if not block: break
+                    received += len(block)
+                    if received > expected_size: raise ValueError('Draft przekracza zadeklarowany rozmiar')
+                    digest.update(block); out.write(block)
+                out.flush(); os.fsync(out.fileno())
+            actual = digest.hexdigest()
+            if received != expected_size or actual.lower() != expected_sha256.lower():
+                raise ValueError('Rozmiar lub SHA-256 pliku draft nie zgadza się z manifestem')
+            os.chmod(part, 0o600); os.replace(part, target)
+            c.execute("UPDATE model_versions SET draft_filename=?,draft_sha256=?,draft_size_bytes=?,draft_status='downloaded',draft_managed_copy=1 WHERE id=?",
+                      (filename, actual, received, version_id))
+            return {'version_id': version_id, 'filename': filename, 'sha256': actual,
+                    'size_bytes': received, 'managed_copy': True, 'path': str(target)}
+        except Exception:
+            try: part.unlink()
+            except FileNotFoundError: pass
+            raise
 
 
 def _open_by_process(path: Path) -> tuple[list[int], bool]:
@@ -169,19 +226,32 @@ def _open_by_process(path: Path) -> tuple[list[int], bool]:
 
 
 def cleanup_version(version_id: int) -> dict:
-    """Remove only a confirmed arena-owned file that no process currently has open."""
+    """Remove target and optional draft caches only after proving neither is open."""
     with MODEL_LIFECYCLE_LOCK, league.connect() as c:
         row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
         if row is None:
             raise ValueError('Nieznana wersja modelu')
-        if row['managed_copy'] != 1 or not row['filename']:
-            raise PermissionError('Plik nie jest oznaczony jako kopia zarządzana przez arenę')
-        path = (MANAGED_DIR / row['filename']).resolve()
-        if path.parent != MANAGED_DIR.resolve() or not path.is_file():
-            raise PermissionError('Ścieżka poza katalogiem zarządzanym lub brak pliku')
-        users, uncertain = _open_by_process(path)
-        if users or uncertain:
-            raise RuntimeError(f'Nie można bezpiecznie potwierdzić braku użycia pliku; procesy={users}, niepewność={uncertain}')
-        path.unlink()
-        c.execute("UPDATE model_versions SET status='catalogued',managed_copy=0 WHERE id=?", (version_id,))
-    return {'version_id': version_id, 'removed': True, 'metadata_retained': True}
+        assets = []
+        if row['managed_copy'] == 1 and row['filename']:
+            assets.append(('target', row['filename']))
+        if row['draft_managed_copy'] == 1 and row['draft_filename']:
+            assets.append(('draft', row['draft_filename']))
+        if not assets:
+            raise PermissionError('Brak plików oznaczonych jako kopie zarządzane przez arenę')
+        removed = []
+        for role, filename in assets:
+            path = (MANAGED_DIR / filename).resolve()
+            if path.parent != MANAGED_DIR.resolve() or not path.is_file() and path.exists():
+                raise PermissionError(f'Nieprawidłowa ścieżka kopii {role}')
+            if not path.exists():
+                continue
+            users, uncertain = _open_by_process(path)
+            if users or uncertain:
+                raise RuntimeError(f'Nie można bezpiecznie usunąć {role}; procesy={users}, niepewność={uncertain}')
+        for role, filename in assets:
+            path = MANAGED_DIR / filename
+            if path.exists():
+                path.unlink(); removed.append(role)
+        c.execute("UPDATE model_versions SET status='catalogued',managed_copy=0,draft_status='catalogued',draft_managed_copy=0 WHERE id=?", (version_id,))
+    return {'version_id': version_id, 'removed': bool(removed), 'removed_assets': removed,
+            'already_absent': not removed, 'metadata_retained': True}

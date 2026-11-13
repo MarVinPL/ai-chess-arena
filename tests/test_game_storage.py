@@ -53,10 +53,14 @@ class PerGameStorageTests(unittest.TestCase):
         def download(*args):
             calls.append(args[0])
             return self._fake_download(*args)
+        with league.connect() as c:
+            before = c.execute("SELECT COUNT(*) FROM model_versions WHERE status='catalogued' AND managed_copy=0").fetchone()[0]
+        self.assertEqual(before, 3)
         with patch.object(model_store, 'download_version', side_effect=download), \
              patch('shutil.disk_usage') as disk:
             disk.return_value.free = 10**10
-            white_path, black_path = server._prepare_game_models(self.players[0], self.players[1])
+            white_assets, black_assets = server._prepare_game_models(self.players[0], self.players[1])
+            white_path, black_path = white_assets['path'], black_assets['path']
         self.assertEqual(calls, [1, 2])
         self.assertTrue(Path(white_path).is_file())
         self.assertTrue(Path(black_path).is_file())
@@ -68,6 +72,11 @@ class PerGameStorageTests(unittest.TestCase):
             rows = c.execute('SELECT id,filename,status,managed_copy FROM model_versions ORDER BY id').fetchall()
         self.assertEqual([r['filename'] for r in rows], ['alpha.gguf', 'beta.gguf', 'unused.gguf'])
         self.assertTrue(all(r['status'] == 'catalogued' and r['managed_copy'] == 0 for r in rows))
+        # Removing the local cache never removes tournament eligibility.
+        tournament = league.create_round_robin('After cache cleanup')
+        with league.connect() as c:
+            entries = c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?', (tournament['id'],)).fetchone()[0]
+        self.assertEqual(entries, 3)
 
     def test_existing_pair_is_kept_without_redownload(self):
         for player in self.players[:2]:
@@ -77,8 +86,44 @@ class PerGameStorageTests(unittest.TestCase):
         with patch.object(model_store, 'download_version', side_effect=AssertionError('unexpected download')):
             with patch('shutil.disk_usage') as disk:
                 disk.return_value.free = 10**10
-                paths = server._prepare_game_models(self.players[0], self.players[1])
-        self.assertTrue(all(Path(path).is_file() for path in paths))
+                assets = server._prepare_game_models(self.players[0], self.players[1])
+        self.assertTrue(all(Path(item['path']).is_file() for item in assets))
+
+    def test_target_and_draft_are_downloaded_and_cleaned_as_one_configuration(self):
+        target_payload=b'GGUF target bytes'; draft_payload=b'GGUF draft bytes'
+        target_sha=hashlib.sha256(target_payload).hexdigest(); draft_sha=hashlib.sha256(draft_payload).hexdigest()
+        paired=league.register_model('Alpha + MTP',source='https://huggingface.co/example/alpha',license='Apache-2.0',license_verified=True,
+            metadata={'filename':'alpha-pair.gguf','sha256':target_sha,'size_bytes':len(target_payload),
+                'draft_model':{'filename':'alpha-draft.gguf','sha256':draft_sha,'size_bytes':len(draft_payload),
+                    'download_url':'https://huggingface.co/example/alpha/resolve/main/alpha-draft.gguf','source_path':'alpha-draft.gguf'}})
+        player={'name':'Alpha + MTP','version_id':paired['versions'][0]['id']}
+        def fake_target(version_id,url,filename,sha,size,approved):
+            self.assertEqual((sha,size),(target_sha,len(target_payload)))
+            path=model_store.MANAGED_DIR/filename; path.write_bytes(target_payload)
+            with league.connect() as c: c.execute("UPDATE model_versions SET status='downloaded',managed_copy=1 WHERE id=?",(version_id,))
+            return {'path':str(path)}
+        def fake_draft(version_id,url,filename,sha,size,approved):
+            self.assertEqual((sha,size),(draft_sha,len(draft_payload)))
+            path=model_store.MANAGED_DIR/filename; path.write_bytes(draft_payload)
+            with league.connect() as c: c.execute("UPDATE model_versions SET draft_status='downloaded',draft_managed_copy=1 WHERE id=?",(version_id,))
+            return {'path':str(path)}
+        with patch.object(model_store,'download_version',side_effect=fake_target), \
+             patch.object(model_store,'download_draft_version',side_effect=fake_draft), \
+             patch('shutil.disk_usage') as disk:
+            disk.return_value.free=10**10
+            assets=server._prepare_single_model(player)
+        self.assertTrue(Path(assets['path']).is_file())
+        self.assertTrue(Path(assets['draft_path']).is_file())
+        with patch.object(model_store,'_open_by_process',return_value=([],False)):
+            server.cleanup_unneeded_models()
+        self.assertFalse(Path(assets['path']).exists())
+        self.assertFalse(Path(assets['draft_path']).exists())
+        with league.connect() as c:
+            row=c.execute('SELECT filename,draft_filename,license_verified,managed_copy,draft_managed_copy FROM model_versions WHERE id=?',(player['version_id'],)).fetchone()
+        self.assertEqual(row['filename'],'alpha-pair.gguf')
+        self.assertEqual(row['draft_filename'],'alpha-draft.gguf')
+        self.assertEqual(row['license_verified'],1)
+        self.assertEqual((row['managed_copy'],row['draft_managed_copy']),(0,0))
 
     def test_existing_same_size_model_is_rejected_when_sha256_changed(self):
         player = self.players[0]
