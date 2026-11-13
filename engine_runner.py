@@ -98,7 +98,7 @@ class LlamafileRuntime:
                     self._desired_model_path = model_path
                     self._desired_draft_model_path = draft_path
                 self._notify('model_watchdog_error',
-'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
+                             'Watchdog nie zdołał uruchomić llamafile: ' + str(exc),
                              model=model_path.name, error=str(exc))
 
     def _monitor_loop(self) -> None:
@@ -198,7 +198,7 @@ class LlamafileRuntime:
                 previous = chess.Move.from_uci(record.get('uci', ''))
             except (ValueError, TypeError):
                 continue
-piece = board.piece_at(previous.to_square)
+            piece = board.piece_at(previous.to_square)
             if not piece or piece.color != board.turn:
                 continue
             expected_piece = record.get('piece')
@@ -298,7 +298,7 @@ piece = board.piece_at(previous.to_square)
                                 'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
                 retry_prompt = (f'{feedback}\n'
                                 f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
-'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
+                                'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
                 self._notify('retrying', feedback, model=Path(model_path).name,
                              color=color, fen=board.fen(), legal_moves=legal, response=content[:300],
                              illegal_move=illegal_uci, attempt=2)
