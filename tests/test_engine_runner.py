@@ -77,7 +77,8 @@ class EngineRunnerTests(unittest.TestCase):
         result = SequentialChessRunner(FakeRuntime()).play_game(
             {'name': 'A', 'path': '/tmp/a.gguf'},
             {'name': 'B', 'path': '/tmp/b.gguf'}, event)
-        self.assertEqual(result['status'], 'stopped')self.assertEqual(result['moves'], [])
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['moves'], [])
 
     def test_runtime_status_callback_is_optional_and_receives_events(self):
         from engine_runner import LlamafileRuntime
@@ -97,7 +98,7 @@ class EngineRunnerTests(unittest.TestCase):
             root=Path(tmp); binary=root/'llamafile'; target=root/'target.gguf'; draft=root/'draft.gguf'
             binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
             target.write_bytes(b'target'); draft.write_bytes(b'draft')
-            calls=[]
+calls=[]
             class Process:
                 returncode=None
                 def poll(self): return None
@@ -156,7 +157,8 @@ class EngineRunnerTests(unittest.TestCase):
                                    'usage':{'completion_tokens':16}}).encode()
         runtime=LlamafileRuntime()
         try:
-            with patch.object(runtime,'ensure_loaded'), patch('urllib.request.urlopen',return_value=Response()):with self.assertRaises(RunnerError) as caught:
+            with patch.object(runtime,'ensure_loaded'), patch('urllib.request.urlopen',return_value=Response()):
+                with self.assertRaises(RunnerError) as caught:
                     runtime.generate('/tmp/model.gguf',chess.Board(),max_tokens=16)
         finally:
             runtime.shutdown()
@@ -196,7 +198,7 @@ class EngineRunnerTests(unittest.TestCase):
         class Response:
             def __init__(self, content):
                 self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
-            def __enter__(self): return self
+def __enter__(self): return self
             def __exit__(self, *args): return False
             def read(self): return self.body
         outputs = iter(['e2e5', 'e2e5'])
@@ -235,7 +237,8 @@ class EngineRunnerTests(unittest.TestCase):
             runtime._process = first
             runtime._model_path = model.resolve()
             runtime._desired_model_path = model.resolve()
-            first.returncode = 1with patch.object(runtime, '_healthy', return_value=True):
+            first.returncode = 1
+            with patch.object(runtime, '_healthy', return_value=True):
                 runtime._monitor_once()
             self.assertEqual(len(calls), 1)
             self.assertIsNot(runtime._process, first)
@@ -294,8 +297,7 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('g1h1', blocked)
         self.assertNotIn('g1h1', [move.uci() for move in allowed])
         self.assertTrue(allowed)
-
-    def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
+def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
         import json
         from unittest.mock import patch
         from engine_runner import LlamafileRuntime
@@ -314,7 +316,8 @@ class EngineRunnerTests(unittest.TestCase):
         history = [{'ply': 1, 'color': 'white', 'uci': 'h1g1', 'piece': 'R'}]
         runtime = LlamafileRuntime()
         with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
-            move, _ = runtime.generate('/tmp/model.gguf', board, recent_moves=history)self.assertEqual(move.uci(), 'g1g2')
+            move, _ = runtime.generate('/tmp/model.gguf', board, recent_moves=history)
+        self.assertEqual(move.uci(), 'g1g2')
         first_prompt = requests[0]['messages'][0]['content']
         retry_prompt = requests[1]['messages'][0]['content']
         self.assertNotIn('g1h1', first_prompt.split('LEGAL MOVES: ', 1)[1])
@@ -393,7 +396,8 @@ class EngineRunnerTests(unittest.TestCase):
         fake = HistoryRuntime()
         SequentialChessRunner(fake).play_game(
             {'name':'Alpha','path':'/tmp/a.gguf'},
-            {'name':'Beta','path':'/tmp/b.gguf'})self.assertEqual(fake.histories[0], [])
+            {'name':'Beta','path':'/tmp/b.gguf'})
+self.assertEqual(fake.histories[0], [])
         self.assertEqual(fake.histories[1][0]['uci'], 'f2f3')
         self.assertEqual(fake.histories[1][0]['piece'], 'P')
         self.assertEqual(fake.histories[2][1]['uci'], 'e7e5')
