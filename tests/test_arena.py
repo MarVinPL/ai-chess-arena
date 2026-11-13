@@ -125,6 +125,27 @@ class ArenaSmokeTests(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(ctx.exception.code, 422)
 
+    def test_tournament_finalizer_releases_model_lock_if_runner_stop_fails(self):
+        class BrokenRuntime:
+            def stop(self):
+                raise RuntimeError('simulated runner shutdown failure')
+
+        old_runtime = server.tournament_runtime
+        old_error = server.tournament_error
+        server.tournament_runtime = BrokenRuntime()
+        try:
+            worker = threading.Thread(target=server.tournament_loop, args=(-1,))
+            worker.start()
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            lock = server.model_store.MODEL_LIFECYCLE_LOCK
+            self.assertTrue(lock.acquire(blocking=False))
+            lock.release()
+            self.assertIn('Runner shutdown failed', server.tournament_error)
+        finally:
+            server.tournament_runtime = old_runtime
+            server.tournament_error = old_error
+
     def test_cleanup_requires_explicit_confirmation(self):
         request = urllib.request.Request(self.base + '/api/models/cleanup', data=b'{"version_id":1}', headers={'Content-Type':'application/json'}, method='POST')
         with self.assertRaises(urllib.error.HTTPError) as ctx:
