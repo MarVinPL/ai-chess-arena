@@ -54,6 +54,20 @@ Kolumny `games.tournament_id`, `pairing_id`, `move_times_json`, `inference_metad
 
 Migracje są zasadniczo addytywne, ale zmieniają produkcyjną bazę przy starcie procesu. Muszą być najpierw sprawdzone na kopii DB. Nie uruchamiać `db_init()` na produkcyjnej bazie bez uprzedniego, zweryfikowanego backupu i osobnej zgody na deploy.
 
+## Gotowość modeli w aktualnym main
+
+Aktualny kod Areny uruchamia wyłącznie wersje, które mają status `downloaded`, `managed_copy=1`, kompletny manifest filename/SHA-256/size i zweryfikowany plik we własnym katalogu `managed-models` (patrz `server.py::_version_path`).
+
+Stan bazy z audytu:
+- wszystkie 10 wersji ma `status=catalogued` i `managed_copy=0`;
+- katalog `/home/debian/ai-chess-arena/managed-models` nie istnieje;
+- wersje 1–3 mają manifest SHA/rozmiaru, ale nie mają lokalnej kopii zarządzanej przez Arenę;
+- wersje 4–10 nie mają nawet kompletnego manifestu artefaktu.
+
+Wniosek: **żadna z 10 wersji nie jest obecnie gotowa do uruchomienia przez aktualny main**, także modele historycznie używane w starszym runtime. Kompletność manifestu nie jest równoznaczna z obecnością i gotowością pliku.
+
+Przed uruchomieniem przyszłego turnieju trzeba osobno zatwierdzić pobranie wybranych modeli do prywatnego `managed-models`. Ta operacja zapisuje duże pliki i aktualizuje status/manifest w DB; wymaga osobnej zgody, kontroli wolnego miejsca, źródła, licencji, SHA-256, rozmiaru i zgodności runtime. Nie jest częścią zwykłego deployu kodu. Nie używać ani nie modyfikować `/home/debian/ai-agent/models`; aktualny kod Areny odrzuca pliki spoza własnego katalogu.
+
 ## Procedura przed wdrożeniem
 
 1. Potwierdzić dokładny SHA docelowego `main` i sprawdzić, czy nie pojawiły się nowsze commity.
