@@ -5,7 +5,7 @@ Data audytu: 2026-11-13. Audyt read-only; nie pobierano modeli, nie uruchamiano 
 ## Wniosek wykonawczy
 
 W bazie znajduje się 10 aktywnych wpisów wersji, ale **nie oznacza to 10 gotowych zawodników**:
-- Wersje 1–3 mają komplet podstawowych danych artefaktu (nazwa pliku, SHA-256, rozmiar) i były już wpisane do turniejów. Są warunkowo gotowe, ale bieżąca dostępność plików i runtime nie została potwierdzona.
+- Wersje 1–3 mają komplet podstawowych danych manifestu (nazwa pliku, SHA-256, rozmiar) i występują w historii turniejów, ale nie są gotowe do uruchomienia przez aktualny main: wszystkie rekordy mają status catalogued, managed_copy=0, a prywatny managed-models nie istnieje. Aktualny _version_path wymaga statusu downloaded, managed_copy=1 i pliku w managed-models.
 - Wersje 4–10 nie mają w DB nazwy pliku w polu `filename`, SHA-256 ani rozmiaru. Są katalogowymi wpisami bez kompletnego manifestu artefaktu.
 - Wszystkie 10 rekordów mają `license_verified=1`, ale zapisane `license_evidence` jest puste albo sprzeczne z tym flagiem. Nie należy traktować samego flagu jako wystarczającego dowodu.
 - VPS ma 4,01 GB (3,74 GiB) RAM, 2 vCPU i 2 GiB swapu; w chwili audytu dostępne było około 2,06 GiB RAM. Większość większych kandydatów nie mieści się w tej konfiguracji.
@@ -18,9 +18,9 @@ Wszystkie rekordy mają `active=1`, `status=catalogued`, `runtime=llamafile` i `
 
 | ID | Wersja / konfiguracja z rejestru | Manifest DB | Licencja wg publicznej karty | Ocena |
 |---:|---|---|---|---|
-| 1 | Qwen2.5-0.5B-Instruct-Q4_K_M | 491 400 032 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Warunkowo gotowy |
-| 2 | SmolLM2-360M-Instruct-Q4_K_M | 270 590 592 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Warunkowo gotowy |
-| 3 | Qwen2-0.5B-Instruct-Q4_K_M | 397 805 248 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Warunkowo gotowy |
+| 1 | Qwen2.5-0.5B-Instruct-Q4_K_M | 491 400 032 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Manifest OK; runtime niegotowy |
+| 2 | SmolLM2-360M-Instruct-Q4_K_M | 270 590 592 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Manifest OK; runtime niegotowy |
+| 3 | Qwen2-0.5B-Instruct-Q4_K_M | 397 805 248 B, SHA-256 obecny, plik wskazany | Apache-2.0 | Manifest OK; runtime niegotowy |
 | 4 | Meta-Llama-3.1-8B-Instruct, Q3_K_S | Brak filename/SHA/size w kolumnach manifestu | `llama3.1` – warunki Meta Llama 3.1 | Niegotowy |
 | 5 | Llama-3.2-3B-Instruct, UD-IQ3_XXS | Brak filename/SHA/size w kolumnach manifestu | `llama3.2` – Community License Meta | Wymaga weryfikacji |
 | 6 | Bielik-11B-v3.0-Instruct, Q4_K_M | Brak filename/SHA/size w kolumnach manifestu | Apache-2.0 na aktualnej karcie; dowody DB mówią `license_not_declared` | Niegotowy |
@@ -34,7 +34,7 @@ Wszystkie rekordy mają `active=1`, `status=catalogued`, `runtime=llamafile` i `
 **Wersje 1–3**
 - Wpisy mają dokładny rozmiar i SHA-256; źródła #1 i #2 są przypięte do rewizji repozytorium, a #3 ma przypiętą rewizję w `download_url`.
 - Wszystkie trzy mają odrębne SHA-256, więc nie są duplikatami na podstawie zapisanych hashy.
-- Wpisy tych wersji występują w historii turniejów #1–5, a roster turnieju #5 obejmuje wszystkie trzy. Nie oznacza to jednak, że pliki są obecnie dostępne: `managed_copy=0`, a współdzielonego katalogu modeli nie sprawdzano.
+- Wpisy tych wersji występują w historii turniejów #1–5, a roster turnieju #5 obejmuje wszystkie trzy. To historyczne użycie dotyczy starszego runtime; aktualny main odrzuca wersje z `status=catalogued` lub `managed_copy=0`. Pliki muszą być jawnie pobrane i zweryfikowane w prywatnym `managed-models`, po osobnej zgodzie.
 - Publiczne karty Qwen2.5, SmolLM2 i Qwen2 oznaczają licencję Apache-2.0.
 
 **Wersje 4–7**
@@ -79,7 +79,7 @@ Nie uruchamiano binarium, nie pobierano modeli i nie wykonywano prób ładowania
 ## Rekomendacje
 
 1. Pozostawić turniej #5 bez zmian; jego roster nadal obejmuje wyłącznie wersje 1–3.
-2. Traktować wersje 1–3 jako jedyne warunkowo gotowe wpisy, do czasu potwierdzenia dostępności plików i ponownego uruchomienia health-check runtime.
+2. Traktować wersje 1–3 wyłącznie jako wpisy z kompletnym manifestem. Żadna z 10 wersji nie jest obecnie runtime-ready dla aktualnego `main`; wymagane jest osobno zatwierdzone pobranie do `managed-models`, kontrola SHA/rozmiaru i health-check runtime.
 3. Nie dopuszczać #4, #6–#10 do nowego turnieju na obecnym VPS.
 4. Dla #5 (Llama 3.2 3B) przed jakąkolwiek decyzją uzupełnić manifest SHA/size/filename, ręcznie sprawdzić licencję i wykonać test na kopii/stagingu po odzyskaniu runtime.
 5. Nie oznaczać #9 jako samodzielnego zawodnika. Najpierw wymaga poprawnej definicji pary target/draft i kompletnego manifestu obu plików; obecny host i tak nie ma zasobów na target 27B.
