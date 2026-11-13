@@ -18,14 +18,18 @@ API_BASE = 'http://127.0.0.1:8088'
 
 
 class RunnerError(RuntimeError):
-    def __init__(self, message, budget_observations=None):
+    def __init__(self, message, budget_observations=None, uci_attempts=None):
         super().__init__(message)
         self.budget_observations = list(budget_observations or [])
+        self.uci_attempts = list(uci_attempts or [])
         self.model_id = None
         self.model_name = None
         self.inference = None
         self.model_sha256 = None
         self.draft_sha256 = None
+        self.color = None
+        self.fen = None
+        self.legal_moves = []
 
 
 class LlamafileRuntime:
@@ -241,6 +245,7 @@ class LlamafileRuntime:
         content = ''
         move = None
         budget_observations = []
+        uci_attempts = []
         # One bounded retry handles malformed model output without inventing a move.
         # No per-move timeout: user-requested timing is measured, not forfeited.
         for attempt in range(2):
@@ -279,12 +284,24 @@ class LlamafileRuntime:
                     blocked_uci = candidate.uci()
                 else:
                     illegal_uci = candidate.uci()
+            if candidate_valid:
+                classification = 'valid'
+            elif blocked_uci:
+                classification = 'blocked_reversal'
+            elif illegal_uci:
+                classification = 'illegal_uci'
+            else:
+                classification = 'missing_uci'
+            candidate_uci = match.group(1) if match else None
             truncated = (not candidate_valid and
                          (str(finish_reason).lower() in ('length','max_tokens','max_output_tokens')
                           or (completion_tokens is not None and completion_tokens >= int(max_tokens))))
             budget_observations.append({'max_tokens':int(max_tokens),'completion_tokens':completion_tokens,
                 'finish_reason':finish_reason,'truncated':bool(truncated),
                 'valid_move':bool(candidate_valid),'attempt':attempt+1})
+            uci_attempts.append({'attempt':attempt+1,'classification':classification,
+                'candidate_uci':candidate_uci,'response':content[:300],
+                'finish_reason':finish_reason,'completion_tokens':completion_tokens})
             if candidate_valid:
                 break
             if attempt == 0:
@@ -306,7 +323,8 @@ class LlamafileRuntime:
         elapsed = time.monotonic() - started
         if move is None:
             raise RunnerError(f'Model nie zwrócił legalnego ruchu UCI po 2 próbach: {content[:120]!r}',
-                              budget_observations=budget_observations)
+                              budget_observations=budget_observations,
+                              uci_attempts=uci_attempts)
         self._notify('move_generated', f'Model zaproponował ruch: {move.uci()}', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=content[:300], proposed_move=move.uci(), elapsed_seconds=round(elapsed,4))
         return move, {'seconds': round(elapsed, 4), 'runtime': 'llamafile',
                       'model_path': str(Path(model_path).resolve()),
@@ -354,6 +372,9 @@ class SequentialChessRunner:
                 exc.inference = dict(inference)
                 exc.model_sha256 = player.get('model_sha256')
                 exc.draft_sha256 = player.get('draft_sha256')
+                exc.color = color
+                exc.fen = board.fen()
+                exc.legal_moves = [move.uci() for move in board.legal_moves]
                 raise
             san = board.san(move)
             piece = board.piece_at(move.from_square)
