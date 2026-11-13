@@ -52,6 +52,14 @@ class LeagueTests(unittest.TestCase):
    c.execute("INSERT INTO model_versions(model_id,version_key,license,created_at) VALUES(1,'test-sha','UNVERIFIED','now')")
    v=c.execute("SELECT license_verified FROM model_versions WHERE version_key='test-sha'").fetchone()[0]
   self.assertEqual(v,0)
+ def test_registration_cannot_approve_unknown_license(self):
+  for license_name in ('unknown','nieustalona','n/a','unverified',''):
+   with self.subTest(license=license_name):
+    with self.assertRaises(ValueError):
+     league.register_model('Blocked '+(license_name or 'empty'),source='https://huggingface.co/example/model',license=license_name,license_verified=True)
+ def test_registration_cannot_approve_without_https_source(self):
+  with self.assertRaises(ValueError):
+   league.register_model('Blocked Source',source='http://example.test/model',license='Apache-2.0',license_verified=True)
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')

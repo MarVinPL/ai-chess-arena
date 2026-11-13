@@ -22,6 +22,12 @@ def init():
    c.execute('ALTER TABLE model_versions ADD COLUMN license_verified INTEGER NOT NULL DEFAULT 0')
 def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
  if not name or format not in ('PURE_AI','AI_ENGINE'): raise ValueError('Nieprawidłowa nazwa lub format')
+ if license_verified:
+  normalized_license=(license or '').strip().lower()
+  if not (source or '').strip().lower().startswith('https://'):
+   raise ValueError('Zatwierdzona licencja wymaga źródła HTTPS')
+  if not normalized_license or normalized_license in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
+   raise ValueError('Nie można zatwierdzić nieustalonej licencji')
  p=(MODEL_DIR/filename).resolve() if filename else None; digest=None; size=None; status='catalogued'
  if p:
   if p.parent!=MODEL_DIR.resolve() or not p.is_file() or p.suffix.lower()!='.gguf': raise ValueError('Wymagany istniejący GGUF w katalogu managed-models Areny')
