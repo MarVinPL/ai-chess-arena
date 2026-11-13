@@ -5,7 +5,7 @@ explicitly verified free-use license. Only files inside MANAGED_DIR are arena
 owned; shared model directories are never cleanup targets.
 """
 from __future__ import annotations
-import hashlib, os, re, shutil, sqlite3, stat, urllib.request
+import hashlib, os, re, shutil, sqlite3, stat, threading, urllib.request
 from pathlib import Path
 import league
 
@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parent
 MANAGED_DIR = ROOT / 'managed-models'
 MIN_FREE_MARGIN = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
+# Serializes destructive model cleanup against tournament model use.
+MODEL_LIFECYCLE_LOCK = threading.RLock()
 
 
 def _safe_filename(name: str) -> str:
@@ -168,7 +170,7 @@ def _open_by_process(path: Path) -> tuple[list[int], bool]:
 
 def cleanup_version(version_id: int) -> dict:
     """Remove only a confirmed arena-owned file that no process currently has open."""
-    with league.connect() as c:
+    with MODEL_LIFECYCLE_LOCK, league.connect() as c:
         row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
         if row is None:
             raise ValueError('Nieznana wersja modelu')

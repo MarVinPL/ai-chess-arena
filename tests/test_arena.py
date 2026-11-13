@@ -131,6 +131,13 @@ class ArenaSmokeTests(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(ctx.exception.code, 422)
 
+    def test_cleanup_is_rejected_while_tournament_holds_model_lifecycle_lock(self):
+        with server.model_store.MODEL_LIFECYCLE_LOCK:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self._post_json('/api/models/cleanup', {'version_id': 1, 'confirm_delete': True})
+            self.assertEqual(ctx.exception.code, 422)
+            self.assertIn('aktywnego turnieju', ctx.exception.read().decode())
+
     def test_storage_api_reports_arena_managed_area(self):
         with urllib.request.urlopen(self.base + '/api/storage') as response:
             data = __import__('json').loads(response.read())
