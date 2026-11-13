@@ -98,7 +98,7 @@ class EngineRunnerTests(unittest.TestCase):
             root=Path(tmp); binary=root/'llamafile'; target=root/'target.gguf'; draft=root/'draft.gguf'
             binary.write_text('#!/bin/sh\n'); binary.chmod(0o700)
             target.write_bytes(b'target'); draft.write_bytes(b'draft')
-calls=[]
+            calls=[]
             class Process:
                 returncode=None
                 def poll(self): return None
@@ -198,7 +198,7 @@ calls=[]
         class Response:
             def __init__(self, content):
                 self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
-def __enter__(self): return self
+            def __enter__(self): return self
             def __exit__(self, *args): return False
             def read(self): return self.body
         outputs = iter(['e2e5', 'e2e5'])
@@ -297,7 +297,8 @@ def __enter__(self): return self
         self.assertIn('g1h1', blocked)
         self.assertNotIn('g1h1', [move.uci() for move in allowed])
         self.assertTrue(allowed)
-def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
+
+    def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
         import json
         from unittest.mock import patch
         from engine_runner import LlamafileRuntime
@@ -397,7 +398,7 @@ def test_generate_rejects_a_recent_piece_reversal_and_retries(self):
         SequentialChessRunner(fake).play_game(
             {'name':'Alpha','path':'/tmp/a.gguf'},
             {'name':'Beta','path':'/tmp/b.gguf'})
-self.assertEqual(fake.histories[0], [])
+        self.assertEqual(fake.histories[0], [])
         self.assertEqual(fake.histories[1][0]['uci'], 'f2f3')
         self.assertEqual(fake.histories[1][0]['piece'], 'P')
         self.assertEqual(fake.histories[2][1]['uci'], 'e7e5')
