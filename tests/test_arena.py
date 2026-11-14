@@ -114,7 +114,10 @@ class ArenaSmokeTests(unittest.TestCase):
 
     def test_game_history_api(self):
         with urllib.request.urlopen(self.base + '/api/games') as response:
-            self.assertIn(b'"result": "1-0"', response.read())
+            payload = __import__('json').loads(response.read())
+        self.assertEqual(payload[0]['white'], 'Model A')
+        self.assertEqual(payload[0]['black'], 'Model B')
+        self.assertEqual(payload[0]['result'], '1-0')
 
     def test_model_registry_exposes_version_and_ownership_fields(self):
         with urllib.request.urlopen(self.base + '/api/models') as response:
