@@ -538,6 +538,7 @@ function renderModelPermissions(rows, allowlistRows){
   const card=document.createElement('div');card.style.cssText='padding:10px;margin:8px 0;border:1px solid #34445c;border-radius:9px';
   const title=document.createElement('strong');title.textContent='#'+item.model_id+' · '+item.repo_id+' · '+item.scope+' · '+item.status;card.appendChild(title);
   const details=document.createElement('div');details.style.cssText='font-size:12px;color:#aebbd0;margin-top:5px';details.textContent='Revision: '+item.revision+' · żądanie: '+item.requested_at+' · '+item.reason;card.appendChild(details);
+  const history=document.createElement('div');history.style.cssText='font-size:11px;color:#91a5ba;margin-top:6px';history.textContent='Audyt: '+(item.history||[]).map(x=>x.event+' · '+x.actor+' · '+x.occurred_at+(x.reason?' · '+x.reason:'')).join(' | ');card.appendChild(history);
   if(item.status==='pending'){
    for(const action of ['approve','reject']){
     const button=document.createElement('button');button.className=action==='approve'?'':'secondary';button.style.margin='8px 6px 0 0';button.textContent=action==='approve'?'Zatwierdź':'Odrzuć';
