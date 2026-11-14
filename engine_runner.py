@@ -278,7 +278,12 @@ class LlamafileRuntime:
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(request, timeout=None) as response:
-                data = json.loads(response.read().decode())
+                raw_response = response.read()
+            # A stop requested during inference invalidates this in-flight answer.
+            # Never let it become a committed chess move; resume from the last checkpoint.
+            if stop_event and stop_event.is_set():
+                raise RunnerError('Turniej zatrzymany przez operatora')
+            data = json.loads(raw_response.decode())
             try:
                 choice = data['choices'][0]
                 content = choice['message'].get('content', '')
@@ -366,10 +371,37 @@ class SequentialChessRunner:
 
     def play_game(self, white: dict, black: dict,
                   stop_event: threading.Event | None = None,
-                  progress: Callable[[dict], None] | None = None) -> dict:
+                  progress: Callable[[dict], None] | None = None,
+                  resume_moves: list[dict] | None = None,
+                  resume_fen: str | None = None,
+                  resume_move_times: list[float] | None = None) -> dict:
         board = chess.Board()
         move_records, times, arbiter_events = [], [], []
-        intervention_count = 0
+        # Reconstruct from verified UCI history only; every ply must remain legal.
+        for saved in (resume_moves or []):
+            try:
+                move = chess.Move.from_uci(saved['uci'])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError('Checkpoint zawiera nieprawidłowy ruch; wznowienie zablokowane') from exc
+            expected_color = 'white' if board.turn == chess.WHITE else 'black'
+            if saved.get('color') not in (None, expected_color):
+                raise ValueError('Kolor ruchu nie zgadza się z pozycją checkpointu; wznowienie zablokowane')
+            if saved.get('ply') not in (None, len(move_records) + 1):
+                raise ValueError('Numer półruchu nie zgadza się z historią checkpointu; wznowienie zablokowane')
+            if move not in board.legal_moves:
+                raise ValueError('Checkpoint zawiera nielegalną historię ruchów; wznowienie zablokowane')
+            board.push(move)
+            if saved.get('fen') and saved['fen'] != board.fen():
+                raise ValueError('Pozycja po ruchu nie zgadza się z historią checkpointu; wznowienie zablokowane')
+            move_records.append(dict(saved))
+            if saved.get('arbiter_intervention'):
+                arbiter_events.append(dict(saved))
+        if resume_fen and board.fen() != resume_fen:
+            raise ValueError('Pozycja FEN nie zgadza się z historią checkpointu; wznowienie zablokowane')
+        times = [float(value) for value in (resume_move_times or [])]
+        if len(times) != len(move_records):
+            times = [float(item.get('seconds') or 0) for item in move_records]
+        intervention_count = len(arbiter_events)
         while not board.is_game_over(claim_draw=True):
             if stop_event and stop_event.is_set():
                 return {'status': 'stopped', 'fen': board.fen(), 'moves': move_records,
@@ -399,6 +431,8 @@ class SequentialChessRunner:
             try:
                 try:
                     move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+                    if stop_event and stop_event.is_set():
+                        raise RunnerError('Turniej zatrzymany przez operatora')
                 except RunnerError:
                     raise
                 except Exception as runtime_error:

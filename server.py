@@ -9,6 +9,7 @@ from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
 import passkey_test
+import tournament_checkpoint
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
@@ -151,6 +152,7 @@ def active_model():
 
 def db_init():
     league.init()
+    tournament_checkpoint.ensure_schema(DB)
     with sqlite3.connect(DB) as c:
         c.execute('''CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
@@ -163,6 +165,11 @@ def db_init():
             model_name TEXT NOT NULL, question_no INTEGER NOT NULL, question TEXT NOT NULL,
             status TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '', elapsed_seconds REAL,
             created_at TEXT NOT NULL, UNIQUE(tournament_id,model_id,question_no))''')
+        tournament_cols = {row[1] for row in c.execute('PRAGMA table_info(tournaments)')}
+        if 'resume_blocked' not in tournament_cols:
+            c.execute('ALTER TABLE tournaments ADD COLUMN resume_blocked INTEGER NOT NULL DEFAULT 0')
+        c.execute("UPDATE tournaments SET status='stopped',resume_blocked=0 WHERE status='running' AND id IN (SELECT tournament_id FROM tournament_checkpoints)")
+        c.execute("UPDATE tournaments SET status='failed',resume_blocked=1 WHERE status='running' AND id NOT IN (SELECT tournament_id FROM tournament_checkpoints)")
         passkey_cols={r[1] for r in c.execute('PRAGMA table_info(passkey_test_answers)')}
         if 'question_fingerprint' not in passkey_cols:
             c.execute('ALTER TABLE passkey_test_answers ADD COLUMN question_fingerprint TEXT')
@@ -221,26 +228,33 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
         side_to_move = 'white' if chess.Board(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
     except (ValueError, TypeError):
         side_to_move = None
-    with sqlite3.connect(DB) as db:
-        cur = db.execute("""INSERT INTO games(
-            started_at,ended_at,white_model,black_model,result,pgn,move_count,
-            illegal_attempts,avg_move_seconds,tournament_id,pairing_id,
-            move_times_json,inference_metadata_json,adjudication_status,
-            adjudication_json,failure_reason,failure_fen,failure_color,
-            failure_side_to_move,failure_model_id
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (game_started, ended, white['name'], black['name'], result, pgn,
-             len(moves), illegal_attempts, average, tournament_id, pairing['id'],
-             json.dumps(times), json.dumps(moves, ensure_ascii=False),
-             'adjudicated' if adjudicated else 'unresolved',
-             json.dumps(decision, ensure_ascii=False), str(exc)[:1000],
-             getattr(exc, 'fen', None), getattr(exc, 'color', None),
-              side_to_move, getattr(exc, 'model_id', None)))
-        game_id = cur.lastrowid
-    with league.connect() as db:
+    with sqlite3.connect(DB, timeout=10) as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute('SELECT id FROM games WHERE tournament_id=? AND pairing_id=?',
+                               (tournament_id, pairing['id'])).fetchone()
+        if existing:
+            game_id = existing[0]
+        else:
+            cur = db.execute("""INSERT INTO games(
+                started_at,ended_at,white_model,black_model,result,pgn,move_count,
+                illegal_attempts,avg_move_seconds,tournament_id,pairing_id,
+                move_times_json,inference_metadata_json,adjudication_status,
+                adjudication_json,failure_reason,failure_fen,failure_color,
+                failure_side_to_move,failure_model_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (game_started, ended, white['name'], black['name'], result, pgn,
+                 len(moves), illegal_attempts, average, tournament_id, pairing['id'],
+                 json.dumps(times), json.dumps(moves, ensure_ascii=False),
+                 'adjudicated' if adjudicated else 'unresolved',
+                 json.dumps(decision, ensure_ascii=False), str(exc)[:1000],
+                 getattr(exc, 'fen', None), getattr(exc, 'color', None),
+                 side_to_move, getattr(exc, 'model_id', None)))
+            game_id = cur.lastrowid
         db.execute("""UPDATE tournament_pairings
             SET status=?,game_id=?,winner_model_id=? WHERE id=?""",
             (pairing_status, game_id, winner_id, pairing['id']))
+        db.execute('DELETE FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,))
+        db.commit()
     return {'game_id': game_id, 'result': result, 'winner_model_id': winner_id,
             'adjudicated': adjudicated, 'adjudication': decision,
             'moves': moves, 'move_times': times, 'fen': getattr(exc, 'fen', None),
@@ -531,6 +545,92 @@ def _preflight_error_message(preflight):
     return 'Preflight zablokował start turnieju. ' + '; '.join(details)
 
 
+def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_started,
+                                   moves, move_times, fen, phase='game'):
+    with league.connect() as c:
+        tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+        if tournament is None:
+            raise RuntimeError('Nie znaleziono turnieju do checkpointu')
+        entries = c.execute('''SELECT e.model_id,e.version_id,m.name,m.format,m.active FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=? ORDER BY e.model_id''', (tournament_id,)).fetchall()
+        schedule = c.execute('''SELECT id,white_model_id,black_model_id,leg,stage,round_no,match_no,status,game_id,winner_model_id FROM tournament_pairings WHERE tournament_id=? ORDER BY id''', (tournament_id,)).fetchall()
+    return {
+        'schema_version': tournament_checkpoint.SCHEMA_VERSION,
+        'tournament_id': int(tournament_id),
+        'phase': phase,
+        'tournament': dict(tournament),
+        'entries': [dict(row) for row in entries],
+        'schedule': [dict(row) for row in schedule],
+        'pairing': {'id': int(pairing['id']), 'stage': pairing.get('stage', 'league'),
+                    'white_model_id': int(pairing['white_model_id']),
+                    'black_model_id': int(pairing['black_model_id'])},
+        'white': {'model_id': int(white['model_id']), 'name': white['name'],
+                  'version_id': white.get('version_id'),
+                  'model_sha256': white.get('model_sha256'),
+                  'draft_sha256': white.get('draft_sha256'),
+                  'base_inference': white.get('base_inference'),
+                  'inference': white.get('inference')},
+        'black': {'model_id': int(black['model_id']), 'name': black['name'],
+                  'version_id': black.get('version_id'),
+                  'model_sha256': black.get('model_sha256'),
+                  'draft_sha256': black.get('draft_sha256'),
+                  'base_inference': black.get('base_inference'),
+                  'inference': black.get('inference')},
+        'game_started': game_started,
+        'moves': [dict(move) for move in moves],
+        'move_times': [float(value) for value in move_times],
+        'fen': fen,
+        'side_to_move': 'white' if fen.split(' ')[1] == 'w' else 'black',
+        'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+
+
+def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black):
+    if checkpoint.get('phase') != 'game':
+        raise ValueError('Checkpoint nie wskazuje aktywnej partii; wznowienie zablokowane')
+    saved = checkpoint.get('pairing') or {}
+    expected = (int(pairing['id']), int(pairing['white_model_id']), int(pairing['black_model_id']))
+    actual = (int(saved.get('id', -1)), int(saved.get('white_model_id', -1)), int(saved.get('black_model_id', -1)))
+    if actual != expected:
+        raise ValueError('Checkpoint dotyczy innej pary; wznowienie zablokowane')
+    for color, player in (('white', white), ('black', black)):
+        saved_player = checkpoint.get(color) or {}
+        for field in ('model_id', 'name', 'version_id', 'model_sha256', 'draft_sha256', 'base_inference', 'inference'):
+            if saved_player.get(field) != player.get(field):
+                raise ValueError('Konfiguracja zawodnika różni się od checkpointu; wznowienie zablokowane')
+    if len(checkpoint.get('moves') or []) != len(checkpoint.get('move_times') or []):
+        raise ValueError('Checkpoint ma niespójne czasy i historię ruchów')
+    fen = checkpoint.get('fen')
+    if not isinstance(fen, str) or len(fen.split()) != 6:
+        raise ValueError('Checkpoint nie zawiera poprawnej pozycji FEN')
+    if checkpoint.get('side_to_move') != ('white' if fen.split()[1] == 'w' else 'black'):
+        raise ValueError('Strona na ruchu nie zgadza się z pozycją checkpointu')
+    with league.connect() as c:
+        current_tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+        if current_tournament is None:
+            raise ValueError('Turniej checkpointu nie istnieje; wznowienie zablokowane')
+        current_entries = c.execute('SELECT e.model_id,e.version_id,m.name,m.format,m.active FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=? ORDER BY e.model_id', (tournament_id,)).fetchall()
+        current_schedule = c.execute('SELECT id,white_model_id,black_model_id,leg,stage,round_no,match_no,status,game_id,winner_model_id FROM tournament_pairings WHERE tournament_id=? ORDER BY id', (tournament_id,)).fetchall()
+    saved_tournament = checkpoint.get('tournament') or {}
+    for field in ('id', 'name', 'format', 'rules_version', 'qualification_percent', 'created_at'):
+        if saved_tournament.get(field) != current_tournament[field]:
+            raise ValueError('Konfiguracja turnieju różni się od checkpointu; wznowienie zablokowane')
+    if checkpoint.get('entries') != [dict(row) for row in current_entries]:
+        raise ValueError('Lista uczestników różni się od checkpointu; wznowienie zablokowane')
+    saved_schedule = checkpoint.get('schedule') or []
+    current_schedule = [dict(row) for row in current_schedule]
+    if len(saved_schedule) != len(current_schedule):
+        raise ValueError('Harmonogram różni się od checkpointu; wznowienie zablokowane')
+    for saved_row, current_row in zip(saved_schedule, current_schedule):
+        if saved_row.get('id') == int(pairing['id']):
+            # A crash may occur between the durable initial checkpoint and the
+            # pending→running DB transition. This one status transition is safe.
+            if saved_row.get('status') not in ('pending', 'running') or current_row.get('status') not in ('pending', 'running'):
+                raise ValueError('Status aktywnej pary różni się od checkpointu; wznowienie zablokowane')
+            saved_row = {**saved_row, 'status': current_row.get('status')}
+        if saved_row != current_row:
+            raise ValueError('Harmonogram różni się od checkpointu; wznowienie zablokowane')
+
+
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -607,6 +707,10 @@ def tournament_loop(tournament_id):
                     if tournament_stop_event.is_set():
                         break
                     answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900)
+                    # A response that completed after stop was requested is not recorded;
+                    # the unanswered question is reconstructed from durable answer rows.
+                    if tournament_stop_event.is_set() or answer.get('status') == 'stopped':
+                        break
                     with sqlite3.connect(DB) as db:
                         db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at,question_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (tournament_id, player_id, player['name'], question_no, question,
@@ -635,13 +739,39 @@ def tournament_loop(tournament_id):
             white, black = _resolve_pairing_players(players, pairing)
             runtime_context['white'] = white['name']
             runtime_context['black'] = black['name']
-            set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None, response=None, proposed_move=None, legal_moves=[])
+            checkpoint = tournament_checkpoint.load(DB, tournament_id)
+            if checkpoint:
+                _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
+                resume_moves = checkpoint.get('moves') or []
+                resume_times = checkpoint.get('move_times') or []
+                resume_fen = checkpoint.get('fen')
+                game_started = checkpoint.get('game_started') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            else:
+                resume_moves, resume_times, resume_fen = [], [], chess.Board().fen()
+                game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                    tournament_id, pairing, white, black, game_started, [], [], resume_fen))
+            with league.connect() as c:
+                c.execute("UPDATE tournament_pairings SET status='running' WHERE id=? AND status='pending'", (pairing['id'],))
+            # Refresh the snapshot after the pending→running transition so a process
+            # crash during model preparation still has a self-consistent schedule.
+            if not checkpoint:
+                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                    tournament_id, pairing, white, black, game_started, [], [], resume_fen))
+            set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_models(white, black)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
-            game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
+            set_live('game_running','Wznowiono partię' if resume_moves else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
+            checkpoint_moves = [dict(item) for item in resume_moves]
+            checkpoint_times = [float(value) for value in resume_times]
             def publish_move(move):
+                checkpoint_moves.append(dict(move))
+                checkpoint_times.append(float(move.get('seconds') or 0))
+                saved_fen = move.get('fen')
+                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                    tournament_id, pairing, white, black, game_started,
+                    checkpoint_moves, checkpoint_times, saved_fen))
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
@@ -660,7 +790,8 @@ def tournament_loop(tournament_id):
                 try:
                     result = game_runner.play_game(
                         game_white, game_black, tournament_stop_event,
-                        progress=publish_move)
+                        progress=publish_move, resume_moves=resume_moves,
+                        resume_fen=resume_fen, resume_move_times=resume_times)
                 except engine_runner.RunnerError as exc:
                     if tournament_stop_event.is_set() or 'Turniej zatrzymany przez operatora' in str(exc):
                         result = {'status': 'stopped', 'fen': exc.fen,
@@ -692,21 +823,43 @@ def tournament_loop(tournament_id):
             finally:
                 tournament_runtime.stop()
             if result['status'] == 'stopped':
+                # The initial checkpoint and every verified move were durably saved
+                # before inference/runtime shutdown. Keep that exact checkpoint intact.
                 break
             if result.get('adjudicated'):
                 game_id = result['game_id']
             else:
                 game_ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-                with sqlite3.connect(DB) as db:
-                    cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
-                         len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
-                         json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
-                    game_id = cur.lastrowid
-                with league.connect() as c:
-                    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?", (game_id, pairing['id']))
+                with sqlite3.connect(DB, timeout=10) as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    existing = db.execute('SELECT id FROM games WHERE tournament_id=? AND pairing_id=?',
+                                          (tournament_id, pairing['id'])).fetchone()
+                    if existing:
+                        game_id = existing[0]
+                    else:
+                        cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
+                             len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
+                             json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
+                        game_id = cur.lastrowid
+                    winner_id = None
+                    if pairing.get('stage') == 'draft':
+                        if result['result'] == '1-0':
+                            winner_id = white['model_id']
+                        elif result['result'] == '0-1':
+                            winner_id = black['model_id']
+                        else:
+                            seeds = db.execute('SELECT model_id,seed FROM tournament_seeds WHERE tournament_id=? AND model_id IN (?,?)',
+                                               (tournament_id, white['model_id'], black['model_id'])).fetchall()
+                            seed_by_model = {row[0]: row[1] for row in seeds}
+                            if len(seed_by_model) != 2:
+                                raise RuntimeError('Brak rozstawień potrzebnych do rozstrzygnięcia remisu w drabince')
+                            winner_id = white['model_id'] if seed_by_model[white['model_id']] < seed_by_model[black['model_id']] else black['model_id']
+                    db.execute("UPDATE tournament_pairings SET status='completed',game_id=?,winner_model_id=? WHERE id=?",
+                               (game_id, winner_id, pairing['id']))
+                    db.execute('DELETE FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,))
+                    db.commit()
             if pairing.get('stage') == 'draft':
-                league.record_draft_result(pairing['id'], result['result'])
                 champion = league.draft_champion(tournament_id)
                 if champion:
                     set_live('draft_champion', f'Zwycięzca draftu: {players[champion]["name"]}', tournament_id=tournament_id, champion=players[champion]['name'])
@@ -719,8 +872,8 @@ def tournament_loop(tournament_id):
                      adjudication_status='adjudicated' if result.get('adjudicated') else 'not_applicable',
                      adjudication_reason=(result.get('adjudication') or {}).get('reason'))
         with league.connect() as c:
-            pending = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
-            status = 'stopped' if tournament_stop_event.is_set() else ('completed' if pending == 0 else 'failed')
+            unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
+            status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
             c.execute('UPDATE tournaments SET status=? WHERE id=?', (status, tournament_id))
         set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
     except Exception as exc:
@@ -764,15 +917,22 @@ def start_tournament(tournament_id):
         if tournament_thread and tournament_thread.is_alive():
             raise RuntimeError('Inny turniej jest już uruchomiony')
         with league.connect() as c:
-            row = c.execute('SELECT status FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+            row = c.execute('SELECT status,resume_blocked FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
             if not row:
                 raise ValueError('Nie znaleziono turnieju')
+            if row['resume_blocked']:
+                raise RuntimeError('Wznowienie zablokowane: poprzedni proces nie pozostawił poprawnego checkpointu. Wymagany jest ręczny przegląd stanu.')
             if row['status'] not in ('planned', 'stopped', 'failed'):
                 raise RuntimeError(f'Nie można uruchomić turnieju ze statusem: {row["status"]}')
             entries_count = c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?', (tournament_id,)).fetchone()[0]
-            pairings = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
+            pairings = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
         if entries_count < 2 or pairings < 1:
             raise RuntimeError('Turniej nie ma co najmniej dwóch uczestników i oczekujących par')
+        with league.connect() as c:
+            orphan_running = c.execute("SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=? AND p.status='running'", (tournament_id,)).fetchone()[0]
+        checkpoint = tournament_checkpoint.load(DB, tournament_id)
+        if orphan_running and checkpoint is None:
+            raise RuntimeError('Wykryto rozpoczętą partię bez checkpointu. Wznowienie zablokowane, aby nie utracić ani nie zdublować stanu.')
         # Serialize preflight against manual cleanup. The worker repeats it after
         # acquiring the same lifecycle lock to close the start/cleanup race.
         with model_store.MODEL_LIFECYCLE_LOCK:
@@ -1147,7 +1307,8 @@ class Handler(BaseHTTPRequestHandler):
                        AND p.status='completed'
                        AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
                     (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
-                    t.qualification_percent,
+                    t.qualification_percent,t.resume_blocked,
+                    EXISTS(SELECT 1 FROM tournament_checkpoints cp WHERE cp.tournament_id=t.id) AS has_checkpoint,
                     CASE WHEN t.rules_version='2' THEN
                       (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
                       ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
@@ -1240,8 +1401,12 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path == '/api/tournaments/start':
                     result = start_tournament(int(payload.get('tournament_id', 0)))
                 elif self.path == '/api/tournaments/stop':
-                    tournament_stop_event.set()
-                    result = {'status': 'stop_requested'}
+                    active = bool(tournament_thread and tournament_thread.is_alive())
+                    if active:
+                        tournament_stop_event.set()
+                        result = {'status': 'stop_requested', 'checkpoint_required': True}
+                    else:
+                        result = {'status': 'not_running'}
                 elif self.path == '/api/models/download':
                     if payload.get('confirm_download') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie pobrania')
