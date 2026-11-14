@@ -1582,24 +1582,36 @@ class Handler(BaseHTTPRequestHandler):
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
                     current = model_allowlist.load_allowlist()
-                    model_id = int(payload.get('model_id', 0))
-                    entry = next((item for item in current['models'] if item.get('model_id') == model_id), None)
-                    if entry is None or entry.get('status') == 'blocked' or model_id == 6:
-                        raise ValueError('Model nie ma aktywnego wpisu w allowliście lub jest zablokowany.')
-                    repo_id = payload.get('repo_id', entry.get('repo_id'))
-                    revision = payload.get('revision', entry.get('revision'))
-                    if repo_id != entry.get('repo_id') or revision != entry.get('revision'):
-                        raise ValueError('Żądanie musi wskazywać dokładne repozytorium i rewizję z allowlisty.')
+                    action = path.rsplit('/', 1)[-1]
                     with league.connect() as c:
-                        if path.endswith('/request'):
+                        if action == 'request':
+                            model_id = int(payload.get('model_id', 0))
+                            entry = next((item for item in current['models'] if item.get('model_id') == model_id), None)
+                            if entry is None or entry.get('status') == 'blocked' or model_id == 6:
+                                raise ValueError('Model nie ma aktywnego wpisu w allowliście lub jest zablokowany.')
+                            repo_id = payload.get('repo_id', entry.get('repo_id'))
+                            revision = payload.get('revision', entry.get('revision'))
+                            if repo_id != entry.get('repo_id') or revision != entry.get('revision'):
+                                raise ValueError('Żądanie musi wskazywać dokładne repozytorium i rewizję z allowlisty.')
                             result = model_permissions.request_permission(
                                 c, model_id=model_id, repo_id=repo_id, revision=revision,
                                 scope=payload.get('scope'), confirm=payload.get('confirm') is True,
                                 reason=payload.get('reason', ''), snapshot=entry)
                         else:
+                            request_id = int(payload.get('request_id', 0))
+                            existing = next((item for item in model_permissions.list_permissions(c)
+                                             if item.get('id') == request_id), None)
+                            if existing is None:
+                                raise ValueError('Nie znaleziono żądania uprawnień.')
+                            entry = next((item for item in current['models']
+                                          if item.get('model_id') == existing.get('model_id')), None)
+                            if entry is None or entry.get('status') == 'blocked' or existing.get('model_id') == 6:
+                                raise ValueError('Model nie ma aktywnego wpisu w allowliście lub jest zablokowany.')
+                            if entry.get('repo_id') != existing.get('repo_id') or entry.get('revision') != existing.get('revision'):
+                                raise ValueError('Rewizja żądania nie jest już zgodna z allowlistą.')
                             result = model_permissions.decide_permission(
-                                c, request_id=int(payload.get('request_id', 0)),
-                                action=path.rsplit('/', 1)[-1], confirm=payload.get('confirm') is True,
+                                c, request_id=request_id, action=action,
+                                confirm=payload.get('confirm') is True,
                                 reason=payload.get('reason', ''))
                 elif path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
