@@ -106,6 +106,7 @@ The current branch now adds a deny-by-default gate before reading the request bo
 - `model_permission_auth.py` reads only the private in-process `_arena_verified_actor` attribute. It does not trust `Authorization`, `X-Authenticated-User`, `X-Forwarded-User`, JSON fields, the remote address, the shared Caddy Basic Auth account, or the Unix service account.
 - `server.py` checks this identity before reading a mutation request body for `/api/model-permissions/request`, `approve`, `reject`, and `revoke`. Missing or malformed identity returns HTTP 403 and performs no database operation.
 - `model_permissions.py` no longer has a shared default actor. Both request and decision operations require an explicit validated actor and fail closed when it is missing.
-- Unit tests cover spoofed headers, caller-supplied actor data, malformed identities, and missing actor rejection.
+- The panel now visibly explains the temporary restriction, disables the request form and decision/revocation buttons, and keeps audit history readable.
+- Unit tests cover spoofed headers, caller-supplied actor data, malformed identities, missing actor rejection, and HTTP 403 before request-body reads.
 
 **Important limitation:** there is not yet an authentication middleware that sets `_arena_verified_actor`. Therefore these four API mutation routes are intentionally unavailable until a separately reviewed application login/session or trusted local IPC identity mechanism is implemented. The gate is a protective deny-by-default control, not a completed authentication system.
