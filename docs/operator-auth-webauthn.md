@@ -86,14 +86,14 @@ The first backend slice is now present on the Issue #136 branch:
 
 ### Not yet complete / not production-ready
 
-- Persistent rate limiting and alerting for failed authentication/enrollment attempts are not implemented.
-- Credential revocation, operator suspension, role-change workflows, recovery, and global session invalidation are not implemented.
-- Ceremony failure-attempt handling and end-to-end browser tests need further security review. Unit tests now cover discoverable login, stored user-handle binding, session creation, CSRF, and origin enforcement.
+- Persistent hashed rate limiting, credential revocation, operator suspension, target-session invalidation, and owner audit events are implemented in the branch but still require a successful CI run and security review.
+- Failed-authentication alerting, recovery, role-change workflows, and full browser/authenticator end-to-end tests remain outstanding.
+- Ceremony failure-attempt handling and proxy-aware abuse controls require further security review. Unit tests cover discoverable login, stored user-handle binding, session creation, CSRF, origin enforcement, revocation, suspension, and owner protections.
 - No real RP ID/origin values have been configured or verified for the live site.
 - No owner enrollment token has been generated; no credentials or sessions have been created.
 - No production database migration, environment change, service restart, or deployment has been performed.
 
-Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until rate limits, lifecycle/recovery controls, security review, and end-to-end tests are complete. The production environment remains unchanged.
+Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until the current branch passes CI and receives security review, and until recovery and end-to-end tests are complete. The production environment remains unchanged.
 
 
 ### Browser UI implementation update (2026-11-14)
@@ -107,7 +107,7 @@ The panel now contains a Passkey section with:
 
 The UI does not store tokens in local storage or query strings. The enrollment token field is cleared after successful registration. Invitation tokens are displayed in a one-time readonly field and are not automatically copied or transmitted elsewhere. The browser uses `credentials: same-origin` and the session cookie remains HttpOnly.
 
-A discoverable-login test mocks the cryptographic verifier and verifies credential lookup, stored user-handle comparison, challenge consumption, and session creation. Full authenticator/browser E2E, persistent rate limiting, alerting, credential revocation, operator suspension, recovery, and global session invalidation remain mandatory before production activation.
+A discoverable-login test mocks the cryptographic verifier and verifies credential lookup, stored user-handle comparison, challenge consumption, and session creation. Persistent rate limiting, credential revocation, operator suspension, session invalidation, and owner audit history are now implemented in the branch. Failed-authentication alerting, recovery, and full authenticator/browser E2E remain mandatory before production activation.
 
 The repository CI workflow also extracts the single inline panel script and runs `node --check` (Node.js 22) before the Python suite, so browser JavaScript syntax is validated on pull requests.
 
@@ -120,5 +120,6 @@ The repository CI workflow also extracts the single inline panel script and runs
 - Owners can inspect operator and active credential inventory, revoke a credential, or suspend a non-self operator. Credential revocation invalidates all sessions for that operator; suspension also prevents future authentication.
 - The last active credential of the last active owner cannot be revoked, and the last active owner cannot be suspended. An owner cannot suspend their own account.
 - Revoked credentials remain in the credential registry as tombstones and cannot authenticate again; their credential IDs cannot be silently re-enrolled as new credentials.
+- Credential revocations and operator suspensions append actor, target, action, time, and limited metadata to an owner-readable security event history. Raw session tokens and CSRF tokens are not recorded.
 
 These controls are implemented in the application database and are not yet deployed. Rate-limit thresholds and the reverse-proxy topology require review before production activation. No live owner bootstrap or credential lifecycle action has been run.
