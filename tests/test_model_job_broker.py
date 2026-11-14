@@ -120,12 +120,14 @@ class ModelJobBrokerTests(unittest.TestCase):
             model_root=self.root)
         mark_job_running(
             self.db, job_id=evaluation["job_id"],
-            systemd_unit=plan["systemd_unit"], actor="test-broker")
+            systemd_unit=plan["systemd_unit"], actor="test-broker",
+            unit_is_active=lambda unit: True)
         record_evaluation_metric(
             self.db, job_id=evaluation["job_id"], metric_name="latency_ms",
             metric_value=12.5, actor="test-worker")
         finish_job(self.db, job_id=evaluation["job_id"], success=True,
-                   actor="test-broker", result={"exit_code": 0})
+                   actor="test-broker", unit_is_active=lambda unit: False,
+                   result={"exit_code": 0})
         saved = get_job(self.db, evaluation["job_id"])
         self.assertEqual(saved["status"], "succeeded")
         self.assertEqual(saved["metrics"][0]["metric_name"], "latency_ms")
@@ -138,11 +140,13 @@ class ModelJobBrokerTests(unittest.TestCase):
             model_root=self.root)
         with self.assertRaisesRegex(ValueError, "jednostka"):
             mark_job_running(self.db, job_id=job["job_id"],
-                             systemd_unit="untrusted.service", actor="test-broker")
+                             systemd_unit="untrusted.service", actor="test-broker",
+                             unit_is_active=lambda unit: True)
         mark_job_running(self.db, job_id=job["job_id"],
                          systemd_unit=plan["systemd_unit"], actor="test-broker")
         finish_job(self.db, job_id=job["job_id"], success=False,
-                   actor="test-broker", result={"reason": "fixture"})
+                   actor="test-broker", unit_is_active=lambda unit: False,
+                   result={"reason": "fixture"})
         with self.assertRaisesRegex(ValueError, "zakończone"):
             finish_job(self.db, job_id=job["job_id"], success=True,
                        actor="test-broker")
