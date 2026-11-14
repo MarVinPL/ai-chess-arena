@@ -27,6 +27,16 @@ class ModelPermissionTests(unittest.TestCase):
         return decide_permission(self.db, request_id=request["id"],
                                   action="approve", confirm=True)
 
+    def test_schema_migration_supports_default_sqlite_tuple_rows(self):
+        db = sqlite3.connect(":memory:")
+        try:
+            ensure_schema(db)
+            ensure_schema(db)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(model_permission_requests)")}
+            self.assertIn("artifact_sha256", columns)
+        finally:
+            db.close()
+
     def test_new_models_have_no_permissions_and_request_is_not_approval(self):
         self.assertFalse(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
         req = self.request()
