@@ -10,6 +10,7 @@ import model_allowlist
 import model_admission
 import model_permissions
 import model_permission_auth
+import operator_auth
 import model_review_submissions
 import hf_candidate_audit
 from model_exclusions import is_excluded_model_identity
@@ -167,6 +168,7 @@ def db_init():
     tournament_checkpoint.ensure_schema(DB)
     with sqlite3.connect(DB) as permission_db:
         model_permissions.ensure_schema(permission_db)
+        operator_auth.ensure_schema(permission_db)
     with sqlite3.connect(DB) as c:
         c.execute('''CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
@@ -1286,10 +1288,37 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+    def send_operator_auth_json(self, obj, code=200, session_token=None, csrf_token=None, clear=False):
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        if session_token and csrf_token:
+            self.send_header('Set-Cookie', 'arena_session={}; Path=/; Max-Age={}; Secure; HttpOnly; SameSite=Strict'.format(session_token, operator_auth.SESSION_ABSOLUTE_SECONDS))
+            self.send_header('Set-Cookie', 'arena_csrf={}; Path=/; Max-Age={}; Secure; SameSite=Strict'.format(csrf_token, operator_auth.SESSION_ABSOLUTE_SECONDS))
+        elif clear:
+            self.send_header('Set-Cookie', 'arena_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict')
+            self.send_header('Set-Cookie', 'arena_csrf=; Path=/; Max-Age=0; Secure; SameSite=Strict')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
     def do_GET(self):
         raw_path = self.path
         path = _route_path(raw_path)
-        if path == '/api/models/random':
+        if path == '/api/operator-auth/session':
+            try:
+                config = operator_auth.load_config()
+                session = operator_auth.bind_verified_request(DB, config, self, require_csrf=False)
+                if session is None:
+                    self.send_json({'authenticated': False}, 401)
+                else:
+                    self.send_json({'authenticated': True, 'operator': {
+                        'operator_id': session['operator_id'],
+                        'display_name': session['display_name'], 'role': session['role']
+                    }})
+            except operator_auth.OperatorAuthError as exc:
+                self.send_json({'authenticated': False, 'error': str(exc)}, 503)
+        elif path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
             except Exception as e: self.send_json({'error':str(e)},422)
@@ -1533,13 +1562,72 @@ class Handler(BaseHTTPRequestHandler):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         permission_actor = None
+        permission_role = None
         if path.startswith('/api/model-permissions/'):
+            try:
+                auth_config = operator_auth.load_config()
+                operator_auth.bind_verified_request(DB, auth_config, self, require_csrf=True)
+            except operator_auth.OperatorAuthError:
+                pass
             permission_actor = model_permission_auth.authenticated_actor(self)
-            if permission_actor is None:
+            permission_role = getattr(self, '_arena_verified_role', None)
+            if permission_actor is None or (not path.endswith('/request') and permission_role != 'owner'):
                 self.send_json({
-                    'error': 'Brak uwierzytelnionej tożsamości operatora. Operacje na uprawnieniach modeli są zablokowane do czasu wdrożenia zaufanego mechanizmu logowania.'
+                    'error': 'Brak poprawnej sesji operatora, CSRF lub wymaganej roli właściciela.'
                 }, 403)
                 return
+        if path in ('/api/operator-auth/register/options','/api/operator-auth/register/verify','/api/operator-auth/login/options','/api/operator-auth/login/verify','/api/operator-auth/logout','/api/operator-auth/invite'):
+            try:
+                auth_config = operator_auth.load_config()
+                if path == '/api/operator-auth/logout':
+                    session = operator_auth.bind_verified_request(DB, auth_config, self, require_csrf=True)
+                    if session is None:
+                        self.send_operator_auth_json({'error': 'Brak poprawnej sesji lub tokenu CSRF.'}, 403, clear=True)
+                        return
+                    from http.cookies import SimpleCookie
+                    cookies = SimpleCookie()
+                    cookies.load(self.headers.get('Cookie', ''))
+                    operator_auth.revoke_session(DB, cookies['arena_session'].value)
+                    self.send_operator_auth_json({'ok': True}, 200, clear=True)
+                    return
+                if path == '/api/operator-auth/invite':
+                    session = operator_auth.bind_verified_request(DB, auth_config, self, require_csrf=True)
+                    if session is None or session['role'] != 'owner':
+                        self.send_operator_auth_json({'error': 'Wymagane konto właściciela i poprawny token CSRF.'}, 403)
+                        return
+                    length = int(self.headers.get('Content-Length', '0'))
+                    payload = json.loads(self.rfile.read(length) or b'{}')
+                    token = operator_auth.create_operator_invitation(
+                        DB, session['operator_id'], payload.get('display_name', ''),
+                    )
+                    self.send_operator_auth_json({'invitation_token': token, 'expires_in': operator_auth.TOKEN_TTL_SECONDS})
+                    return
+                length = int(self.headers.get('Content-Length', '0'))
+                payload = json.loads(self.rfile.read(length) or b'{}')
+                if path == '/api/operator-auth/register/options':
+                    result = operator_auth.begin_registration(DB, auth_config, payload.get('token'))
+                elif path == '/api/operator-auth/register/verify':
+                    result = operator_auth.finish_registration(
+                        DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
+                    )
+                elif path == '/api/operator-auth/login/options':
+                    result = operator_auth.begin_authentication(DB, auth_config)
+                else:
+                    result = operator_auth.finish_authentication(
+                        DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
+                    )
+                    session_token = result.pop('session_token')
+                    csrf_token = result.pop('csrf_token')
+                    self.send_operator_auth_json(result, 200, session_token=session_token, csrf_token=csrf_token)
+                    return
+                self.send_operator_auth_json(result)
+            except operator_auth.OperatorAuthError as exc:
+                self.send_operator_auth_json({'error': str(exc)}, 400, clear=False)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                self.send_operator_auth_json({'error': 'Nieprawidłowe dane ceremonii Passkey.'}, 400)
+            except Exception:
+                self.send_operator_auth_json({'error': 'Nie udało się zakończyć operacji uwierzytelniania.'}, 503)
+            return
         if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-permissions/request','/api/model-permissions/approve','/api/model-permissions/reject','/api/model-permissions/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
