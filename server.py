@@ -463,7 +463,7 @@ def tournament_loop(tournament_id):
             set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
             def publish_move(move):
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
-                         model=move['model'], color=move['color'], pairing_id=pairing['id'],
+                         model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
                 observations = move.get('budget_observations') or []
                 player = players.get(move.get('model_id'))
