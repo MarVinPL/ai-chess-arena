@@ -1584,7 +1584,7 @@ class Handler(BaseHTTPRequestHandler):
                     current = model_allowlist.load_allowlist()
                     model_id = int(payload.get('model_id', 0))
                     entry = next((item for item in current['models'] if item.get('model_id') == model_id), None)
-                    if entry is None or entry.get('status') == 'blocked':
+                    if entry is None or entry.get('status') == 'blocked' or model_id == 6:
                         raise ValueError('Model nie ma aktywnego wpisu w allowliście lub jest zablokowany.')
                     repo_id = payload.get('repo_id', entry.get('repo_id'))
                     revision = payload.get('revision', entry.get('revision'))
