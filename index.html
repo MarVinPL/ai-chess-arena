@@ -65,6 +65,33 @@ button.stop{background:#744b4b;border-color:#986363}
  .sq{font-size:clamp(27px,9vw,40px)}
 }
 
+/* Tournament list: readable cards on desktop and mobile */
+.tournament-list{display:grid;gap:12px;margin-top:14px;max-height:none;overflow:visible}
+.tournament-card{min-width:0;padding:14px;border:1px solid #304854;border-radius:13px;background:#0e1b24}
+.tournament-card__header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.tournament-card__title{min-width:0;margin:0;color:var(--arena-text);font-size:16px;line-height:1.4;overflow-wrap:anywhere}
+.tournament-card__id{color:var(--arena-muted);font-size:12px;font-weight:600}
+.tournament-status{display:inline-flex;align-items:center;min-height:28px;padding:4px 9px;border:1px solid #49616a;border-radius:8px;background:#172a32;color:#e8f1f0;font-size:12px;font-weight:750;letter-spacing:.02em}
+.tournament-status[data-status="running"]{border-color:#3d9b8e;background:#123a37;color:#a9eee2}
+.tournament-status[data-status="failed"],.tournament-status[data-status="stopped"]{border-color:#956363;background:#382729;color:#ffd0c8}
+.tournament-status[data-status="completed"]{border-color:#8b784a;background:#342f20;color:#f1d99d}
+.tournament-card__fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0}
+.tournament-card__field{min-width:0;padding:9px 10px;border:1px solid #263d48;border-radius:9px;background:#12232c}
+.tournament-card__field dt{margin:0 0 5px;color:var(--arena-muted);font-size:11px;font-weight:650}
+.tournament-card__field dd{margin:0;color:var(--arena-text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.tournament-card__actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid #263d48}
+.tournament-card__actions button{flex:0 1 auto;min-width:0}
+.tournament-card button:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+@media(max-width:760px){
+ .tournament-card{padding:12px}
+ .tournament-card__fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .tournament-card__actions button{flex:1 1 calc(50% - 8px)}
+}
+@media(max-width:380px){
+ .tournament-card__fields{grid-template-columns:minmax(0,1fr)}
+ .tournament-card__actions button{flex:1 1 100%}
+}
+
 </style></head><body><div class="wrap"><div class="top"><div><h1>♟ Local AI Chess Arena</h1><div class="sub">Lokalne modele GGUF • tryb Pure AI • bez płatnych API</div></div><div id="online" class="pill">Sprawdzanie modelu…</div></div>
 <div class="layout"><section class="panel"><div class="board-topline"><span class="board-kicker">Chess Arena Pro</span><span class="board-live">Local match</span></div><div class="player-strip"><span id="white" class="player-badge player-badge--white">Model lokalny · białe</span><span id="black" class="player-badge player-badge--black">Model lokalny · czarne</span></div><div id="board" class="board" role="img" aria-label="Szachownica z aktualną pozycją"></div><div class="controls"><button id="step">Następny ruch</button><button id="run">Autoplay</button><button id="stop" class="stop">Stop</button><button id="reset" class="secondary">Nowa partia</button></div><div id="status" class="status">Gotowy.</div></section>
 <aside class="panel"><h3 style="margin:0 0 12px">Statystyki partii</h3><div class="metrics"><div class="metric"><small>Ruchy</small><strong id="count">0</strong></div><div class="metric"><small>Średni czas ruchu</small><strong id="avg">—</strong></div><div class="metric"><small>Niepoprawne próby</small><strong id="illegal">0</strong></div><div class="metric"><small>Dostępna pamięć</small><strong id="ram">—</strong></div></div><h3 style="margin:20px 0 8px">Zapis ruchów</h3><div id="moves" class="moves">Brak ruchów.</div><div class="model-status" aria-live="polite">
@@ -172,7 +199,65 @@ async function loadTournamentView(id){
   $('tournament-champion').textContent=d.champion?'Mistrz: '+d.champion.name:'Mistrz: jeszcze nierozstrzygnięty';
  }catch(e){$('tournament-detail-title').textContent='Nie udało się odczytać turnieju: '+e}
 }
-function renderTournaments(rows){const host=$('tournament-list');host.textContent='';if(!rows.length){host.textContent='Brak turniejów.';return}rows.forEach(t=>{const row=document.createElement('div');row.style.cssText='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;padding:8px;border:1px solid #34445c;border-radius:8px';const label=document.createElement('span');label.style.flex='1';const completed=Number(t.completed_games??0);const planned=Number(t.total_games_planned??t.games_planned??0);label.textContent=`#${t.id} · ${t.name} · ${t.format} · ${t.status} · ${completed} / ${planned} rozegranych (plan łączny) · awans ${t.qualification_percent||80}%`;row.appendChild(label);const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);row.appendChild(view);const check=document.createElement('button');check.textContent='Sprawdź gotowość';check.onclick=async()=>{try{const r=await fetch('/api/tournaments/'+t.id+'/preflight');const d=await r.json();if(!r.ok)throw Error(d.error||r.status);const entrants=d.entrants||[];const blocked=d.blocked||[];const summary=entrants.map(e=>{const state=e.ready_to_start?'GOTOWY':'BLOKADA';const reasons=(e.blockers||[]).join(', ');const cache=e.local_file_available?'plik lokalny':(e.download_on_demand?'plik pobierze się przed partią':'pobranie zablokowane do czasu weryfikacji manifestu/licencji');return e.name+': '+state+'; '+cache+(reasons?'; '+reasons:'')}).join('\\n');$('league-message').textContent='Preflight turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.\\n'+summary}catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}};row.appendChild(check);if(['planned','stopped','failed'].includes(t.status)){const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';start.onclick=async()=>{if(!confirm('Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;try{const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await loadLeague()}catch(e){$('league-message').textContent='Nie uruchomiono turnieju: '+e}};row.appendChild(start)}if(t.status==='running'){const stop=document.createElement('button');stop.className='stop';stop.textContent='Zatrzymaj turniej';stop.onclick=async()=>{if(!confirm('Zatrzymać turniej po zakończeniu bieżącego ruchu?'))return;try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Wysłano żądanie zatrzymania turnieju.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się zatrzymać: '+e}};row.appendChild(stop)}host.appendChild(row)})}
+function renderTournaments(rows){
+ const host=$('tournament-list');
+ host.classList.add('tournament-list');
+ host.textContent='';
+ if(!rows.length){host.textContent='Brak turniejów.';return}
+ const statusLabels={planned:'Zaplanowany',running:'W trakcie',stopped:'Zatrzymany',failed:'Błąd',completed:'Zakończony'};
+ const addField=(grid,label,value)=>{
+  const field=document.createElement('div');field.className='tournament-card__field';
+  const term=document.createElement('dt');term.textContent=label;
+  const detail=document.createElement('dd');detail.textContent=String(value);
+  field.append(term,detail);grid.appendChild(field);
+ };
+ rows.forEach(t=>{
+  const card=document.createElement('article');card.className='tournament-card';
+  const header=document.createElement('div');header.className='tournament-card__header';
+  const title=document.createElement('h5');title.className='tournament-card__title';
+  title.textContent=t.name||'Turniej bez nazwy';
+  const id=document.createElement('span');id.className='tournament-card__id';id.textContent='#'+t.id;
+  title.appendChild(document.createTextNode(' '));title.appendChild(id);
+  const status=document.createElement('span');status.className='tournament-status';
+  status.dataset.status=String(t.status||'unknown');
+  status.textContent=statusLabels[t.status]||('Status: '+(t.status||'nieznany'));
+  header.append(title,status);card.appendChild(header);
+  const fields=document.createElement('dl');fields.className='tournament-card__fields';
+  const completed=Number(t.completed_games??0);
+  const planned=Number(t.total_games_planned??t.games_planned??0);
+  addField(fields,'Format',t.format||'—');
+  addField(fields,'Postęp partii',completed+' / '+planned);
+  addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
+  card.appendChild(fields);
+  const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
+  const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
+  const check=document.createElement('button');check.textContent='Sprawdź gotowość';check.onclick=async()=>{
+   try{
+    const r=await fetch('/api/tournaments/'+t.id+'/preflight');const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
+    const entrants=d.entrants||[];const blocked=d.blocked||[];
+    const summary=entrants.map(e=>{const state=e.ready_to_start?'GOTOWY':'BLOKADA';const reasons=(e.blockers||[]).join(', ');const cache=e.local_file_available?'plik lokalny':(e.download_on_demand?'plik pobierze się przed partią':'pobranie zablokowane do czasu weryfikacji manifestu/licencji');return e.name+': '+state+'; '+cache+(reasons?'; '+reasons:'')}).join('\\n');
+    $('league-message').textContent='Preflight turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.\\n'+summary;
+   }catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}
+  };actions.appendChild(check);
+  if(['planned','stopped','failed'].includes(t.status)){
+   const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';
+   start.onclick=async()=>{
+    if(!confirm('Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;
+    try{const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await loadLeague()}
+    catch(e){$('league-message').textContent='Nie uruchomiono turnieju: '+e}
+   };actions.appendChild(start);
+  }
+  if(t.status==='running'){
+   const stop=document.createElement('button');stop.className='stop';stop.textContent='Zatrzymaj turniej';
+   stop.onclick=async()=>{
+    if(!confirm('Zatrzymać turniej po zakończeniu bieżącego ruchu?'))return;
+    try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Wysłano żądanie zatrzymania turnieju.';await loadLeague()}
+    catch(e){$('league-message').textContent='Nie udało się zatrzymać: '+e}
+   };actions.appendChild(stop);
+  }
+  card.appendChild(actions);host.appendChild(card);
+ });
+}
 function renderModelStatus(models,storage){
  arenaModels=Array.isArray(models)?models:[];
  const active=arenaModels.filter(m=>Boolean(m.active));
