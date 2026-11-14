@@ -1624,6 +1624,9 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     length = int(self.headers.get('Content-Length', '0'))
                     payload = json.loads(self.rfile.read(length) or b'{}')
+                    operator_auth.consume_rate_limit(
+                        DB, 'operator-invite:' + session['operator_id'], 5, window_seconds=3600,
+                    )
                     token = operator_auth.create_operator_invitation(
                         DB, session['operator_id'], payload.get('display_name', ''),
                     )
@@ -1636,23 +1639,23 @@ class Handler(BaseHTTPRequestHandler):
                     token = payload.get('token')
                     if not isinstance(token, str):
                         raise operator_auth.OperatorAuthError('Nieprawidłowy token rejestracyjny.')
-                    operator_auth.consume_rate_limit(DB, 'register-options:' + source_ip + ':' + token, 6)
+                    operator_auth.consume_rate_limit(DB, 'register-options:' + source_ip, 120)\n                    operator_auth.consume_rate_limit(DB, 'register-token:' + token, 6)
                     result = operator_auth.begin_registration(DB, auth_config, token)
                 elif path == '/api/operator-auth/register/verify':
                     operator_auth.consume_rate_limit(
-                        DB, 'register-verify:' + source_ip + ':' + str(payload.get('ceremony_id', '')), 8,
+                        DB, 'register-verify-source:' + source_ip, 120,\n                    )\n                    operator_auth.consume_rate_limit(\n                        DB, 'register-verify-ceremony:' + str(payload.get('ceremony_id', '')), 8,
                     )
                     result = operator_auth.finish_registration(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
                     )
                 elif path == '/api/operator-auth/login/options':
-                    operator_auth.consume_rate_limit(DB, 'login-options:' + source_ip, 15)
+                    operator_auth.consume_rate_limit(DB, 'login-options:' + source_ip, 120)
                     result = operator_auth.begin_authentication(DB, auth_config)
                 else:
                     credential = payload.get('credential') if isinstance(payload.get('credential'), dict) else {}
                     credential_id = str(credential.get('rawId') or credential.get('id') or '')
                     operator_auth.consume_rate_limit(
-                        DB, 'login-verify:' + source_ip + ':' + credential_id, 12,
+                        DB, 'login-verify-source:' + source_ip, 120,\n                    )\n                    operator_auth.consume_rate_limit(\n                        DB, 'login-verify-credential:' + credential_id, 12,
                     )
                     result = operator_auth.finish_authentication(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
