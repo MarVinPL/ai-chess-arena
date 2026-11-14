@@ -93,5 +93,41 @@ class OperatorAuthStorageTests(unittest.TestCase):
         self.assertIsNone(operator_auth.get_session(self.db, session_token, now=1002.0))
 
 
+    def test_verified_handler_binding_requires_exact_origin_and_csrf(self):
+        import time
+        from types import SimpleNamespace
+        now = time.time()
+        with operator_auth._connect(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", b"o" * 32, now),
+            )
+            session_token, csrf_token = operator_auth._new_session(conn, "owner-id", now)
+        config = operator_auth.WebAuthnConfig("example.test", "https://arena.example.test")
+        valid = SimpleNamespace(headers={
+            "Cookie": "arena_session=" + session_token,
+            "Origin": config.origin,
+            "X-Arena-CSRF": csrf_token,
+        })
+        session = operator_auth.bind_verified_request(self.db, config, valid, require_csrf=True)
+        self.assertEqual(session["role"], "owner")
+        self.assertEqual(valid._arena_verified_actor, "owner-id")
+        invalid_origin = SimpleNamespace(headers={
+            "Cookie": "arena_session=" + session_token,
+            "Origin": "https://attacker.example.test",
+            "X-Arena-CSRF": csrf_token,
+        })
+        self.assertIsNone(operator_auth.bind_verified_request(
+            self.db, config, invalid_origin, require_csrf=True))
+        invalid_csrf = SimpleNamespace(headers={
+            "Cookie": "arena_session=" + session_token,
+            "Origin": config.origin,
+            "X-Arena-CSRF": "wrong",
+        })
+        self.assertIsNone(operator_auth.bind_verified_request(
+            self.db, config, invalid_csrf, require_csrf=True))
+
+
 if __name__ == "__main__":
     unittest.main()
