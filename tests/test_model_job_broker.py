@@ -49,7 +49,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_no_active_scope_fails_closed(self):
         model_permissions.decide_permission(
             self.db, request_id=1, action="revoke", confirm=True,
-            reason="test zakończony", actor="test-reviewer")
+            reason="test zakończony")
         with self.assertRaises(PermissionError):
             self._create()
 
@@ -64,7 +64,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_claim_consumes_consent_and_returns_fixed_shell_free_plan(self):
         job = self._create()
         plan = claim_job_for_start(
-            self.db, job_id=job["job_id"], actor="test-broker",
+            self.db, job_id=job["job_id"],
             model_root=self.root)
         self.assertEqual(plan["status"], "starting")
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
@@ -104,7 +104,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EVALUATION"):
             record_evaluation_metric(
                 self.db, job_id=technical["job_id"], metric_name="latency_ms",
-                metric_value=12.5, actor="test-worker")
+                metric_value=12.5)
         self._grant("EVALUATION")
         evaluation = self._create(scope="EVALUATION")
         plan = claim_job_for_start(
