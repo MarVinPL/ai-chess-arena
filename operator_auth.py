@@ -387,7 +387,8 @@ def finish_authentication(db_path, config, ceremony_id, credential):
         row = conn.execute(
             """SELECT c.*,o.operator_id,o.role,o.display_name,o.active,o.user_handle
             FROM arena_webauthn_credentials c JOIN arena_operators o
-            ON o.operator_id=c.operator_id WHERE c.credential_id=?""",
+            ON o.operator_id=c.operator_id
+            WHERE c.credential_id=? AND c.revoked_at IS NULL""",
             (credential_id,),
         ).fetchone()
         if row is None or not row["active"]:
