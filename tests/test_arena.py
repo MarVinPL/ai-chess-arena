@@ -118,6 +118,16 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(event_record['white'], 'Registry Model A')
         self.assertEqual(event_record['black'], 'Registry Model B')
 
+    def test_live_status_keeps_pairing_stage_separate_from_runtime_stage(self):
+        server.set_live('game_finished', 'Partia zakończona: 1-0',
+                        white='Model A', black='Model B', pairing_stage='league')
+        self.assertEqual(server.live_status['stage'], 'game_finished')
+        self.assertEqual(server.live_status['pairing_stage'], 'league')
+        event_record = __import__('json').loads(
+            server.LIVE_EVENTS_LOG.read_text(encoding='utf-8').splitlines()[-1])
+        self.assertEqual(event_record['stage'], 'game_finished')
+        self.assertEqual(event_record['pairing_stage'], 'league')
+
     def test_diagnostic_logs_apply_separate_age_retention(self):
         import json
         from datetime import datetime, timedelta, timezone

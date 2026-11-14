@@ -93,7 +93,7 @@ def set_live(stage, message, **fields):
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
-        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason')
+        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
                  'stage':stage,'message':message,
                  **{k:v for k,v in fields.items() if k in event_fields}}
@@ -702,7 +702,7 @@ def tournament_loop(tournament_id):
                      white=white['name'], black=black['name'], result=result['result'],
                      game_id=game_id, move_count=len(result['moves']), fen=result['fen'],
                      moves=result['moves'], generation_started_at=None,
-                     stage=pairing.get('stage','league'),
+                     pairing_stage=pairing.get('stage','league'),
                      adjudication_status='adjudicated' if result.get('adjudicated') else 'not_applicable',
                      adjudication_reason=(result.get('adjudication') or {}).get('reason'))
         with league.connect() as c:
