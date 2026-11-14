@@ -1315,7 +1315,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         raw_path = self.path
         path = _route_path(raw_path)
-        if path == '/api/operator-auth/operators':
+        if path == '/api/operator-auth/events':
+            try:
+                config = operator_auth.load_config()
+                session = operator_auth.bind_verified_request(DB, config, self, require_csrf=False)
+                if session is None or session['role'] != 'owner':
+                    self.send_operator_auth_json({'error': 'Wymagane konto właściciela.'}, 403)
+                else:
+                    self.send_operator_auth_json({'events': operator_auth.list_operator_events(DB)})
+            except operator_auth.OperatorAuthError as exc:
+                self.send_operator_auth_json({'error': str(exc)}, 503)
+        elif path == '/api/operator-auth/operators':
             try:
                 config = operator_auth.load_config()
                 session = operator_auth.bind_verified_request(DB, config, self, require_csrf=False)
