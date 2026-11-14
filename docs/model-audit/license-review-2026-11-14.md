@@ -11,7 +11,7 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 | ID | Model / artefakt | Status audytu | Ustalenie |
 |---:|---|---|---|
 | 1 | Qwen2.5-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Oficjalny pinned README i LICENSE są dostępne w tej samej rewizji; LFS SHA-256 dokładnego GGUF zgadza się z rejestrem, a przypięta licencja modelu bazowego również wskazuje Apache-2.0. |
-| 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `review_required` | Licencja wagi Apache-2.0 i SHA-256 są potwierdzone, ale karta modelu wymienia zbiory treningowe, których odrębnych warunków nie zweryfikowano. |
+| 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `review_required` | Licencja wagi i SHA-256 są potwierdzone; źródła treningowe mają różne warunki, a dokładne rewizje i podzbiór DCLM nie są przypięte w karcie modelu. |
 | 3 | Qwen2-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; dokładna przypięta rewizja oficjalnego upstream zawiera pełny tekst Apache License 2.0. |
 | 4 | Meta Llama 3.1 8B Instruct Q3_K_S GGUF | `review_required` | Licencja Meta i AUP są znane, a SHA-256 GGUF jest zgodny; brak jednak przypiętej rewizji upstream base modelu w źródłowej karcie GGUF. |
 | 5 | Llama 3.2 3B Instruct UD-IQ3_XXS GGUF | `review_required` | Licencja Meta i AUP są znane, a SHA-256 GGUF jest zgodny; brak jednak przypiętej rewizji upstream base modelu w źródłowej karcie GGUF. |
@@ -61,12 +61,22 @@ Brak pliku dataset w repozytorium kwantyzacji nie jest dowodem, że prawa do dan
 - SHA-256 z manifestu i metadanych LFS dokładnego pliku w przypiętej rewizji: `75c4346ef9e855ed630f80078a2430cf63aaca599e340360998a313070fcdc47`; rozmiar 270,590,592 B jest zgodny.
 - Pinned README wskazuje `HuggingFaceTB/SmolLM2-360M-Instruct` jako źródło i deklaruje Apache-2.0.
 - Oficjalna karta modelu bazowego na przypiętej rewizji `a10cc1512eabd3dde888204e902eca88bddb4951` deklaruje Apache-2.0.
-- Karta modelu bazowego w dokładnej przypiętej rewizji wskazuje Apache 2.0 i zawiera bezpośredni link do kanonicznego tekstu licencji Apache. To stanowi dowód warunków upstream; nie znaleziono dodatkowych ograniczeń w sprawdzonych plikach.
+- Karta modelu bazowego w dokładnej przypiętej rewizji wskazuje Apache 2.0 i zawiera bezpośredni link do kanonicznego tekstu licencji Apache.
+- Ta sama przypięta karta wymienia FineWeb-Edu, DCLM, The Stack oraz Synth-APIGen jako źródła treningowe. Nie podaje jednak dokładnych rewizji datasetów ani jednoznacznego identyfikatora podzbioru DCLM.
+- FineWeb-Edu deklaruje ODC-By 1.0; jego karta odsyła również do warunków Common Crawl. DCLM-Baseline deklaruje CC-BY-4.0, ale jego karta opisuje dataset jako baseline badawczy; nie ma dowodu, że dokładnie ten wariant został użyty przez SmolLM2. Synth-APIGen deklaruje Apache-2.0.
+- The Stack nie ma jednej zbiorczej licencji permissive: użycie każdego pliku musi respektować licencję źródłową, w tym atrybucję; obowiązują także aktualizacje wersji po zgłoszeniach usunięcia oraz warunki hostowania/udostępniania.
+- Wniosek: `review_required`. Apache-2.0 dla wag jest udokumentowane, ale bez dokładnych snapshotów danych i provenance poszczególnych plików The Stack nie można zakończyć łącznej oceny komponentów.
 
 Źródła:
 - GGUF README (pinned): https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md
 - Model bazowy README (pinned): https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md
 - Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+- FineWeb-Edu: https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
+- Common Crawl Terms of Use: https://commoncrawl.org/terms-of-use
+- DCLM-Baseline: https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
+- The Stack dataset card and terms: https://huggingface.co/datasets/bigcode/the-stack
+- BigCode The Stack data governance: https://www.bigcode-project.org/docs/about/the-stack/
+- Argilla Synth-APIGen-v0.1: https://huggingface.co/datasets/argilla/Synth-APIGen-v0.1
 
 ### 3. Qwen2-0.5B-Instruct Q4_K_M
 

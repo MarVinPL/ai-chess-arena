@@ -47,8 +47,8 @@
       "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
       "license": "apache-2.0",
       "license_review_status": "review_required",
-      "license_notes": "Pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base, declares Apache-2.0 and describes llama.cpp quantization. The exact pinned upstream model card links directly to the canonical Apache License 2.0 text.",
-      "license_evidence": "Pinned GGUF README; pinned official HuggingFaceTB model card with direct link to Apache License 2.0",
+      "license_notes": "The selected GGUF weight has Apache-2.0 evidence and its SHA-256/size match the pinned derived revision. The pinned SmolLM2 source card names FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen as training sources, but does not pin exact dataset revisions or identify the exact DCLM subset. FineWeb-Edu is ODC-By 1.0 and subject to CommonCrawl terms; DCLM-Baseline is tagged CC-BY-4.0 but its card describes research-baseline use; The Stack requires compliance with each source file's original license and attribution plus current-version/hosting terms; Synth-APIGen declares Apache-2.0. Because the actual dataset snapshots/subsets and The Stack per-file provenance used for this model are not identified, the combined entry remains review_required.",
+      "license_evidence": "Pinned GGUF README, pinned SmolLM2 source model card, and official dataset cards/terms for the named training sources",
       "license_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
       "download_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/resolve/25eef036a8d245a5a188b1b45d4b240a39bc9f24/SmolLM2-360M-Instruct.Q4_K_M.gguf",
       "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
@@ -60,10 +60,16 @@
         "evidence": [
           "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
           "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md",
-          "https://www.apache.org/licenses/LICENSE-2.0"
+          "https://www.apache.org/licenses/LICENSE-2.0",
+          "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu",
+          "https://commoncrawl.org/terms-of-use",
+          "https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0",
+          "https://huggingface.co/datasets/bigcode/the-stack",
+          "https://www.bigcode-project.org/docs/about/the-stack/",
+          "https://huggingface.co/datasets/argilla/Synth-APIGen-v0.1"
         ],
-        "summary": "Pinned GGUF file SHA-256 and size match the exact revision. The pinned SmolLM2 model card identifies training corpora including FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen; separate dataset terms and rights were not audited, so the combined entry remains review_required.",
-        "component_review": "The derived GGUF tree contains the selected GGUF and README, but no standalone tokenizer/code/dataset files. The source model card names training datasets; their individual licences and provenance remain unresolved."
+        "summary": "The selected GGUF weight has Apache-2.0 evidence and its SHA-256/size match the pinned derived revision. The pinned SmolLM2 source card names FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen as training sources, but does not pin exact dataset revisions or identify the exact DCLM subset. FineWeb-Edu is ODC-By 1.0 and subject to CommonCrawl terms; DCLM-Baseline is tagged CC-BY-4.0 but its card describes research-baseline use; The Stack requires compliance with each source file's original license and attribution plus current-version/hosting terms; Synth-APIGen declares Apache-2.0. Because the actual dataset snapshots/subsets and The Stack per-file provenance used for this model are not identified, the combined entry remains review_required.",
+        "component_review": "No standalone tokenizer/code/dataset files in the pinned derived GGUF tree. The pinned upstream SmolLM2 card lists FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen. Official dataset cards/terms were checked: FineWeb-Edu ODC-By 1.0 + CommonCrawl ToU; DCLM-Baseline CC-BY-4.0 with research-baseline framing (not proven to be the exact DCLM subset used); The Stack has per-source-file licenses/attribution and ongoing version/hosting terms; Synth-APIGen Apache-2.0. Exact training dataset revisions/subsets are not pinned, so this component review cannot close the entry."
       }
     },
     {
