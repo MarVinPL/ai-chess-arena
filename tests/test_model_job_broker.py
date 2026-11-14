@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -17,10 +18,12 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.root.mkdir()
         self.artifact = self.root / "candidate.gguf"
         self.artifact.write_bytes(b"test-fixture-only")
+        self.artifact_sha256 = hashlib.sha256(self.artifact.read_bytes()).hexdigest()
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
         model_permissions.ensure_schema(self.db)
-        self.ident = dict(model_id=1, repo_id="org/model", revision="a" * 40)
+        self.ident = dict(model_id=1, repo_id="org/model", revision="a" * 40,
+                          artifact_sha256=self.artifact_sha256)
         self._grant("TEST_ONLY")
 
     def tearDown(self):
@@ -36,10 +39,9 @@ class ModelJobBrokerTests(unittest.TestCase):
             confirm=True)
 
     def _create(self, scope="TEST_ONLY", **overrides):
-        import hashlib
         args = dict(
             **self.ident, scope=scope, artifact_path=str(self.artifact),
-            expected_sha256=hashlib.sha256(self.artifact.read_bytes()).hexdigest(),
+            expected_sha256=self.artifact_sha256,
             confirm_operation=True, actor="test-owner",
             model_root=self.root, capacity_check=lambda: True,
         )
