@@ -23,7 +23,7 @@ This service-level boundary is not, by itself, a per-job sandbox. A model job ne
 - accepts only a regular `.gguf` file resolved inside the Arena-owned `managed-models/` directory; symlink escapes and files outside that root are rejected;
 - explicitly rejects the shared `/home/debian/ai-agent/models` path;
 - creates a shell-free `systemd-run --system --wait --pipe --collect` argv for a transient service;
-- uses `DynamicUser=yes`, a unique private `RuntimeDirectory`, `PrivateNetwork=yes`, `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, and `KillMode=control-group`;
+- uses `DynamicUser=yes`, a unique private `RuntimeDirectory`, `PrivateNetwork=yes`, `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`, `ProtectHome=tmpfs`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, and `KillMode=control-group`;
 - binds only the fixed worker executable and selected model artifact read-only, hides the rest of host home directories, and makes the shared model directory inaccessible;
 - bounds CPU quota (25–800%), memory (512 MiB–8 GiB), runtime (10–1800 seconds), and task count (1–128);
 - computes SHA-256 and byte size by streaming the selected artifact without changing it.
@@ -67,3 +67,14 @@ Still required before a real model test can run:
 - Start-plan generation is side-effect free: it returns an argv list and explicitly reports `side_effects_performed=false`. It does not call `systemd-run`, create a process, or claim that a job is running.
 
 **Not yet implemented:** a privileged launcher that accepts only these validated plans, authenticated actor propagation from the existing panel session, cancellation of a live systemd unit, stale-job recovery, worker executable/package, and disposable-systemd integration tests. Until those exist and receive security review, no real model job can be started through this code. The actor parameter is an interface contract for a future trusted caller, not proof of authentication in this slice.
+
+
+## Cancellation and restart reconciliation (ledger only)
+
+The job ledger now supports:
+- cancelling a queued job before a systemd unit exists;
+- recording a cancellation request for a starting/running job without claiming it has stopped;
+- transitioning an active job to `cancelled` only after an injected, authoritative systemd state reader confirms the exact recorded unit is inactive;
+- reconciling a starting/running row after a service restart: an active or unknown unit leaves the row unchanged; a confirmed inactive unit becomes `failed`, or `cancelled` if cancellation had already been requested.
+
+These functions do not call `systemctl`, `systemd-run`, or `systemd` D-Bus. They accept a state-reader callback so unit inspection and stop privileges remain outside the web/API process. The real stop adapter and its authorization boundary are still outstanding.
