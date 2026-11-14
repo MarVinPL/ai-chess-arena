@@ -60,12 +60,14 @@ class ModelManifestTests(unittest.TestCase):
         self.assertEqual(next(m for m in payload["models"] if m["model_id"] == 4)["license_review_status"], "verified_restricted")
 
         missing = json.loads(json.dumps(payload))
-        missing_model = next(m for m in missing["models"] if m["model_id"] == 4)\n        missing_model.pop("license_audit")
+        missing_model = next(m for m in missing["models"] if m["model_id"] == 4)
+        missing_model.pop("license_audit")
         with self.assertRaises(ManifestError):
             validate_manifest(missing)
 
         mismatched = json.loads(json.dumps(payload))
-        mismatched_model = next(m for m in mismatched["models"] if m["model_id"] == 4)\n        mismatched_model["license_audit"]["reviewed_revision"] = "0" * 40
+        mismatched_model = next(m for m in mismatched["models"] if m["model_id"] == 4)
+        mismatched_model["license_audit"]["reviewed_revision"] = "0" * 40
         with self.assertRaises(ManifestError):
             validate_manifest(mismatched)
 
