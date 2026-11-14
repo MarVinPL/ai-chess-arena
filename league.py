@@ -394,12 +394,15 @@ def tournament_view(tournament_id,live=None):
   game_columns={row[1] for row in c.execute('PRAGMA table_info(games)')}
   if not {'tournament_id','pairing_id'} <= game_columns:
    raise RuntimeError('Brak kolumn audytowych gier; widok turnieju pozostaje niedostępny')
-  rows=c.execute('''SELECT p.id,p.stage,p.round_no,p.match_no,p.leg,p.status,
+  adjudication_status_col='g.adjudication_status' if 'adjudication_status' in game_columns else "'not_applicable'"
+  adjudication_json_col='g.adjudication_json' if 'adjudication_json' in game_columns else "'{}'"
+  rows=c.execute(f'''SELECT p.id,p.stage,p.round_no,p.match_no,p.leg,p.status,
     p.white_model_id,p.black_model_id,p.winner_model_id,p.game_id,
     w.name AS white_name,b.name AS black_name,
     sw.seed AS white_seed,sb.seed AS black_seed,
     g.id AS saved_game_id,g.result,g.ended_at,g.move_count,
-    g.adjudication_status,g.adjudication_json
+    {adjudication_status_col} AS adjudication_status,
+    {adjudication_json_col} AS adjudication_json
     FROM tournament_pairings p
     JOIN league_models w ON w.id=p.white_model_id
     JOIN league_models b ON b.id=p.black_model_id
