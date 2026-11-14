@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "source_repository": "MarVinPL/ai-chess-arena",
+  "source_ref": "main",
+  "source_manifest": "manifests/huggingface-models.json",
+  "source_policy": "GitHub main is the sole source of truth; this file is informational and does not activate models.",
+  "models": [
+    {
+      "model_id": 1,
+      "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "verified_permissive",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 2,
+      "repo_id": "QuantFactory/SmolLM2-360M-Instruct-GGUF",
+      "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 3,
+      "repo_id": "Qwen/Qwen2-0.5B-Instruct-GGUF",
+      "revision": "198f08841147e5196a6a69bd0053690fb1fd3857",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "verified_permissive",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "198f08841147e5196a6a69bd0053690fb1fd3857"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "198f08841147e5196a6a69bd0053690fb1fd3857"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 4,
+      "repo_id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+      "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "llama3.1",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 5,
+      "repo_id": "unsloth/Llama-3.2-3B-Instruct-GGUF",
+      "revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "llama3.2",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 6,
+      "repo_id": "speakleash/Bielik-11B-v3.0-Instruct-GGUF",
+      "revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "verified_restricted",
+        "license_verified_required": true,
+        "obligations": [
+          "Warunki licencji Bielik v3 wymagają osobnego sprawdzenia ograniczeń użytkowania przed ewentualnym dopuszczeniem."
+        ]
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [
+        "Warunki licencji Bielik v3 wymagają osobnego sprawdzenia ograniczeń użytkowania przed ewentualnym dopuszczeniem."
+      ],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 7,
+      "repo_id": "speakleash/Bielik-7B-Instruct-v0.1-GGUF",
+      "revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "cc-by-nc-4.0",
+        "manifest_audit_status": "verified_restricted",
+        "license_verified_required": true,
+        "obligations": [
+          "Licencja CC BY-NC 4.0 ogranicza zastosowania komercyjne i wymaga atrybucji oraz oznaczenia zmian."
+        ]
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [
+        "Licencja CC BY-NC 4.0 ogranicza zastosowania komercyjne i wymaga atrybucji oraz oznaczenia zmian."
+      ],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 8,
+      "repo_id": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "status": "review_required",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "manifests/huggingface-models.json",
+          "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9"
+        },
+        {
+          "path": "docs/model-audit/license-review-2026-11-14.md",
+          "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "technical_readiness": "not_evaluated",
+      "technical_blockers": [
+        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+      ]
+    },
+    {
+      "model_id": 9,
+      "repo_id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
+      "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18",
+      "status": "blocked",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "docs/model-audit/model-exclusions-issue-71.md",
+          "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady.",
+      "technical_readiness": "blocked",
+      "technical_blockers": [
+        "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady."
+      ]
+    },
+    {
+      "model_id": 10,
+      "repo_id": "mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF",
+      "revision": "be0e37087303291b3967f8cd19a193ea04cdc150",
+      "status": "blocked",
+      "admission_scope": [],
+      "license_requirements": {
+        "manifest_license": "apache-2.0",
+        "manifest_audit_status": "review_required",
+        "license_verified_required": true,
+        "obligations": []
+      },
+      "evidence": [
+        {
+          "path": "docs/model-audit/model-exclusions-issue-71.md",
+          "revision": "be0e37087303291b3967f8cd19a193ea04cdc150"
+        }
+      ],
+      "reviewed_at": "2026-11-14",
+      "restrictions": [],
+      "block_reason": "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady.",
+      "technical_readiness": "blocked",
+      "technical_blockers": [
+        "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady."
+      ]
+    }
+  ]
+}
