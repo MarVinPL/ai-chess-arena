@@ -387,7 +387,7 @@ class LeagueTests(unittest.TestCase):
    orphan=c.execute("INSERT INTO games(white_model,black_model,result,tournament_id,pairing_id) VALUES(?,?,?,?,?)",
     ('Beta','Alpha','0-1',tournament['id'],999999))
    c.execute("UPDATE tournament_pairings SET game_id=? WHERE id=?",(orphan.lastrowid,second['id']))
-  view=league.tournament_view(tournament['id'],{'tournament_id':tournament['id'],'pairing_id':second['id'],'stage':'generating'})
+  view=league.tournament_view(tournament['id'],{'tournament_id':tournament['id'],'pairing_id':second['id'],'stage':'game_running'})
   self.assertEqual(len(view['standings']),2)
   alpha=next(row for row in view['standings'] if row['name']=='Alpha')
   beta=next(row for row in view['standings'] if row['name']=='Beta')
