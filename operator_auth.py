@@ -504,7 +504,7 @@ def list_operators(db_path):
         ensure_schema(conn)
         rows = conn.execute(
             """SELECT o.operator_id,o.display_name,o.role,o.active,o.created_at,
-            COUNT(CASE WHEN c.revoked_at IS NULL THEN 1 END) AS active_credentials
+            COUNT(CASE WHEN c.credential_id IS NOT NULL AND c.revoked_at IS NULL THEN 1 END) AS active_credentials
             FROM arena_operators o LEFT JOIN arena_webauthn_credentials c
             ON c.operator_id=o.operator_id
             GROUP BY o.operator_id ORDER BY o.created_at,o.display_name"""
