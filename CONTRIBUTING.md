@@ -38,11 +38,13 @@
 - Do not change tournament state, model files, inference runtime, or database contents as part of unrelated repository work.
 - Put follow-up behavior or additional improvements in their own issues and PRs.
 
-## Periodic VPS-to-main drift detection and controlled synchronization
+## Event-driven VPS-to-main drift detection and controlled synchronization
 
-- Periodically perform a read-only comparison of the deployed VPS revision with the current `main`, including repository status, tracked and untracked changes, and the running service/release identity where available.
-- Distinguish an expected deployment lag from uncommitted VPS edits, a divergent checkout, and a deployment that was intentionally held back.
-- When drift is detected, report the exact revisions, ahead/behind commits, affected paths, local modifications, operational risk, and whether an active tournament or inference process could be affected.
+- Do not run calendar-based weekly or other recurring drift checks.
+- Perform a read-only comparison when it is relevant to project work: at the start of a work cycle involving the VPS, before making VPS changes, and after significant merges or deployments when the deployed revision may have become stale.
+- Compare the deployed VPS revision with current `main`, including repository status, tracked and untracked changes, and the running service/release identity where available.
+- Distinguish expected deployment lag from uncommitted VPS edits, a divergent checkout, and a deployment that was intentionally held back.
+- When drift is detected, report the exact revisions, ahead/behind commits, affected paths, local modifications, operational risk, and whether an active tournament or inference process could be affected. Offer a controlled synchronization plan only after detecting drift.
 - Detection is read-only. Never run automatic `git pull`, `reset`, `clean`, `stash`, checkout, deployment, migration, or service restart as part of monitoring.
 - Before any approved synchronization, inspect and preserve all local edits and untracked files, confirm a usable backup/rollback path, and assess active tournament/runtime state. Never overwrite changes merely to make VPS match `main`.
 - Synchronizing VPS code requires explicit user approval. Deployment, service restart, database migration, and tournament-state changes each require their own explicit approval.
