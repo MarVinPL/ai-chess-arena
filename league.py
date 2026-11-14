@@ -427,7 +427,7 @@ def tournament_view(tournament_id,live=None):
        live.get('tournament_id')==tournament_id and live.get('pairing_id')==item['id']):
     status='running'
    item['status']=status
-   item['game_url']=f"/api/games/{item['saved_game_id']}" if valid_saved else None
+   item['game_url']=f"/api/games/{item['saved_game_id']}/pgn" if valid_saved else None
    fixtures.append(item)
   league_fixtures=[x for x in fixtures if x['stage']=='league']
   draft_fixtures=[x for x in fixtures if x['stage']=='draft']
