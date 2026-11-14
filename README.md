@@ -83,3 +83,13 @@ No tournament is started automatically when a model is added. Real inference and
 - `model_allowlist.load_allowlist()` validates each entry against the pinned model manifest, including repository, exact revision, license status, evidence references, and required restrictions. It never writes to the database or changes a tournament.
 - `scripts/check_model_allowlist_sync.py` checks whether the checkout is exactly at `origin/main` and whether the allowlist file has local changes. It is read-only: it does not fetch, merge, reset, or overwrite anything. Refresh Git refs separately before running it.
 - Use `python -m pytest -q tests/test_model_allowlist.py` to test validation, changes, withdrawals, and stale/dirty consumer detection.
+
+### Periodic Hugging Face candidate discovery
+
+- `.github/workflows/huggingface-catalog-sync.yml` runs weekly and supports manual dispatch; it uses the free public GitHub Actions runner and the unauthenticated public Hugging Face metadata API.
+- `scripts/sync_hf_catalog.py` reads only repository metadata (IDs, commit revisions, tags, timestamps and GGUF file names). It never downloads weights, opens model-card contents, runs inference, imports candidates into SQLite, or changes a tournament.
+- The separate `manifests/huggingface-candidates.json` is informational and does not modify the pinned/curated `manifests/huggingface-models.json` or the admission allowlist. Only public text-generation repositories with at least one non-helper `.gguf` file are listed; sensitive, cyber-offensive, and other restricted/dangerous catalog tags are excluded.
+- New and changed candidates stay `unverified` with `review_required=true`. License tags are recorded as source metadata only and never count as license approval, runtime readiness or tournament admission.
+- Revision/metadata changes, repository renames, and unavailable repositories are kept in each entry's history. A partial scan never marks unseen repositories as removed; a complete scan verifies each previously known repository directly before changing its status.
+- The script writes atomically only after a successful API scan. API errors, rate limits, invalid/empty responses and incomplete metadata preserve the last good manifest. The workflow summary records each successful check; a PR is opened/updated only when the candidate manifest actually changes. Every generated PR requires human review before merge.
+- Run `python -m unittest tests.test_hf_catalog_sync -v` for offline fixture-based tests.

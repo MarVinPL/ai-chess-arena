@@ -1,0 +1,51 @@
+name: Hugging Face catalog metadata sync
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: huggingface-catalog-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Discover public GGUF metadata
+        run: python scripts/sync_hf_catalog.py
+
+      - name: Create or update metadata PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/huggingface-catalog-sync
+          delete-branch: true
+          commit-message: 'Odśwież metadane katalogu Hugging Face'
+          title: 'Automatyczna aktualizacja kandydatów Hugging Face'
+          body: |
+            Cotygodniowa synchronizacja wyłącznie publicznych metadanych repozytoriów GGUF.
+
+            - Nowe i zmienione wpisy pozostają `unverified` i wymagają ręcznego przeglądu.
+            - Brak pobierania wag, inferencji, importu do rejestru lub zmian turniejów.
+            - Historia zmian i niedostępności źródeł pozostaje w manifeście.
+            - Raport wykonania znajduje się w podsumowaniu workflow.
+
+            PR wymaga ręcznego przeglądu przed scaleniem.
+          add-paths: manifests/huggingface-candidates.json
