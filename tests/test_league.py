@@ -383,6 +383,18 @@ class LeagueTests(unittest.TestCase):
   self.assertEqual(alpha['repo_id'],'Qwen/Qwen2.5-0.5B-Instruct-GGUF')
   self.assertEqual(alpha['revision'],'a'*40)
 
+ def test_required_model_versions_follow_pending_and_resumable_pairings(self):
+  league.register_model('Gamma',source='https://example.test/gamma.gguf',
+   license='Apache-2.0',license_verified=True,
+   metadata={'filename':'gamma.gguf','sha256':'c'*64,'size_bytes':100})
+  tournament=league.create_round_robin('Model cache lifecycle')
+  with league.connect() as c:
+   c.execute("UPDATE tournament_pairings SET status='completed' WHERE tournament_id=? AND (white_model_id=3 OR black_model_id=3)",(tournament['id'],))
+  self.assertEqual(league.tournament_required_version_ids(tournament['id']),{1,2})
+  with league.connect() as c:
+   c.execute("UPDATE tournament_pairings SET status='running' WHERE tournament_id=? AND id=(SELECT id FROM tournament_pairings WHERE tournament_id=? AND status='pending' LIMIT 1)",(tournament['id'],tournament['id']))
+  self.assertEqual(league.tournament_required_version_ids(tournament['id']),{1,2})
+
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')

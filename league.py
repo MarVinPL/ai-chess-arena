@@ -359,6 +359,19 @@ def tournament_entry_status(tournament_id):
  return entries
 
 
+
+def tournament_required_version_ids(tournament_id):
+ """Versions still needed by pending or resumable games in this tournament."""
+ with connect() as c:
+  rows=c.execute("""SELECT DISTINCT e.version_id
+      FROM tournament_entries e
+      JOIN tournament_pairings p ON p.tournament_id=e.tournament_id
+       AND (p.white_model_id=e.model_id OR p.black_model_id=e.model_id)
+      WHERE e.tournament_id=? AND p.status IN ('pending','running')
+       AND e.version_id IS NOT NULL""",(tournament_id,)).fetchall()
+ return {int(row['version_id']) for row in rows}
+
+
 def _seed_order(size):
  order=[1,2]
  while len(order)<size:
