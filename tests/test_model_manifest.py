@@ -52,6 +52,27 @@ class ModelManifestTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ManifestError):
                 validate_manifest(broken)
 
+    def test_verified_status_requires_revision_bound_audit_evidence(self):
+        payload = load_manifest()
+        self.assertEqual(payload["models"][0]["license_review_status"], "verified_restricted")
+
+        missing = json.loads(json.dumps(payload))
+        missing["models"][0].pop("license_audit")
+        with self.assertRaises(ManifestError):
+            validate_manifest(missing)
+
+        mismatched = json.loads(json.dumps(payload))
+        mismatched["models"][0]["license_audit"]["reviewed_revision"] = "0" * 40
+        with self.assertRaises(ManifestError):
+            validate_manifest(mismatched)
+
+        unknown = json.loads(json.dumps(payload))
+        unknown["models"][0]["license_review_status"] = "approved"
+        with self.assertRaises(ManifestError):
+            validate_manifest(unknown)
+
+        validate_manifest(payload)
+
     def test_draft_head_cannot_be_used_as_the_target_model(self):
         payload = load_manifest()
         broken = json.loads(json.dumps(payload))
@@ -78,7 +99,8 @@ class ModelManifestTests(unittest.TestCase):
             metadata = json.loads(row[7])
             self.assertEqual(metadata["inference"], {"thinking": False})
             self.assertEqual(metadata["revision"], item["revision"])
-            self.assertEqual(metadata["manifest_audit"]["license_review_status"], "review_required")
+            self.assertEqual(metadata["manifest_audit"]["license_review_status"], item["license_review_status"])
+            self.assertEqual(metadata["manifest_audit"]["license_audit"], item.get("license_audit"))
 
     def test_manifest_application_is_atomic_when_registry_entry_is_missing(self):
         payload = load_manifest()
