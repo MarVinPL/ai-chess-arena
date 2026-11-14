@@ -503,7 +503,7 @@ def list_operators(db_path):
 
 
 def revoke_credential(db_path, owner_operator_id, credential_id):
-    if not isinstance(credential_id, str) or not credential_id or len(credential_id) > 256:
+    if not isinstance(credential_id, str) or not credential_id or len(credential_id) > 4096:
         raise OperatorAuthError("Nieprawidłowy identyfikator poświadczenia.")
     now = time.time()
     with _db(db_path) as conn:
