@@ -651,26 +651,52 @@ def tournament_loop(tournament_id):
                             tournament_id, exc.model_id, failed_player['model_sha256'],
                             failed_player['draft_sha256'], failed_player['base_inference'],
                             exc.budget_observations)
-                    raise
+                    try:
+                        decision = adjudication.adjudicate_failure(
+                            exc.fen, exc.move_records, exc.color, exc.uci_attempts)
+                    except Exception as analysis_error:
+                        decision = {'status': 'unresolved', 'reason': 'adjudication_exception',
+                                    'error': f'{type(analysis_error).__name__}: {analysis_error}'[:500]}
+                    failure = _persist_failed_game(
+                        tournament_id, pairing, white, black, game_started, exc, decision)
+                    if not failure['adjudicated']:
+                        set_live('game_failed', 'Partia nierozstrzygnięta po awarii',
+                                 white=white['name'], black=black['name'], pairing_id=pairing['id'],
+                                 game_id=failure['game_id'], result='failed',
+                                 adjudication_status='unresolved',
+                                 adjudication_reason=decision.get('reason'),
+                                 failure_reason=str(exc)[:500])
+                        raise
+                    result = {'status': 'adjudicated', **failure}
             finally:
                 tournament_runtime.stop()
             if result['status'] == 'stopped':
                 break
-            game_ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            with sqlite3.connect(DB) as db:
-                cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
-                     len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
-                     json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
-                game_id = cur.lastrowid
-            with league.connect() as c:
-                c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?", (game_id, pairing['id']))
+            if result.get('adjudicated'):
+                game_id = result['game_id']
+            else:
+                game_ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                with sqlite3.connect(DB) as db:
+                    cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id,move_times_json,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (game_started, game_ended, white['name'], black['name'], result['result'], result['pgn'],
+                         len(result['moves']), 0, result['avg_move_seconds'], tournament_id, pairing['id'],
+                         json.dumps(result['move_times']), json.dumps(result['moves'], ensure_ascii=False)))
+                    game_id = cur.lastrowid
+                with league.connect() as c:
+                    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?", (game_id, pairing['id']))
             if pairing.get('stage') == 'draft':
                 league.record_draft_result(pairing['id'], result['result'])
                 champion = league.draft_champion(tournament_id)
                 if champion:
                     set_live('draft_champion', f'Zwycięzca draftu: {players[champion]["name"]}', tournament_id=tournament_id, champion=players[champion]['name'])
-            set_live('game_finished',f'Partia zakończona: {result["result"]}', white=white['name'], black=black['name'], result=result['result'], game_id=game_id, move_count=len(result['moves']), fen=result['fen'], moves=result['moves'], generation_started_at=None, stage=pairing.get('stage','league'))
+            set_live('game_adjudicated' if result.get('adjudicated') else 'game_finished',
+                     ('Partia rozstrzygnięta analizą lokalnego silnika: ' if result.get('adjudicated') else 'Partia zakończona: ')+result['result'],
+                     white=white['name'], black=black['name'], result=result['result'],
+                     game_id=game_id, move_count=len(result['moves']), fen=result['fen'],
+                     moves=result['moves'], generation_started_at=None,
+                     stage=pairing.get('stage','league'),
+                     adjudication_status='adjudicated' if result.get('adjudicated') else 'not_applicable',
+                     adjudication_reason=(result.get('adjudication') or {}).get('reason'))
         with league.connect() as c:
             pending = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
             status = 'stopped' if tournament_stop_event.is_set() else ('completed' if pending == 0 else 'failed')
