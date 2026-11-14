@@ -390,7 +390,10 @@ class SequentialChessRunner:
                 raise ValueError('Numer półruchu nie zgadza się z historią checkpointu; wznowienie zablokowane')
             if move not in board.legal_moves:
                 raise ValueError('Checkpoint zawiera nielegalną historię ruchów; wznowienie zablokowane')
+            expected_san = board.san(move)
             board.push(move)
+            if saved.get('san') and saved['san'] != expected_san:
+                raise ValueError('Zapis SAN nie zgadza się z ruchem UCI checkpointu; wznowienie zablokowane')
             if saved.get('fen') and saved['fen'] != board.fen():
                 raise ValueError('Pozycja po ruchu nie zgadza się z historią checkpointu; wznowienie zablokowane')
             move_records.append(dict(saved))
