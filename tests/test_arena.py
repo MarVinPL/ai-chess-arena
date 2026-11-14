@@ -76,7 +76,7 @@ class ArenaSmokeTests(unittest.TestCase):
         response_record = __import__('json').loads(server.MODEL_RESPONSES_LOG.read_text(encoding='utf-8').splitlines()[-1])
         event_record = __import__('json').loads(server.LIVE_EVENTS_LOG.read_text(encoding='utf-8').splitlines()[-1])
         self.assertEqual(response_record['response'], 'e2e4')
-        self.assertEqual(response_record['model'], 'TestModel.gguf')
+        self.assertEqual(response_record['model'], 'Registry Model A')
         self.assertEqual(event_record['stage'], 'move_generated')
         self.assertEqual(event_record['proposed_move'], 'e2e4')
         self.assertEqual(event_record['white'], 'Registry Model A')
