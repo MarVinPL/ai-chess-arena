@@ -68,10 +68,14 @@ def _prune_jsonl(path, retention_seconds, max_entries):
         except (ValueError, TypeError, json.JSONDecodeError):
             continue
     kept = kept[-max_entries:]
-    content = '\n'.join(kept) + ('\n' if kept else '')
+    content = '
+'.join(kept) + ('
+' if kept else '')
     if len(content.encode('utf-8')) > LOG_MAX_BYTES:
         kept = kept[-max_entries // 4:]
-        content = '\n'.join(kept) + ('\n' if kept else '')
+        content = '
+'.join(kept) + ('
+' if kept else '')
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(content, encoding='utf-8')
     temporary.replace(path)
@@ -81,7 +85,8 @@ def _append_jsonl(path, record, max_entries, retention_seconds):
     """Append a diagnostic record and enforce age/count/size retention."""
     LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as stream:
-        stream.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '\n')
+        stream.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '
+')
     _prune_jsonl(path, retention_seconds, max_entries)
 
 
@@ -300,8 +305,11 @@ def ask_model(model, b):
     legal = [m.uci() for m in b.legal_moves]
     prompt = (
         'You are playing chess. Select exactly one move from the LEGAL MOVES list. '
-        'Return only the UCI move, with no explanation.\n'
-        f'FEN: {b.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:'
+        'Return only the UCI move, with no explanation.
+'
+        f'FEN: {b.fen()}
+LEGAL MOVES: {", ".join(legal)}
+MOVE:'
     )
     payload = json.dumps({
         'messages': [{'role': 'user', 'content': prompt}],
@@ -1549,7 +1557,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/export/pgn':
             with sqlite3.connect(DB) as c:
                 rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
-            body = ('\n\n'.join(row[0].strip() for row in rows if row[0].strip()) + ('\n' if rows else '')).encode('utf-8')
+            body = ('
+
+'.join(row[0].strip() for row in rows if row[0].strip()) + ('
+' if rows else '')).encode('utf-8')
             self.send_response(200); self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
             self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.pgn"')
             self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -1639,11 +1650,15 @@ class Handler(BaseHTTPRequestHandler):
                     token = payload.get('token')
                     if not isinstance(token, str):
                         raise operator_auth.OperatorAuthError('Nieprawidłowy token rejestracyjny.')
-                    operator_auth.consume_rate_limit(DB, 'register-options:' + source_ip, 120)\n                    operator_auth.consume_rate_limit(DB, 'register-token:' + token, 6)
+                    operator_auth.consume_rate_limit(DB, 'register-options:' + source_ip, 120)
+                    operator_auth.consume_rate_limit(DB, 'register-token:' + token, 6)
                     result = operator_auth.begin_registration(DB, auth_config, token)
                 elif path == '/api/operator-auth/register/verify':
                     operator_auth.consume_rate_limit(
-                        DB, 'register-verify-source:' + source_ip, 120,\n                    )\n                    operator_auth.consume_rate_limit(\n                        DB, 'register-verify-ceremony:' + str(payload.get('ceremony_id', '')), 8,
+                        DB, 'register-verify-source:' + source_ip, 120,
+                    )
+                    operator_auth.consume_rate_limit(
+                        DB, 'register-verify-ceremony:' + str(payload.get('ceremony_id', '')), 8,
                     )
                     result = operator_auth.finish_registration(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
@@ -1655,7 +1670,10 @@ class Handler(BaseHTTPRequestHandler):
                     credential = payload.get('credential') if isinstance(payload.get('credential'), dict) else {}
                     credential_id = str(credential.get('rawId') or credential.get('id') or '')
                     operator_auth.consume_rate_limit(
-                        DB, 'login-verify-source:' + source_ip, 120,\n                    )\n                    operator_auth.consume_rate_limit(\n                        DB, 'login-verify-credential:' + credential_id, 12,
+                        DB, 'login-verify-source:' + source_ip, 120,
+                    )
+                    operator_auth.consume_rate_limit(
+                        DB, 'login-verify-credential:' + credential_id, 12,
                     )
                     result = operator_auth.finish_authentication(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
