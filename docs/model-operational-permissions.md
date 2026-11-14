@@ -52,3 +52,18 @@ Still required before a real model test can run:
 ## Database
 
 `model_permissions.ensure_schema(connection)` creates only the two permission audit tables. It is safe to call repeatedly. No existing model or tournament records are backfilled or promoted.
+
+
+## Transactional job ledger and pre-start authorization (implementation slice)
+
+`model_job_broker.py` adds a separate job ledger and evaluation-metrics table. It is deliberately not wired to an HTTP endpoint or a privileged service yet.
+
+- Job creation requires an active, exact-version `TEST_ONLY` or `EVALUATION` grant, explicit one-operation confirmation, an expected SHA-256, and a positive host-capacity callback.
+- Immediately before a start plan is issued, the ledger rechecks the active scope, artifact SHA-256 and byte size, approved limits, and current host-capacity callback.
+- The one-operation consent is consumed atomically with the queued → starting transition. A second claim is rejected.
+- The worker executable is a fixed constant; panel/API input cannot supply a command, systemd property, or arbitrary argument vector.
+- The worker output directory is constrained to the job's private systemd runtime directory.
+- Job lifecycle events and evaluation metrics are stored in separate tables. Metric writes are accepted only for `EVALUATION` jobs; no official tournament/result/rating table is referenced.
+- Start-plan generation is side-effect free: it returns an argv list and explicitly reports `side_effects_performed=false`. It does not call `systemd-run`, create a process, or claim that a job is running.
+
+**Not yet implemented:** a privileged launcher that accepts only these validated plans, authenticated actor propagation from the existing panel session, cancellation of a live systemd unit, stale-job recovery, worker executable/package, and disposable-systemd integration tests. Until those exist and receive security review, no real model job can be started through this code. The actor parameter is an interface contract for a future trusted caller, not proof of authentication in this slice.
