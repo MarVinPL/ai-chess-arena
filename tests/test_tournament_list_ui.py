@@ -19,6 +19,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("tournament-status", self.renderer)
         self.assertIn("tournament-card__fields", self.renderer)
         self.assertIn("addField(fields,'Format'", self.renderer)
+        self.assertIn("addField(fields,'Uczestnicy',Number(t.players??0))", self.renderer)
         self.assertIn("addField(fields,'Postęp partii'", self.renderer)
         self.assertIn("addField(fields,'Awans do draftu'", self.renderer)
         self.assertIn("addField(fields,'Checkpoint'", self.renderer)
