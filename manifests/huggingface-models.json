@@ -15,14 +15,26 @@
       "source_path": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
       "size_bytes": 491400032,
       "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
-      "revision": "6dd44a1fb35d11b5d1b28902876ce3cc9e882d0e",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
       "license": "apache-2.0",
-      "license_review_status": "review_required",
-      "license_notes": "The exact GGUF blob is pinned, but the README/model-card file is absent at this artifact revision. The current repository card and pinned upstream Qwen2.5 LICENSE do not establish all terms for this exact derived artifact; review remains required.",
-      "license_evidence": "Pinned GGUF blob metadata; current derived-repository card; pinned official Qwen2.5 upstream LICENSE",
-      "license_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/README.md",
-      "download_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/6dd44a1fb35d11b5d1b28902876ce3cc9e882d0e/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-      "license_terms_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE"
+      "license_review_status": "verified_permissive",
+      "license_notes": "The exact GGUF blob is unchanged at the reviewed repository snapshot (LFS SHA-256 matches the registry). The official Qwen GGUF README and LICENSE are present at the same pinned revision; the README identifies Qwen2.5-0.5B-Instruct as the base model. The pinned upstream base-model LICENSE is Apache-2.0. Audit status only; no owner approval to download, run or distribute.",
+      "license_evidence": "Pinned official Qwen GGUF README and LICENSE, exact LFS blob SHA-256, and pinned official Qwen2.5 base-model LICENSE",
+      "license_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/README.md",
+      "download_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "license_terms_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE",
+      "license_audit": {
+        "status": "verified_permissive",
+        "reviewed_at": "2026-11-14",
+        "reviewed_revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+        "report": "docs/model-audit/license-review-2026-11-14.md",
+        "evidence": [
+          "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/README.md",
+          "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE",
+          "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE"
+        ],
+        "summary": "The pinned official Qwen GGUF README identifies Qwen2.5-0.5B-Instruct as the base model and declares Apache-2.0. The pinned GGUF repository contains the full Apache License 2.0 text. The LFS SHA-256 of the exact GGUF file matches the registry hash; the pinned upstream base-model LICENSE also declares Apache-2.0. Audit status only, not owner permission to download or use."
+      }
     },
     {
       "model_id": 2,
