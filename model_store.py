@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib, os, re, shutil, sqlite3, stat, threading, urllib.request
 from pathlib import Path
 import league
+from model_exclusions import is_excluded_model_identity
 
 ROOT = Path(__file__).resolve().parent
 MANAGED_DIR = ROOT / 'managed-models'
@@ -41,6 +42,8 @@ def _download_version_locked(version_id: int, url: str, filename: str, expected_
                         (version_id,)).fetchone()
         if row is None or not row['active']:
             raise ValueError('Nieznana lub nieaktywna wersja modelu')
+        if is_excluded_model_identity(name=row['name'], source=row['source'], metadata=row['metadata_json']):
+            raise ValueError('Pobieranie zablokowane: model jest trwale wyłączony z AI Chess Arena (Issue #71)')
         if row['license_verified'] != 1:
             raise ValueError('Licencja nie jest zatwierdzona w rejestrze')
         if row['source'] and row['source'] != url:
@@ -111,6 +114,8 @@ def download_draft_version(version_id: int, url: str, filename: str, expected_sh
         row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
         if row is None or row['license_verified'] != 1:
             raise ValueError('Wersja modelu nie ma jawnie zatwierdzonej licencji')
+        if is_excluded_model_identity(source=row['source'], metadata=row['metadata_json']):
+            raise ValueError('Pobieranie draft zablokowane: model jest wyłączony z AI Chess Arena (Issue #71)')
         if (row['draft_filename'], row['draft_sha256'], row['draft_size_bytes'], row['draft_download_url']) != (filename, expected_sha256, expected_size, url):
             raise ValueError('Manifest draft nie zgadza się z przypiętą konfiguracją zawodnika')
         if row['source'].startswith('https://huggingface.co/') and not url.startswith(row['source'].rstrip('/') + '/resolve/'):

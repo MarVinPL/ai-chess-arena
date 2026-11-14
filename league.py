@@ -1,4 +1,5 @@
 import hashlib,json,re,shutil,sqlite3,time,math
+from model_exclusions import is_excluded_model_identity
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 DB=ROOT/'arena.sqlite3'
@@ -164,6 +165,8 @@ def record_token_budget_observations(tournament_id, model_id, model_sha256, draf
 
 def register_model(name,filename=None,source='',license='',metadata=None,format='PURE_AI',license_verified=False):
  if not name or format not in ('PURE_AI','AI_ENGINE'): raise ValueError('Nieprawidłowa nazwa lub format')
+ if is_excluded_model_identity(name=name, source=source, metadata=metadata):
+  raise ValueError('Model jest trwale wyłączony z AI Chess Arena (Issue #71)')
  if license_verified:
   normalized_license=(license or '').strip().lower()
   if not (source or '').strip().lower().startswith('https://'):
@@ -252,7 +255,7 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   # represented explicitly and blocks execution later; it never hides a player.
   candidates=c.execute('''SELECT m.id,m.name,
       v.id AS version_id,v.sha256 AS model_sha256,
-      COALESCE(v.draft_sha256,'') AS draft_sha256,v.metadata_json
+      COALESCE(v.draft_sha256,'') AS draft_sha256,v.metadata_json,v.source
       FROM league_models m
       LEFT JOIN model_versions v ON v.id=(
        SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id)
@@ -260,6 +263,10 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   if len(candidates)<2:
    raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
   ms=[dict(row) for row in candidates]
+  ms=[model for model in ms if not is_excluded_model_identity(
+      name=model.get('name',''), source=model.get('source',''), metadata=model.get('metadata_json'))]
+  if len(ms)<2:
+   raise ValueError('Po wykluczeniu niedopuszczonych modeli potrzeba co najmniej dwóch aktywnych wpisów')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
   for model in ms:
@@ -291,6 +298,7 @@ def tournament_entry_status(tournament_id):
    metadata=json.loads(item.get('metadata_json') or '{}')
   except (TypeError,json.JSONDecodeError):
    metadata={}
+  excluded=is_excluded_model_identity(name=item.get('name',''), source=item.get('source',''), metadata=metadata)
   revision=metadata.get('revision')
   download_url=metadata.get('download_url') or ''
   is_hf_source=isinstance(item.get('source'),str) and item['source'].startswith('https://huggingface.co/')
@@ -329,6 +337,7 @@ def tournament_entry_status(tournament_id):
   draft_file_available=bool(item.get('draft_filename') and item.get('draft_managed_copy')==1 and
                             item.get('draft_status')=='downloaded' and
                             (MODEL_DIR/item['draft_filename']).is_file())
+  if excluded: blockers.append('model jest trwale wyłączony z AI Chess Arena (Issue #71)')
   if item.get('active')!=1: blockers.append('wpis rejestru jest nieaktywny')
   if not item.get('version_id'): blockers.append('brak wersji modelu')
   if not manifest_ready: blockers.append('niekompletny lub nieprzypięty manifest')
@@ -336,14 +345,14 @@ def tournament_entry_status(tournament_id):
   if not license_verified: blockers.append('licencja niezatwierdzona')
   entries.append({
    'model_id':item['model_id'],'name':item['name'],
-   'active_registry_entry':item.get('active')==1,'tournament_entrant':True,
+   'active_registry_entry':item.get('active')==1,'tournament_entrant':not excluded,
    'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
    'license_verified':license_verified,'local_file_available':local_file_available,
    'local_file_required_before_start':False,
-   'download_on_demand':manifest_ready and license_verified and not local_file_available,
+   'download_on_demand':not excluded and manifest_ready and license_verified and not local_file_available,
    'draft_manifest_ready':draft_manifest_ready,
    'draft_file_available':draft_file_available,
-   'draft_download_on_demand':draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
+   'draft_download_on_demand':not excluded and draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
    'ready':not blockers,'blockers':blockers
   })
  return entries

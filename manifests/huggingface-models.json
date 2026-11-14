@@ -268,7 +268,16 @@
         }
       ],
       "download_url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
-      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0"
+      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "arena_admission": {
+        "status": "excluded",
+        "issue": 71,
+        "download_allowed": false,
+        "runtime_allowed": false,
+        "allowlist_allowed": false,
+        "tournament_allowed": false,
+        "reason": "Wpis informacyjny wyłączony z AI Chess Arena; deklaracja licencji repozytorium pochodnego nie stanowi zatwierdzenia."
+      }
     },
     {
       "model_id": 10,
@@ -284,7 +293,16 @@
       "license_evidence": "Hugging Face README license declaration",
       "license_url": "https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/blob/main/README.md",
       "download_url": "https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/resolve/be0e37087303291b3967f8cd19a193ea04cdc150/JonathanColetti-Qwen3.8-27B-Uncensored.Q4_K_S.gguf",
-      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0"
+      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "arena_admission": {
+        "status": "excluded",
+        "issue": 71,
+        "download_allowed": false,
+        "runtime_allowed": false,
+        "allowlist_allowed": false,
+        "tournament_allowed": false,
+        "reason": "Wpis informacyjny wyłączony z AI Chess Arena; deklaracja licencji repozytorium pochodnego nie stanowi zatwierdzenia."
+      }
     }
   ]
 }
