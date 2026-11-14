@@ -298,6 +298,20 @@ class OperatorAuthStorageTests(unittest.TestCase):
         self.assertEqual(events[0]["actor_operator_id"], "owner-id")
         self.assertEqual(events[0]["target_operator_id"], "operator-id")
 
+
+    def test_operator_inventory_counts_zero_credentials_correctly(self):
+        now = operator_auth.time.time()
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("operator-id", "Operator", "operator", b"o" * 32, now),
+            )
+        inventory = operator_auth.list_operators(self.db)
+        self.assertEqual(inventory[0]["active_credentials"], 0)
+        self.assertEqual(inventory[0]["credentials"], [])
+
+
     def test_owner_cannot_suspend_self_or_last_active_owner(self):
         now = operator_auth.time.time()
         with operator_auth._db(self.db) as conn:
