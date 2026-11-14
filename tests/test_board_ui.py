@@ -38,6 +38,19 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertRegex(HTML, r'@media\(max-width:760px\)')
         self.assertIn('overflow-x:hidden', HTML)
 
+    def test_piece_inventory_is_above_board_and_updates_for_both_views(self):
+        self.assertIn('class="piece-count-strip"', HTML)
+        self.assertIn('id="white-piece-types"', HTML)
+        self.assertIn('id="black-piece-types"', HTML)
+        self.assertIn('id="white-piece-summary"', HTML)
+        self.assertIn('id="black-piece-summary"', HTML)
+        self.assertIn("function pieceInventory(fen,color)", HTML)
+        self.assertIn("function renderPieceInventory(fen)", HTML)
+        self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
+        self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
+        self.assertIn('aria-live="polite"', HTML)
+        self.assertIn(".piece-count-strip{grid-template-columns:minmax(0,1fr)}", HTML)
+
     def test_material_and_registry_name_rendering_are_unchanged(self):
         self.assertIn('function materialAdvantage(fen)', HTML)
         self.assertIn('function formatMaterialScore(score)', HTML)
