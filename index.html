@@ -238,6 +238,7 @@ function renderTournaments(rows){
   addField(fields,'Format',t.format||'—');
   addField(fields,'Postęp partii',completed+' / '+planned);
   addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
+  if(t.status==='stopped'||t.status==='running'||t.resume_blocked)addField(fields,'Checkpoint',t.resume_blocked?'brak · wznowienie zablokowane — wymagany przegląd':(t.has_checkpoint?'zapisany · gotowy do wznowienia':'brak aktywnej partii do odtworzenia'));
   card.appendChild(fields);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
@@ -251,7 +252,7 @@ function renderTournaments(rows){
     }catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}
    };actions.appendChild(check);
   }
-  if(['planned','stopped','failed'].includes(t.status)){
+  if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked){
    const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';
    start.onclick=async()=>{
     if(!confirm('Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;
@@ -262,8 +263,8 @@ function renderTournaments(rows){
   if(t.status==='running'){
    const stop=document.createElement('button');stop.className='stop';stop.textContent='Zatrzymaj turniej';
    stop.onclick=async()=>{
-    if(!confirm('Zatrzymać turniej po zakończeniu bieżącego ruchu?'))return;
-    try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Wysłano żądanie zatrzymania turnieju.';await loadLeague()}
+    if(!confirm('Bezpiecznie zatrzymać turniej? Ostatnia zweryfikowana pozycja zostanie zapisana i będzie można wznowić od tego miejsca.'))return;
+    try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent=d.status==='stop_requested'?'Żądanie zatrzymania przyjęte. Trwa zapis ostatniej zweryfikowanej pozycji.':'Turniej nie jest obecnie uruchomiony.';await loadLeague()}
     catch(e){$('league-message').textContent='Nie udało się zatrzymać: '+e}
    };actions.appendChild(stop);
   }
