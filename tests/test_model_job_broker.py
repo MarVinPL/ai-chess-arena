@@ -88,7 +88,7 @@ class ModelJobBrokerTests(unittest.TestCase):
             reason="cofnięcie zgody")
         with self.assertRaises(PermissionError):
             claim_job_for_start(
-                self.db, job_id=job["job_id"], actor="test-broker",
+                self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
                 model_root=self.root)
 
     def test_artifact_change_after_queue_blocks_claim(self):
@@ -126,7 +126,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_job_lifecycle_rejects_wrong_unit_and_invalid_transition(self):
         job = self._create()
         plan = claim_job_for_start(
-            self.db, job_id=job["job_id"], actor="test-broker",
+            self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
             model_root=self.root)
         with self.assertRaisesRegex(ValueError, "jednostka"):
             mark_job_running(self.db, job_id=job["job_id"],
