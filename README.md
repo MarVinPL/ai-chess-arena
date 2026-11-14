@@ -87,3 +87,11 @@ No tournament is started automatically when a model is added. Real inference and
 ### Weekly Hugging Face candidate catalog sync
 
 The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` discovers public Hugging Face GGUF repositories tagged for text-generation/conversational tasks and separately verifies the eight already-pinned repositories for model IDs 1–8. New candidates are added only to the informational `manifests/huggingface-candidates.json` catalog with `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`. It does not change the tournament admission allowlist. The workflow runs weekly and manually, downloads no model artifacts, performs no inference, and creates a draft PR only when tracked metadata changes. Excluded identities and unsafe categories are filtered fail-closed. See `docs/huggingface-catalog-sync.md`.
+
+## Safe tournament stop and resume
+
+**Operational rule (Issue #98): a tournament may be stopped at any time, but its complete, consistent state must be durably saved before the runtime is stopped. It must then be resumable from the exact saved point rather than restarted from the beginning.**
+
+The implementation must preserve the tournament configuration and entrants, schedule and pending-game order, every game's status and complete move history/position, results, current side to move, round/game progress, and any runner state needed to resume safely. If stop is requested while a model is generating a move, the in-flight unvalidated response must not be committed as a move; resume from the last verified position and retry generation for that same position.
+
+The checkpoint must be atomic, integrity-checked, and confirmed durable before stopping owned runtime processes. Stop/resume operations must be idempotent and prevent duplicate games, moves, results, or Elo updates. The panel/API must expose the stopped state and a resume action. Preserve existing tournament data and database compatibility; do not reset or discard existing state to implement this feature. All code changes belong on a dedicated branch and PR, with backup and regression testing before production deployment.
