@@ -1595,6 +1595,7 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError('Żądanie musi wskazywać dokładne repozytorium i rewizję z allowlisty.')
                             result = model_permissions.request_permission(
                                 c, model_id=model_id, repo_id=repo_id, revision=revision,
+                                artifact_sha256=payload.get('artifact_sha256'),
                                 scope=payload.get('scope'), confirm=payload.get('confirm') is True,
                                 reason=payload.get('reason', ''), snapshot=entry)
                         else:
