@@ -94,6 +94,7 @@ class PerGameStorageTests(unittest.TestCase):
         target_sha=hashlib.sha256(target_payload).hexdigest(); draft_sha=hashlib.sha256(draft_payload).hexdigest()
         paired=league.register_model('Alpha + MTP',source='https://huggingface.co/example/alpha',license='Apache-2.0',license_verified=True,
             metadata={'filename':'alpha-pair.gguf','sha256':target_sha,'size_bytes':len(target_payload),
+                'revision':'a'*40,'source_path':'alpha-pair.gguf','download_url':'https://huggingface.co/example/alpha/resolve/'+'a'*40+'/alpha-pair.gguf',
                 'draft_model':{'filename':'alpha-draft.gguf','sha256':draft_sha,'size_bytes':len(draft_payload),
                     'download_url':'https://huggingface.co/example/alpha/resolve/main/alpha-draft.gguf','source_path':'alpha-draft.gguf'}})
         player={'name':'Alpha + MTP','version_id':paired['versions'][0]['id']}
