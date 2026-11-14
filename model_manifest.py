@@ -15,7 +15,7 @@ from urllib.parse import quote
 MANIFEST_PATH = Path(__file__).resolve().parent / "manifests" / "huggingface-models.json"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
-_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\\.gguf$", re.I)
+_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf$", re.I)
 _ALLOWED_LICENSES = {"apache-2.0", "llama3.1", "llama3.2", "cc-by-nc-4.0"}
 
 
