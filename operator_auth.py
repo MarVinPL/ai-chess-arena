@@ -432,7 +432,7 @@ def finish_authentication(db_path, config, ceremony_id, credential):
 
 def consume_rate_limit(db_path, bucket, limit, window_seconds=RATE_LIMIT_WINDOW_SECONDS, now=None):
     """Atomically count a bounded auth attempt; bucket values are never stored raw."""
-    if not isinstance(bucket, str) or not bucket or len(bucket) > 512:
+    if not isinstance(bucket, str) or not bucket or len(bucket) > 4096:
         raise OperatorAuthError("Nieprawidłowy klucz limitu prób.")
     if not isinstance(limit, int) or limit < 1 or not isinstance(window_seconds, int) or window_seconds < 1:
         raise OperatorAuthError("Nieprawidłowa konfiguracja limitu prób.")
