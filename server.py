@@ -6,6 +6,7 @@ import chess, chess.pgn
 import league
 import model_store
 import engine_runner
+import adjudication
 import passkey_test
 
 ROOT = Path(__file__).resolve().parent
@@ -168,11 +169,77 @@ def db_init():
         for answer_id, question in c.execute('SELECT id,question FROM passkey_test_answers WHERE question_fingerprint IS NULL').fetchall():
             c.execute('UPDATE passkey_test_answers SET question_fingerprint=? WHERE id=?',
                       (passkey_test.question_fingerprint(question),answer_id))
-        for name, declaration in (('tournament_id', 'INTEGER'), ('pairing_id', 'INTEGER'),
-                                  ('move_times_json', "TEXT NOT NULL DEFAULT '[]'"),
-                                  ('inference_metadata_json', "TEXT NOT NULL DEFAULT '{}'")):
+        for name, declaration in (
+            ('tournament_id', 'INTEGER'), ('pairing_id', 'INTEGER'),
+            ('move_times_json', "TEXT NOT NULL DEFAULT '[]'"),
+            ('inference_metadata_json', "TEXT NOT NULL DEFAULT '{}'"),
+            ('adjudication_status', "TEXT NOT NULL DEFAULT 'not_applicable'"),
+            ('adjudication_json', "TEXT NOT NULL DEFAULT '{}'"),
+            ('failure_reason', 'TEXT'), ('failure_fen', 'TEXT'),
+            ('failure_color', 'TEXT'), ('failure_model_id', 'INTEGER')
+        ):
             if name not in cols:
                 c.execute(f'ALTER TABLE games ADD COLUMN {name} {declaration}')
+
+
+def _failure_pgn(white_name, black_name, move_records, result, termination):
+    game = chess.pgn.Game()
+    game.headers['Event'] = 'Local AI Chess Arena'
+    game.headers['White'] = white_name
+    game.headers['Black'] = black_name
+    game.headers['Result'] = result
+    game.headers['Termination'] = termination
+    node = game
+    for record in move_records:
+        move = chess.Move.from_uci(record['uci'])
+        if move not in node.board().legal_moves:
+            raise ValueError('Historia awarii zawiera nielegalny ruch')
+        node = node.add_variation(move)
+    return str(game)
+
+
+def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc, decision):
+    """Persist the failure snapshot and the optional adjudicated result exactly once."""
+    adjudicated = decision.get('status') == 'adjudicated'
+    result = ('1-0' if decision.get('winner_color') == 'white' else '0-1') if adjudicated else 'failed'
+    winner_id = (white['model_id'] if decision.get('winner_color') == 'white'
+                 else black['model_id']) if adjudicated else None
+    pairing_status = 'completed' if adjudicated else 'failed'
+    moves = list(getattr(exc, 'move_records', []) or [])
+    times = list(getattr(exc, 'move_times', []) or [])
+    pgn_result = result if adjudicated else '*'
+    pgn = _failure_pgn(white['name'], black['name'], moves, pgn_result,
+                       'Adjudication' if adjudicated else 'Unresolved failure')
+    ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    average = round(sum(times) / len(times), 4) if times else 0.0
+    attempts = list(getattr(exc, 'uci_attempts', []) or [])
+    illegal_attempts = sum(1 for item in attempts
+                           if item.get('classification') == 'illegal_uci')
+    with sqlite3.connect(DB) as db:
+        cur = db.execute("""INSERT INTO games(
+            started_at,ended_at,white_model,black_model,result,pgn,move_count,
+            illegal_attempts,avg_move_seconds,tournament_id,pairing_id,
+            move_times_json,inference_metadata_json,adjudication_status,
+            adjudication_json,failure_reason,failure_fen,failure_color,failure_model_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (game_started, ended, white['name'], black['name'], result, pgn,
+             len(moves), illegal_attempts, average, tournament_id, pairing['id'],
+             json.dumps(times), json.dumps(moves, ensure_ascii=False),
+             'adjudicated' if adjudicated else 'unresolved',
+             json.dumps(decision, ensure_ascii=False), str(exc)[:1000],
+             getattr(exc, 'fen', None), getattr(exc, 'color', None),
+             getattr(exc, 'model_id', None)))
+        game_id = cur.lastrowid
+    with league.connect() as db:
+        db.execute("""UPDATE tournament_pairings
+            SET status=?,game_id=?,winner_model_id=? WHERE id=?""",
+            (pairing_status, game_id, winner_id, pairing['id']))
+    if adjudicated and pairing.get('stage') == 'draft':
+        league.record_draft_result(pairing['id'], result)
+    return {'game_id': game_id, 'result': result, 'winner_model_id': winner_id,
+            'adjudicated': adjudicated, 'adjudication': decision,
+            'moves': moves, 'move_times': times, 'fen': getattr(exc, 'fen', None),
+            'avg_move_seconds': average, 'pgn': pgn}
 
 
 def llm_health():
