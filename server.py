@@ -377,6 +377,13 @@ def _registry_display_name_for_runtime_model(model_label, names_by_filename):
     return names_by_filename.get(Path(str(model_label)).name)
 
 
+def _registry_runtime_message(message, names_by_filename):
+    """Replace any runtime filename embedded in status text with its registry name."""
+    for filename, display_name in names_by_filename.items():
+        message = message.replace(filename, display_name)
+    return message
+
+
 def _resolve_pairing_players(players, pairing):
     """Resolve the exact registry entrants assigned to the white/black sides."""
     white_id = pairing.get('white_model_id')
@@ -432,6 +439,7 @@ def tournament_loop(tournament_id):
             if runtime_label:
                 fields['model'] = _registry_display_name_for_runtime_model(
                     runtime_label, registry_names_by_filename)
+            message = _registry_runtime_message(message, registry_names_by_filename)
             if runtime_context['white'] and runtime_context['black']:
                 fields.setdefault('white', runtime_context['white'])
                 fields.setdefault('black', runtime_context['black'])
