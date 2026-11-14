@@ -64,6 +64,7 @@ Still required before a real model test can run:
 - The worker executable is a fixed constant; panel/API input cannot supply a command, systemd property, or arbitrary argument vector. The plan also passes the approved SHA-256 to the worker, which must independently verify the opened artifact immediately before loading it to close the path-replacement race.
 - The worker output directory is constrained to the job's private systemd runtime directory.
 - Job lifecycle events and evaluation metrics are stored in separate tables. Metric writes are accepted only for `EVALUATION` jobs; no official tournament/result/rating table is referenced.
+- `starting` → `running` requires an authoritative positive status for the exact systemd unit; `succeeded`/`failed` and `cancelled` require an authoritative inactive status. Unknown systemd state never advances the ledger.
 - Start-plan generation is side-effect free: it returns an argv list and explicitly reports `side_effects_performed=false`. It does not call `systemd-run`, create a process, or claim that a job is running.
 
 **Not yet implemented:** a privileged launcher that accepts only these validated plans, authenticated actor propagation from the existing panel session, cancellation of a live systemd unit, stale-job recovery, worker executable/package, and disposable-systemd integration tests. Until those exist and receive security review, no real model job can be started through this code. The actor parameter is an interface contract for a future trusted caller, not proof of authentication in this slice.
