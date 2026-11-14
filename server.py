@@ -1283,7 +1283,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        raw_path = path
+        raw_path = self.path
         path = _route_path(raw_path)
         if path == '/api/models/random':
             try:
@@ -1517,7 +1517,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
         else: self.send_error(404)
     def do_POST(self):
-        path = _route_path(path)
+        path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
