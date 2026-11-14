@@ -643,29 +643,33 @@ def tournament_loop(tournament_id):
                         game_white, game_black, tournament_stop_event,
                         progress=publish_move)
                 except engine_runner.RunnerError as exc:
-                    failed_player = players.get(exc.model_id)
-                    if failed_player and exc.budget_observations:
-                        league.record_token_budget_observations(
-                            tournament_id, exc.model_id, failed_player['model_sha256'],
-                            failed_player['draft_sha256'], failed_player['base_inference'],
-                            exc.budget_observations)
-                    try:
-                        decision = adjudication.adjudicate_failure(
-                            exc.fen, exc.move_records, exc.color, exc.uci_attempts)
-                    except Exception as analysis_error:
-                        decision = {'status': 'unresolved', 'reason': 'adjudication_exception',
-                                    'error': f'{type(analysis_error).__name__}: {analysis_error}'[:500]}
-                    failure = _persist_failed_game(
-                        tournament_id, pairing, white, black, game_started, exc, decision)
-                    if not failure['adjudicated']:
-                        set_live('game_failed', 'Partia nierozstrzygnięta po awarii',
-                                 white=white['name'], black=black['name'], pairing_id=pairing['id'],
-                                 game_id=failure['game_id'], result='failed',
-                                 adjudication_status='unresolved',
-                                 adjudication_reason=decision.get('reason'),
-                                 failure_reason=str(exc)[:500])
-                        raise
-                    result = {'status': 'adjudicated', **failure}
+                    if tournament_stop_event.is_set() or 'Turniej zatrzymany przez operatora' in str(exc):
+                        result = {'status': 'stopped', 'fen': exc.fen,
+                                  'moves': exc.move_records, 'move_times': exc.move_times}
+                    else:
+                        failed_player = players.get(exc.model_id)
+                        if failed_player and exc.budget_observations:
+                            league.record_token_budget_observations(
+                                tournament_id, exc.model_id, failed_player['model_sha256'],
+                                failed_player['draft_sha256'], failed_player['base_inference'],
+                                exc.budget_observations)
+                        try:
+                            decision = adjudication.adjudicate_failure(
+                                exc.fen, exc.move_records, exc.color, exc.uci_attempts)
+                        except Exception as analysis_error:
+                            decision = {'status': 'unresolved', 'reason': 'adjudication_exception',
+                                        'error': f'{type(analysis_error).__name__}: {analysis_error}'[:500]}
+                        failure = _persist_failed_game(
+                            tournament_id, pairing, white, black, game_started, exc, decision)
+                        if not failure['adjudicated']:
+                            set_live('game_failed', 'Partia nierozstrzygnięta po awarii',
+                                     white=white['name'], black=black['name'], pairing_id=pairing['id'],
+                                     game_id=failure['game_id'], result='failed',
+                                     adjudication_status='unresolved',
+                                     adjudication_reason=decision.get('reason'),
+                                     failure_reason=str(exc)[:500])
+                            raise
+                        result = {'status': 'adjudicated', **failure}
             finally:
                 tournament_runtime.stop()
             if result['status'] == 'stopped':
