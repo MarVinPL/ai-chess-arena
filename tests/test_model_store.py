@@ -20,6 +20,29 @@ class ModelStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): model_store.download_version(1,'https://example.test/a.gguf','../a.gguf','0'*64,10,True)
     def test_rejects_unpinned_hash(self):
         with self.assertRaises(ValueError): model_store.download_version(1,'https://example.test/a.gguf','a.gguf','bad',10,True)
+    def test_excluded_model_cannot_be_downloaded_even_if_registry_license_is_verified(self):
+        with league.connect() as c:
+            c.execute("INSERT INTO league_models(id,name,format,active,created_at) VALUES(9,'Deferred model','PURE_AI',1,'now')")
+            c.execute("INSERT INTO model_versions(id,model_id,version_key,source,license,license_verified,created_at) VALUES(9,9,'deferred-v1','https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF','Apache-2.0',1,'now')")
+        with patch.object(model_store.urllib.request,'urlopen') as open_url:
+            with self.assertRaisesRegex(ValueError, 'Model ID 9'):
+                model_store.download_version(9,'https://example.test/deferred.gguf','deferred.gguf','0'*64,10,True)
+            open_url.assert_not_called()
+        with league.connect() as c:
+            row=c.execute('SELECT license_verified,status,managed_copy FROM model_versions WHERE id=9').fetchone()
+        self.assertEqual(tuple(row),(1,'catalogued',0))
+        self.assertFalse((model_store.MANAGED_DIR/'deferred.gguf').exists())
+
+    def test_excluded_model_draft_download_is_rejected_before_network_access(self):
+        with league.connect() as c:
+            c.execute("INSERT INTO league_models(id,name,format,active,created_at) VALUES(10,'Deferred draft model','PURE_AI',1,'now')")
+            c.execute("INSERT INTO model_versions(id,model_id,version_key,source,license,license_verified,draft_filename,draft_sha256,draft_size_bytes,draft_download_url,draft_source_path,created_at) VALUES(10,10,'deferred-v1','https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF','Apache-2.0',1,'draft.gguf',?,10,'https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/resolve/' || ?, 'draft.gguf','now')",
+                      ('b'*64,'a'*40))
+        with patch.object(model_store.urllib.request,'urlopen') as open_url:
+            with self.assertRaisesRegex(ValueError, 'Model ID 10'):
+                model_store.download_draft_version(10,'https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/resolve/'+'a'*40+'/draft.gguf','draft.gguf','b'*64,10,True)
+            open_url.assert_not_called()
+
     def test_download_success_verifies_hash_and_marks_managed(self):
         payload=b'GGUF-mock-payload'; digest=hashlib.sha256(payload).hexdigest()
         class Response:

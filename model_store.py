@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib, os, re, shutil, sqlite3, stat, threading, urllib.request
 from pathlib import Path
 import league
+import model_policy
 
 ROOT = Path(__file__).resolve().parent
 MANAGED_DIR = ROOT / 'managed-models'
@@ -36,11 +37,12 @@ def _download_version_locked(version_id: int, url: str, filename: str, expected_
     if not isinstance(expected_size, int) or expected_size <= 0:
         raise ValueError('Wymagany dodatni, znany rozmiar pliku')
     with league.connect() as c:
-        row = c.execute('''SELECT v.*,m.name,m.active FROM model_versions v
+        row = c.execute('''SELECT v.*,m.id AS model_id,m.name,m.active FROM model_versions v
                            JOIN league_models m ON m.id=v.model_id WHERE v.id=?''',
                         (version_id,)).fetchone()
         if row is None or not row['active']:
             raise ValueError('Nieznana lub nieaktywna wersja modelu')
+        model_policy.assert_model_not_excluded(row['model_id'], 'pobranie modelu', row['source'], row['metadata_json'])
         if row['license_verified'] != 1:
             raise ValueError('Licencja nie jest zatwierdzona w rejestrze')
         if row['source'] and row['source'] != url:
@@ -108,9 +110,10 @@ def download_draft_version(version_id: int, url: str, filename: str, expected_sh
     if not re.fullmatch(r'[0-9a-fA-F]{64}', expected_sha256 or '') or not isinstance(expected_size, int) or expected_size <= 0:
         raise ValueError('Niekompletny manifest SHA-256/rozmiaru pliku draft')
     with MODEL_LIFECYCLE_LOCK, league.connect() as c:
-        row = c.execute('SELECT * FROM model_versions WHERE id=?', (version_id,)).fetchone()
+        row = c.execute('SELECT v.*,m.id AS model_id FROM model_versions v JOIN league_models m ON m.id=v.model_id WHERE v.id=?', (version_id,)).fetchone()
         if row is None or row['license_verified'] != 1:
             raise ValueError('Wersja modelu nie ma jawnie zatwierdzonej licencji')
+        model_policy.assert_model_not_excluded(row['model_id'], 'pobranie modelu draft', row['source'])
         if (row['draft_filename'], row['draft_sha256'], row['draft_size_bytes'], row['draft_download_url']) != (filename, expected_sha256, expected_size, url):
             raise ValueError('Manifest draft nie zgadza się z przypiętą konfiguracją zawodnika')
         if row['source'].startswith('https://huggingface.co/') and not url.startswith(row['source'].rstrip('/') + '/resolve/'):

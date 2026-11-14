@@ -359,6 +359,37 @@ class LeagueTests(unittest.TestCase):
   self.assertTrue(all(not entry['local_file_available'] for entry in entries))
   self.assertTrue(all(not entry['local_file_required_before_start'] for entry in entries))
 
+ def test_deferred_models_are_excluded_from_new_and_existing_tournaments_without_mutating_registry_state(self):
+  with league.connect() as c:
+   for model_id in (9,10):
+    c.execute("INSERT INTO league_models(id,name,format,active,created_at) VALUES(?,?, 'PURE_AI',1,'now')",
+              (model_id,f'Deferred {model_id}'))
+    c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,status,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+              (model_id,f'deferred-{model_id}',f'deferred-{model_id}.gguf','a'*64,100,
+               f'https://huggingface.co/{sorted(__import__('model_policy').EXCLUDED_MODEL_REPOS)[model_id-9]}','Apache-2.0',1,'held-for-review',
+               '{\"keep\":\"exact\"}','now'))
+  new_tournament=league.create_round_robin('Only eligible entrants')
+  self.assertEqual(new_tournament['players'],2)
+  with league.connect() as c:
+   new_ids=[row[0] for row in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=? ORDER BY model_id',(new_tournament['id'],))]
+   cur=c.execute("INSERT INTO tournaments(name,format,created_at) VALUES('Historical deferred roster','PURE_AI','now')")
+   old_tournament=cur.lastrowid
+   versions={row['model_id']:row['id'] for row in c.execute('SELECT id,model_id FROM model_versions WHERE model_id IN (9,10)')}
+   c.executemany('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',
+                 [(old_tournament,9,versions[9]),(old_tournament,10,versions[10])])
+   before=c.execute("SELECT model_id,filename,sha256,size_bytes,source,license,license_verified,status,metadata_json FROM model_versions WHERE model_id IN (9,10) ORDER BY model_id").fetchall()
+  self.assertEqual(new_ids,[1,2])
+  entries=league.tournament_entry_status(old_tournament)
+  self.assertEqual([entry['model_id'] for entry in entries],[9,10])
+  for entry in entries:
+   self.assertTrue(entry['admission_excluded'])
+   self.assertFalse(entry['ready'])
+   self.assertFalse(entry['download_on_demand'])
+   self.assertIn('wyłączony z kwalifikacji',entry['blockers'][0])
+  with league.connect() as c:
+   after=c.execute("SELECT model_id,filename,sha256,size_bytes,source,license,license_verified,status,metadata_json FROM model_versions WHERE model_id IN (9,10) ORDER BY model_id").fetchall()
+  self.assertEqual(after,before)
+
  def test_active_registry_model_without_any_version_is_still_enrolled(self):
   with league.connect() as c:
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('No manifest','PURE_AI','now')")

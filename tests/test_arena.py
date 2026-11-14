@@ -58,6 +58,19 @@ class ArenaSmokeTests(unittest.TestCase):
         finally:
             server.engine_runner.LLAMAFILE = original_binary
 
+    def test_excluded_model_version_is_rejected_before_runtime_use(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(id,name,format,active,created_at) VALUES(9,'Deferred runtime model','PURE_AI',1,'now')")
+            db.execute("INSERT INTO model_versions(id,model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,status,created_at) VALUES(9,9,'deferred-v1','deferred.gguf',?,?,?,'Apache-2.0',1,'downloaded','now')",
+                       ('a'*64,100,'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF'))
+        try:
+            with self.assertRaisesRegex(ValueError, 'Model ID 9'):
+                server._version_record(9)
+        finally:
+            with sqlite3.connect(server.DB) as db:
+                db.execute('DELETE FROM model_versions WHERE id=9')
+                db.execute('DELETE FROM league_models WHERE id=9')
+
     def test_python_chess_legal_start_position(self):
         board = chess.Board()
         self.assertEqual(board.legal_moves.count(), 20)

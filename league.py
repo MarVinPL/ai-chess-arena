@@ -1,5 +1,6 @@
 import hashlib,json,re,shutil,sqlite3,time,math
 from pathlib import Path
+import model_policy
 ROOT=Path(__file__).resolve().parent
 DB=ROOT/'arena.sqlite3'
 MODEL_DIR=ROOT/'managed-models'
@@ -250,16 +251,16 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
  with connect() as c:
   # Every active registry row is an entrant. A missing version or manifest is
   # represented explicitly and blocks execution later; it never hides a player.
-  candidates=c.execute('''SELECT m.id,m.name,
+  candidates=c.execute('''SELECT m.id,m.name,v.source,v.metadata_json,
       v.id AS version_id,v.sha256 AS model_sha256,
-      COALESCE(v.draft_sha256,'') AS draft_sha256,v.metadata_json
+      COALESCE(v.draft_sha256,'') AS draft_sha256
       FROM league_models m
       LEFT JOIN model_versions v ON v.id=(
        SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id)
       WHERE m.active=1 AND m.format=? ORDER BY m.id''',(format,)).fetchall()
-  if len(candidates)<2:
-   raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
-  ms=[dict(row) for row in candidates]
+  ms=[dict(row) for row in candidates if model_policy.is_model_admission_allowed(row['id'], row['source'], row['metadata_json'])]
+  if len(ms)<2:
+   raise ValueError('Potrzeba co najmniej dwóch aktywnych i kwalifikujących się wpisów rejestru')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
   for model in ms:
@@ -329,6 +330,8 @@ def tournament_entry_status(tournament_id):
   draft_file_available=bool(item.get('draft_filename') and item.get('draft_managed_copy')==1 and
                             item.get('draft_status')=='downloaded' and
                             (MODEL_DIR/item['draft_filename']).is_file())
+  admission_excluded=model_policy.is_model_excluded(item.get('model_id'), item.get('source'), item.get('metadata_json'))
+  if admission_excluded: blockers.append(model_policy.EXCLUSION_REASON)
   if item.get('active')!=1: blockers.append('wpis rejestru jest nieaktywny')
   if not item.get('version_id'): blockers.append('brak wersji modelu')
   if not manifest_ready: blockers.append('niekompletny lub nieprzypięty manifest')
@@ -337,13 +340,14 @@ def tournament_entry_status(tournament_id):
   entries.append({
    'model_id':item['model_id'],'name':item['name'],
    'active_registry_entry':item.get('active')==1,'tournament_entrant':True,
+   'admission_excluded':admission_excluded,
    'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
    'license_verified':license_verified,'local_file_available':local_file_available,
    'local_file_required_before_start':False,
-   'download_on_demand':manifest_ready and license_verified and not local_file_available,
+   'download_on_demand':not admission_excluded and manifest_ready and license_verified and not local_file_available,
    'draft_manifest_ready':draft_manifest_ready,
    'draft_file_available':draft_file_available,
-   'draft_download_on_demand':draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
+   'draft_download_on_demand':not admission_excluded and draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
    'ready':not blockers,'blockers':blockers
   })
  return entries

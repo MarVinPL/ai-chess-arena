@@ -8,6 +8,7 @@ import model_store
 import engine_runner
 import adjudication
 import passkey_test
+import model_policy
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
@@ -312,6 +313,8 @@ def finish_game():
 
 
 def _version_path(version):
+    if version and 'model_id' in version:
+        model_policy.assert_model_not_excluded(version['model_id'], 'uruchomienie modelu', version.get('source'), version.get('metadata_json'))
     if not version or version['license_verified'] != 1 or version['status'] != 'downloaded' or not version['filename']:
         raise RuntimeError('Wersja modelu nie ma zatwierdzonej licencji lub pobranego pliku')
     if version['managed_copy'] != 1:
@@ -337,7 +340,9 @@ def _version_path(version):
 
 def _version_record(version_id):
     with league.connect() as c:
-        row = c.execute("SELECT v.*,m.name,m.active FROM model_versions v JOIN league_models m ON m.id=v.model_id WHERE v.id=?", (version_id,)).fetchone()
+        row = c.execute("SELECT v.*,m.id AS model_id,m.name,m.active FROM model_versions v JOIN league_models m ON m.id=v.model_id WHERE v.id=?", (version_id,)).fetchone()
+    if row is not None:
+        model_policy.assert_model_not_excluded(row['model_id'], 'pobranie lub użycie modelu', row['source'], row['metadata_json'])
     if row is None or not row['active']:
         raise RuntimeError(f'Nieaktywna lub nieznana wersja modelu: {version_id}')
     if row['license_verified'] != 1 or not row['filename'] or not row['source'] or not row['sha256'] or not row['size_bytes']:
@@ -512,7 +517,7 @@ def tournament_preflight(tournament_id):
         if not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
-        entry['download_on_demand'] = bool(entry.get('manifest_ready') and entry.get('license_verified'))
+        entry['download_on_demand'] = bool(not entry.get('admission_excluded') and entry.get('manifest_ready') and entry.get('license_verified'))
         entry['blockers'] = reasons
         entry['ready_to_start'] = not reasons
         if reasons:
@@ -1062,6 +1067,8 @@ class Handler(BaseHTTPRequestHandler):
             models = []
             for row in rows:
                 item = dict(row)
+                item['admission_excluded'] = model_policy.is_model_excluded(item['id'], item.get('source'), item.get('metadata_json'))
+                item['admission_exclusion_reason'] = model_policy.EXCLUSION_REASON if item['admission_excluded'] else None
                 try:
                     metadata = json.loads(item.pop('metadata_json') or '{}')
                     item['license_evidence'] = metadata.get('license_evidence')
@@ -1170,9 +1177,10 @@ class Handler(BaseHTTPRequestHandler):
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
                     with league.connect() as c:
-                        row = c.execute('SELECT id,source FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        row = c.execute('SELECT v.id,v.source,m.id AS model_id FROM model_versions v JOIN league_models m ON m.id=v.model_id WHERE v.id=?', (version_id,)).fetchone()
                     if row is None:
                         raise ValueError('Nieznana wersja modelu')
+                    model_policy.assert_model_not_excluded(row['model_id'], 'pobranie dowodów licencji', row['source'])
                     evidence = fetch_hf_license_evidence(row['source'])
                     with league.connect() as c:
                         current = c.execute('SELECT metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
@@ -1189,9 +1197,10 @@ class Handler(BaseHTTPRequestHandler):
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
                     with league.connect() as c:
-                        row = c.execute('SELECT id,source,license,metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        row = c.execute('SELECT v.id,v.source,v.license,v.metadata_json,m.id AS model_id FROM model_versions v JOIN league_models m ON m.id=v.model_id WHERE v.id=?', (version_id,)).fetchone()
                         if row is None:
                             raise ValueError('Nieznana wersja modelu')
+                        model_policy.assert_model_not_excluded(row['model_id'], 'zmiana decyzji licencyjnej', row['source'], row['metadata_json'])
                         source = (row['source'] or '').strip()
                         license_name = (payload.get('license') or row['license'] or '').strip()
                         metadata = json.loads(row['metadata_json'] or '{}')
