@@ -1306,6 +1306,8 @@ class Handler(BaseHTTPRequestHandler):
         elif clear:
             self.send_header('Set-Cookie', 'arena_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict')
             self.send_header('Set-Cookie', 'arena_csrf=; Path=/; Max-Age=0; Secure; SameSite=Strict')
+        if retry_after is not None:
+            self.send_header('Retry-After', str(max(1, int(retry_after))))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
