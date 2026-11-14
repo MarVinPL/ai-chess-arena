@@ -6,6 +6,7 @@ The caller must supply an explicit database path and validated RP configuration.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -57,9 +58,18 @@ def load_config(environ=None) -> WebAuthnConfig:
     env = os.environ if environ is None else environ
     rp_id = str(env.get("ARENA_WEBAUTHN_RP_ID", "")).strip().lower()
     origin = str(env.get("ARENA_WEBAUTHN_ORIGIN", "")).strip()
-    if not rp_id or not _RP_ID.fullmatch(rp_id) or rp_id in {"localhost"}:
-        raise OperatorAuthError("Brak prawidłowego ARENA_WEBAUTHN_RP_ID.")
-    parsed = urlsplit(origin)
+    try:
+        ipaddress.ip_address(rp_id)
+        is_ip_literal = True
+    except ValueError:
+        is_ip_literal = False
+    if not rp_id or not _RP_ID.fullmatch(rp_id) or rp_id == "localhost" or is_ip_literal:
+        raise OperatorAuthError("Brak prawidłowego DNS ARENA_WEBAUTHN_RP_ID.")
+    try:
+        parsed = urlsplit(origin)
+        port = parsed.port
+    except ValueError as exc:
+        raise OperatorAuthError("Nieprawidłowy port w ARENA_WEBAUTHN_ORIGIN.") from exc
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username or
             parsed.password or parsed.path not in ("", "/") or parsed.query or
             parsed.fragment):
@@ -67,8 +77,8 @@ def load_config(environ=None) -> WebAuthnConfig:
     host = parsed.hostname.lower().rstrip(".")
     if host != rp_id and not host.endswith("." + rp_id):
         raise OperatorAuthError("Origin HTTPS nie należy do skonfigurowanego RP ID.")
-    if parsed.port not in (None, 443):
-        origin = f"https://{host}:{parsed.port}"
+    if port not in (None, 443):
+        origin = f"https://{host}:{port}"
     else:
         origin = f"https://{host}"
     return WebAuthnConfig(rp_id=rp_id, origin=origin)
