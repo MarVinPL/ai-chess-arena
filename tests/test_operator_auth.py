@@ -184,5 +184,76 @@ class OperatorAuthStorageTests(unittest.TestCase):
             self.assertIsNotNone(stored["consumed_at"])
 
 
+    def test_persistent_rate_limit_counts_attempts_and_resets_window(self):
+        operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1000)
+        operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1001)
+        with self.assertRaises(operator_auth.OperatorRateLimitError) as caught:
+            operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1002)
+        self.assertEqual(caught.exception.retry_after, 58)
+        operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1060)
+
+    def test_owner_can_revoke_credential_and_all_target_sessions_but_not_last_owner_key(self):
+        from webauthn.helpers import bytes_to_base64url
+        now = operator_auth.time.time()
+        owner_credential = bytes_to_base64url(b"owner-credential")
+        operator_credential = bytes_to_base64url(b"operator-credential")
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", b"o" * 32, now),
+            )
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("operator-id", "Operator", "operator", b"p" * 32, now),
+            )
+            for cid, oid in ((owner_credential, "owner-id"), (operator_credential, "operator-id")):
+                conn.execute(
+                    """INSERT INTO arena_webauthn_credentials
+                    (credential_id,operator_id,public_key,sign_count,created_at)
+                    VALUES(?,?,?,?,?)""",
+                    (cid, oid, b"public-key", 0, now),
+                )
+            operator_session, _ = operator_auth._new_session(conn, "operator-id", now)
+        with self.assertRaises(operator_auth.OperatorAuthError):
+            operator_auth.revoke_credential(self.db, "owner-id", owner_credential)
+        result = operator_auth.revoke_credential(self.db, "owner-id", operator_credential)
+        self.assertEqual(result["operator_id"], "operator-id")
+        self.assertIsNone(operator_auth.get_session(self.db, operator_session))
+        inventory = operator_auth.list_operators(self.db)
+        target = next(item for item in inventory if item["operator_id"] == "operator-id")
+        self.assertEqual(target["active_credentials"], 0)
+
+    def test_owner_can_suspend_operator_and_revoke_all_sessions(self):
+        now = operator_auth.time.time()
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            for oid, role in (("owner-id", "owner"), ("operator-id", "operator")):
+                conn.execute(
+                    "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                    (oid, oid, role, (oid.encode() + b"x" * 32)[:32], now),
+                )
+            session_token, _ = operator_auth._new_session(conn, "operator-id", now)
+        result = operator_auth.suspend_operator(self.db, "owner-id", "operator-id")
+        self.assertTrue(result["sessions_revoked"])
+        self.assertIsNone(operator_auth.get_session(self.db, session_token))
+        with operator_auth._db(self.db) as conn:
+            active = conn.execute(
+                "SELECT active FROM arena_operators WHERE operator_id='operator-id'"
+            ).fetchone()["active"]
+        self.assertEqual(active, 0)
+
+    def test_owner_cannot_suspend_self_or_last_active_owner(self):
+        now = operator_auth.time.time()
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", b"o" * 32, now),
+            )
+        with self.assertRaises(operator_auth.OperatorAuthError):
+            operator_auth.suspend_operator(self.db, "owner-id", "owner-id")
+
+
 if __name__ == "__main__":
     unittest.main()
