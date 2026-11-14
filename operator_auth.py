@@ -435,6 +435,32 @@ def verify_csrf(session, csrf_token):
     return secrets.compare_digest(candidate, session.get("csrf_hash", ""))
 
 
+from http.cookies import SimpleCookie
+
+
+def bind_verified_request(db_path, config, handler, require_csrf=False):
+    """Attach actor/role only after opaque session, expiry, origin and CSRF checks."""
+    try:
+        cookies = SimpleCookie()
+        cookies.load(handler.headers.get("Cookie", ""))
+        morsel = cookies.get("arena_session")
+        if morsel is None:
+            return None
+        session = get_session(db_path, morsel.value)
+        if session is None:
+            return None
+        if require_csrf:
+            if handler.headers.get("Origin") != config.origin:
+                return None
+            if not verify_csrf(session, handler.headers.get("X-Arena-CSRF", "")):
+                return None
+        handler._arena_verified_actor = session["operator_id"]
+        handler._arena_verified_role = session["role"]
+        return session
+    except (AttributeError, OperatorAuthError, ValueError):
+        return None
+
+
 def revoke_session(db_path, session_token):
     if not isinstance(session_token, str) or len(session_token) > 256:
         return False
