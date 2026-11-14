@@ -15,6 +15,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 from webauthn import (
@@ -91,6 +92,15 @@ def _connect(db_path):
     return conn
 
 
+@contextmanager
+def _db(db_path):
+    conn = _connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def ensure_schema(conn):
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS arena_operators (
@@ -164,7 +174,7 @@ def create_owner_enrollment(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
         raise OperatorAuthError("Nieprawidłowy czas ważności tokenu.")
     token = secrets.token_urlsafe(32)
     now = time.time()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         owners = conn.execute(
@@ -371,6 +381,13 @@ def finish_authentication(db_path, config, ceremony_id, credential):
             (credential_id,),
         ).fetchone()
         if row is None or not row["active"]:
+            raise OperatorAuthError("Nie udało się uwierzytelnić operatora.")
+        raw_user_handle = (credential.get("response") or {}).get("userHandle")
+        try:
+            supplied_user_handle = base64url_to_bytes(raw_user_handle)
+        except Exception as exc:
+            raise OperatorAuthError("Nie udało się uwierzytelnić operatora.") from exc
+        if not secrets.compare_digest(supplied_user_handle, bytes(row["user_handle"])):
             raise OperatorAuthError("Nie udało się uwierzytelnić operatora.")
         verified = verify_authentication_response(
             credential=credential,
