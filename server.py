@@ -1310,14 +1310,14 @@ class Handler(BaseHTTPRequestHandler):
                 config = operator_auth.load_config()
                 session = operator_auth.bind_verified_request(DB, config, self, require_csrf=False)
                 if session is None:
-                    self.send_json({'authenticated': False}, 401)
+                    self.send_operator_auth_json({'authenticated': False}, 401)
                 else:
-                    self.send_json({'authenticated': True, 'operator': {
+                    self.send_operator_auth_json({'authenticated': True, 'operator': {
                         'operator_id': session['operator_id'],
                         'display_name': session['display_name'], 'role': session['role']
                     }})
             except operator_auth.OperatorAuthError as exc:
-                self.send_json({'authenticated': False, 'error': str(exc)}, 503)
+                self.send_operator_auth_json({'authenticated': False, 'error': str(exc)}, 503)
         elif path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
