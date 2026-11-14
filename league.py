@@ -559,6 +559,33 @@ def _league_standings(c,tournament_id,strict_game_linkage=False):
  return sorted((dict(r) for r in rows),key=lambda r:(-r['points'],-r['wins'],-r['draws'],r['name'].casefold()))
 
 
+def tournament_roster_counts(c,tournament_id):
+ """Count unique active and eliminated entrants from the persisted tournament bracket."""
+ entrant_ids={int(row[0]) for row in c.execute(
+  'SELECT model_id FROM tournament_entries WHERE tournament_id=?',(tournament_id,)).fetchall()}
+ seed_ids={int(row[0]) for row in c.execute(
+  'SELECT model_id FROM tournament_seeds WHERE tournament_id=?',(tournament_id,)).fetchall()}
+ # Before qualification is materialized, every roster member remains in the league.
+ # Once seeds exist, non-qualifiers are eliminated and only bracket winners survive.
+ if not seed_ids:
+  remaining_ids=entrant_ids
+ else:
+  remaining_ids=entrant_ids & seed_ids
+  completed=c.execute("""SELECT white_model_id,black_model_id,winner_model_id
+   FROM tournament_pairings WHERE tournament_id=? AND stage='draft'
+    AND status='completed' AND winner_model_id IS NOT NULL""",(tournament_id,)).fetchall()
+  eliminated_ids=set()
+  for row in completed:
+   white,black,winner=(int(row[0]),int(row[1]),int(row[2]))
+   if winner==white and black!=white: eliminated_ids.add(black)
+   elif winner==black and white!=black: eliminated_ids.add(white)
+  remaining_ids-=eliminated_ids
+ eliminated_count=len(entrant_ids-remaining_ids)
+ remaining_count=len(remaining_ids)
+ return {'eliminated':eliminated_count,'remaining':remaining_count,
+  'total':len(entrant_ids)}
+
+
 def tournament_view(tournament_id,live=None):
  """Return a read-only tournament snapshot; never create seeds or pairings here."""
  live=live or {}
@@ -566,6 +593,7 @@ def tournament_view(tournament_id,live=None):
   tournament=c.execute('SELECT id,name,format,status,created_at,qualification_percent,initial_entrant_count,late_admission_limit,late_admission_used,parent_tournament_id,admission_batch_id FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
   if not tournament: raise KeyError('Nie znaleziono turnieju')
   standings=_league_standings(c,tournament_id,strict_game_linkage=True)
+  roster_counts=tournament_roster_counts(c,tournament_id)
   game_columns={row[1] for row in c.execute('PRAGMA table_info(games)')}
   if not {'tournament_id','pairing_id'} <= game_columns:
    raise RuntimeError('Brak kolumn audytowych gier; widok turnieju pozostaje niedostępny')
@@ -647,6 +675,7 @@ def tournament_view(tournament_id,live=None):
   elif league_total and league_done==league_total: bracket_status='awaiting_bracket_generation'
   else: bracket_status='awaiting_league_completion'
   return {'tournament':dict(tournament),'standings':standings,'fixtures':fixtures,
+   'roster_counts':roster_counts,
    'bracket':bracket,'seeds':seeds,'champion':dict(champion_row) if champion_row else None,
    'bracket_status':bracket_status,'active_pairing':active_pairing,
    'live':{k:live.get(k) for k in ('stage','message','tournament_id','pairing_id','white','black','model','color','fen','moves','updated_at') if k in live},

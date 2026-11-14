@@ -67,6 +67,17 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("Historia kwalifikacji nowych zawodników", HTML)
         self.assertIn("capacity_exhausted", HTML)
 
+    def test_roster_counters_are_rendered_under_first_chess_arena_heading(self):
+        heading = HTML.index('<span class="board-kicker">Chess Arena Pro</span>')
+        counters = HTML.index('id="tournament-roster-counters"')
+        self.assertGreater(counters, heading)
+        self.assertLess(counters, HTML.index('id="white"'))
+        self.assertIn("function renderTournamentRosterCounts(counts)", HTML)
+        self.assertIn("Wyeliminowani: ", HTML)
+        self.assertIn("Pozostali: ", HTML)
+        self.assertIn("Brak aktywnego turnieju", HTML)
+        self.assertIn("renderTournamentRosterCounts(d.roster_counts)", HTML)
+
     def test_empty_list_state_is_preserved(self):
         self.assertIn("if(!rows.length){host.textContent='Brak turniejów.';return}", self.renderer)
 
