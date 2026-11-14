@@ -65,7 +65,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         job = self._create()
         plan = claim_job_for_start(
             self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
-            model_root=self.root)
+            capacity_check=lambda: True, model_root=self.root)
         self.assertEqual(plan["status"], "starting")
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
         self.assertFalse(plan["side_effects_performed"])
