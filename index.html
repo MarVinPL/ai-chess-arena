@@ -236,6 +236,7 @@ function renderTournaments(rows){
   const completed=Number(t.completed_games??0);
   const planned=Number(t.total_games_planned??t.games_planned??0);
   addField(fields,'Format',t.format||'—');
+  addField(fields,'Uczestnicy',Number(t.players??0));
   addField(fields,'Postęp partii',completed+' / '+planned);
   addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
   if(t.status==='stopped'||t.status==='running'||t.resume_blocked)addField(fields,'Checkpoint',t.resume_blocked?'brak · wznowienie zablokowane — wymagany przegląd':(t.has_checkpoint?'zapisany · gotowy do wznowienia':'brak aktywnej partii do odtworzenia'));
