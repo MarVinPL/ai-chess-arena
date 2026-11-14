@@ -178,10 +178,11 @@ button.stop{background:#744b4b;border-color:#986363}
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <h4>Uprawnienia operacyjne modeli</h4>
   <p class="notice">TEST_ONLY i EVALUATION są odrębne od formatu turnieju. Żądanie nie pobiera ani nie uruchamia modelu. TOURNAMENT pozostaje wyłącznie w allowliście.</p>
+  <p class="notice">Operacje zmiany uprawnień są tymczasowo wyłączone: aplikacja nie ma jeszcze zweryfikowanej sesji operatora. Odczyt historii pozostaje dostępny.</p>
   <form id="model-permission-form">
-   <div class="formrow"><select class="field" id="permission-model-id" required><option value="">Wybierz model z allowlisty</option></select>
-   <select class="field" id="permission-scope"><option value="TEST_ONLY">TEST_ONLY</option><option value="EVALUATION">EVALUATION</option></select></div>
-   <div class="formrow"><input class="field" id="permission-artifact-sha256" placeholder="SHA-256 artefaktu GGUF (64 znaki)" required pattern="[a-fA-F0-9]{64}" minlength="64" maxlength="64"><input class="field" id="permission-reason" placeholder="Uzasadnienie żądania" required minlength="3"><button type="submit">Wyślij żądanie</button></div>
+   <div class="formrow"><select class="field" id="permission-model-id" required disabled><option value="">Wybierz model z allowlisty</option></select>
+   <select class="field" id="permission-scope" disabled><option value="TEST_ONLY">TEST_ONLY</option><option value="EVALUATION">EVALUATION</option></select></div>
+   <div class="formrow"><input class="field" id="permission-artifact-sha256" disabled placeholder="SHA-256 artefaktu GGUF (64 znaki)" required pattern="[a-fA-F0-9]{64}" minlength="64" maxlength="64"><input class="field" id="permission-reason" disabled placeholder="Uzasadnienie żądania" required minlength="3"><button type="submit" disabled>Wyślij żądanie</button></div>
   </form>
   <div id="model-permissions-list" class="moves">Odczytuję uprawnienia operacyjne…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
@@ -541,14 +542,14 @@ function renderModelPermissions(rows, allowlistRows){
   const history=document.createElement('div');history.style.cssText='font-size:11px;color:#91a5ba;margin-top:6px';history.textContent='Audyt: '+(item.history||[]).map(x=>x.event+' · '+x.actor+' · '+x.occurred_at+(x.reason?' · '+x.reason:'')).join(' | ');card.appendChild(history);
   if(item.status==='pending'){
    for(const action of ['approve','reject']){
-    const button=document.createElement('button');button.className=action==='approve'?'':'secondary';button.style.margin='8px 6px 0 0';button.textContent=action==='approve'?'Zatwierdź':'Odrzuć';
+    const button=document.createElement('button');button.className=action==='approve'?'':'secondary';button.style.margin='8px 6px 0 0';button.textContent=action==='approve'?'Zatwierdź':'Odrzuć';button.disabled=true;button.title='Zmiany zablokowane do czasu wdrożenia zweryfikowanej sesji operatora.';
     button.onclick=async()=>{let reason='';if(action==='reject'){reason=prompt('Uzasadnienie odrzucenia:')||'';if(reason.trim().length<3)return}
      if(!confirm((action==='approve'?'Zatwierdzić':'Odrzucić')+' '+item.scope+' dla dokładnej rewizji '+item.revision+'?'))return;
      button.disabled=true;try{const r=await fetch('/api/model-permissions/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:item.id,confirm:true,reason})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);await loadLeague()}catch(e){$('league-message').textContent='Nie zapisano decyzji: '+e;button.disabled=false}
     };card.appendChild(button);
    }
   }else if(item.status==='approved'){
-   const button=document.createElement('button');button.className='stop';button.style.marginTop='8px';button.textContent='Wycofaj uprawnienie';
+   const button=document.createElement('button');button.className='stop';button.style.marginTop='8px';button.textContent='Wycofaj uprawnienie';button.disabled=true;button.title='Zmiany zablokowane do czasu wdrożenia zweryfikowanej sesji operatora.';
    button.onclick=async()=>{const reason=prompt('Uzasadnienie wycofania:')||'';if(reason.trim().length<3)return;if(!confirm('Wycofać '+item.scope+' dla '+item.repo_id+'?'))return;button.disabled=true;try{const r=await fetch('/api/model-permissions/revoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:item.id,confirm:true,reason})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);await loadLeague()}catch(e){$('league-message').textContent='Nie wycofano uprawnienia: '+e;button.disabled=false}};card.appendChild(button);
   }
   host.appendChild(card);
