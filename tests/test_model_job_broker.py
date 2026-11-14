@@ -78,7 +78,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.assertIn("--", plan["argv"])
         self.assertIn("--expected-sha256", plan["argv"])
         self.assertIn(self.artifact_sha256, plan["argv"])
-        self.assertEqual(plan["argv"][-9], WORKER_EXECUTABLE)
+        self.assertEqual(plan["argv"][plan["argv"].index("--") + 1], WORKER_EXECUTABLE)
         self.assertFalse(any(x in {"sh", "bash", "-c"} for x in plan["argv"]))
         with self.assertRaisesRegex(ValueError, "zużyta"):
             claim_job_for_start(
