@@ -59,7 +59,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_operation_consent_hash_and_capacity_are_required(self):
         with self.assertRaisesRegex(ValueError, "zgoda"):
             self._create(confirm_operation=False)
-        with self.assertRaisesRegex(ValueError, "SHA-256"):
+        with self.assertRaises(PermissionError):
             self._create(expected_sha256="0" * 64)
         with self.assertRaisesRegex(RuntimeError, "zasobów"):
             self._create(capacity_check=lambda: False)
