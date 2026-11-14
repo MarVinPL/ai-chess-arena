@@ -1,4 +1,6 @@
+import hashlib
 import sqlite3
+import tempfile
 import unittest
 
 from model_permissions import (
@@ -10,7 +12,9 @@ class ModelPermissionTests(unittest.TestCase):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
         ensure_schema(self.db)
-        self.ident = dict(model_id=1, repo_id="org/model", revision="a" * 40)
+        self.artifact_sha256 = hashlib.sha256(b"approved-gguf-fixture").hexdigest()
+        self.ident = dict(model_id=1, repo_id="org/model", revision="a" * 40,
+                          artifact_sha256=self.artifact_sha256)
 
     def tearDown(self):
         self.db.close()
@@ -34,6 +38,7 @@ class ModelPermissionTests(unittest.TestCase):
         self.approve(req)
         self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
         self.assertFalse(has_permission(self.db, **{**self.ident, "revision": "b" * 40}, scope="TEST_ONLY"))
+        self.assertFalse(has_permission(self.db, **{**self.ident, "artifact_sha256": "b" * 64}, scope="TEST_ONLY"))
 
     def test_evaluation_requires_separate_test_only_approval(self):
         with self.assertRaisesRegex(ValueError, "TEST_ONLY"):
@@ -83,6 +88,7 @@ class ModelPermissionTests(unittest.TestCase):
             "SELECT event FROM model_permission_events ORDER BY id")],
             ["requested", "rejected"])
         self.assertEqual(list_permissions(self.db)[0]["status"], "rejected")
+        self.assertEqual(list_permissions(self.db)[0]["artifact_sha256"], self.artifact_sha256)
 
     def test_missing_confirmation_and_invalid_identity_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "potwierdzenie"):
