@@ -6,6 +6,7 @@ import chess, chess.pgn
 import league
 import model_store
 import model_allowlist
+import model_admission
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1323,6 +1324,15 @@ class Handler(BaseHTTPRequestHandler):
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)
+        elif self.path == '/api/model-admission':
+            try:
+                sync = model_allowlist.check_repository_sync(ROOT)
+                if not sync.get('in_sync'):
+                    raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+                with league.connect() as c:
+                    self.send_json(model_admission.list_decisions(c))
+            except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
+                self.send_json({'error': str(exc)}, 503)
         elif self.path == '/api/league':
             self.send_json(league.elo_ratings('PURE_AI'))
         elif self.path == '/api/league/engine':
@@ -1411,11 +1421,21 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/model-admission/admit','/api/model-admission/revoke'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path == '/api/models/license-evidence':
+                if self.path in ('/api/model-admission/admit','/api/model-admission/revoke'):
+                    sync = model_allowlist.check_repository_sync(ROOT)
+                    if not sync.get('in_sync'):
+                        raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+                    with league.connect() as c:
+                        result = model_admission.apply_decision(
+                            c, model_id=int(payload.get('model_id', 0)),
+                            action='admit' if self.path.endswith('/admit') else 'revoke',
+                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
+                        )
+                elif self.path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
@@ -1489,7 +1509,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence') else 201)
+                self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif self.path == '/api/step':
