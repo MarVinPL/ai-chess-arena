@@ -30,10 +30,10 @@ class ModelJobBrokerTests(unittest.TestCase):
     def _grant(self, scope):
         req = model_permissions.request_permission(
             self.db, **self.ident, scope=scope, confirm=True,
-            reason="kontrolowany test", actor="test-owner")
+            reason="kontrolowany test")
         model_permissions.decide_permission(
             self.db, request_id=req["id"], action="approve",
-            confirm=True, actor="test-reviewer")
+            confirm=True)
 
     def _create(self, scope="TEST_ONLY", **overrides):
         import hashlib
@@ -70,7 +70,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
         self.assertFalse(plan["side_effects_performed"])
         self.assertIn("--", plan["argv"])
-        self.assertEqual(plan["argv"][-8], WORKER_EXECUTABLE)
+        self.assertEqual(plan["argv"][-9], WORKER_EXECUTABLE)
         self.assertFalse(any(x in {"sh", "bash", "-c"} for x in plan["argv"]))
         with self.assertRaisesRegex(ValueError, "zużyta"):
             claim_job_for_start(
