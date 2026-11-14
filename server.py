@@ -234,7 +234,7 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
              'adjudicated' if adjudicated else 'unresolved',
              json.dumps(decision, ensure_ascii=False), str(exc)[:1000],
              getattr(exc, 'fen', None), getattr(exc, 'color', None),
-             getattr(exc, 'model_id', None)))
+              side_to_move, getattr(exc, 'model_id', None)))
         game_id = cur.lastrowid
     with league.connect() as db:
         db.execute("""UPDATE tournament_pairings
