@@ -2,7 +2,7 @@
 
 ## Status i zakres
 
-To jest techniczny audyt dowodów dla ośmiu bezpiecznych do przeglądu wpisów rejestru. **Issue #52 pozostaje otwarte**, ponieważ dwa pozostałe wpisy nie zostały objęte analizą. Nie jest to opinia prawna ani zgoda właściciela projektu na pobranie, uruchomienie, dystrybucję lub udział w turnieju.
+To jest techniczny audyt dowodów dla wpisów 1–8 rejestru, zgodnie z aktualnym zakresem Issue #52. Wpisy 9–10 są wyłączone z kryterium ukończenia tego audytu i śledzone oddzielnie w Issue #71; pozostają `review_required` i nie są zatwierdzone do pobierania, uruchamiania, allowlisty ani udziału w turniejach. Nie jest to opinia prawna ani zgoda właściciela projektu na pobranie, uruchomienie, dystrybucję lub udział w turnieju.
 
 Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej bazy, rosterów, wyników ani usług. Nie odczytywano współdzielonego katalogu modeli.
 
