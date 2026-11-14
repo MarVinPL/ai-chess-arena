@@ -29,6 +29,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Run Hugging Face catalog regression tests
+        run: python -m unittest discover -s tests -p 'test_huggingface_catalog*.py' -v
+
       - name: Discover public GGUF text-generation candidates and verify tracked sources
         run: python scripts/sync_huggingface_catalog.py
 
