@@ -88,6 +88,10 @@ No tournament is started automatically when a model is added. Real inference and
 
 The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` checks only the eight repositories already pinned as model IDs 1–8. It queries their exact public metadata endpoints and does not perform public model discovery or add new repositories. Results are stored separately in `manifests/huggingface-existing-models-metadata.json`; the existing candidate catalog, pinned model manifest, admission allowlist, database, and tournament state are not changed. Changed revisions or unavailable sources require human review. The workflow downloads no model artifacts, performs no inference, and creates a draft PR only when tracked metadata changes. See `docs/huggingface-catalog-sync.md`.
 
+### Weekly public Hugging Face candidate catalog
+
+The separate free GitHub Actions workflow `.github/workflows/huggingface-candidate-catalog-sync.yml` discovers public GGUF text-generation/conversational repositories and updates only the informational `manifests/huggingface-candidates.json` catalog. New candidates remain `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`; no license or tournament admission is approved automatically. It downloads no model artifacts, runs no inference, and does not modify the pinned model manifest, admission allowlist, database, or tournament state. It creates a draft PR only when tracked catalog metadata changes. The original 14 November 2026 snapshot (436 entries from a partial scan) is preserved separately under `manifests/archive/` and is not used by the workflow. See `docs/huggingface-candidate-catalog.md`.
+
 ## Safe tournament stop and resume
 
 **Operational rule (Issue #98): a tournament may be stopped at any time, but its complete, consistent state must be durably saved before the runtime is stopped. It must then be resumable from the exact saved point rather than restarted from the beginning.**
