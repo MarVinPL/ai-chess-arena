@@ -8,7 +8,7 @@
 - `EVALUATION`: permission for future isolated benchmarks/test matches. Requires a separately approved `TEST_ONLY` permission for the exact same model ID, repository, and full revision SHA.
 - `TOURNAMENT`: deliberately not grantable in this registry. Official admission remains governed by the versioned allowlist and existing tournament preflight.
 
-A request is not an approval. All new model versions start with no operational permissions. Decisions are version-pinned, require explicit confirmation, and create an append-only event history. Revoking `TEST_ONLY` is blocked while `EVALUATION` remains active.
+A request is not an approval. All new model versions start with no operational permissions. Every request and approval is pinned to the exact model ID, repository, full revision SHA, and SHA-256 of one concrete GGUF artifact. The panel requires the artifact digest; a different file hash cannot inherit the grant. Decisions require explicit confirmation and create an append-only event history. Revoking `TEST_ONLY` is blocked while `EVALUATION` remains active.
 
 ## Existing production isolation baseline
 
@@ -58,7 +58,7 @@ Still required before a real model test can run:
 
 `model_job_broker.py` adds a separate job ledger and evaluation-metrics table. It is deliberately not wired to an HTTP endpoint or a privileged service yet.
 
-- Job creation requires an active, exact-version `TEST_ONLY` or `EVALUATION` grant, explicit one-operation confirmation, an expected SHA-256, and a positive host-capacity callback.
+- Job creation requires an active `TEST_ONLY` or `EVALUATION` grant pinned to the exact artifact SHA-256, explicit one-operation confirmation, a matching file fingerprint, and a positive host-capacity callback.
 - Immediately before a start plan is issued, the ledger rechecks the active scope, artifact SHA-256 and byte size, approved limits, and current host-capacity callback.
 - The one-operation consent is consumed atomically with the queued → starting transition. A second claim is rejected.
 - The worker executable is a fixed constant; panel/API input cannot supply a command, systemd property, or arbitrary argument vector.
