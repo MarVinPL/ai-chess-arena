@@ -42,7 +42,7 @@ class ModelManifestTests(unittest.TestCase):
         payload = load_manifest()
         self.assertEqual(len(payload["models"]), 10)
         self.assertEqual(len({m["model_id"] for m in payload["models"]}), 10)
-        self.assertEqual(len({m["repo_id"] for m in payload["models"]}), 7)
+        self.assertEqual(len({m["repo_id"] for m in payload["models"]}), 10)
         self.assertTrue(all(len(m["sha256"]) == 64 and len(m["revision"]) == 40
                             for m in payload["models"]))
 
@@ -57,20 +57,20 @@ class ModelManifestTests(unittest.TestCase):
 
     def test_verified_status_requires_revision_bound_audit_evidence(self):
         payload = load_manifest()
-        self.assertEqual(payload["models"][0]["license_review_status"], "verified_restricted")
+        self.assertEqual(next(m for m in payload["models"] if m["model_id"] == 4)["license_review_status"], "verified_restricted")
 
         missing = json.loads(json.dumps(payload))
-        missing["models"][0].pop("license_audit")
+        missing_model = next(m for m in missing["models"] if m["model_id"] == 4)\n        missing_model.pop("license_audit")
         with self.assertRaises(ManifestError):
             validate_manifest(missing)
 
         mismatched = json.loads(json.dumps(payload))
-        mismatched["models"][0]["license_audit"]["reviewed_revision"] = "0" * 40
+        mismatched_model = next(m for m in mismatched["models"] if m["model_id"] == 4)\n        mismatched_model["license_audit"]["reviewed_revision"] = "0" * 40
         with self.assertRaises(ManifestError):
             validate_manifest(mismatched)
 
         unknown = json.loads(json.dumps(payload))
-        unknown["models"][0]["license_review_status"] = "approved"
+        next(m for m in unknown["models"] if m["model_id"] == 4)["license_review_status"] = "approved"
         with self.assertRaises(ManifestError):
             validate_manifest(unknown)
 
