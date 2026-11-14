@@ -16,9 +16,10 @@ def test_arena_service_has_independent_identity_and_lifecycle():
     assert "TimeoutStopSec=30s" in text
     assert "NoNewPrivileges=true" in text
     assert "ProtectHome=read-only" in text
+    assert "BindPaths=/home/debian/ai-chess-arena" in text
     assert "ReadWritePaths=/home/debian/ai-chess-arena" in text
     assert "ReadOnlyPaths=/home/debian/ai-agent/bin/llamafile" in text
-    assert "/home/debian/ai-agent/models" not in text
+    assert "InaccessiblePaths=/home/debian/ai-agent/models" in text
     assert "sentinelx-cloud-core.service" not in text
 
 
