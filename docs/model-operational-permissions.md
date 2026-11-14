@@ -44,7 +44,7 @@ Still required before a real model test can run:
 
 1. a narrowly privileged execution broker with a fixed, reviewed worker command (no arbitrary command supplied by the panel);
 2. authenticated actor propagation from the existing panel session (the current actor argument is not authentication);
-3. an installed and independently reviewed worker executable;
+3. an installed and independently reviewed worker executable that re-hashes the opened GGUF immediately before loading it;
 4. isolated evaluation output storage and proof that no writes can reach official tournament/result/rating tables;
 5. a real systemd stop adapter, timeout/process-tree cleanup and a controlled capacity probe;
 6. integration tests against a disposable systemd test unit, plus security review of the broker's privilege boundary.
@@ -61,7 +61,7 @@ Still required before a real model test can run:
 - Job creation requires an active `TEST_ONLY` or `EVALUATION` grant pinned to the exact artifact SHA-256, explicit one-operation confirmation, a matching file fingerprint, and a positive host-capacity callback.
 - Immediately before a start plan is issued, the ledger rechecks the active scope, artifact SHA-256 and byte size, approved limits, and current host-capacity callback.
 - The one-operation consent is consumed atomically with the queued → starting transition. A second claim is rejected.
-- The worker executable is a fixed constant; panel/API input cannot supply a command, systemd property, or arbitrary argument vector.
+- The worker executable is a fixed constant; panel/API input cannot supply a command, systemd property, or arbitrary argument vector. The plan also passes the approved SHA-256 to the worker, which must independently verify the opened artifact immediately before loading it to close the path-replacement race.
 - The worker output directory is constrained to the job's private systemd runtime directory.
 - Job lifecycle events and evaluation metrics are stored in separate tables. Metric writes are accepted only for `EVALUATION` jobs; no official tournament/result/rating table is referenced.
 - Start-plan generation is side-effect free: it returns an argv list and explicitly reports `side_effects_performed=false`. It does not call `systemd-run`, create a process, or claim that a job is running.
