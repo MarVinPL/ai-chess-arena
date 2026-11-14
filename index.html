@@ -218,7 +218,48 @@ async function loadTournamentView(id){
     bracketHost.appendChild(section);
    });
   }
-  $('tournament-champion').textContent=d.champion?'Mistrz: '+d.champion.name:'Mistrz: jeszcze nierozstrzygnięty';
+  const championHost=$('tournament-champion');championHost.textContent=d.champion?'Mistrz: '+d.champion.name:'Mistrz: jeszcze nierozstrzygnięty';
+  const admission=d.late_admission||{};
+  if(t.parent_tournament_id){const note=document.createElement('div');note.className='notice';note.textContent='Turniej eliminacyjny nowych zawodników dla turnieju #'+t.parent_tournament_id+'. Kryterium awansu: co najmniej jedno zwycięstwo; ranking: punkty, zwycięstwa, remisy, nazwa.';championHost.appendChild(note)}
+  else {
+   if(admission.initial_entrant_count!=null){
+    const quota=document.createElement('div');quota.className='notice';quota.style.marginTop='8px';
+    quota.textContent='Nowi zawodnicy: wykorzystano '+admission.used+'/'+admission.limit+' · pozostało '+admission.remaining+' (podstawa: '+admission.initial_entrant_count+' zawodników na starcie).';championHost.appendChild(quota);
+   }
+   (admission.batches||[]).forEach(batch=>{const line=document.createElement('div');line.className='notice';line.textContent='Eliminacje #'+batch.qualification_tournament_id+' · '+batch.status+' · turniej eliminacyjny: '+batch.qualification_status;championHost.appendChild(line)});
+   if(t.status==='planned'&&Array.isArray(admission.candidates)&&admission.candidates.length){
+    const section=document.createElement('div');section.className='notice';section.style.marginTop='8px';
+    const label=document.createElement('label');label.textContent='Dodaj nowych zawodników bez limitu przed startem:';label.style.display='block';
+    const select=document.createElement('select');select.multiple=true;select.size=Math.min(8,admission.candidates.length);select.style.width='100%';select.style.margin='7px 0';
+    admission.candidates.forEach(candidate=>{const option=document.createElement('option');option.value=String(candidate.model_id);option.textContent=candidate.name+' · #'+candidate.model_id;select.appendChild(option)});
+    const add=document.createElement('button');add.textContent='Dodaj wybranych do składu';add.onclick=async()=>{
+     const model_ids=Array.from(select.selectedOptions).map(option=>Number(option.value));
+     if(!model_ids.length){$('league-message').textContent='Wybierz co najmniej jednego zawodnika.';return}
+     add.disabled=true;
+     try{const response=await fetch('/api/tournaments/entries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id,model_ids})});const result=await response.json();if(!response.ok)throw Error(result.error||response.status);$('league-message').textContent='Dodano '+result.added_count+' zawodników. Skład liczy teraz '+result.total_entrants+'.';await loadLeague()}
+     catch(error){$('league-message').textContent='Nie udało się dodać zawodników: '+error;add.disabled=false}
+    };
+    section.append(label,select,add);championHost.appendChild(section);
+   }
+   if(t.status==='stopped'&&admission.remaining>0&&Array.isArray(admission.candidates)&&admission.candidates.length>=2){
+    const section=document.createElement('div');section.className='notice';section.style.marginTop='8px';
+    const label=document.createElement('label');label.textContent='Kandydaci do osobnej eliminacji (wybierz co najmniej 2):';label.style.display='block';
+    const select=document.createElement('select');select.multiple=true;select.size=Math.min(8,admission.candidates.length);select.style.width='100%';select.style.margin='7px 0';
+    admission.candidates.forEach(candidate=>{const option=document.createElement('option');option.value=String(candidate.model_id);option.textContent=candidate.name+' · #'+candidate.model_id;select.appendChild(option)});
+    const start=document.createElement('button');start.textContent='Utwórz i uruchom eliminacje';start.onclick=async()=>{
+     const model_ids=Array.from(select.selectedOptions).map(option=>Number(option.value));
+     if(model_ids.length<2){$('league-message').textContent='Wybierz co najmniej dwóch kandydatów.';return}
+     if(!confirm('Uruchomić osobny turniej eliminacyjny dla '+model_ids.length+' kandydatów? Turniej główny pozostanie zatrzymany.'))return;
+     start.disabled=true;
+     try{const created=await fetch('/api/tournaments/admissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({parent_tournament_id:t.id,model_ids})});const batch=await created.json();if(!created.ok)throw Error(batch.error||created.status);
+      const launched=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:batch.qualification_tournament_id})});const run=await launched.json();if(!launched.ok)throw Error(run.error||launched.status);
+      $('league-message').textContent='Uruchomiono eliminacje #'+batch.qualification_tournament_id+'. Po zakończeniu najlepsze modele z co najmniej jednym zwycięstwem zostaną automatycznie dopuszczone w ramach pozostałego limitu.';await loadLeague();
+     }catch(error){$('league-message').textContent='Nie udało się uruchomić eliminacji: '+error;start.disabled=false}
+    };
+    section.append(label,select,start);championHost.appendChild(section);
+   }
+   if((admission.results||[]).length){const title=document.createElement('strong');title.textContent='Historia kwalifikacji nowych zawodników';championHost.appendChild(title);const list=document.createElement('div');list.className='notice';(admission.results||[]).forEach(item=>{const line=document.createElement('div');line.textContent='#'+item.rank+' '+item.name+' · '+item.points+' pkt · W '+item.wins+' · R '+item.draws+' · '+({qualified:'dopuszczony',not_qualified:'nie spełnił kryterium',capacity_exhausted:'brak miejsca w limicie'}[item.outcome]||item.outcome);list.appendChild(line)});championHost.appendChild(list)}
+  }
  }catch(e){$('tournament-detail-title').textContent='Nie udało się odczytać turnieju: '+e}
 }
 function renderTournaments(rows){
@@ -238,6 +279,7 @@ function renderTournaments(rows){
   const header=document.createElement('div');header.className='tournament-card__header';
   const title=document.createElement('h5');title.className='tournament-card__title';
   title.textContent=t.name||'Turniej bez nazwy';
+  if(t.parent_tournament_id)title.textContent+=' · eliminacje dla #'+t.parent_tournament_id;
   const id=document.createElement('span');id.className='tournament-card__id';id.textContent='#'+t.id;
   title.appendChild(document.createTextNode(' '));title.appendChild(id);
   const status=document.createElement('span');status.className='tournament-status';
@@ -251,6 +293,7 @@ function renderTournaments(rows){
   addField(fields,'Uczestnicy',Number(t.players??0));
   addField(fields,'Postęp partii',completed+' / '+planned);
   addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
+  if(!t.parent_tournament_id&&t.initial_entrant_count!=null)addField(fields,'Limit nowych zawodników',Number(t.late_admission_used||0)+' / '+Number(t.late_admission_limit||0));
   if(t.status==='stopped'||t.status==='running'||t.resume_blocked)addField(fields,'Checkpoint',t.resume_blocked?'brak · wznowienie zablokowane — wymagany przegląd':(t.has_checkpoint?'zapisany · gotowy do wznowienia':'brak aktywnej partii do odtworzenia'));
   card.appendChild(fields);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));

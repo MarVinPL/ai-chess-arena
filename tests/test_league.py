@@ -84,6 +84,157 @@ class LeagueTests(unittest.TestCase):
   self.assertNotEqual(key_a,key_c)
   self.assertNotEqual(key_a,key_d)
 
+ def test_legacy_tournament_schema_migrates_admission_columns_safely(self):
+  legacy=Path(self.tmp.name)/'legacy.sqlite3'
+  with sqlite3.connect(legacy) as c:
+   c.execute("CREATE TABLE tournaments(id INTEGER PRIMARY KEY,name TEXT NOT NULL,format TEXT NOT NULL DEFAULT 'PURE_AI',status TEXT NOT NULL DEFAULT 'planned',created_at TEXT NOT NULL,rules_version TEXT NOT NULL DEFAULT '1',qualification_percent INTEGER NOT NULL DEFAULT 80)")
+   c.execute("INSERT INTO tournaments(name,created_at) VALUES('Legacy tournament','now')")
+  league.DB=legacy
+  league.init()
+  with league.connect() as c:
+   columns={row['name'] for row in c.execute('PRAGMA table_info(tournaments)')}
+   self.assertTrue({'initial_entrant_count','late_admission_limit','late_admission_used','parent_tournament_id','admission_batch_id'}<=columns)
+   tables={row['name'] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+   self.assertTrue({'tournament_admission_batches','tournament_admission_results'}<=tables)
+   self.assertEqual(c.execute('SELECT status,initial_entrant_count,late_admission_used FROM tournaments WHERE id=1').fetchone()['status'],'planned')
+
+ def test_prestart_roster_can_be_extended_without_a_fixed_limit(self):
+  tournament=league.create_round_robin('Unlimited prestart')
+  candidate_ids=[]
+  for index in range(6):
+   result=league.register_model(f'Prestart Candidate {index}',source=f'https://example.test/prestart-{index}',license='Apache-2.0',license_verified=True,
+    metadata={'filename':f'prestart-{index}.gguf','sha256':format(index+1,'064x'),'size_bytes':100})
+   candidate_ids.append(result['id'])
+  added=league.add_prestart_tournament_entries(tournament['id'],candidate_ids)
+  self.assertEqual(added['added_count'],6)
+  self.assertEqual(added['total_entrants'],8)
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchone()[0],56)
+  league.initialize_late_admission_quota(tournament['id'])
+  with self.assertRaises(ValueError): league.add_prestart_tournament_entries(tournament['id'],[candidate_ids[0]])
+
+ def test_late_admission_quota_is_frozen_from_original_roster(self):
+  tournament=league.create_round_robin('Quota snapshot')
+  snapshot=league.initialize_late_admission_quota(tournament['id'])
+  self.assertEqual(snapshot,{'initial_entrant_count':2,'late_admission_limit':5})
+  with league.connect() as c:
+   c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Gamma','PURE_AI','now')")
+   model_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+   c.execute("INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,NULL)",(tournament['id'],model_id))
+  self.assertEqual(league.initialize_late_admission_quota(tournament['id']),snapshot)
+
+ def test_late_admission_quota_examples(self):
+  for count,expected in ((6,5),(20,10),(40,20)):
+   league.DB=Path(self.tmp.name)/f'quota-{count}.sqlite3'; league.init()
+   with league.connect() as c:
+    for model_id in range(1,count+1):
+     c.execute('INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)',(f'Quota Model {count}-{model_id}','PURE_AI','now'))
+     new_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+     c.execute('INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(new_id,f'q-{count}-{model_id}',f'q-{count}-{model_id}.gguf',format(model_id,'064x'),100,'https://example.test/q.gguf','Apache-2.0',1,'now'))
+    c.execute("INSERT INTO tournaments(name,format,created_at) VALUES(?,?,?)",(f'Quota {count}','PURE_AI','now'))
+    tournament_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) SELECT ?,id,(SELECT MAX(id) FROM model_versions WHERE model_id=league_models.id) FROM league_models',(tournament_id,))
+   self.assertEqual(league.initialize_late_admission_quota(tournament_id)['late_admission_limit'],expected)
+
+ def test_late_admission_elimination_ranks_and_appends_only_winners(self):
+  tournament=league.create_round_robin('Admission parent')
+  league.initialize_late_admission_quota(tournament['id'])
+  candidates=[]
+  for name in ('Candidate A','Candidate B','Candidate C','Candidate D','Candidate E','Candidate F'):
+   result=league.register_model(name,source='https://example.test/'+name.lower().replace(' ','-'),license='Apache-2.0',license_verified=True,
+    metadata={'filename':name.lower().replace(' ','-')+'.gguf','sha256':('c'*63)+str(len(candidates)),'size_bytes':100})
+   candidates.append(result['id'])
+  with league.connect() as c: c.execute("UPDATE tournaments SET status='stopped' WHERE id=?",(tournament['id'],))
+  batch=league.create_late_admission_batch(tournament['id'],candidates)
+  self.assertEqual(batch['available_slots'],5)
+  child_id=batch['qualification_tournament_id']
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league' ORDER BY id",(child_id,)).fetchall()
+   for pairing in pairings:
+    # Every candidate earns exactly one win; deterministic name order breaks ties.
+    winner=pairing['white_model_id']
+    white=c.execute('SELECT name FROM league_models WHERE id=?',(pairing['white_model_id'],)).fetchone()['name']
+    black=c.execute('SELECT name FROM league_models WHERE id=?',(pairing['black_model_id'],)).fetchone()['name']
+    cur=c.execute('INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)',(white,black,'1-0'))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,pairing['id']))
+   c.execute("UPDATE tournaments SET status='completed' WHERE id=?",(child_id,))
+  finalized=league.finalize_late_admission_batch(child_id)
+  self.assertEqual(finalized['qualified_count'],5)
+  self.assertEqual(len(finalized['ranking']),6)
+  self.assertEqual(sum(1 for row in finalized['ranking'] if row['outcome']=='capacity_exhausted'),1)
+  with league.connect() as c:
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament['id'],)).fetchone()[0],7)
+   self.assertEqual(c.execute('SELECT late_admission_used FROM tournaments WHERE id=?',(tournament['id'],)).fetchone()[0],5)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND stage='league'",(tournament['id'],)).fetchone()[0],42)
+  self.assertTrue(league.finalize_late_admission_batch(child_id)['already_finalized'])
+  with self.assertRaises(ValueError): league.create_late_admission_batch(tournament['id'],candidates[:2])
+  with self.assertRaises(ValueError):
+   extra=[]
+   for index in range(2):
+    item=league.register_model(f'After limit {index}',source=f'https://example.test/after-limit-{index}',license='Apache-2.0',license_verified=True,
+     metadata={'filename':f'after-limit-{index}.gguf','sha256':format(index+90,'064x'),'size_bytes':100})
+    extra.append(item['id'])
+   league.create_late_admission_batch(tournament['id'],extra)
+
+ def test_elimination_does_not_fill_places_with_candidates_without_a_win(self):
+  tournament=league.create_round_robin('Admission pass criterion')
+  league.initialize_late_admission_quota(tournament['id'])
+  candidates=[]
+  for index in range(3):
+   item=league.register_model(f'Pass Candidate {index}',source=f'https://example.test/pass-{index}',license='Apache-2.0',license_verified=True,
+    metadata={'filename':f'pass-{index}.gguf','sha256':format(index+101,'064x'),'size_bytes':100})
+   candidates.append(item['id'])
+  with league.connect() as c: c.execute("UPDATE tournaments SET status='stopped' WHERE id=?",(tournament['id'],))
+  batch=league.create_late_admission_batch(tournament['id'],candidates)
+  child_id=batch['qualification_tournament_id']
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league' ORDER BY id",(child_id,)).fetchall()
+   for pairing in pairings:
+    if pairing['white_model_id']==candidates[0]: result='1-0'
+    elif pairing['black_model_id']==candidates[0]: result='0-1'
+    else: result='1/2-1/2'
+    white=c.execute('SELECT name FROM league_models WHERE id=?',(pairing['white_model_id'],)).fetchone()['name']
+    black=c.execute('SELECT name FROM league_models WHERE id=?',(pairing['black_model_id'],)).fetchone()['name']
+    game=c.execute('INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)',(white,black,result))
+    c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(game.lastrowid,pairing['id']))
+   c.execute("UPDATE tournaments SET status='completed' WHERE id=?",(child_id,))
+  finalized=league.finalize_late_admission_batch(child_id)
+  self.assertEqual(finalized['qualified_model_ids'],[candidates[0]])
+  self.assertEqual(finalized['qualified_count'],1)
+  self.assertEqual(sum(1 for row in finalized['ranking'] if row['outcome']=='not_qualified'),2)
+  with league.connect() as c:
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament['id'],)).fetchone()[0],3)
+
+ def test_late_admission_rejects_duplicate_and_concurrent_batches(self):
+  tournament=league.create_round_robin('Admission duplicate')
+  league.initialize_late_admission_quota(tournament['id'])
+  candidate_ids=[]
+  for index in range(2):
+   result=league.register_model(f'Batch Candidate {index}',source=f'https://example.test/batch-{index}',license='Apache-2.0',license_verified=True,
+    metadata={'filename':f'batch-{index}.gguf','sha256':str(index+1)*64,'size_bytes':100})
+   candidate_ids.append(result['id'])
+  with league.connect() as c: c.execute("UPDATE tournaments SET status='stopped' WHERE id=?",(tournament['id'],))
+  with self.assertRaises(ValueError): league.create_late_admission_batch(tournament['id'],[candidate_ids[0],candidate_ids[0]])
+  import concurrent.futures, threading
+  barrier=threading.Barrier(2)
+  def create_batch():
+   barrier.wait()
+   try:
+    league.create_late_admission_batch(tournament['id'],candidate_ids)
+    return 'created'
+   except ValueError:
+    return 'rejected'
+  with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+   outcomes=list(pool.map(lambda _:create_batch(),range(2)))
+  self.assertEqual(sorted(outcomes),['created','rejected'])
+  with league.connect() as c:
+   child_id=c.execute('SELECT qualification_tournament_id FROM tournament_admission_batches WHERE parent_tournament_id=?',(tournament['id'],)).fetchone()[0]
+   c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Nested Candidate','PURE_AI','now')")
+   nested_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(nested_id,'nested','nested.gguf','e'*64,100,'https://example.test/nested.gguf','Apache-2.0',1,'now'))
+  with self.assertRaises(ValueError): league.add_prestart_tournament_entries(child_id,[nested_id])
+  with self.assertRaises(ValueError): league.create_late_admission_batch(child_id,[candidate_ids[0],nested_id])
+
  def test_round_robin_has_two_legs_per_pair(self):
   t=league.create_round_robin('Test Cup')
   self.assertEqual(t['games_planned'],2)

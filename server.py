@@ -432,7 +432,10 @@ def _ensure_version_assets(version_id):
 
 
 def cleanup_unneeded_models(keep_version_ids=()):
+    # A separate admission-elimination tournament can run while its parent is
+    # stopped. Preserve cached assets required by every pending/resumable event.
     keep = {int(value) for value in keep_version_ids}
+    keep.update(league.tournament_required_version_ids())
     with league.connect() as c:
         rows = c.execute("SELECT id FROM model_versions WHERE (managed_copy=1 AND filename IS NOT NULL) OR (draft_managed_copy=1 AND draft_filename IS NOT NULL) ORDER BY id").fetchall()
     removed = []
@@ -644,13 +647,30 @@ def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, b
     for field in ('id', 'name', 'format', 'rules_version', 'qualification_percent', 'created_at'):
         if saved_tournament.get(field) != current_tournament[field]:
             raise ValueError('Konfiguracja turnieju różni się od checkpointu; wznowienie zablokowane')
-    if checkpoint.get('entries') != [dict(row) for row in current_entries]:
-        raise ValueError('Lista uczestników różni się od checkpointu; wznowienie zablokowane')
+    saved_entries = checkpoint.get('entries') or []
+    current_entries = [dict(row) for row in current_entries]
+    current_entries_by_id = {int(row['model_id']): row for row in current_entries}
+    saved_entry_ids = {int(row['model_id']) for row in saved_entries}
+    if any(current_entries_by_id.get(int(row['model_id'])) != row for row in saved_entries):
+        raise ValueError('Istniejący uczestnik lub jego przypisana wersja różni się od checkpointu; wznowienie zablokowane')
+    appended_entries = [row for row in current_entries if int(row['model_id']) not in saved_entry_ids]
+    appended_ids = {int(row['model_id']) for row in appended_entries}
+    if appended_ids:
+        with league.connect() as c:
+            qualified_ids = {int(row[0]) for row in c.execute(
+                "SELECT model_id FROM tournament_admission_results WHERE parent_tournament_id=? AND outcome='qualified'",
+                (tournament_id,)).fetchall()}
+        if not appended_ids <= qualified_ids:
+            raise ValueError('Checkpoint nie dopuszcza uczestników dodanych poza zatwierdzoną eliminacją')
     saved_schedule = checkpoint.get('schedule') or []
     current_schedule = [dict(row) for row in current_schedule]
-    if len(saved_schedule) != len(current_schedule):
-        raise ValueError('Harmonogram różni się od checkpointu; wznowienie zablokowane')
-    for saved_row, current_row in zip(saved_schedule, current_schedule):
+    current_schedule_by_id = {int(row['id']): row for row in current_schedule}
+    saved_schedule_ids = {int(row['id']) for row in saved_schedule}
+    if not saved_schedule_ids <= set(current_schedule_by_id):
+        raise ValueError('Istniejące parowanie zniknęło z harmonogramu; wznowienie zablokowane')
+    for original_saved_row in saved_schedule:
+        saved_row = dict(original_saved_row)
+        current_row = current_schedule_by_id[int(saved_row['id'])]
         if saved_row.get('id') == int(pairing['id']):
             # A crash may occur between the durable initial checkpoint and the
             # pending→running DB transition. This one status transition is safe.
@@ -658,7 +678,13 @@ def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, b
                 raise ValueError('Status aktywnej pary różni się od checkpointu; wznowienie zablokowane')
             saved_row = {**saved_row, 'status': current_row.get('status')}
         if saved_row != current_row:
-            raise ValueError('Harmonogram różni się od checkpointu; wznowienie zablokowane')
+            raise ValueError('Istniejące parowanie różni się od checkpointu; wznowienie zablokowane')
+    appended_pairings = [row for row in current_schedule if int(row['id']) not in saved_schedule_ids]
+    for row in appended_pairings:
+        if (row.get('stage') != 'league' or row.get('status') != 'pending' or
+                row.get('game_id') is not None or row.get('winner_model_id') is not None or
+                not ({int(row['white_model_id']), int(row['black_model_id'])} & appended_ids)):
+            raise ValueError('Nowy wpis harmonogramu nie jest bezpiecznym, oczekującym parowaniem dopuszczonego zawodnika')
 
 
 
@@ -948,6 +974,17 @@ def tournament_loop(tournament_id):
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
             c.execute('UPDATE tournaments SET status=? WHERE id=?', (status, tournament_id))
         set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
+        if status == 'completed':
+            try:
+                admission_result = league.finalize_late_admission_batch(tournament_id)
+                if admission_result:
+                    set_live('completed',
+                             f"Eliminacje zakończone: dopuszczono {admission_result['qualified_count']} nowych zawodników",
+                             tournament_id=tournament_id, admission=admission_result)
+            except Exception as admission_exc:
+                tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Admission finalization failed: ' + str(admission_exc)
+                set_live('admission_finalize_error', 'Nie udało się zatwierdzić wyników eliminacji: ' + str(admission_exc),
+                         tournament_id=tournament_id)
     except Exception as exc:
         tournament_error = str(exc)
         if isinstance(exc, TournamentPreflightError):
@@ -989,11 +1026,15 @@ def start_tournament(tournament_id):
         if tournament_thread and tournament_thread.is_alive():
             raise RuntimeError('Inny turniej jest już uruchomiony')
         with league.connect() as c:
-            row = c.execute('SELECT status,resume_blocked FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+            row = c.execute('SELECT status,resume_blocked,parent_tournament_id FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
             if not row:
                 raise ValueError('Nie znaleziono turnieju')
             if row['resume_blocked']:
                 raise RuntimeError('Wznowienie zablokowane: poprzedni proces nie pozostawił poprawnego checkpointu. Wymagany jest ręczny przegląd stanu.')
+            if row['parent_tournament_id'] is not None:
+                parent = c.execute('SELECT status FROM tournaments WHERE id=?', (row['parent_tournament_id'],)).fetchone()
+                if parent is None or parent['status'] != 'stopped':
+                    raise RuntimeError('Eliminacje można uruchomić tylko wtedy, gdy turniej nadrzędny jest bezpiecznie zatrzymany')
             if row['status'] not in ('planned', 'stopped', 'failed'):
                 raise RuntimeError(f'Nie można uruchomić turnieju ze statusem: {row["status"]}')
             entries_count = c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?', (tournament_id,)).fetchone()[0]
@@ -1011,6 +1052,10 @@ def start_tournament(tournament_id):
             preflight = tournament_preflight(tournament_id)
         if not preflight['ready']:
             raise TournamentPreflightError(_preflight_error_message(preflight))
+        # Freeze the original roster only after all start checks passed. The
+        # snapshot is immutable across stops, resumes, and process restarts.
+        if row['parent_tournament_id'] is None:
+            league.initialize_late_admission_quota(tournament_id)
         tournament_stop_event.clear()
         tournament_error = ''
         tournament_thread = threading.Thread(target=tournament_loop, args=(tournament_id,), daemon=True)
@@ -1388,7 +1433,8 @@ class Handler(BaseHTTPRequestHandler):
                        AND p.status='completed'
                        AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
                     (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
-                    t.qualification_percent,t.resume_blocked,
+                    t.qualification_percent,t.resume_blocked,t.initial_entrant_count,t.late_admission_limit,
+                    t.late_admission_used,t.parent_tournament_id,t.admission_batch_id,
                     EXISTS(SELECT 1 FROM tournament_checkpoints cp WHERE cp.tournament_id=t.id) AS has_checkpoint,
                     CASE WHEN t.rules_version='2' THEN
                       (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
@@ -1428,7 +1474,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/model-admission/admit','/api/model-admission/revoke'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1491,6 +1537,16 @@ class Handler(BaseHTTPRequestHandler):
                     result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
                 elif self.path == '/api/tournaments/start':
                     result = start_tournament(int(payload.get('tournament_id', 0)))
+                elif self.path == '/api/tournaments/admissions':
+                    if tournament_thread and tournament_thread.is_alive():
+                        raise RuntimeError('Najpierw bezpiecznie zatrzymaj aktywny turniej')
+                    result = league.create_late_admission_batch(
+                        int(payload.get('parent_tournament_id', 0)), payload.get('model_ids'))
+                elif self.path == '/api/tournaments/entries':
+                    if tournament_thread and tournament_thread.is_alive():
+                        raise RuntimeError('Nie można zmieniać składu podczas aktywnego turnieju')
+                    result = league.add_prestart_tournament_entries(
+                        int(payload.get('tournament_id', 0)), payload.get('model_ids'))
                 elif self.path == '/api/tournaments/stop':
                     active = bool(tournament_thread and tournament_thread.is_alive())
                     if active:
