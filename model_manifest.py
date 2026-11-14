@@ -101,7 +101,7 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
     """Persist verified remote file metadata, without approving licenses or downloading.
 
     Updates existing registry versions only. It refuses missing/ambiguous rows and
-    wraps all seven records in one SQLite transaction. The existing model row's
+    wraps all manifest records in one SQLite transaction. The existing model row's
     license_verified flag is always forced to 0. Even a revision-bound
     verified_restricted audit is not owner approval to use or distribute weights.
     """
@@ -120,8 +120,8 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
                     """SELECT v.id, v.metadata_json, v.managed_copy, v.status
                        FROM model_versions v
                        JOIN league_models m ON m.id=v.model_id
-                       WHERE v.model_id=? AND v.source=?""",
-                    (item["model_id"], repo_url),
+                       WHERE v.model_id=? AND (v.source=? OR v.source LIKE ?)""",
+                    (item["model_id"], repo_url, f"{repo_url}/resolve/%"),
                 ).fetchall()
                 if len(rows) != 1:
                     raise ManifestError(f"Model {item['model_id']} ({item['repo_id']}): oczekiwano 1 wersji, znaleziono {len(rows)}")
