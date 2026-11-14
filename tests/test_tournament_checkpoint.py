@@ -89,6 +89,15 @@ class RunnerResumeTests(unittest.TestCase):
         self.assertEqual(len(caught.exception.move_records), 1)
         self.assertEqual(caught.exception.fen, board.fen())
 
+    def test_resume_rejects_san_that_does_not_match_uci(self):
+        stop = threading.Event()
+        runner = engine_runner.SequentialChessRunner(_StopDuringInference(stop))
+        player = {'name': 'Model', 'path': '/tmp/model.gguf', 'model_id': 1}
+        with self.assertRaisesRegex(ValueError, 'SAN nie zgadza się'):
+            runner.play_game(player, player, stop_event=stop,
+                             resume_moves=[{'ply': 1, 'uci': 'e2e4', 'san': 'd4',
+                                            'color': 'white', 'model': 'Model', 'seconds': 0.1}])
+
     def test_resume_rejects_illegal_history(self):
         stop = threading.Event()
         runner = engine_runner.SequentialChessRunner(_StopDuringInference(stop))
