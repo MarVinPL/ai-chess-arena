@@ -5,6 +5,7 @@ from pathlib import Path
 import chess, chess.pgn
 import league
 import model_store
+import model_allowlist
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -518,16 +519,42 @@ class TournamentPreflightError(RuntimeError):
 def tournament_preflight(tournament_id):
     """Check metadata, license decision, and runtime; local weights are lazy-cached."""
     entries = league.tournament_entry_status(tournament_id)
+    try:
+        sync = model_allowlist.check_repository_sync(ROOT)
+        if not sync.get('in_sync'):
+            raise model_allowlist.AllowlistError(
+                'allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+        admission = {item['model_id']: item for item in model_allowlist.load_allowlist()['models']}
+        allowlist_error = None
+    except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
+        admission = {}
+        allowlist_error = str(exc)
+    with league.connect() as connection:
+        tournament = connection.execute('SELECT format FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+    tournament_format = tournament['format'] if tournament else ''
     # The runner starts Llamafile only after this preflight succeeds.
     # Requiring /health here would deadlock the lazy-start lifecycle.
     runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
+        if allowlist_error is not None:
+            reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
+        else:
+            reasons.extend(model_allowlist.tournament_admission_blockers(
+                admission.get(entry['model_id']), model_id=entry['model_id'],
+                repo_id=entry.get('repo_id'), revision=entry.get('revision'),
+                license_name=entry.get('license'),
+                license_verified=entry.get('license_verified') is True,
+                tournament_format=tournament_format))
         if not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
-        entry['download_on_demand'] = bool(entry.get('download_on_demand') and entry.get('manifest_ready') and entry.get('license_verified'))
+        entry['download_on_demand'] = bool(
+            not reasons and entry.get('download_on_demand') and
+            entry.get('manifest_ready') and entry.get('license_verified'))
+        entry['draft_download_on_demand'] = bool(
+            not reasons and entry.get('draft_download_on_demand'))
         entry['blockers'] = reasons
         entry['ready_to_start'] = not reasons
         if reasons:

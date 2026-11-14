@@ -157,6 +157,37 @@ def is_runtime_ready(entry: dict, *, license_verified: bool,
         license_verified is True and local_file_verified is True and runtime_healthy is True
     )
 
+
+def tournament_admission_blockers(entry: dict | None, *, model_id: int,
+                                  repo_id: str | None, revision: str | None,
+                                  license_name: str | None, license_verified: bool,
+                                  tournament_format: str) -> list[str]:
+    """Fail-closed admission gate for one exact model version and tournament scope."""
+    reasons = []
+    if model_id in {9, 10}:
+        return ['model jest trwale wyłączony z AI Chess Arena (Issue #71)']
+    if not isinstance(entry, dict):
+        return ['brak decyzji modelu w allowliście']
+    if entry.get('model_id') != model_id:
+        reasons.append('niezgodny identyfikator modelu w allowliście')
+    if entry.get('status') not in {'eligible', 'restricted'}:
+        reasons.append('model nie ma jawnej decyzji dopuszczenia (status allowlisty: %s)' % entry.get('status', 'brak'))
+    if tournament_format not in (entry.get('admission_scope') or []):
+        reasons.append('allowlista nie dopuszcza modelu do tego formatu turnieju')
+    if entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers'):
+        reasons.append('gotowość techniczna modelu nie została zatwierdzona')
+    if not isinstance(repo_id, str) or repo_id != entry.get('repo_id'):
+        reasons.append('repozytorium wersji nie zgadza się z allowlistą')
+    if not isinstance(revision, str) or revision != entry.get('revision'):
+        reasons.append('rewizja wersji nie zgadza się z allowlistą')
+    expected_license = (entry.get('license_requirements') or {}).get('manifest_license')
+    if not isinstance(license_name, str) or license_name.casefold() != str(expected_license or '').casefold():
+        reasons.append('deklaracja licencji wersji nie zgadza się z allowlistą')
+    if license_verified is not True:
+        reasons.append('licencja tej wersji nie została niezależnie zatwierdzona')
+    return reasons
+
+
 def check_allowlist_sync(local_commit: str, main_commit: str,
                          allowlist_worktree_clean: bool) -> dict:
     """Report whether the consumer is exactly on origin/main; never fetch or reset."""
