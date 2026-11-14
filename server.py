@@ -884,6 +884,12 @@ class Handler(BaseHTTPRequestHandler):
                 rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
                     (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
                     (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
+                    (SELECT COUNT(DISTINCT p.id)
+                     FROM tournament_pairings p
+                     JOIN games g ON g.id=p.game_id
+                     WHERE p.tournament_id=t.id
+                       AND p.status='completed'
+                       AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
                     (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
                     t.qualification_percent,
                     CASE WHEN t.rules_version='2' THEN
