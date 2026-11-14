@@ -205,32 +205,40 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
 
 
 def mark_job_running(connection: sqlite3.Connection, *, job_id: str,
-                     systemd_unit: str, actor: str) -> None:
+                     systemd_unit: str, actor: str, unit_is_active) -> None:
     ensure_schema(connection)
     actor = _actor(actor)
+    if not callable(unit_is_active):
+        raise ValueError("Wymagany jest kontrolowany odczyt stanu jednostki systemd.")
     with connection:
         row = connection.execute(
             "SELECT status,systemd_unit FROM model_test_jobs WHERE job_id=?",
             (job_id,)).fetchone()
         if row is None or row["status"] != "starting" or row["systemd_unit"] != systemd_unit:
             raise ValueError("Nieprawidłowy stan lub jednostka systemd zadania.")
+        if unit_is_active(systemd_unit) is not True:
+            raise RuntimeError("Systemd nie potwierdził aktywności dokładnej jednostki zadania.")
         connection.execute(
             "UPDATE model_test_jobs SET status='running' WHERE job_id=?", (job_id,))
         _event(connection, job_id, "running", actor, {"systemd_unit": systemd_unit})
 
 
 def finish_job(connection: sqlite3.Connection, *, job_id: str, success: bool,
-               actor: str, result: dict | None = None) -> None:
+               actor: str, unit_is_active, result: dict | None = None) -> None:
     ensure_schema(connection)
     actor = _actor(actor)
     if success is not True and success is not False:
         raise ValueError("Nieprawidłowy wynik zadania.")
+    if not callable(unit_is_active):
+        raise ValueError("Wymagany jest kontrolowany odczyt stanu jednostki systemd.")
     with connection:
         row = connection.execute(
-            "SELECT status FROM model_test_jobs WHERE job_id=?", (job_id,)
+            "SELECT status,systemd_unit FROM model_test_jobs WHERE job_id=?", (job_id,)
         ).fetchone()
         if row is None or row["status"] not in {"starting", "running"}:
             raise ValueError("Zadanie nie może zostać zakończone z obecnego stanu.")
+        if not row["systemd_unit"] or unit_is_active(row["systemd_unit"]) is not False:
+            raise RuntimeError("Nie można zakończyć zadania bez potwierdzenia, że jego jednostka systemd jest nieaktywna.")
         status = "succeeded" if success else "failed"
         now = _now()
         safe_result = result if isinstance(result, dict) else {}
