@@ -453,10 +453,12 @@ def tournament_loop(tournament_id):
     # manual cleanup endpoint can unlink a model after preparation but before
     # a later turn reloads it. Downloads and cleanup use the same re-entrant lock.
     model_store.MODEL_LIFECYCLE_LOCK.acquire()
+    preflight_passed = False
     try:
         preflight = tournament_preflight(tournament_id)
         if not preflight['ready']:
             raise TournamentPreflightError(_preflight_error_message(preflight))
+        preflight_passed = True
         with league.connect() as c:
             tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
             if tournament is None:
@@ -633,10 +635,11 @@ def tournament_loop(tournament_id):
                 except Exception as cleanup_exc:
                     tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Runner shutdown failed: ' + str(cleanup_exc)
             tournament_runtime = None
-            try:
-                cleanup_unneeded_models()
-            except Exception as cleanup_exc:
-                tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
+            if preflight_passed:
+                try:
+                    cleanup_unneeded_models()
+                except Exception as cleanup_exc:
+                    tournament_error = (tournament_error + '; ' if tournament_error else '') + 'Model cleanup deferred: ' + str(cleanup_exc)
         finally:
             model_store.MODEL_LIFECYCLE_LOCK.release()
 
