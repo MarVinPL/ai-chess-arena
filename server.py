@@ -588,8 +588,10 @@ def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, b
     if checkpoint.get('phase') != 'game':
         raise ValueError('Checkpoint nie wskazuje aktywnej partii; wznowienie zablokowane')
     saved = checkpoint.get('pairing') or {}
-    expected = (int(pairing['id']), int(pairing['white_model_id']), int(pairing['black_model_id']))
-    actual = (int(saved.get('id', -1)), int(saved.get('white_model_id', -1)), int(saved.get('black_model_id', -1)))
+    expected = (int(pairing['id']), pairing.get('stage', 'league'),
+                int(pairing['white_model_id']), int(pairing['black_model_id']))
+    actual = (int(saved.get('id', -1)), saved.get('stage', 'league'),
+              int(saved.get('white_model_id', -1)), int(saved.get('black_model_id', -1)))
     if actual != expected:
         raise ValueError('Checkpoint dotyczy innej pary; wznowienie zablokowane')
     for color, player in (('white', white), ('black', black)):
@@ -629,6 +631,44 @@ def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, b
             saved_row = {**saved_row, 'status': current_row.get('status')}
         if saved_row != current_row:
             raise ValueError('Harmonogram różni się od checkpointu; wznowienie zablokowane')
+
+
+
+def _select_tournament_pairing(tournament_id, draft_enabled):
+    """Select the checkpointed pair first, whether pending or already running."""
+    checkpoint = tournament_checkpoint.load(DB, tournament_id)
+    with league.connect() as c:
+        running_rows = c.execute(
+            "SELECT id,white_model_id,black_model_id,stage,status FROM tournament_pairings "
+            "WHERE tournament_id=? AND status='running' ORDER BY id",
+            (tournament_id,)).fetchall()
+        if len(running_rows) > 1:
+            raise RuntimeError('Wznowienie zablokowane: turniej ma więcej niż jedno aktywne parowanie')
+        if checkpoint:
+            saved_pairing = checkpoint.get('pairing') or {}
+            pairing_id = saved_pairing.get('id')
+            if not isinstance(pairing_id, int):
+                raise RuntimeError('Checkpoint nie wskazuje prawidłowego parowania')
+            if running_rows and int(running_rows[0]['id']) != pairing_id:
+                raise RuntimeError('Checkpoint wskazuje inne parowanie niż aktywne parowanie w bazie')
+            row = c.execute(
+                "SELECT id,white_model_id,black_model_id,stage,status FROM tournament_pairings "
+                "WHERE tournament_id=? AND id=? AND status IN ('pending','running')",
+                (tournament_id, pairing_id)).fetchone()
+            if row is None:
+                raise RuntimeError('Parowanie checkpointu nie jest oczekujące ani aktywne; wznowienie zablokowane')
+            return dict(row), checkpoint
+        if running_rows:
+            raise RuntimeError('Wykryto aktywne parowanie bez checkpointu; wznowienie zablokowane')
+        row = c.execute(
+            "SELECT id,white_model_id,black_model_id,stage,status FROM tournament_pairings "
+            "WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id LIMIT 1",
+            (tournament_id,)).fetchone()
+    if row:
+        return dict(row), None
+    if draft_enabled:
+        return league.next_draft_match(tournament_id), None
+    return None, None
 
 
 def tournament_loop(tournament_id):
@@ -726,20 +766,12 @@ def tournament_loop(tournament_id):
         while True:
             if tournament_stop_event.is_set():
                 break
-            with league.connect() as c:
-                league_pairing = c.execute("SELECT id,white_model_id,black_model_id,'league' AS stage FROM tournament_pairings WHERE tournament_id=? AND status='pending' AND stage='league' ORDER BY id LIMIT 1", (tournament_id,)).fetchone()
-            if league_pairing:
-                pairing = dict(league_pairing)
-            else:
-                if not draft_enabled:
-                    break
-                pairing = league.next_draft_match(tournament_id)
-                if pairing is None:
-                    break
+            pairing, checkpoint = _select_tournament_pairing(tournament_id, draft_enabled)
+            if pairing is None:
+                break
             white, black = _resolve_pairing_players(players, pairing)
             runtime_context['white'] = white['name']
             runtime_context['black'] = black['name']
-            checkpoint = tournament_checkpoint.load(DB, tournament_id)
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []
@@ -753,11 +785,16 @@ def tournament_loop(tournament_id):
                     tournament_id, pairing, white, black, game_started, [], [], resume_fen))
             with league.connect() as c:
                 c.execute("UPDATE tournament_pairings SET status='running' WHERE id=? AND status='pending'", (pairing['id'],))
-            # Refresh the snapshot after the pending→running transition so a process
-            # crash during model preparation still has a self-consistent schedule.
-            if not checkpoint:
-                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
-                    tournament_id, pairing, white, black, game_started, [], [], resume_fen))
+                active = c.execute(
+                    "SELECT status FROM tournament_pairings WHERE id=? AND tournament_id=?",
+                    (pairing['id'], tournament_id)).fetchone()
+                if active is None or active['status'] != 'running':
+                    raise RuntimeError('Nie udało się zarezerwować parowania do wznowienia')
+            # Always refresh after pending→running, including resumed checkpoints.
+            # This closes the crash window before model preparation / first move.
+            tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                tournament_id, pairing, white, black, game_started,
+                resume_moves, resume_times, resume_fen))
             set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_models(white, black)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])

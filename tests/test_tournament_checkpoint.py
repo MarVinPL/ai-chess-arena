@@ -135,5 +135,60 @@ class StartupRecoveryTests(unittest.TestCase):
             server.start_tournament(32)
 
 
+class PairingSelectionRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.db = Path(self.temp.name) / 'pairing-recovery.sqlite3'
+        self.old_server_db = server.DB
+        self.old_league_db = server.league.DB
+        server.DB = self.db
+        server.league.DB = self.db
+        server.db_init()
+        with server.league.connect() as db:
+            db.execute("INSERT INTO tournaments(id,name,format,status,created_at,rules_version) VALUES(77,'Recovery','PURE_AI','stopped','2026-11-14T00:00:00Z','2')")
+            for model_id, name in ((1, 'White'), (2, 'Black')):
+                db.execute("INSERT INTO league_models(id,name,format,active,created_at) VALUES(?,?, 'PURE_AI',1,'2026-11-14T00:00:00Z')", (model_id, name))
+            db.execute("INSERT INTO tournament_pairings(id,tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(101,77,1,2,1,'running','league')")
+    def tearDown(self):
+        server.DB = self.old_server_db
+        server.league.DB = self.old_league_db
+        self.temp.cleanup()
+    def save_checkpoint(self, pairing_id=101):
+        tournament_checkpoint.save(self.db, 77, {
+            'schema_version': tournament_checkpoint.SCHEMA_VERSION,
+            'tournament_id': 77, 'phase': 'game',
+            'pairing': {'id': pairing_id, 'stage': 'league', 'white_model_id': 1, 'black_model_id': 2},
+            'moves': [], 'move_times': [], 'fen': chess.Board().fen(),
+        })
+    def test_running_pairing_is_selected_from_checkpoint_after_restart(self):
+        self.save_checkpoint()
+        pairing, checkpoint = server._select_tournament_pairing(77, False)
+        self.assertEqual((pairing['id'], pairing['status']), (101, 'running'))
+        self.assertEqual(checkpoint['pairing']['id'], 101)
+    def test_pending_pairing_is_selected_from_checkpoint(self):
+        with server.league.connect() as db:
+            db.execute("UPDATE tournament_pairings SET status='pending' WHERE id=101")
+        self.save_checkpoint()
+        pairing, checkpoint = server._select_tournament_pairing(77, False)
+        self.assertEqual((pairing['id'], pairing['status']), (101, 'pending'))
+        self.assertIsNotNone(checkpoint)
+    def test_running_pairing_without_checkpoint_fails_closed(self):
+        with self.assertRaisesRegex(RuntimeError, 'bez checkpointu'):
+            server._select_tournament_pairing(77, False)
+    def test_multiple_running_pairings_fail_closed(self):
+        with server.league.connect() as db:
+            db.execute("INSERT INTO tournament_pairings(id,tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(102,77,2,1,1,'running','league')")
+        self.save_checkpoint()
+        with self.assertRaisesRegex(RuntimeError, 'więcej niż jedno'):
+            server._select_tournament_pairing(77, False)
+    def test_checkpoint_must_match_running_pairing(self):
+        self.save_checkpoint()
+        with server.league.connect() as db:
+            db.execute("UPDATE tournament_pairings SET id=102 WHERE id=101")
+        with self.assertRaisesRegex(RuntimeError, 'inne parowanie'):
+            server._select_tournament_pairing(77, False)
+
+
+
 if __name__ == '__main__':
     unittest.main()
