@@ -36,5 +36,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
+      - name: Set up Node.js for browser script validation
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate embedded browser JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path("index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, flags=re.S)
+          if len(scripts) != 1:
+              raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
+          Path("/tmp/arena-panel-inline.js").write_text(scripts[0], encoding="utf-8")
+          PY
+          node --check /tmp/arena-panel-inline.js
+
       - name: Run complete test suite
         run: python -m pytest -q tests
