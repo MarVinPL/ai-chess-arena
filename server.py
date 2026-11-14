@@ -92,7 +92,7 @@ def set_live(stage, message, **fields):
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
-        event_fields = ('model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds')
+        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
                  'stage':stage,'message':message,
                  **{k:v for k,v in fields.items() if k in event_fields}}
@@ -800,8 +800,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(get_live())
         elif self.path == '/api/games':
             with sqlite3.connect(DB) as c:
-                rows = c.execute('SELECT id,started_at,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
-            self.send_json([dict(id=x[0],started_at=x[1],result=x[2],moves=x[3],avg_seconds=round(x[4],3)) for x in rows])
+                rows = c.execute('SELECT id,started_at,white_model,black_model,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
+            self.send_json([dict(id=x[0],started_at=x[1],white=x[2],black=x[3],result=x[4],moves=x[5],avg_seconds=round(x[6],3)) for x in rows])
         elif self.path == '/api/models':
             with league.connect() as c:
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
