@@ -21,11 +21,20 @@ class ModelPermissionTests(unittest.TestCase):
 
     def request(self, scope="TEST_ONLY"):
         return request_permission(self.db, **self.ident, scope=scope,
-                                  confirm=True, reason="kontrolowany test")
+                                  confirm=True, reason="kontrolowany test", actor="test-operator")
 
     def approve(self, request):
-        return decide_permission(self.db, request_id=request["id"],
-                                  action="approve", confirm=True)
+        return decide_permission(self.db, actor="test-operator", request_id=request["id"],
+                                  action="approve", confirm=True, actor="test-operator")
+
+    def test_mutation_requires_explicit_operator_identity(self):
+        with self.assertRaisesRegex(ValueError, "tożsamości operatora"):
+            request_permission(self.db, **self.ident, scope="TEST_ONLY",
+                               confirm=True, reason="kontrolowany test")
+        req = self.request()
+        with self.assertRaisesRegex(ValueError, "tożsamości operatora"):
+            decide_permission(self.db, request_id=req["id"], action="approve",
+                              confirm=True)
 
     def test_schema_migration_supports_default_sqlite_tuple_rows(self):
         db = sqlite3.connect(":memory:")
