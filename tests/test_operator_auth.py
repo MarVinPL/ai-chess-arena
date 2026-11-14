@@ -191,6 +191,10 @@ class OperatorAuthStorageTests(unittest.TestCase):
             operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1002)
         self.assertEqual(caught.exception.retry_after, 58)
         operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1060)
+        with operator_auth._db(self.db) as conn:
+            row = conn.execute("SELECT bucket_hash FROM arena_auth_rate_limits").fetchone()
+        self.assertEqual(len(row["bucket_hash"]), 64)
+        self.assertNotEqual(row["bucket_hash"], "login:ip:192.0.2.10")
 
     def test_owner_can_revoke_credential_and_all_target_sessions_but_not_last_owner_key(self):
         from webauthn.helpers import bytes_to_base64url
@@ -247,12 +251,15 @@ class OperatorAuthStorageTests(unittest.TestCase):
         now = operator_auth.time.time()
         with operator_auth._db(self.db) as conn:
             operator_auth.ensure_schema(conn)
-            conn.execute(
-                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
-                ("owner-id", "Owner", "owner", b"o" * 32, now),
-            )
+            for oid in ("owner-id", "other-owner"):
+                conn.execute(
+                    "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                    (oid, oid, "owner", (oid.encode() + b"x" * 32)[:32], now),
+                )
         with self.assertRaises(operator_auth.OperatorAuthError):
             operator_auth.suspend_operator(self.db, "owner-id", "owner-id")
+        with self.assertRaises(operator_auth.OperatorAuthError):
+            operator_auth.suspend_operator(self.db, "owner-id", "other-owner")
 
 
 if __name__ == "__main__":
