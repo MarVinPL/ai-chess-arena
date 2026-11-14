@@ -10,7 +10,7 @@ Status obu kandydatów: `review_required`, `license_review=pending`, `technical_
 - Nie uruchamiano kodu, modelu ani inferencji.
 - Nie zmieniano katalogu kandydatów, manifestu modeli, allowlisty, bazy produkcyjnej, rosterów, wyników ani stanu turniejów.
 - Nie jest to opinia prawna ani decyzja o dopuszczeniu.
-- Obie strony Hugging Face były oglądane przez pływający ref `main`. Pełny, niezmienny SHA repozytorium GGUF nie został jeszcze potwierdzony dla żadnego kandydata. Zgodnie z Issue #127 nie wolno ustawiać `revision_confirmed=true` bez przypięcia i sprawdzenia pełnej rewizji.
+- Karty i indeksy plików sprawdzono na `main`, a następnie otwarto strony commitów wskazanych przez bieżący widok Hugging Face. Poniżej zapisano pełne SHA commitów widocznych w tych stronach. To przypina obserwowany snapshot, ale nie jest równoznaczne z audytem każdego pliku ani z zatwierdzeniem przez operatora; `revision_confirmed` pozostaje `false`.
 
 ## Kandydat A — Bielik 1.5B v3.0 Instruct GGUF
 
@@ -29,7 +29,7 @@ Repozytorium: https://huggingface.co/speakleash/Bielik-1.5B-v3.0-Instruct-GGUF
 
 - Deklaracja licencji modelu i karty GGUF: Apache-2.0.
 - Niezależne potwierdzenie tekstem LICENSE dla dokładnej rewizji GGUF: brak.
-- Pełny SHA rewizji repozytorium GGUF: nieustalony.
+- SHA obserwowanego commitu repozytorium GGUF: `bb7ba70f60f2eee48d46857966ba3cf91bccb260` (strona commitu Hugging Face).
 - Dokładny artefakt Q4_K_M w oficjalnym repozytorium: niepotwierdzony.
 - Raport techniczny Bielik v3 opisuje korpus treningowy na poziomie ogólnym; ta wstępna kontrola nie ustala praw do każdego źródłowego dokumentu ani pełnej proweniencji danych.
 - Wniosek: kandydat ma obiecującą deklarację licencji, ale dowody nie wystarczają do statusu `verified_permissive`.
@@ -52,7 +52,7 @@ Repozytorium: https://huggingface.co/speakleash/Bielik-4.5B-v3.0-Instruct-GGUF
 
 - Deklaracja licencji modelu i karty GGUF: Apache-2.0.
 - Niezależne potwierdzenie tekstem LICENSE dla dokładnej rewizji GGUF: brak.
-- Pełny SHA rewizji repozytorium GGUF: nieustalony.
+- SHA obserwowanego commitu repozytorium GGUF: `c80ffe0e154fab9f7af170993a16d6f8acc83903` (strona commitu Hugging Face).
 - Dokładny artefakt Q4_K_M w oficjalnym repozytorium: niepotwierdzony.
 - Prawa do wszystkich elementów korpusu treningowego nie zostały niezależnie przeanalizowane.
 - Wniosek: kandydat ma obiecującą deklarację licencji, ale dowody nie wystarczają do statusu `verified_permissive`.
@@ -81,7 +81,7 @@ Dla obu kandydatów, do czasu uzupełnienia dowodów:
 
 ## Wymagane kolejne dowody (bez pobierania wag)
 
-1. Odczytać publiczne metadane Hugging Face API dla obu repozytoriów i zapisać pełne SHA rewizji.
+1. Zweryfikować na poziomie Hugging Face API, że pełne SHA commitów zapisane niżej nadal są aktualnymi rewizjami repozytoriów (widok stron commitów jest potwierdzeniem identyfikatora commitu, nie niezależnym audytem plików).
 2. Dla tych SHA ponownie odczytać indeks plików, model card, metadane licencji oraz sprawdzić obecność LICENSE/COPYING.
 3. Ustalić, czy Q4_K_M ma być kandydatem z repo SpeakLeash, czy osobnym artefaktem z repozytorium konwertującego. Nie mieszać tych identyfikatorów.
 4. Przypiąć rewizje upstream modeli bazowych i przeanalizować odpowiednie warunki oraz znane informacje o korpusie treningowym.
@@ -99,8 +99,12 @@ Dla obu kandydatów, do czasu uzupełnienia dowodów:
 - Bazowy Bielik 4.5B v3: https://huggingface.co/speakleash/Bielik-4.5B-v3
 
 ### Źródła porównawcze — osobne repozytoria konwertujące, nie SpeakLeash
-- Q4_K_M 1.5B: https://huggingface.co/second-state/Bielik-1.5B-v3.0-Instruct-GGUF
-- Q4_K_M 4.5B: https://huggingface.co/second-state/Bielik-4.5B-v3.0-Instruct-GGUF
+- Q4_K_M 1.5B: https://huggingface.co/second-state/Bielik-1.5B-v3.0-Instruct-GGUF — widoczny commit README: `6c316d2be07dee472901150c3f3e9d4f725a4706`.
+- Q4_K_M 4.5B: https://huggingface.co/second-state/Bielik-4.5B-v3.0-Instruct-GGUF — widoczny commit README: `5ed9534f824c7c184c21320f4d339e75569d0987`.
+
+### Pełne SHA obserwowanych commitów repozytoriów oficjalnych SpeakLeash
+- GGUF 1.5B: `bb7ba70f60f2eee48d46857966ba3cf91bccb260` — https://huggingface.co/speakleash/Bielik-1.5B-v3.0-Instruct-GGUF/commit/bb7ba70f60f2eee48d46857966ba3cf91bccb260
+- GGUF 4.5B: `c80ffe0e154fab9f7af170993a16d6f8acc83903` — https://huggingface.co/speakleash/Bielik-4.5B-v3.0-Instruct-GGUF/commit/c80ffe0e154fab9f7af170993a16d6f8acc83903
 
 ### Raport techniczny
 - Bielik v3 Small: https://arxiv.org/abs/2505.02550
