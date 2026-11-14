@@ -179,6 +179,7 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
         worker_argv = [
             WORKER_EXECUTABLE, "--job-id", job_id,
             "--model", row["artifact_path"],
+            "--expected-sha256", row["artifact_sha256"],
             "--output-dir", f"/run/ai-chess-model-test-{job_id}",
             "--scope", row["scope"],
         ]
