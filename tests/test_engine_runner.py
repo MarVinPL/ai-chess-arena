@@ -212,6 +212,42 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('retrying', [stage for stage, _ in events])
         self.assertEqual(meta['response'], 'g1h3')
 
+    def test_retry_payload_constrains_output_to_allowed_uci_moves(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+
+        class Response:
+            def __init__(self, content):
+                self.body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+
+        requests = []
+        outputs = iter(['e2e5', 'g1h3'])
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response(next(outputs))
+
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch(
+                    'urllib.request.urlopen', side_effect=fake_urlopen):
+                move, _ = runtime.generate('/tmp/model.gguf', chess.Board(), enable_thinking=True)
+        finally:
+            runtime.shutdown()
+
+        self.assertEqual(move.uci(), 'g1h3')
+        self.assertNotIn('grammar', requests[0])
+        self.assertTrue(requests[0]['chat_template_kwargs']['enable_thinking'])
+        self.assertFalse(requests[1]['chat_template_kwargs']['enable_thinking'])
+        grammar = requests[1]['grammar']
+        self.assertTrue(grammar.startswith('root ::= '))
+        self.assertIn('"g1h3"', grammar)
+        self.assertNotIn('"e2e5"', grammar)
+        self.assertEqual(grammar.count('"'), 40)
+
     def test_generate_retries_illegal_move_and_never_accepts_it(self):
         import json
         from unittest.mock import patch
@@ -256,7 +292,9 @@ class EngineRunnerTests(unittest.TestCase):
             def read(self): return self.body
 
         outputs = iter(['g6d8', 'g6d8'])
+        requests = []
         def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
             return Response(next(outputs))
 
         runtime = LlamafileRuntime()
@@ -278,6 +316,9 @@ class EngineRunnerTests(unittest.TestCase):
             ['illegal_uci', 'illegal_uci'])
         self.assertTrue(all(not item['valid_move']
                             for item in caught.exception.budget_observations))
+        self.assertNotIn('grammar', requests[0])
+        self.assertIn('grammar', requests[1])
+        self.assertNotIn('"g6d8"', requests[1]['grammar'])
 
 
     def test_watchdog_restarts_an_unexpectedly_stopped_owned_process(self):
