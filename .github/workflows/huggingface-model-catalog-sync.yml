@@ -1,0 +1,64 @@
+name: Weekly Hugging Face metadata check
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: huggingface-existing-model-metadata-check
+  cancel-in-progress: false
+
+jobs:
+  check-existing-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Check metadata for existing model IDs 1–8 only
+        run: python scripts/sync_huggingface_catalog.py
+
+      - name: Open draft PR only when tracked metadata changes
+        if: success()
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/huggingface-existing-model-metadata
+          base: main
+          delete-branch: true
+          draft: true
+          add-paths: manifests/huggingface-candidates.json
+          commit-message: 'chore: refresh existing model metadata'
+          title: 'chore: refresh existing model metadata'
+          body: |
+            Automated metadata-only check of the eight model repositories already tracked by AI Chess Arena (IDs 1–8).
+
+            - No new repositories are discovered or added.
+            - A changed revision, missing source, or moved source requires human review.
+            - No license is approved and no model becomes tournament-eligible.
+            - No model weights are downloaded and no inference is run.
+
+            Refs #63
+
+      - name: Upload check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: huggingface-existing-model-check-${{ github.run_id }}
+          path: reports/huggingface-catalog-sync.json
+          if-no-files-found: ignore
+          retention-days: 90
