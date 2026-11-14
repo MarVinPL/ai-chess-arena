@@ -90,6 +90,16 @@ class ModelManifestTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM model_versions WHERE filename IS NOT NULL").fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_import_refuses_to_repoint_an_existing_managed_copy(self):
+        payload = load_manifest()
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE model_versions SET managed_copy=1 WHERE model_id=4")
+        with self.assertRaises(ManifestError):
+            apply_manifest(self.db, payload, applied_at="2026-11-14T12:00:00Z")
+        with sqlite3.connect(self.db) as connection:
+            row = connection.execute("SELECT filename,license_verified FROM model_versions WHERE model_id=4").fetchone()
+        self.assertEqual(row, (None, 1))
+
     def test_duplicate_repo_or_model_id_is_rejected(self):
         payload = load_manifest()
         broken = json.loads(json.dumps(payload))
