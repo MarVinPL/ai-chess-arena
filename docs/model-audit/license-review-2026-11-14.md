@@ -126,10 +126,10 @@ Warunki Meta nie są Apache-2.0 ani bezwarunkową licencją permissive. Audyt od
 
 ## Pozostałe blokady
 
-- Wpisy 9 i 10 pozostają `review_required` i nie zostały zatwierdzone: ich pochodzenie/warunki wymagają odrębnego przeglądu. Nie należy interpretować samej deklaracji Apache-2.0 w metadanych pochodnego repozytorium jako wystarczającego dowodu ani dopuszczenia do użycia.
-- Dwa pozostałe wpisy rejestru nie zostały objęte analizą w tym bezpiecznym zakresie. Ich statusy pozostają bez zmian i nie wolno traktować ich jako zatwierdzonych.
+- Wpisy 9 i 10 są poza zakresem Issue #52 i są śledzone w Issue #71. Pozostają `review_required`; sama deklaracja Apache-2.0 w metadanych repozytorium pochodnego nie jest traktowana jako wystarczający dowód ani dopuszczenie do użycia.
+- Dla zakresu Issue #52 oceniono wpisy 1–8. Każdy z nich ma jawny status i wskazane dowody; ograniczenia licencji pozostają wiążące.
 - Status audytu nie jest zgodą właściciela projektu. Import manifestu nadal wymusza `license_verified=0`; żadna zmiana w tym raporcie nie przyznaje uprawnień do pobrania, uruchomienia ani udziału w turnieju.
-- Do zamknięcia Issue #52 wymagane jest rozstrzygnięcie wszystkich wpisów i ewentualna decyzja właściciela; przypadki niejasne muszą pozostać zablokowane.
+- Issue #52 można zamknąć po przeglądzie i zaakceptowaniu wyników dla wpisów 1–8; ewentualna decyzja o operacyjnym dopuszczeniu modeli jest odrębnym procesem.
 
 ## Zastrzeżenie
 
