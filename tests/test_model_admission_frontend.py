@@ -29,6 +29,15 @@ class ModelAdmissionFrontendTests(unittest.TestCase):
         self.assertIn("[6,9,10].includes(Number(item.model_id))", HTML)
         self.assertIn('warunki Bielik v3 zawierają wymóg wieku 18+', HTML)
 
+    def test_review_scope_controls_follow_proposed_status(self):
+        self.assertIn('id="review-scope-hint"', HTML)
+        self.assertIn("['review_required','blocked'].includes(reviewProposedStatus?.value)", HTML)
+        self.assertIn('input.disabled=blocking', HTML)
+        self.assertIn('if(blocking)input.checked=false', HTML)
+        self.assertIn("['eligible','restricted'].includes(proposedStatus)&&!selectedScopes.length", HTML)
+        self.assertIn('status blokujący nie może mieć zakresu dopuszczenia', HTML)
+        self.assertIn('syncReviewScopeControls();', HTML)
+
     def test_registry_list_is_rendered_with_text_content(self):
         self.assertIn('function renderModelAdmission(items)', HTML)
         self.assertIn('title.textContent', HTML)
