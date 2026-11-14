@@ -1,0 +1,171 @@
+{
+  "inference_run": false,
+  "models": [
+    {
+      "audited_revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "current_revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "display_name": "Qwen2.5-0.5B-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2024-09-20T06:20:24.000Z",
+      "license_review_status": "verified_permissive",
+      "metadata_status": "unchanged",
+      "model_id": 1,
+      "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
+      "current_revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac",
+      "display_name": "SmolLM2-360M-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "audited_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
+          "current_revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac",
+          "event": "revision_changed",
+          "previous_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2024-11-01T12:03:38.000Z",
+      "license_review_status": "review_required",
+      "metadata_status": "review_required",
+      "model_id": 2,
+      "repo_id": "QuantFactory/SmolLM2-360M-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "198f08841147e5196a6a69bd0053690fb1fd3857",
+      "current_revision": "198f08841147e5196a6a69bd0053690fb1fd3857",
+      "display_name": "Qwen2-0.5B-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "198f08841147e5196a6a69bd0053690fb1fd3857"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2024-08-21T10:29:53.000Z",
+      "license_review_status": "verified_permissive",
+      "metadata_status": "unchanged",
+      "model_id": 3,
+      "repo_id": "Qwen/Qwen2-0.5B-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+      "current_revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+      "display_name": "Meta-Llama-3.1-8B-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2024-12-01T04:12:27.000Z",
+      "license_review_status": "review_required",
+      "metadata_status": "unchanged",
+      "model_id": 4,
+      "repo_id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31",
+      "current_revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31",
+      "display_name": "Llama-3.2-3B-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2025-11-08T06:37:39.000Z",
+      "license_review_status": "review_required",
+      "metadata_status": "unchanged",
+      "model_id": 5,
+      "repo_id": "unsloth/Llama-3.2-3B-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7",
+      "current_revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7",
+      "display_name": "Bielik-11B-v3.0-Instruct-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2026-11-05T09:05:17.000Z",
+      "license_review_status": "verified_restricted",
+      "metadata_status": "unchanged",
+      "model_id": 6,
+      "repo_id": "speakleash/Bielik-11B-v3.0-Instruct-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1",
+      "current_revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1",
+      "display_name": "Bielik-7B-Instruct-v0.1-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2024-04-07T19:43:23.000Z",
+      "license_review_status": "verified_restricted",
+      "metadata_status": "unchanged",
+      "model_id": 7,
+      "repo_id": "speakleash/Bielik-7B-Instruct-v0.1-GGUF",
+      "source_status": "active"
+    },
+    {
+      "audited_revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "current_revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "display_name": "Qwen3.8-27B-GGUF",
+      "first_seen_at": "2026-11-14T12:17:46Z",
+      "history": [
+        {
+          "at": "2026-11-14T12:17:46Z",
+          "event": "source_restored",
+          "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9"
+        }
+      ],
+      "last_checked_at": "2026-11-14T12:17:46Z",
+      "last_modified": "2026-11-12T02:15:52.000Z",
+      "license_review_status": "review_required",
+      "metadata_status": "unchanged",
+      "model_id": 8,
+      "repo_id": "unsloth/Qwen3.8-27B-GGUF",
+      "source_status": "active"
+    }
+  ],
+  "provider": "Hugging Face",
+  "schema_version": 1,
+  "scope": "Exactly existing model IDs 1–8 from manifests/huggingface-models.json; no discovery of new repositories.",
+  "weights_downloaded": false
+}
