@@ -43,10 +43,10 @@ No model is automatically granted a scope. A model download remains a separate o
 Still required before a real model test can run:
 
 1. a narrowly privileged execution broker with a fixed, reviewed worker command (no arbitrary command supplied by the panel);
-2. a transactional job/artifact record with append-only start/finish/failure/cleanup events and actor identity;
-3. independent revalidation of active scope, exact revision, SHA-256 and per-operation consent immediately before execution;
-4. isolated evaluation output storage and metrics, with tests proving no writes to official tournament tables;
-5. cancellation, timeout, process-tree cleanup, stale-job recovery and capacity preflight;
+2. authenticated actor propagation from the existing panel session (the current actor argument is not authentication);
+3. an installed and independently reviewed worker executable;
+4. isolated evaluation output storage and proof that no writes can reach official tournament/result/rating tables;
+5. a real systemd stop adapter, timeout/process-tree cleanup and a controlled capacity probe;
 6. integration tests against a disposable systemd test unit, plus security review of the broker's privilege boundary.
 
 ## Database
