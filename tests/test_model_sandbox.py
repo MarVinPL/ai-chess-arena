@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 
 from model_sandbox import (
-    SandboxLimits, build_systemd_run_argv, validate_artifact, validate_limits,
+    SandboxLimits, artifact_fingerprint, build_systemd_run_argv,
+    validate_artifact, validate_limits,
 )
 
 
@@ -35,8 +36,14 @@ class ModelSandboxTests(unittest.TestCase):
         self.assertIn("--property=PrivateNetwork=yes", argv)
         self.assertIn("--property=KillMode=control-group", argv)
         self.assertTrue(any(x.startswith("--property=CPUQuota=") for x in argv))
-        self.assertEqual(argv[-4:], ["--model", str(self.artifact)][-4:] if False else argv[-4:])
+        self.assertEqual(argv[-3:], ["/opt/arena/bin/trusted-worker", "--model", str(self.artifact)])
         self.assertNotIn("shell", " ".join(argv).lower())
+
+    def test_artifact_fingerprint_records_sha256_and_size(self):
+        record = artifact_fingerprint(self.artifact, self.root)
+        self.assertEqual(record["size_bytes"], len(b"fixture-not-a-model"))
+        self.assertEqual(len(record["sha256"]), 64)
+        self.assertEqual(record["artifact_name"], "candidate.gguf")
 
     def test_rejects_artifact_outside_private_model_root(self):
         outside = Path(self.temp.name) / "outside.gguf"
