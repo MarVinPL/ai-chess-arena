@@ -70,7 +70,7 @@ def _active_scope(connection: sqlite3.Connection, model_id: int,
     row = connection.execute("""
         SELECT status FROM model_permission_requests
         WHERE model_id=? AND repo_id=? AND revision=? AND scope=?
-        ORDER BY id DESC LIMIT 1
+          AND status IN ('approved','revoked') ORDER BY id DESC LIMIT 1
     """, (model_id, repo_id, revision, scope)).fetchone()
     return bool(row and row["status"] == "approved")
 
