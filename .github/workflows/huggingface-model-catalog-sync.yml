@@ -1,4 +1,4 @@
-name: Weekly Hugging Face candidate catalog sync
+name: Weekly metadata check for existing Hugging Face models
 
 on:
   schedule:
@@ -10,13 +10,13 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: huggingface-candidate-catalog-sync
+  group: huggingface-existing-model-metadata-check
   cancel-in-progress: false
 
 jobs:
-  discover-and-verify-candidates:
+  check-existing-models:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -29,37 +29,40 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Discover public GGUF text-generation candidates and verify tracked sources
-        run: python scripts/sync_huggingface_catalog.py
+      - name: Test metadata-only checker
+        run: python -m unittest tests.test_existing_model_metadata_check -v
 
-      - name: Open draft PR only when catalog metadata changes
+      - name: Check only the eight already-pinned model repositories (IDs 1–8)
+        run: python existing_model_metadata_check.py
+
+      - name: Open draft PR only when tracked metadata changes
         if: success()
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: automation/huggingface-candidate-catalog
+          branch: automation/huggingface-existing-model-metadata
           base: main
           delete-branch: true
           draft: true
-          add-paths: manifests/huggingface-candidates.json
-          commit-message: 'chore: refresh Hugging Face candidate catalog'
-          title: 'chore: refresh Hugging Face candidate catalog'
+          add-paths: manifests/huggingface-existing-models-metadata.json
+          commit-message: 'chore: refresh existing model metadata'
+          title: 'chore: refresh existing model metadata'
           body: |
-            Automated metadata-only discovery and verification of public Hugging Face GGUF text-generation/conversational repositories.
+            Automated metadata-only check of the eight model repositories already pinned by AI Chess Arena (IDs 1–8).
 
-            - New candidates remain review_required, license_verified=false, technical_readiness=not_evaluated, and admission_status=not_admitted.
-            - Existing pinned repositories are checked separately; changed or unavailable sources require human review.
-            - Excluded identities and unsafe categories are filtered fail-closed.
-            - No license is approved, no model is admitted, and the tournament allowlist is not changed.
+            - No public model listing or discovery of new repositories is performed.
+            - Changed revisions, moved sources, or unavailable repositories require human review.
+            - License status is never approved automatically and no model becomes tournament-eligible.
             - No model weights are downloaded and no inference is run.
+            - The pinned model manifest and tournament allowlist are never modified.
 
             Refs #63
 
-      - name: Upload catalog sync report
+      - name: Upload check report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: huggingface-candidate-catalog-${{ github.run_id }}
+          name: huggingface-existing-model-check-${{ github.run_id }}
           path: reports/huggingface-catalog-sync.json
           if-no-files-found: ignore
           retention-days: 90

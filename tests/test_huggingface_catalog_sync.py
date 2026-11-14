@@ -266,5 +266,30 @@ class HuggingFaceCatalogSyncTests(unittest.TestCase):
             self.assertFalse(report['weights_downloaded']); self.assertFalse(report['inference_run'])
 
 
+    def test_unauthorized_candidate_is_retained_as_access_denied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, catalog_path = initial_files(tmp)
+            first, _ = sync_catalog(
+                source, catalog_path, FakeFetcher(source_models()), '2026-11-14T12:00:00Z'
+            )
+            catalog_path.write_text(json.dumps(first), encoding='utf-8')
+            lists = {
+                'lastModified': [api_model('org/other', '8' * 40)],
+                'downloads': [api_model('org/other', '8' * 40)],
+            }
+            details = {'org/new-a': HTTPStatusError(401, API_ROOT + '/org/new-a')}
+            updated, report = sync_catalog(
+                source, catalog_path, FakeFetcher(source_models(), lists, details),
+                '2026-11-21T12:00:00Z'
+            )
+            item = next(x for x in updated['models'] if x['repo_id'] == 'org/new-a')
+            self.assertEqual(item['source_status'], 'access_denied')
+            self.assertEqual(item['license_review_status'], 'review_required')
+            self.assertFalse(item['license_verified'])
+            self.assertEqual(item['admission_status'], 'not_admitted')
+            self.assertGreater(report['filtered_by_reason'].get('access_denied', 0), 0)
+
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -72,6 +72,30 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(progress[-1]['san'], 'Qh4#')
         self.assertEqual(progress[-1]['fen'], result['fen'])
 
+    def test_arbiter_intervention_is_passed_to_model_and_audited(self):
+        from unittest.mock import patch
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class ArbiterRuntime:
+            def __init__(self): self.calls = []
+            def generate(self, path, board, stop_event=None, recent_moves=None, arbiter_signal=None):
+                self.calls.append(arbiter_signal)
+                return chess.Move.from_uci(sequence[len(self.calls)-1]), {
+                    'seconds': 0.25, 'arbiter_intervention': bool(arbiter_signal),
+                    'arbiter_signal': arbiter_signal,
+                    'arbiter_response': 'Ponownie oceniona odpowiedź',
+                }
+        runtime = ArbiterRuntime()
+        signal = {'type': 'piece_cycle', 'reason': 'powtarzany cykl'}
+        with patch('engine_runner.arbiter.detect_stagnation', return_value=signal):
+            result = SequentialChessRunner(runtime).play_game(
+                {'name': 'Alpha', 'path': '/tmp/a.gguf'},
+                {'name': 'Beta', 'path': '/tmp/b.gguf'})
+        self.assertEqual(runtime.calls[0]['type'], 'piece_cycle')
+        self.assertEqual(result['arbiter_intervention_count'], 3)
+        self.assertEqual(result['arbiter_events'][0]['response_seconds'], 0.25)
+        self.assertEqual(result['arbiter_events'][0]['selected_move'], 'f2f3')
+        self.assertEqual(result['moves'][0]['uci'], 'f2f3')  # arbiter never makes a move
+
     def test_stop_before_first_move_returns_stopped(self):
         event = threading.Event(); event.set()
         result = SequentialChessRunner(FakeRuntime()).play_game(
@@ -144,6 +168,32 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertFalse(meta['budget_observations'][0]['valid_move'])
         self.assertTrue(meta['budget_observations'][1]['valid_move'])
         self.assertEqual(meta['budget_observations'][1]['completion_tokens'],3)
+
+    def test_arbiter_prompt_is_preserved_in_recovery_attempt(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content): self.body = json.dumps({'choices':[{'message':{'content':content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter([Response('not-a-move'), Response('e2e4')])
+        prompts = []
+        def fake_open(request, timeout=None):
+            prompts.append(json.loads(request.data.decode())['messages'][0]['content'])
+            return next(outputs)
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_open):
+                move, meta = runtime.generate('/tmp/model.gguf', chess.Board(),
+                    arbiter_signal={'type':'piece_cycle'})
+        finally:
+            runtime.shutdown()
+        self.assertEqual(move.uci(), 'e2e4')
+        self.assertIn('UWAGA SĘDZIEGO', prompts[0])
+        self.assertIn('UWAGA SĘDZIEGO', prompts[1])
+        self.assertTrue(meta['arbiter_intervention'])
 
     def test_valid_move_is_not_treated_as_token_blocked(self):
         import json

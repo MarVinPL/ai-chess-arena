@@ -37,6 +37,13 @@ def test_systemd_analyze_verifies_unit_when_available():
     if not binary:
         import pytest
         pytest.skip("systemd-analyze is not installed")
+    # The unit references the production VPS virtualenv by absolute path.
+    # A hosted CI runner does not have that deployment path, so verification
+    # is meaningful only where the configured executable is present.
+    configured_python = Path("/home/debian/ai-chess-arena/.venv/bin/python")
+    if not configured_python.exists():
+        import pytest
+        pytest.skip("production virtualenv is not present on this host")
     result = subprocess.run(
         [binary, "verify", str(UNIT)],
         text=True,

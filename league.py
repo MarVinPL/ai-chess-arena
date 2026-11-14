@@ -523,7 +523,7 @@ def next_draft_match(tournament_id):
     pairs=[(seed_map[order[i]],seed_map[order[i+1]]) for i in range(0,size,2)]
     _insert_draft_matches(c,tournament_id,1,pairs); last=1
   rows=c.execute("SELECT * FROM tournament_pairings WHERE tournament_id=? AND stage='draft' AND round_no=? ORDER BY match_no",(tournament_id,last)).fetchall()
-  pending=next((dict(r) for r in rows if r['status']=='pending'),None)
+  pending=next((dict(r) for r in rows if r['status']=='running'),None) or next((dict(r) for r in rows if r['status']=='pending'),None)
   if pending: return pending
   winners=[r['winner_model_id'] for r in rows]
   if not rows or any(w is None for w in winners): return None
