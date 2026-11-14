@@ -133,6 +133,11 @@ button.stop{background:#744b4b;border-color:#986363}
    <div class="formrow"><input class="field" id="operator-invite-name" maxlength="100" placeholder="Nazwa wyświetlana operatora"><button type="button" id="operator-invite-create">Utwórz token zaproszenia</button></div>
    <p class="notice">Token zostanie pokazany tylko raz. Przekaż go bezpiecznie zapraszanej osobie.</p>
    <textarea id="operator-invite-result" class="field" rows="2" readonly hidden aria-label="Jednorazowy token zaproszenia"></textarea>
+   <div style="margin-top:14px;padding-top:12px;border-top:1px solid #304854">
+    <strong>Operatorzy i poświadczenia</strong>
+    <p class="notice">Unieważnienie Passkey wylogowuje wszystkie aktywne sesje danego operatora. Zawieszenie konta blokuje dalsze logowanie.</p>
+    <div id="operator-auth-inventory" class="status" aria-live="polite">Ładowanie listy operatorów…</div>
+   </div>
   </div>
  </div>
  <div id="operator-auth-message" class="status" role="status" aria-live="polite"></div>
@@ -671,6 +676,7 @@ async function operatorAuthRefresh() {
    state.textContent='Zalogowano · '+op.role;
    document.getElementById('operator-auth-identity').textContent=op.display_name+' · rola: '+op.role;
    document.getElementById('operator-auth-owner').hidden=op.role!=='owner';
+   if(op.role==='owner') operatorAuthLoadOperators(op.operator_id);
   }else{
    state.textContent='Niezalogowano';
    document.getElementById('operator-auth-identity').textContent='';
@@ -714,7 +720,59 @@ async function operatorPasskeyRegister(){
  document.getElementById('operator-auth-login').hidden=false;
  await operatorAuthRefresh();
 }
-document.getElementById('operator-passkey-login')?.addEventListener('click',async()=>{
+
+async function operatorAuthLoadOperators(currentOperatorId){
+ const host=document.getElementById('operator-auth-inventory');
+ if(!host) return;
+ host.textContent='Ładowanie listy operatorów…';
+ try{
+  const response=await fetch('/api/operator-auth/operators',{credentials:'same-origin',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok) throw new Error(data.error||'Nie udało się pobrać listy.');
+  host.replaceChildren();
+  for(const op of (data.operators||[])){
+   const card=document.createElement('div');card.style.cssText='padding:10px 0;border-top:1px solid #304854';
+   const heading=document.createElement('div');
+   const name=document.createElement('strong');name.textContent=op.display_name+' · '+op.role+(op.active?'':' · ZAWIESZONY');
+   heading.append(name);card.append(heading);
+   const meta=document.createElement('p');meta.className='notice';
+   meta.textContent='Aktywne Passkey: '+op.active_credentials;
+   card.append(meta);
+   for(const cred of (op.credentials||[])){
+    const line=document.createElement('div');line.className='formrow';line.style.margin='6px 0';
+    const label=document.createElement('span');label.className='notice';
+    label.textContent='Passkey …'+String(cred.credential_id).slice(-8)+' · użyto: '+(cred.last_used_at?new Date(cred.last_used_at*1000).toLocaleString():'nigdy');
+    const revoke=document.createElement('button');revoke.type='button';revoke.className='secondary';revoke.textContent='Unieważnij Passkey';
+    revoke.addEventListener('click',async()=>{
+     if(!window.confirm('Unieważnić to Passkey i wylogować wszystkie sesje tego operatora?')) return;
+     revoke.disabled=true;
+     try{
+      await operatorAuthRequest('/api/operator-auth/credentials/revoke',{credential_id:cred.credential_id},true);
+      operatorAuthMessage('Passkey unieważniony; sesje operatora zostały unieważnione.');
+      await operatorAuthLoadOperators(currentOperatorId);
+     }catch(e){operatorAuthMessage('Nie udało się unieważnić Passkey: '+e.message,true);revoke.disabled=false}
+    });
+    line.append(label,revoke);card.append(line);
+   }
+   if(op.active && op.operator_id!==currentOperatorId){
+    const suspend=document.createElement('button');suspend.type='button';suspend.className='secondary';suspend.textContent='Zawieś operatora';
+    suspend.addEventListener('click',async()=>{
+     if(!window.confirm('Zawiesić konto '+op.display_name+' i unieważnić wszystkie jego sesje?')) return;
+     suspend.disabled=true;
+     try{
+      await operatorAuthRequest('/api/operator-auth/operators/suspend',{operator_id:op.operator_id},true);
+      operatorAuthMessage('Konto operatora zawieszone; wszystkie sesje unieważnione.');
+      await operatorAuthLoadOperators(currentOperatorId);
+     }catch(e){operatorAuthMessage('Nie udało się zawiesić operatora: '+e.message,true);suspend.disabled=false}
+    });
+    card.append(suspend);
+   }
+   host.append(card);
+  }
+  if(!(data.operators||[]).length) host.textContent='Brak zarejestrowanych operatorów.';
+ }catch(e){host.textContent='Lista operatorów niedostępna: '+e.message}
+}
+\ndocument.getElementById('operator-passkey-login')?.addEventListener('click',async()=>{
  const button=document.getElementById('operator-passkey-login');button.disabled=true;
  try{await operatorPasskeyLogin()}catch(e){operatorAuthMessage('Logowanie nie powiodło się: '+e.message,true)}finally{button.disabled=false}
 });
