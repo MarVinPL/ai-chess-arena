@@ -66,18 +66,57 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertEqual(rows[1][5], '1-0')
             self.assertIn('text/csv', response.headers['Content-Type'])
 
+    def test_runtime_model_labels_resolve_to_registry_names(self):
+        names = {'qwen2-0_5b-instruct-q4_k_m.gguf': 'Qwen2-0.5B-Instruct-Q4_K_M'}
+        self.assertEqual(
+            server._registry_display_name_for_runtime_model(
+                '/models/qwen2-0_5b-instruct-q4_k_m.gguf', names),
+            'Qwen2-0.5B-Instruct-Q4_K_M',
+        )
+        self.assertIsNone(server._registry_display_name_for_runtime_model(
+            'unknown.gguf', names))
+        self.assertEqual(
+            server._registry_runtime_message(
+                'Ładowanie modelu: qwen2-0_5b-instruct-q4_k_m.gguf', names),
+            'Ładowanie modelu: Qwen2-0.5B-Instruct-Q4_K_M',
+        )
+        self.assertEqual(
+            server._registry_runtime_message('Model loading', names),
+            'Model loading',
+        )
+
+    def test_pairing_resolves_registry_names_for_both_color_assignments(self):
+        players = {
+            3: {'model_id': 3, 'name': 'Qwen2-0.5B-Instruct-Q4_K_M'},
+            2: {'model_id': 2, 'name': 'SmolLM2-360M-Instruct-Q4_K_M'},
+        }
+        white, black = server._resolve_pairing_players(
+            players, {'white_model_id': 3, 'black_model_id': 2})
+        self.assertEqual((white['name'], black['name']),
+                         ('Qwen2-0.5B-Instruct-Q4_K_M', 'SmolLM2-360M-Instruct-Q4_K_M'))
+        white, black = server._resolve_pairing_players(
+            players, {'white_model_id': 2, 'black_model_id': 3})
+        self.assertEqual((white['name'], black['name']),
+                         ('SmolLM2-360M-Instruct-Q4_K_M', 'Qwen2-0.5B-Instruct-Q4_K_M'))
+        with self.assertRaises(RuntimeError):
+            server._resolve_pairing_players(
+                players, {'white_model_id': 3, 'black_model_id': 3})
+
     def test_live_logs_persist_model_responses_and_recent_events(self):
         server.set_live('move_generated', 'Model zaproponował ruch: e2e4',
-                        model='TestModel.gguf', color='white', response='e2e4',
+                        white='Registry Model A', black='Registry Model B',
+                        model='Registry Model A', color='white', response='e2e4',
                         proposed_move='e2e4', elapsed_seconds=1.25)
         self.assertTrue(server.MODEL_RESPONSES_LOG.is_file())
         self.assertTrue(server.LIVE_EVENTS_LOG.is_file())
         response_record = __import__('json').loads(server.MODEL_RESPONSES_LOG.read_text(encoding='utf-8').splitlines()[-1])
         event_record = __import__('json').loads(server.LIVE_EVENTS_LOG.read_text(encoding='utf-8').splitlines()[-1])
         self.assertEqual(response_record['response'], 'e2e4')
-        self.assertEqual(response_record['model'], 'TestModel.gguf')
+        self.assertEqual(response_record['model'], 'Registry Model A')
         self.assertEqual(event_record['stage'], 'move_generated')
         self.assertEqual(event_record['proposed_move'], 'e2e4')
+        self.assertEqual(event_record['white'], 'Registry Model A')
+        self.assertEqual(event_record['black'], 'Registry Model B')
 
     def test_diagnostic_logs_apply_separate_age_retention(self):
         import json
@@ -114,7 +153,10 @@ class ArenaSmokeTests(unittest.TestCase):
 
     def test_game_history_api(self):
         with urllib.request.urlopen(self.base + '/api/games') as response:
-            self.assertIn(b'"result": "1-0"', response.read())
+            payload = __import__('json').loads(response.read())
+        self.assertEqual(payload[0]['white'], 'Model A')
+        self.assertEqual(payload[0]['black'], 'Model B')
+        self.assertEqual(payload[0]['result'], '1-0')
 
     def test_model_registry_exposes_version_and_ownership_fields(self):
         with urllib.request.urlopen(self.base + '/api/models') as response:

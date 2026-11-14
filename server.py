@@ -92,7 +92,7 @@ def set_live(stage, message, **fields):
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
-        event_fields = ('model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds')
+        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
                  'stage':stage,'message':message,
                  **{k:v for k,v in fields.items() if k in event_fields}}
@@ -370,6 +370,33 @@ def live_moves_snapshot(move):
     return previous[-200:]
 
 
+def _registry_display_name_for_runtime_model(model_label, names_by_filename):
+    """Translate runtime file labels to the canonical registry display name."""
+    if not model_label:
+        return None
+    return names_by_filename.get(Path(str(model_label)).name)
+
+
+def _registry_runtime_message(message, names_by_filename):
+    """Replace any runtime filename embedded in status text with its registry name."""
+    for filename, display_name in names_by_filename.items():
+        message = message.replace(filename, display_name)
+    return message
+
+
+def _resolve_pairing_players(players, pairing):
+    """Resolve the exact registry entrants assigned to the white/black sides."""
+    white_id = pairing.get('white_model_id')
+    black_id = pairing.get('black_model_id')
+    if white_id == black_id:
+        raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
+    white = players.get(white_id)
+    black = players.get(black_id)
+    if not white or not black:
+        raise RuntimeError('Brak wersji zawodnika przypisanej do pary turniejowej')
+    return white, black
+
+
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -384,9 +411,15 @@ def tournament_loop(tournament_id):
             draft_enabled = tournament['rules_version'] == '2'
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
             players = {r['model_id']: {'model_id': r['model_id'], 'name': r['name'], 'version_id': r['version_id']} for r in entries}
+            registry_names_by_filename = {}
+            runtime_context = {'white': None, 'black': None}
             budget_snapshots = league.prepare_tournament_budgets(tournament_id)
             for model_id, player in players.items():
                 manifest = _version_record(player['version_id'])
+                for filename_key in ('filename', 'draft_filename'):
+                    filename = manifest.get(filename_key)
+                    if filename:
+                        registry_names_by_filename[Path(filename).name] = player['name']
                 player['base_inference'] = league.normalize_inference_config(
                     json.loads(manifest.get('metadata_json') or '{}'))
                 player['inference'] = dict(player['base_inference'])
@@ -401,7 +434,18 @@ def tournament_loop(tournament_id):
                 raise RuntimeError('Turniej nie ma wystarczającej liczby zawodników')
             c.execute("UPDATE tournaments SET status='running' WHERE id=?", (tournament_id,))
         set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id)
-        tournament_runtime = engine_runner.LlamafileRuntime(on_status=set_live)
+        def publish_runtime_status(stage, message, **fields):
+            runtime_label = fields.get('model')
+            if runtime_label:
+                fields['model'] = _registry_display_name_for_runtime_model(
+                    runtime_label, registry_names_by_filename)
+            message = _registry_runtime_message(message, registry_names_by_filename)
+            if runtime_context['white'] and runtime_context['black']:
+                fields.setdefault('white', runtime_context['white'])
+                fields.setdefault('black', runtime_context['black'])
+            set_live(stage, message, **fields)
+
+        tournament_runtime = engine_runner.LlamafileRuntime(on_status=publish_runtime_status)
 
         # Reuse completed answers for this competitor across tournaments. Once its
         # three knowledge answers are known, run at most one random health check per tournament.
@@ -450,11 +494,9 @@ def tournament_loop(tournament_id):
                 pairing = league.next_draft_match(tournament_id)
                 if pairing is None:
                     break
-            if pairing['white_model_id'] == pairing['black_model_id']:
-                raise RuntimeError('Nieprawidłowa para turniejowa: model nie może grać przeciwko samemu sobie')
-            white = players.get(pairing['white_model_id']); black = players.get(pairing['black_model_id'])
-            if not white or not black:
-                raise RuntimeError('Brak wersji zawodnika przypisanej do pary turniejowej')
+            white, black = _resolve_pairing_players(players, pairing)
+            runtime_context['white'] = white['name']
+            runtime_context['black'] = black['name']
             set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None, response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_models(white, black)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
@@ -463,7 +505,7 @@ def tournament_loop(tournament_id):
             set_live('game_running','Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=[], fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', last_move=None)
             def publish_move(move):
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
-                         model=move['model'], color=move['color'], pairing_id=pairing['id'],
+                         model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
                 observations = move.get('budget_observations') or []
                 player = players.get(move.get('model_id'))
@@ -800,8 +842,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(get_live())
         elif self.path == '/api/games':
             with sqlite3.connect(DB) as c:
-                rows = c.execute('SELECT id,started_at,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
-            self.send_json([dict(id=x[0],started_at=x[1],result=x[2],moves=x[3],avg_seconds=round(x[4],3)) for x in rows])
+                rows = c.execute('SELECT id,started_at,white_model,black_model,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
+            self.send_json([dict(id=x[0],started_at=x[1],white=x[2],black=x[3],result=x[4],moves=x[5],avg_seconds=round(x[6],3)) for x in rows])
         elif self.path == '/api/models':
             with league.connect() as c:
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
