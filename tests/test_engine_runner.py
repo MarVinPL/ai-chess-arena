@@ -169,6 +169,32 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertTrue(meta['budget_observations'][1]['valid_move'])
         self.assertEqual(meta['budget_observations'][1]['completion_tokens'],3)
 
+    def test_arbiter_prompt_is_preserved_in_recovery_attempt(self):
+        import json
+        from unittest.mock import patch
+        from engine_runner import LlamafileRuntime
+        class Response:
+            def __init__(self, content): self.body = json.dumps({'choices':[{'message':{'content':content}}]}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        outputs = iter([Response('not-a-move'), Response('e2e4')])
+        prompts = []
+        def fake_open(request, timeout=None):
+            prompts.append(json.loads(request.data.decode())['messages'][0]['content'])
+            return next(outputs)
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_open):
+                move, meta = runtime.generate('/tmp/model.gguf', chess.Board(),
+                    arbiter_signal={'type':'piece_shuttle'})
+        finally:
+            runtime.shutdown()
+        self.assertEqual(move.uci(), 'e2e4')
+        self.assertIn('UWAGA SĘDZIEGO', prompts[0])
+        self.assertIn('UWAGA SĘDZIEGO', prompts[1])
+        self.assertTrue(meta['arbiter_intervention'])
+
     def test_valid_move_is_not_treated_as_token_blocked(self):
         import json
         from unittest.mock import patch
