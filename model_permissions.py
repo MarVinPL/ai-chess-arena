@@ -78,14 +78,16 @@ def _active_scope(connection: sqlite3.Connection, model_id: int,
 def list_permissions(connection: sqlite3.Connection) -> list[dict]:
     ensure_schema(connection)
     rows = connection.execute("""
-        SELECT r.*, e.event AS latest_event, e.occurred_at AS latest_event_at
-        FROM model_permission_requests r
-        LEFT JOIN model_permission_events e ON e.id=(
-            SELECT MAX(e2.id) FROM model_permission_events e2 WHERE e2.request_id=r.id
-        )
-        ORDER BY r.id DESC
+        SELECT r.* FROM model_permission_requests r ORDER BY r.id DESC
     """).fetchall()
-    return [dict(row) for row in rows]
+    items = [dict(row) for row in rows]
+    for item in items:
+        events = connection.execute("""
+            SELECT event,actor,occurred_at,reason FROM model_permission_events
+            WHERE request_id=? ORDER BY id
+        """, (item["id"],)).fetchall()
+        item["history"] = [dict(event) for event in events]
+    return items
 
 
 def request_permission(connection: sqlite3.Connection, *, model_id: int,
