@@ -144,5 +144,52 @@ class ModelJobBrokerTests(unittest.TestCase):
                        actor="test-broker")
 
 
+    def test_queued_job_can_be_cancelled_without_starting_systemd(self):
+        job = self._create()
+        result = request_job_cancel(
+            self.db, job_id=job["job_id"], actor="test-owner")
+        self.assertEqual(result["status"], "cancelled")
+        self.assertFalse(result["systemd_stop_required"])
+        self.assertEqual(get_job(self.db, job["job_id"])["status"], "cancelled")
+
+    def test_active_cancel_requires_confirmed_systemd_inactive_state(self):
+        job = self._create()
+        plan = claim_job_for_start(
+            self.db, job_id=job["job_id"], actor="test-broker",
+            capacity_check=lambda: True, model_root=self.root)
+        mark_job_running(self.db, job_id=job["job_id"],
+                         systemd_unit=plan["systemd_unit"], actor="test-broker")
+        requested = request_job_cancel(
+            self.db, job_id=job["job_id"], actor="test-owner")
+        self.assertTrue(requested["systemd_stop_required"])
+        still_active = confirm_job_stopped(
+            self.db, job_id=job["job_id"], actor="test-broker",
+            unit_is_active=lambda unit: True)
+        self.assertFalse(still_active["stopped"])
+        self.assertEqual(get_job(self.db, job["job_id"])["status"], "running")
+        stopped = confirm_job_stopped(
+            self.db, job_id=job["job_id"], actor="test-broker",
+            unit_is_active=lambda unit: False)
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(get_job(self.db, job["job_id"])["status"], "cancelled")
+
+    def test_restart_reconciliation_only_finishes_confirmed_inactive_units(self):
+        job = self._create()
+        plan = claim_job_for_start(
+            self.db, job_id=job["job_id"], actor="test-broker",
+            capacity_check=lambda: True, model_root=self.root)
+        active = reconcile_orphaned_job(
+            self.db, job_id=job["job_id"], actor="recovery",
+            unit_is_active=lambda unit: True)
+        self.assertFalse(active["reconciled"])
+        self.assertEqual(get_job(self.db, job["job_id"])["status"], "starting")
+        recovered = reconcile_orphaned_job(
+            self.db, job_id=job["job_id"], actor="recovery",
+            unit_is_active=lambda unit: False)
+        self.assertTrue(recovered["reconciled"])
+        self.assertEqual(recovered["status"], "failed")
+        self.assertEqual(get_job(self.db, job["job_id"])["status"], "failed")
+
+
 if __name__ == "__main__":
     unittest.main()
