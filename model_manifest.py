@@ -72,7 +72,7 @@ def validate_manifest(payload: dict) -> None:
                 raise ManifestError("Dowód audytu licencji musi dotyczyć dokładnej rewizji artefaktu")
             if audit.get("report") != _LICENSE_AUDIT_REPORT:
                 raise ManifestError("Brak referencji do raportu audytu licencji")
-            if not isinstance(audit.get("reviewed_at"), str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", audit["reviewed_at"]):
+            if not isinstance(audit.get("reviewed_at"), str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", audit["reviewed_at"]):
                 raise ManifestError("Nieprawidłowa data audytu licencji")
             evidence = audit.get("evidence")
             if not isinstance(evidence, list) or len(evidence) < 2 or not all(
