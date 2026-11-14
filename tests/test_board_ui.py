@@ -46,6 +46,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('id="black-piece-summary"', HTML)
         self.assertIn("function pieceInventory(fen,color)", HTML)
         self.assertIn("function renderPieceInventory(fen)", HTML)
+        self.assertIn("data.figures+' figur · '+data.pawns+' pionków", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
         self.assertIn('aria-live="polite"', HTML)

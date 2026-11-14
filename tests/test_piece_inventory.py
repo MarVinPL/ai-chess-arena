@@ -31,6 +31,8 @@ class PieceInventoryTests(unittest.TestCase):
             with self.subTest(color=color):
                 result = inventory(self.START, color)
                 self.assertEqual(result["counts"], {"k": 1, "q": 1, "r": 2, "b": 2, "n": 2, "p": 8})
+                self.assertEqual(result["figures"], 7)
+                self.assertEqual(result["pawns"], 8)
                 self.assertEqual(result["total"], 16)
                 self.assertEqual(result["material"], 39)
 
@@ -40,6 +42,8 @@ class PieceInventoryTests(unittest.TestCase):
         black = inventory(fen, "black")
         self.assertEqual(white["total"], 16)
         self.assertEqual(black["counts"]["p"], 7)
+        self.assertEqual(black["figures"], 7)
+        self.assertEqual(black["pawns"], 7)
         self.assertEqual(black["total"], 15)
         self.assertEqual(black["material"], 38)
 
@@ -47,7 +51,9 @@ class PieceInventoryTests(unittest.TestCase):
         fen = "4k3/8/8/8/8/8/8/3QK3 w - - 0 1"
         white = inventory(fen, "white")
         self.assertEqual(white["counts"]["p"], 0)
+        self.assertEqual(white["pawns"], 0)
         self.assertEqual(white["counts"]["q"], 1)
+        self.assertEqual(white["figures"], 1)
         self.assertEqual(white["total"], 2)
         self.assertEqual(white["material"], 9)
 
