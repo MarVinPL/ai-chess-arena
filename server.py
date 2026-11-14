@@ -1288,7 +1288,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
-    def send_operator_auth_json(self, obj, code=200, session_token=None, csrf_token=None, clear=False):
+    def send_operator_auth_json(self, obj, code=200, session_token=None, csrf_token=None, clear=False, retry_after=None):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1576,9 +1576,26 @@ class Handler(BaseHTTPRequestHandler):
                     'error': 'Brak uwierzytelnionej tożsamości operatora lub wymaganej roli właściciela (sesja/CSRF).'
                 }, 403)
                 return
-        if path in ('/api/operator-auth/register/options','/api/operator-auth/register/verify','/api/operator-auth/login/options','/api/operator-auth/login/verify','/api/operator-auth/logout','/api/operator-auth/invite'):
+        if path in ('/api/operator-auth/register/options','/api/operator-auth/register/verify','/api/operator-auth/login/options','/api/operator-auth/login/verify','/api/operator-auth/logout','/api/operator-auth/invite','/api/operator-auth/credentials/revoke','/api/operator-auth/operators/suspend'):
             try:
                 auth_config = operator_auth.load_config()
+                if path in ('/api/operator-auth/credentials/revoke','/api/operator-auth/operators/suspend'):
+                    session = operator_auth.bind_verified_request(DB, auth_config, self, require_csrf=True)
+                    if session is None or session['role'] != 'owner':
+                        self.send_operator_auth_json({'error': 'Wymagane konto właściciela i poprawny token CSRF.'}, 403)
+                        return
+                    length = int(self.headers.get('Content-Length', '0'))
+                    payload = json.loads(self.rfile.read(length) or b'{}')
+                    if path.endswith('/credentials/revoke'):
+                        result = operator_auth.revoke_credential(
+                            DB, session['operator_id'], payload.get('credential_id'),
+                        )
+                    else:
+                        result = operator_auth.suspend_operator(
+                            DB, session['operator_id'], payload.get('operator_id'),
+                        )
+                    self.send_operator_auth_json({'ok': True, **result})
+                    return
                 if path == '/api/operator-auth/logout':
                     session = operator_auth.bind_verified_request(DB, auth_config, self, require_csrf=True)
                     if session is None:
@@ -1604,15 +1621,29 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 length = int(self.headers.get('Content-Length', '0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
+                source_ip = str(self.client_address[0]) if getattr(self, 'client_address', None) else 'unknown'
                 if path == '/api/operator-auth/register/options':
-                    result = operator_auth.begin_registration(DB, auth_config, payload.get('token'))
+                    token = payload.get('token')
+                    if not isinstance(token, str):
+                        raise operator_auth.OperatorAuthError('Nieprawidłowy token rejestracyjny.')
+                    operator_auth.consume_rate_limit(DB, 'register-options:' + source_ip + ':' + token, 6)
+                    result = operator_auth.begin_registration(DB, auth_config, token)
                 elif path == '/api/operator-auth/register/verify':
+                    operator_auth.consume_rate_limit(
+                        DB, 'register-verify:' + source_ip + ':' + str(payload.get('ceremony_id', '')), 8,
+                    )
                     result = operator_auth.finish_registration(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
                     )
                 elif path == '/api/operator-auth/login/options':
+                    operator_auth.consume_rate_limit(DB, 'login-options:' + source_ip, 15)
                     result = operator_auth.begin_authentication(DB, auth_config)
                 else:
+                    credential = payload.get('credential') if isinstance(payload.get('credential'), dict) else {}
+                    credential_id = str(credential.get('rawId') or credential.get('id') or '')
+                    operator_auth.consume_rate_limit(
+                        DB, 'login-verify:' + source_ip + ':' + credential_id, 12,
+                    )
                     result = operator_auth.finish_authentication(
                         DB, auth_config, payload.get('ceremony_id'), payload.get('credential'),
                     )
@@ -1621,6 +1652,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_operator_auth_json(result, 200, session_token=session_token, csrf_token=csrf_token)
                     return
                 self.send_operator_auth_json(result)
+            except operator_auth.OperatorRateLimitError as exc:
+                self.send_operator_auth_json({'error': str(exc)}, 429, clear=False, retry_after=exc.retry_after)
             except operator_auth.OperatorAuthError as exc:
                 self.send_operator_auth_json({'error': str(exc)}, 400, clear=False)
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
