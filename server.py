@@ -305,6 +305,14 @@ def _ensure_version_assets(version_id):
     version = _version_record(version_id)
     draft_path = None
     if version.get('draft_filename'):
+        if str(version['source']).startswith('https://huggingface.co/'):
+            prefix = version['source'].rstrip('/') + '/resolve/'
+            draft_url = version.get('draft_download_url') or ''
+            remainder = draft_url[len(prefix):] if draft_url.startswith(prefix) else ''
+            draft_revision, separator, draft_path = remainder.partition('/')
+            if (not re.fullmatch(r'[0-9a-fA-F]{40}', draft_revision) or not separator or
+                    draft_path != version.get('draft_source_path')):
+                raise RuntimeError('Plik draft nie ma URL przypiętego do pełnego commita Hugging Face')
         expected = model_store.MANAGED_DIR / version['draft_filename']
         if not expected.is_file():
             model_store.download_draft_version(
