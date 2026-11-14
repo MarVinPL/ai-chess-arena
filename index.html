@@ -79,7 +79,9 @@ async function loadTournamentView(id){
   const r=await fetch('/api/tournaments/'+selectedTournamentId+'/view',{cache:'no-store'});
   const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
   const t=d.tournament;
-  $('tournament-detail-title').textContent='#'+t.id+' · '+t.name+' · '+t.status+' · '+t.format;
+  $('tournament-detail-title').textContent='#'+t.id+' · '+t.name+' · '+t.status+' · '+t.format+(d.active_pairing?' · AKTYWNA PARA: '+d.active_pairing.white_name+' vs '+d.active_pairing.black_name:'');
+  const liveMoves=Array.isArray(d.live?.moves)?d.live.moves:[];
+  if(d.active_pairing&&liveMoves.length){$('tournament-detail-title').textContent+=' · ostatni ruch: '+(liveMoves[liveMoves.length-1].san||liveMoves[liveMoves.length-1].uci||'—')}
   const p=d.progress;
   $('tournament-progress').textContent='Liga: '+p.league.completed+'/'+p.league.planned+' · Puchar: '+p.draft.completed+'/'+p.draft.planned+' · Łącznie: '+p.total.completed+'/'+p.total.planned+' rozegranych (wyłącznie zapisane, poprawnie powiązane wyniki).';
   tableRows('tournament-standings',(d.standings||[]).map((x,i)=>[i+1,x.name,x.points,x.played,x.wins,x.draws,x.losses]),['#','Zawodnik','Pkt','Partie','W','R','P']);
