@@ -260,20 +260,6 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   if len(candidates)<2:
    raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
   ms=[dict(row) for row in candidates]
-  # Same weights with different inference settings are distinct competitors;
-  # identical weights under the same inference configuration are not.
-  identities=[]
-  for model in ms:
-   digest=(model.get('model_sha256') or '').lower()
-   if not digest: continue
-   try:
-    metadata=json.loads(model.get('metadata_json') or '{}')
-   except (TypeError,json.JSONDecodeError):
-    metadata={}
-   inference=json.dumps(normalize_inference_config(metadata),sort_keys=True,separators=(',',':'))
-   identities.append((digest,inference))
-  if len(identities)!=len(set(identities)):
-   raise ValueError('Rejestr zawiera duplikaty wag z identyczną konfiguracją inferencji; turniej wymaga dwóch różnych modeli')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
   for model in ms:
@@ -307,14 +293,17 @@ def tournament_entry_status(tournament_id):
    metadata={}
   revision=metadata.get('revision')
   download_url=metadata.get('download_url') or ''
+  is_hf_source=isinstance(item.get('source'),str) and item['source'].startswith('https://huggingface.co/')
+  pinned_hf=bool(isinstance(revision,str) and re.fullmatch(r'[0-9a-fA-F]{40}',revision) and
+                  isinstance(download_url,str) and f'/resolve/{revision}/' in download_url)
+  direct_https=bool(isinstance(item.get('source'),str) and item['source'].startswith('https://') and
+                    item['source'].lower().endswith('.gguf'))
   manifest_ready=bool(
    item.get('version_id') and
    isinstance(item.get('filename'),str) and item['filename'].lower().endswith('.gguf') and
    isinstance(item.get('sha256'),str) and re.fullmatch(r'[0-9a-fA-F]{64}',item['sha256']) and
    isinstance(item.get('size_bytes'),int) and item['size_bytes']>0 and
-   isinstance(item.get('source'),str) and item['source'].startswith('https://') and
-   isinstance(revision,str) and re.fullmatch(r'[0-9a-fA-F]{40}',revision) and
-   isinstance(download_url,str) and f'/resolve/{revision}/' in download_url
+   (pinned_hf if is_hf_source else direct_https or pinned_hf)
   )
   license_verified=item.get('license_verified')==1
   local_file_available=False
