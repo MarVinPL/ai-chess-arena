@@ -72,6 +72,8 @@ class ModelJobBrokerTests(unittest.TestCase):
             model_root=self.root)
         self.assertEqual(plan["status"], "starting")
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
+        self.assertEqual(plan["systemd_unit"], f"ai-chess-model-test-{job['job_id']}.service")
+        self.assertIn(f"/run/ai-chess-model-test-{job['job_id']}", plan["argv"])
         self.assertFalse(plan["side_effects_performed"])
         self.assertIn("--", plan["argv"])
         self.assertEqual(plan["argv"][-9], WORKER_EXECUTABLE)
