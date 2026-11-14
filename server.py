@@ -887,6 +887,8 @@ class Handler(BaseHTTPRequestHandler):
                     (SELECT COUNT(DISTINCT p.id)
                      FROM tournament_pairings p
                      JOIN games g ON g.id=p.game_id
+                       AND g.tournament_id=p.tournament_id
+                       AND g.pairing_id=p.id
                      WHERE p.tournament_id=t.id
                        AND p.status='completed'
                        AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
