@@ -108,3 +108,5 @@ The panel now contains a Passkey section with:
 The UI does not store tokens in local storage or query strings. The enrollment token field is cleared after successful registration. Invitation tokens are displayed in a one-time readonly field and are not automatically copied or transmitted elsewhere. The browser uses `credentials: same-origin` and the session cookie remains HttpOnly.
 
 A discoverable-login test mocks the cryptographic verifier and verifies credential lookup, stored user-handle comparison, challenge consumption, and session creation. Full authenticator/browser E2E, persistent rate limiting, alerting, credential revocation, operator suspension, recovery, and global session invalidation remain mandatory before production activation.
+
+The repository CI workflow also extracts the single inline panel script and runs `node --check` (Node.js 22) before the Python suite, so browser JavaScript syntax is validated on pull requests.
