@@ -114,7 +114,7 @@ The repository CI workflow also extracts the single inline panel script and runs
 
 ### Authentication abuse controls and credential lifecycle (2026-11-14)
 
-- Persistent SQLite fixed-window counters are keyed by SHA-256 hashes; raw bucket identifiers, tokens, IP addresses, and credential identifiers are not stored in the rate-limit table.
+- Persistent SQLite fixed-window counters are keyed by SHA-256 hashes; raw bucket identifiers, tokens, IP addresses, and credential identifiers are not stored in the rate-limit table. Expired challenges and enrollments, old sessions, and stale limiter buckets are pruned during authentication activity.
 - Login and registration endpoints count attempts before performing WebAuthn verification. Registration attempts are additionally bounded by the one-use enrollment token or ceremony; authentication verification is bounded by credential ID. Owner invitations are limited per owner account.
 - HTTP 429 responses include `Retry-After`. Client IP uses the direct socket peer only; untrusted `X-Forwarded-For` headers are ignored. The source-wide threshold is deliberately higher to avoid a shared reverse-proxy address locking out all operators.
 - Owners can inspect operator and active credential inventory, revoke a credential, or suspend a non-self operator. Credential revocation invalidates all sessions for that operator; suspension also prevents future authentication.
