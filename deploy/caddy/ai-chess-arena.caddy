@@ -1,0 +1,8 @@
+# AI Chess Arena — dedicated Caddy site module.
+# Keep the credential in the Caddy service environment; never commit its hash.
+arena.148-113-182-137.sslip.io {
+    basicauth {
+        arena {$ARENA_BASIC_AUTH_HASH}
+    }
+    reverse_proxy 127.0.0.1:8090
+}
