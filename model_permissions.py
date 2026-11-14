@@ -68,11 +68,11 @@ def _validate_identity(model_id: int, repo_id: str, revision: str) -> None:
 def _active_scope(connection: sqlite3.Connection, model_id: int,
                   repo_id: str, revision: str, scope: str) -> bool:
     row = connection.execute("""
-        SELECT 1 FROM model_permission_requests
+        SELECT status FROM model_permission_requests
         WHERE model_id=? AND repo_id=? AND revision=? AND scope=?
-          AND status='approved' ORDER BY id DESC LIMIT 1
+        ORDER BY id DESC LIMIT 1
     """, (model_id, repo_id, revision, scope)).fetchone()
-    return row is not None
+    return bool(row and row["status"] == "approved")
 
 
 def list_permissions(connection: sqlite3.Connection) -> list[dict]:
