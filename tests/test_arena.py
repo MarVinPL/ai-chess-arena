@@ -321,6 +321,14 @@ class ArenaSmokeTests(unittest.TestCase):
         ratings = {row['name']: row for row in server.league.elo_ratings('PURE_AI')}
         self.assertEqual((ratings['Adjudication White']['games'], ratings['Adjudication White']['losses']), (1, 1))
         self.assertEqual((ratings['Adjudication Black']['games'], ratings['Adjudication Black']['wins']), (1, 1))
+        with sqlite3.connect(server.DB) as db:
+            tournament_ids = [item['tournament_id'] for item in pairings]
+            placeholders = ','.join('?' for _ in tournament_ids)
+            db.execute(f"DELETE FROM games WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournament_pairings WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournament_entries WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournaments WHERE id IN ({placeholders})", tournament_ids)
+            db.execute("DELETE FROM league_models WHERE id IN (?,?)", (white_id, black_id))
 
 
     def test_tournament_api_reports_only_saved_completed_pairing_games(self):
