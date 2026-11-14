@@ -7,7 +7,7 @@ from pathlib import Path
 
 from model_allowlist import (
     AllowlistError, check_allowlist_sync, compare_allowlists, is_runtime_ready,
-    load_allowlist, validate_allowlist, check_repository_sync,
+    load_allowlist, validate_allowlist, check_repository_sync, tournament_admission_blockers,
 )
 from model_manifest import load_manifest
 
@@ -125,6 +125,39 @@ class ModelAllowlistTests(unittest.TestCase):
                                          local_file_verified=True, runtime_healthy=True))
         self.assertFalse(is_runtime_ready(candidate, license_verified=False,
                                           local_file_verified=True, runtime_healthy=True))
+
+    def test_tournament_admission_requires_allowlist_license_and_exact_version(self):
+        candidate = copy.deepcopy(self.allowlist['models'][0])
+        candidate.update(status='eligible', admission_scope=['PURE_AI'],
+                         block_reason=None, technical_readiness='ready',
+                         technical_blockers=[])
+        args = dict(model_id=1, repo_id=candidate['repo_id'],
+                    revision=candidate['revision'], license_name='Apache-2.0',
+                    license_verified=True, tournament_format='PURE_AI')
+        self.assertEqual(tournament_admission_blockers(candidate, **args), [])
+        self.assertTrue(tournament_admission_blockers(
+            {**candidate, 'status': 'review_required', 'admission_scope': []}, **args))
+        self.assertTrue(tournament_admission_blockers(
+            {**candidate, 'technical_readiness': 'not_evaluated'}, **args))
+        self.assertTrue(tournament_admission_blockers(
+            candidate, **{**args, 'revision': '0' * 40}))
+        self.assertTrue(tournament_admission_blockers(
+            candidate, **{**args, 'repo_id': 'other/model'}))
+        self.assertTrue(tournament_admission_blockers(
+            candidate, **{**args, 'license_verified': False}))
+        self.assertTrue(tournament_admission_blockers(
+            candidate, **{**args, 'tournament_format': 'AI_ENGINE'}))
+
+    def test_missing_and_permanently_excluded_models_fail_closed(self):
+        args = dict(repo_id='repo/model', revision='a' * 40,
+                    license_name='Apache-2.0', license_verified=True,
+                    tournament_format='PURE_AI')
+        self.assertTrue(tournament_admission_blockers(None, model_id=11, **args))
+        for model_id in (9, 10):
+            self.assertTrue(tournament_admission_blockers(
+                {'model_id': model_id, 'status': 'eligible',
+                 'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready'},
+                model_id=model_id, **args))
 
     def test_sync_check_detects_stale_and_dirty_consumer_without_mutating(self):
         commit = 'a' * 40

@@ -347,6 +347,7 @@ def tournament_entry_status(tournament_id):
    'model_id':item['model_id'],'name':item['name'],
    'active_registry_entry':item.get('active')==1,'tournament_entrant':not excluded,
    'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
+   'repo_id':metadata.get('repo_id'),'revision':revision,'license':item.get('license'),
    'license_verified':license_verified,'local_file_available':local_file_available,
    'local_file_required_before_start':False,
    'download_on_demand':not excluded and manifest_ready and license_verified and not local_file_available,
