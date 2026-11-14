@@ -7,6 +7,7 @@ import league
 import model_store
 import model_allowlist
 import model_admission
+import model_review_submissions
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1474,11 +1475,14 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path in ('/api/model-admission/admit','/api/model-admission/revoke'):
+                if self.path == '/api/model-review-submissions':
+                    with league.connect() as c:
+                        result = model_review_submissions.submit(c, payload)
+                elif self.path in ('/api/model-admission/admit','/api/model-admission/revoke'):
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')

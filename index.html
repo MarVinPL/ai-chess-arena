@@ -149,6 +149,19 @@ button.stop{background:#744b4b;border-color:#986363}
  <div><h4>Modele w rejestrze</h4><div id="model-list" class="moves">Brak zarejestrowanych modeli.</div>
   <h4>Kontrolowane dopuszczenie do rejestru</h4>
   <p class="notice">Decyzja jest zapisywana lokalnie w audycie rejestru. Nie zmienia allowlisty turniejowej, nie uruchamia modelu i nie pobiera wag.</p>
+  <button type="button" id="model-review-open" class="secondary" style="margin:8px 0">Uzupełnij dane modeli 1–3</button>
+  <form id="model-review-form" hidden style="padding:12px;margin:8px 0;border:1px solid #52627a;border-radius:9px">
+   <p class="notice">To jest propozycja do audytu. Zapis nie zatwierdza licencji, nie dopuszcza modelu do turnieju i nie zmienia allowlisty.</p>
+   <div class="formrow"><label for="review-model-id">Model</label><select class="field" id="review-model-id"><option value="1">Model 1 — Qwen2.5 0.5B</option><option value="2">Model 2 — SmolLM2 360M</option><option value="3">Model 3 — Qwen2 0.5B</option></select></div>
+   <div class="formrow"><input class="field" id="review-license-id" placeholder="Dokładny identyfikator licencji (np. Apache-2.0)"><select class="field" id="review-license-status"><option value="pending">Licencja: jeszcze niezweryfikowana</option><option value="verified_permissive">Ocena: zgodna / permissive</option><option value="verified_restricted">Ocena: zgodna z ograniczeniami</option><option value="not_compatible">Ocena: niezgodna</option></select></div>
+   <textarea class="field" id="review-license-notes" rows="3" placeholder="Źródło, link do pliku licencji, warunki i uwagi z ręcznej weryfikacji"></textarea>
+   <div class="formrow"><select class="field" id="review-scope"><option value="">Zakres: nieustalony</option><option value="arena">Arena</option><option value="tournament">Turnieje</option><option value="arena,tournament">Arena i turnieje</option></select><select class="field" id="review-technical"><option value="not_evaluated">Gotowość techniczna: nieoceniona</option><option value="ready">Test techniczny zakończony pozytywnie</option><option value="blocked">Test wykazał blokadę</option></select></div>
+   <textarea class="field" id="review-technical-evidence" rows="3" placeholder="Dowody testu runtime/artefaktu (wymagane przy READY)"></textarea>
+   <label style="display:block;margin:8px 0"><input type="checkbox" id="review-revision-confirmed"> Potwierdzam zgodność rewizji repozytorium z przypiętym manifestem</label>
+   <textarea class="field" id="review-revision-notes" rows="2" placeholder="Uwagi o rewizji; dla modelu 1 opisz rozbieżność lub sposób jej wyjaśnienia"></textarea>
+   <div class="formrow"><button type="submit">Zapisz propozycję do audytu</button><button type="button" class="secondary" id="model-review-cancel">Anuluj</button></div>
+   <div id="model-review-status" class="status" role="status"></div>
+  </form>
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
   <div class="formrow"><input class="field" id="model-source" placeholder="Źródło (opcjonalnie)"><input class="field" id="model-license" placeholder="Licencja (wymagana do użycia)"></div>
@@ -361,6 +374,16 @@ function renderModelStatus(models,storage){
  $('ready-count').textContent=String(ready.length);
  $('model-status-note').textContent='Rejestr: '+active.length+' aktywnych wpisów. Lokalnie gotowe do uruchomienia: '+ready.length+'. Wpisy skatalogowane bez zweryfikowanej kopii w magazynie areny nie są liczone jako dostępne.';
 }
+const reviewOpen=$('model-review-open');
+if(reviewOpen)reviewOpen.addEventListener('click',()=>{$('model-review-form').hidden=false;$('model-review-status').textContent='';});
+const reviewCancel=$('model-review-cancel');
+if(reviewCancel)reviewCancel.addEventListener('click',()=>{$('model-review-form').hidden=true;});
+const reviewForm=$('model-review-form');
+if(reviewForm)reviewForm.addEventListener('submit',async event=>{
+ event.preventDefault();const button=reviewForm.querySelector('button[type="submit"]');button.disabled=true;
+ const payload={model_id:Number($('review-model-id').value),license_id:$('review-license-id').value,license_review:$('review-license-status').value,license_notes:$('review-license-notes').value,admission_scope:$('review-scope').value,technical_readiness:$('review-technical').value,technical_evidence:$('review-technical-evidence').value,revision_confirmed:$('review-revision-confirmed').checked,revision_notes:$('review-revision-notes').value};
+ try{const response=await fetch('/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);$('model-review-status').textContent=`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;reviewForm.reset();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;}finally{button.disabled=false;}
+});
 function renderModelAdmission(items){
  const host=$('model-admission-list');host.textContent='';
  if(!Array.isArray(items)||!items.length){host.textContent='Brak wpisów na jawnej allowliście.';return}
