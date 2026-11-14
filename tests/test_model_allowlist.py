@@ -3,7 +3,7 @@ import unittest
 
 from model_allowlist import AllowlistError, is_eligible, validate_allowlist
 
-MAIN_SHA = "9d0be54d044f35c97cc37d1b7989bdb21a2a4b49"
+MAIN_SHA = "1cd4f3c9cc51f4061bd892e7b6b2605882a64129"
 REVISION = "a" * 40
 
 
