@@ -1,0 +1,430 @@
+"""Fail-closed WebAuthn operator identity and session primitives.
+
+No HTTP handler or production configuration is enabled by importing this module.
+The caller must supply an explicit database path and validated RP configuration.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import secrets
+import sqlite3
+import time
+import uuid
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+from webauthn import (
+    base64url_to_bytes,
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers.structs import (
+    AttestationConveyancePreference,
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
+
+TOKEN_TTL_SECONDS = 600
+CHALLENGE_TTL_SECONDS = 300
+SESSION_IDLE_SECONDS = 1800
+SESSION_ABSOLUTE_SECONDS = 28800
+_OPERATOR_ID = re.compile(r"^[a-f0-9-]{36}$")
+_DISPLAY_NAME = re.compile(r"^[^\\x00-\\x1f\\x7f]{1,100}$")
+_RP_ID = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class OperatorAuthError(ValueError):
+    """Expected authentication, configuration, or ceremony failure."""
+
+
+@dataclass(frozen=True)
+class WebAuthnConfig:
+    rp_id: str
+    origin: str
+    rp_name: str = "AI Chess Arena"
+
+
+def load_config(environ=None) -> WebAuthnConfig:
+    """Load strict deployment config. Never guess a hostname or permit HTTP."""
+    env = os.environ if environ is None else environ
+    rp_id = str(env.get("ARENA_WEBAUTHN_RP_ID", "")).strip().lower()
+    origin = str(env.get("ARENA_WEBAUTHN_ORIGIN", "")).strip()
+    if not rp_id or not _RP_ID.fullmatch(rp_id) or rp_id in {"localhost"}:
+        raise OperatorAuthError("Brak prawidłowego ARENA_WEBAUTHN_RP_ID.")
+    parsed = urlsplit(origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or
+            parsed.password or parsed.path not in ("", "/") or parsed.query or
+            parsed.fragment):
+        raise OperatorAuthError("ARENA_WEBAUTHN_ORIGIN musi być dokładnym originem HTTPS.")
+    host = parsed.hostname.lower().rstrip(".")
+    if host != rp_id and not host.endswith("." + rp_id):
+        raise OperatorAuthError("Origin HTTPS nie należy do skonfigurowanego RP ID.")
+    if parsed.port not in (None, 443):
+        origin = f"https://{host}:{parsed.port}"
+    else:
+        origin = f"https://{host}"
+    return WebAuthnConfig(rp_id=rp_id, origin=origin)
+
+
+def _connect(db_path):
+    conn = sqlite3.connect(str(db_path), timeout=10, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def ensure_schema(conn):
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS arena_operators (
+        operator_id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('owner','operator')),
+        user_handle BLOB NOT NULL UNIQUE,
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        created_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS arena_webauthn_credentials (
+        credential_id TEXT PRIMARY KEY,
+        operator_id TEXT NOT NULL REFERENCES arena_operators(operator_id),
+        public_key BLOB NOT NULL,
+        sign_count INTEGER NOT NULL DEFAULT 0,
+        transports_json TEXT NOT NULL DEFAULT '[]',
+        device_type TEXT,
+        backed_up INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        last_used_at REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arena_credentials_operator
+        ON arena_webauthn_credentials(operator_id);
+    CREATE TABLE IF NOT EXISTS arena_operator_enrollments (
+        token_hash TEXT PRIMARY KEY,
+        role TEXT NOT NULL CHECK(role IN ('owner','operator')),
+        display_name TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        consumed_at REAL
+    );
+    CREATE TABLE IF NOT EXISTS arena_auth_challenges (
+        ceremony_id TEXT PRIMARY KEY,
+        purpose TEXT NOT NULL CHECK(purpose IN ('registration','authentication')),
+        challenge BLOB NOT NULL,
+        token_hash TEXT,
+        operator_id TEXT,
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        consumed_at REAL
+    );
+    CREATE TABLE IF NOT EXISTS arena_operator_sessions (
+        session_hash TEXT PRIMARY KEY,
+        csrf_hash TEXT NOT NULL,
+        operator_id TEXT NOT NULL REFERENCES arena_operators(operator_id),
+        created_at REAL NOT NULL,
+        last_seen_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        revoked_at REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arena_sessions_operator
+        ON arena_operator_sessions(operator_id);
+    """)
+
+
+def _token_hash(token):
+    if not isinstance(token, str) or len(token) < 32 or len(token) > 256:
+        raise OperatorAuthError("Nieprawidłowy token rejestracyjny.")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_owner_enrollment(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
+    """Local-admin bootstrap primitive. Returns the raw one-use token once."""
+    if not isinstance(display_name, str) or not _DISPLAY_NAME.fullmatch(display_name.strip()):
+        raise OperatorAuthError("Nieprawidłowa nazwa właściciela.")
+    if not isinstance(ttl, int) or not 60 <= ttl <= 1800:
+        raise OperatorAuthError("Nieprawidłowy czas ważności tokenu.")
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        owners = conn.execute(
+            "SELECT COUNT(*) FROM arena_operators WHERE role='owner' AND active=1"
+        ).fetchone()[0]
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM arena_operator_enrollments WHERE role='owner' AND consumed_at IS NULL AND expires_at>?",
+            (now,),
+        ).fetchone()[0]
+        if owners or pending:
+            raise OperatorAuthError("Właściciel już istnieje albo aktywny token rejestracji jest wydany.")
+        conn.execute(
+            "INSERT INTO arena_operator_enrollments(token_hash,role,display_name,created_at,expires_at) VALUES(?,?,?,?,?)",
+            (_token_hash(token), "owner", display_name.strip(), now, now + ttl),
+        )
+        conn.commit()
+    return token
+
+
+def create_operator_invitation(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
+    """Create an operator invitation; caller must already have verified owner role."""
+    if not isinstance(display_name, str) or not _DISPLAY_NAME.fullmatch(display_name.strip()):
+        raise OperatorAuthError("Nieprawidłowa nazwa operatora.")
+    if not isinstance(ttl, int) or not 60 <= ttl <= 1800:
+        raise OperatorAuthError("Nieprawidłowy czas ważności zaproszenia.")
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        if not conn.execute(
+            "SELECT 1 FROM arena_operators WHERE role='owner' AND active=1 LIMIT 1"
+        ).fetchone():
+            raise OperatorAuthError("Brak aktywnego właściciela.")
+        conn.execute(
+            "INSERT INTO arena_operator_enrollments(token_hash,role,display_name,created_at,expires_at) VALUES(?,?,?,?,?)",
+            (_token_hash(token), "operator", display_name.strip(), now, now + ttl),
+        )
+    return token
+
+
+def begin_registration(db_path, config, token):
+    token_hash = _token_hash(token)
+    now = time.time()
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        enrollment = conn.execute(
+            "SELECT * FROM arena_operator_enrollments WHERE token_hash=? AND consumed_at IS NULL AND expires_at>?",
+            (token_hash, now),
+        ).fetchone()
+        if enrollment is None:
+            raise OperatorAuthError("Token rejestracyjny jest nieprawidłowy, zużyty lub wygasł.")
+        if enrollment["role"] == "owner" and conn.execute(
+            "SELECT 1 FROM arena_operators WHERE role='owner' AND active=1 LIMIT 1"
+        ).fetchone():
+            raise OperatorAuthError("Właściciel jest już zarejestrowany.")
+        user_handle = secrets.token_bytes(32)
+        options = generate_registration_options(
+            rp_id=config.rp_id,
+            rp_name=config.rp_name,
+            user_name=enrollment["display_name"],
+            user_display_name=enrollment["display_name"],
+            user_id=user_handle,
+            timeout=60000,
+            attestation=AttestationConveyancePreference.NONE,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.REQUIRED,
+                user_verification=UserVerificationRequirement.REQUIRED,
+            ),
+        )
+        ceremony_id = secrets.token_urlsafe(24)
+        conn.execute(
+            "INSERT INTO arena_auth_challenges(ceremony_id,purpose,challenge,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)",
+            (ceremony_id, "registration", options.challenge, token_hash, now, now + CHALLENGE_TTL_SECONDS),
+        )
+        result = json.loads(options_to_json(options))
+        result["ceremony_id"] = ceremony_id
+        return result
+
+
+def finish_registration(db_path, config, ceremony_id, credential):
+    if not isinstance(ceremony_id, str) or len(ceremony_id) > 128 or not isinstance(credential, dict):
+        raise OperatorAuthError("Nieprawidłowa odpowiedź rejestracji.")
+    now = time.time()
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        challenge = conn.execute(
+            "SELECT * FROM arena_auth_challenges WHERE ceremony_id=? AND purpose='registration' AND consumed_at IS NULL AND expires_at>?",
+            (ceremony_id, now),
+        ).fetchone()
+        if challenge is None:
+            raise OperatorAuthError("Wyzwanie rejestracyjne wygasło lub zostało już użyte.")
+        enrollment = conn.execute(
+            "SELECT * FROM arena_operator_enrollments WHERE token_hash=? AND consumed_at IS NULL AND expires_at>?",
+            (challenge["token_hash"], now),
+        ).fetchone()
+        if enrollment is None:
+            raise OperatorAuthError("Token rejestracyjny jest nieprawidłowy, zużyty lub wygasł.")
+        verified = verify_registration_response(
+            credential=credential,
+            expected_challenge=bytes(challenge["challenge"]),
+            expected_rp_id=config.rp_id,
+            expected_origin=config.origin,
+            require_user_verification=True,
+        )
+        from webauthn.helpers import bytes_to_base64url
+        credential_id = bytes_to_base64url(verified.credential_id)
+        if conn.execute(
+            "SELECT 1 FROM arena_webauthn_credentials WHERE credential_id=?",
+            (credential_id,),
+        ).fetchone():
+            raise OperatorAuthError("To poświadczenie Passkey jest już zarejestrowane.")
+        if enrollment["role"] == "owner" and conn.execute(
+            "SELECT 1 FROM arena_operators WHERE role='owner' AND active=1 LIMIT 1"
+        ).fetchone():
+            raise OperatorAuthError("Właściciel jest już zarejestrowany.")
+        operator_id = str(uuid.uuid4())
+        user_handle = secrets.token_bytes(32)
+        conn.execute(
+            "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+            (operator_id, enrollment["display_name"], enrollment["role"], user_handle, now),
+        )
+        conn.execute(
+            """INSERT INTO arena_webauthn_credentials
+            (credential_id,operator_id,public_key,sign_count,device_type,backed_up,created_at)
+            VALUES(?,?,?,?,?,?,?)""",
+            (credential_id, operator_id, verified.credential_public_key,
+             verified.sign_count, str(verified.credential_device_type),
+             int(verified.credential_backed_up), now),
+        )
+        conn.execute(
+            "UPDATE arena_operator_enrollments SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL",
+            (now, challenge["token_hash"]),
+        )
+        conn.execute(
+            "UPDATE arena_auth_challenges SET consumed_at=? WHERE ceremony_id=? AND consumed_at IS NULL",
+            (now, ceremony_id),
+        )
+        conn.commit()
+        return {"operator_id": operator_id, "display_name": enrollment["display_name"],
+                "role": enrollment["role"]}
+
+
+def begin_authentication(db_path, config):
+    now = time.time()
+    options = generate_authentication_options(
+        rp_id=config.rp_id,
+        timeout=60000,
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+    ceremony_id = secrets.token_urlsafe(24)
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO arena_auth_challenges(ceremony_id,purpose,challenge,created_at,expires_at) VALUES(?,?,?,?,?)",
+            (ceremony_id, "authentication", options.challenge, now, now + CHALLENGE_TTL_SECONDS),
+        )
+    result = json.loads(options_to_json(options))
+    result["ceremony_id"] = ceremony_id
+    return result
+
+
+def _new_session(conn, operator_id, now):
+    raw_session = secrets.token_urlsafe(32)
+    raw_csrf = secrets.token_urlsafe(32)
+    conn.execute(
+        """INSERT INTO arena_operator_sessions
+        (session_hash,csrf_hash,operator_id,created_at,last_seen_at,expires_at)
+        VALUES(?,?,?,?,?,?)""",
+        (hashlib.sha256(raw_session.encode()).hexdigest(),
+         hashlib.sha256(raw_csrf.encode()).hexdigest(), operator_id, now, now,
+         now + SESSION_ABSOLUTE_SECONDS),
+    )
+    return raw_session, raw_csrf
+
+
+def finish_authentication(db_path, config, ceremony_id, credential):
+    if not isinstance(ceremony_id, str) or len(ceremony_id) > 128 or not isinstance(credential, dict):
+        raise OperatorAuthError("Nieprawidłowa odpowiedź logowania.")
+    raw_id = credential.get("rawId") or credential.get("id")
+    try:
+        credential_id = __import__("webauthn.helpers", fromlist=["bytes_to_base64url"]).bytes_to_base64url(
+            base64url_to_bytes(raw_id)
+        )
+    except Exception as exc:
+        raise OperatorAuthError("Nieprawidłowy identyfikator Passkey.") from exc
+    now = time.time()
+    with _connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        challenge = conn.execute(
+            "SELECT * FROM arena_auth_challenges WHERE ceremony_id=? AND purpose='authentication' AND consumed_at IS NULL AND expires_at>?",
+            (ceremony_id, now),
+        ).fetchone()
+        if challenge is None:
+            raise OperatorAuthError("Wyzwanie logowania wygasło lub zostało już użyte.")
+        row = conn.execute(
+            """SELECT c.*,o.operator_id,o.role,o.display_name,o.active
+            FROM arena_webauthn_credentials c JOIN arena_operators o
+            ON o.operator_id=c.operator_id WHERE c.credential_id=?""",
+            (credential_id,),
+        ).fetchone()
+        if row is None or not row["active"]:
+            raise OperatorAuthError("Nie udało się uwierzytelnić operatora.")
+        verified = verify_authentication_response(
+            credential=credential,
+            expected_challenge=bytes(challenge["challenge"]),
+            expected_rp_id=config.rp_id,
+            expected_origin=config.origin,
+            credential_public_key=bytes(row["public_key"]),
+            credential_current_sign_count=int(row["sign_count"]),
+            require_user_verification=True,
+        )
+        if verified.credential_id != base64url_to_bytes(raw_id):
+            raise OperatorAuthError("Identyfikator uwierzytelnionego poświadczenia jest niezgodny.")
+        conn.execute(
+            "UPDATE arena_webauthn_credentials SET sign_count=?,last_used_at=?,device_type=?,backed_up=? WHERE credential_id=?",
+            (verified.new_sign_count, now, str(verified.credential_device_type),
+             int(verified.credential_backed_up), credential_id),
+        )
+        conn.execute(
+            "UPDATE arena_auth_challenges SET consumed_at=? WHERE ceremony_id=? AND consumed_at IS NULL",
+            (now, ceremony_id),
+        )
+        session_token, csrf_token = _new_session(conn, row["operator_id"], now)
+        conn.commit()
+        return {
+            "operator": {"operator_id": row["operator_id"], "display_name": row["display_name"],
+                         "role": row["role"]},
+            "session_token": session_token,
+            "csrf_token": csrf_token,
+        }
+
+
+def get_session(db_path, session_token, now=None):
+    if not isinstance(session_token, str) or len(session_token) > 256:
+        return None
+    now = time.time() if now is None else now
+    session_hash = hashlib.sha256(session_token.encode()).hexdigest()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT s.csrf_hash,s.created_at,s.last_seen_at,s.expires_at,
+            o.operator_id,o.display_name,o.role,o.active
+            FROM arena_operator_sessions s JOIN arena_operators o
+            ON o.operator_id=s.operator_id
+            WHERE s.session_hash=? AND s.revoked_at IS NULL""",
+            (session_hash,),
+        ).fetchone()
+        if row is None or not row["active"] or row["expires_at"] <= now or row["last_seen_at"] + SESSION_IDLE_SECONDS <= now:
+            return None
+        conn.execute(
+            "UPDATE arena_operator_sessions SET last_seen_at=? WHERE session_hash=? AND revoked_at IS NULL",
+            (now, session_hash),
+        )
+        return {
+            "operator_id": row["operator_id"], "display_name": row["display_name"],
+            "role": row["role"], "csrf_hash": row["csrf_hash"],
+        }
+
+
+def verify_csrf(session, csrf_token):
+    if not session or not isinstance(csrf_token, str) or len(csrf_token) > 256:
+        return False
+    candidate = hashlib.sha256(csrf_token.encode()).hexdigest()
+    return secrets.compare_digest(candidate, session.get("csrf_hash", ""))
+
+
+def revoke_session(db_path, session_token):
+    if not isinstance(session_token, str) or len(session_token) > 256:
+        return False
+    digest = hashlib.sha256(session_token.encode()).hexdigest()
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE arena_operator_sessions SET revoked_at=? WHERE session_hash=? AND revoked_at IS NULL",
+            (time.time(), digest),
+        )
+        return cur.rowcount == 1
