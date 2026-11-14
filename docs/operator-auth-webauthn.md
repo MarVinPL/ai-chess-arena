@@ -86,12 +86,26 @@ The first backend slice is now present on the Issue #136 branch:
 
 ### Not yet complete / not production-ready
 
-- The browser UI does not yet provide the Passkey registration/login flow or operator-session controls.
+- The browser UI now provides Passkey registration, login, session status, logout, and owner-only operator invitations. It uses the browser WebAuthn API and sends credential responses to the server for cryptographic verification.
 - Persistent rate limiting and alerting for failed authentication/enrollment attempts are not implemented.
 - Credential revocation, operator suspension, role-change workflows, recovery, and global session invalidation are not implemented.
-- Ceremony failure-attempt handling and end-to-end browser tests need further security review.
+- Ceremony failure-attempt handling and end-to-end browser tests need further security review. Unit tests now cover discoverable login, stored user-handle binding, session creation, CSRF, and origin enforcement.
 - No real RP ID/origin values have been configured or verified for the live site.
 - No owner enrollment token has been generated; no credentials or sessions have been created.
 - No production database migration, environment change, service restart, or deployment has been performed.
 
 Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until the UI, rate limits, lifecycle/recovery controls, security review, and end-to-end tests are complete. The production environment remains unchanged.
+
+
+### Browser UI implementation update (2026-11-14)
+
+The panel now contains a Passkey section with:
+- browser capability check and Passkey login;
+- first-owner/operator enrollment-token registration;
+- authenticated operator identity and role display;
+- logout with CSRF protection;
+- owner-only one-time operator invitation token creation.
+
+The UI does not store tokens in local storage or query strings. The enrollment token field is cleared after successful registration. Invitation tokens are displayed in a one-time readonly field and are not automatically copied or transmitted elsewhere. The browser uses `credentials: same-origin` and the session cookie remains HttpOnly.
+
+A discoverable-login test mocks the cryptographic verifier and verifies credential lookup, stored user-handle comparison, challenge consumption, and session creation. Full authenticator/browser E2E, persistent rate limiting, alerting, credential revocation, operator suspension, recovery, and global session invalidation remain mandatory before production activation.
