@@ -86,9 +86,10 @@ async function loadTournamentView(id){
   $('tournament-progress').textContent='Liga: '+p.league.completed+'/'+p.league.planned+' · Puchar: '+p.draft.completed+'/'+p.draft.planned+' · Łącznie: '+p.total.completed+'/'+p.total.planned+' rozegranych (wyłącznie zapisane, poprawnie powiązane wyniki).';
   tableRows('tournament-standings',(d.standings||[]).map((x,i)=>[i+1,x.name,x.points,x.played,x.wins,x.draws,x.losses]),['#','Zawodnik','Pkt','Partie','W','R','P']);
   const fixtureRows=(d.fixtures||[]).map(x=>{
-   const round=x.stage==='league'?'Liga · runda '+(x.leg||'—'):'Puchar · runda '+(x.round_no??'—');
+   const round=x.stage==='league'?'Liga · leg '+(x.leg||'—'):'Puchar · runda '+(x.round_no??'—');
    const result=x.saved_game_id?x.result:'—';
-   return [round,x.white_name+' vs '+x.black_name,x.status,result,x.saved_game_id?'partia #'+x.saved_game_id:'—'];
+   const status=x.status==='running'?'AKTYWNA · running':x.status;
+   return [round,x.white_name+' vs '+x.black_name,status,result,x.saved_game_id?'partia #'+x.saved_game_id:'—'];
   });
   tableRows('tournament-fixtures',fixtureRows,['Faza','Para','Status','Wynik','Zapis']);
   const previewHost=$('tournament-game-previews');previewHost.textContent='';
