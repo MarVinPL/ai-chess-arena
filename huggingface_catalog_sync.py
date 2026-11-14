@@ -179,7 +179,7 @@ def _verify_existing(entry,source,fetcher,now):
     try: data,final=fetcher(url)
     except HTTPStatusError as exc:
         if exc.status in (404,410): return _mark_source_state(entry,'missing',now),'missing'
-        raise CatalogSyncError(f'Nie udało się zweryfikować istniejącego modelu {repo}; zachowano poprzedni katalog') from exc
+        raise CatalogSyncError(f'Nie udało się zweryfikować istniejącego modelu {repo} (HTTP {exc.status}); zachowano poprzedni katalog') from exc
     moved=_repo_from_api_url(final)
     if moved and moved!=repo: return _mark_source_state(entry,'moved',now,moved_to_repo_id=moved),'moved'
     if not isinstance(data,dict): raise CatalogSyncError(f'Niekompletne szczegóły repozytorium {repo}; zachowano poprzedni katalog')
