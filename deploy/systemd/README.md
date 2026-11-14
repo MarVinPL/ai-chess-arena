@@ -8,13 +8,12 @@ Arena API. It is intentionally separate from sentinelx-cloud-core.service.
 - Runs as debian:debian from /home/debian/ai-chess-arena.
 - Starts the repository virtualenv Python and server.py.
 - The current application binds the API to 127.0.0.1:8090.
-- The llamafile executable is read-only at
+- ProtectHome=read-only keeps /home read-only by default. BindPaths exposes
+  only /home/debian/ai-chess-arena as a writable bind mount, allowing SQLite,
+  logs, and Arena-owned model files to be updated.
+- InaccessiblePaths hides /home/debian/ai-agent/models entirely.
+- The llamafile executable is exposed read-only at
   /home/debian/ai-agent/bin/llamafile.
-- The application directory is writable because SQLite, logs, and the
-  Arena-owned managed-models directory live below it.
-- ProtectHome=read-only keeps the rest of /home read-only. The service
-  does not receive access to /home/debian/ai-agent/models; current Arena
-  code only accepts model files from its own managed-models directory.
 - KillMode=control-group ensures child processes remain in the service
   lifecycle. Do not use SentinelX's service as a restart mechanism.
 
