@@ -291,7 +291,7 @@ def _ensure_version_file(version_id):
             raise RuntimeError(f'URL pobrania wersji {version_id} nie zgadza się ze źródłem rejestru')
         model_store.download_version(
             version_id, url, version['filename'], version['sha256'],
-            version['size_bytes'], license_verified=True
+            version['size_bytes'], True
         )
         version = _version_record(version_id)
     if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
