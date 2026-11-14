@@ -103,7 +103,7 @@ def create_job(connection: sqlite3.Connection, *, model_id: int, repo_id: str,
         raise ValueError("Wymagany jest oczekiwany SHA-256 artefaktu.")
     if not model_permissions.has_permission(
             connection, model_id=model_id, repo_id=repo_id,
-            revision=revision, scope=scope):
+            revision=revision, artifact_sha256=expected_sha256, scope=scope):
         raise PermissionError("Brak aktywnego uprawnienia dla dokładnej rewizji modelu.")
     if capacity_check is None or capacity_check() is not True:
         raise RuntimeError("Brak pozytywnego, aktualnego potwierdzenia dostępności zasobów.")
@@ -164,7 +164,8 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
             raise ValueError("Zadanie nie oczekuje na start albo zgoda została już zużyta.")
         if not model_permissions.has_permission(
                 connection, model_id=row["model_id"], repo_id=row["repo_id"],
-                revision=row["revision"], scope=row["scope"]):
+                revision=row["revision"], artifact_sha256=row["artifact_sha256"],
+                scope=row["scope"]):
             raise PermissionError("Uprawnienie zostało cofnięte lub wygasło.")
         fingerprint = artifact_fingerprint(row["artifact_path"], model_root=model_root)
         if fingerprint["sha256"] != row["artifact_sha256"] or fingerprint["size_bytes"] != row["artifact_size_bytes"]:
