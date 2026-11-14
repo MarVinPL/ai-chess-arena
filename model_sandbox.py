@@ -86,6 +86,8 @@ def build_systemd_run_argv(*, job_id: str, artifact_path: str | Path,
         command.append(item)
     if not Path(command[0]).is_absolute():
         raise ValueError("Ścieżka wykonywalna workera musi być bezwzględna.")
+    if any(ch.isspace() for ch in str(artifact)) or any(ch.isspace() for ch in command[0]):
+        raise ValueError("Ścieżki artefaktu i workera nie mogą zawierać białych znaków.")
 
     unit = f"ai-chess-model-test-{job_id}"
     runtime_dir = f"/run/ai-chess-model-test-{job_id}"
