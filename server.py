@@ -309,8 +309,7 @@ def _ensure_version_assets(version_id):
         if not expected.is_file():
             model_store.download_draft_version(
                 version_id, version['draft_download_url'], version['draft_filename'],
-                version['draft_sha256'], version['draft_size_bytes'],
-                license_verified=True
+                version['draft_sha256'], version['draft_size_bytes'], True
             )
             version = _version_record(version_id)
         if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
