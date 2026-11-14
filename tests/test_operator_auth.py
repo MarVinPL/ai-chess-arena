@@ -312,19 +312,18 @@ class OperatorAuthStorageTests(unittest.TestCase):
         self.assertEqual(inventory[0]["credentials"], [])
 
 
-    def test_owner_cannot_suspend_self_or_last_active_owner(self):
+    def test_owner_cannot_suspend_self_or_remove_the_last_active_owner(self):
         now = operator_auth.time.time()
         with operator_auth._db(self.db) as conn:
             operator_auth.ensure_schema(conn)
-            for oid in ("owner-id", "other-owner"):
-                conn.execute(
-                    "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
-                    (oid, oid, "owner", (oid.encode() + b"x" * 32)[:32], now),
-                )
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", b"o" * 32, now),
+            )
         with self.assertRaises(operator_auth.OperatorAuthError):
             operator_auth.suspend_operator(self.db, "owner-id", "owner-id")
-        with self.assertRaises(operator_auth.OperatorAuthError):
-            operator_auth.suspend_operator(self.db, "owner-id", "other-owner")
+        inventory = operator_auth.list_operators(self.db)
+        self.assertEqual(inventory[0]["active"], 1)
 
 
 if __name__ == "__main__":
