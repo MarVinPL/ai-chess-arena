@@ -40,7 +40,8 @@ class ModelJobBrokerTests(unittest.TestCase):
 
     def _create(self, scope="TEST_ONLY", **overrides):
         args = dict(
-            **self.ident, scope=scope, artifact_path=str(self.artifact),
+            model_id=self.ident["model_id"], repo_id=self.ident["repo_id"],
+            revision=self.ident["revision"], scope=scope, artifact_path=str(self.artifact),
             expected_sha256=self.artifact_sha256,
             confirm_operation=True, actor="test-owner",
             model_root=self.root, capacity_check=lambda: True,
