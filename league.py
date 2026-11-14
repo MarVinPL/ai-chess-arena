@@ -260,6 +260,11 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   if len(candidates)<2:
    raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
   ms=[dict(row) for row in candidates]
+  # Never create self-play pairings or schedule two aliases of identical weights.
+  hashes=[(m.get('model_sha256') or '').lower() for m in ms]
+  nonempty=[value for value in hashes if value]
+  if len(nonempty)!=len(set(nonempty)):
+   raise ValueError('Rejestr zawiera duplikaty wag; turniej wymaga dwóch różnych modeli')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
   for model in ms:
@@ -274,7 +279,7 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
 
 
 def tournament_entry_status(tournament_id):
- """Return every tournament entrant and its independent readiness dimensions."""
+ """Return every entrant; local cache absence is informational, not a blocker."""
  with connect() as c:
   rows=c.execute('''SELECT e.model_id,e.version_id,m.name,m.active,
       v.filename,v.sha256,v.size_bytes,v.source,v.status,v.license_verified,
@@ -287,7 +292,6 @@ def tournament_entry_status(tournament_id):
  entries=[]
  for row in rows:
   item=dict(row); blockers=[]
-  metadata={}
   try:
    metadata=json.loads(item.get('metadata_json') or '{}')
   except (TypeError,json.JSONDecodeError):
@@ -309,27 +313,32 @@ def tournament_entry_status(tournament_id):
    path=(MODEL_DIR/item['filename']).resolve()
    local_file_available=(path.parent==MODEL_DIR.resolve() and path.is_file() and
                          isinstance(item.get('size_bytes'),int) and path.stat().st_size==item['size_bytes'])
-  draft_ready=True
+  draft_manifest_ready=True
   if item.get('draft_filename'):
-   draft_ready=bool(
+   draft_manifest_ready=bool(
     item.get('draft_sha256') and re.fullmatch(r'[0-9a-fA-F]{64}',item['draft_sha256']) and
     isinstance(item.get('draft_size_bytes'),int) and item['draft_size_bytes']>0 and
-    item.get('draft_status')=='downloaded' and item.get('draft_managed_copy')==1
+    item.get('draft_download_url') and item.get('draft_source_path')
    )
-   draft_path=(MODEL_DIR/item['draft_filename']).resolve()
-   draft_ready=draft_ready and draft_path.parent==MODEL_DIR.resolve() and draft_path.is_file() and draft_path.stat().st_size==item['draft_size_bytes']
+  draft_file_available=bool(item.get('draft_filename') and item.get('draft_managed_copy')==1 and
+                            item.get('draft_status')=='downloaded' and
+                            (MODEL_DIR/item['draft_filename']).is_file())
   if item.get('active')!=1: blockers.append('wpis rejestru jest nieaktywny')
   if not item.get('version_id'): blockers.append('brak wersji modelu')
   if not manifest_ready: blockers.append('niekompletny lub nieprzypięty manifest')
+  if not draft_manifest_ready: blockers.append('niekompletny manifest modelu draft')
   if not license_verified: blockers.append('licencja niezatwierdzona')
-  if not local_file_available: blockers.append('brak lokalnej kopii GGUF w magazynie Areny')
-  if not draft_ready: blockers.append('brak kompletnej lokalnej kopii draft')
   entries.append({
    'model_id':item['model_id'],'name':item['name'],
    'active_registry_entry':item.get('active')==1,'tournament_entrant':True,
    'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
    'license_verified':license_verified,'local_file_available':local_file_available,
-   'draft_ready':draft_ready,'ready':not blockers,'blockers':blockers
+   'local_file_required_before_start':False,
+   'download_on_demand':manifest_ready and license_verified and not local_file_available,
+   'draft_manifest_ready':draft_manifest_ready,
+   'draft_file_available':draft_file_available,
+   'draft_download_on_demand':draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
+   'ready':not blockers,'blockers':blockers
   })
  return entries
 
