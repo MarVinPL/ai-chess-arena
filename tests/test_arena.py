@@ -267,7 +267,13 @@ class ArenaSmokeTests(unittest.TestCase):
         } <= columns)
 
     def test_failed_game_is_saved_and_only_adjudicated_result_counts_for_elo(self):
-        from types import SimpleNamespace
+        failure = RuntimeError('synthetic')
+        failure.move_records = []
+        failure.move_times = []
+        failure.uci_attempts = []
+        failure.fen = chess.Board().fen()
+        failure.color = 'white'
+        failure.model_id = 1
         with sqlite3.connect(server.DB) as db:
             db.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
                        ('Adjudication White', 'PURE_AI', 'now'))
@@ -289,9 +295,7 @@ class ArenaSmokeTests(unittest.TestCase):
                 pairings.append({'id': cur.lastrowid, 'stage': 'league', 'tournament_id': tournament_id})
         white = {'model_id': white_id, 'name': 'Adjudication White'}
         black = {'model_id': black_id, 'name': 'Adjudication Black'}
-        failure = SimpleNamespace(move_records=[], move_times=[], uci_attempts=[],
-                                  fen=chess.Board().fen(), color='white', model_id=white_id)
-        failure.__str__ = lambda: 'synthetic'
+        failure.model_id = white_id
         unresolved = server._persist_failed_game(
             pairings[0]['tournament_id'], pairings[0], white, black, 'start', failure,
             {'status': 'unresolved', 'reason': 'analysis_engine_not_configured'})
