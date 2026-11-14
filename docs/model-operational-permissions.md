@@ -12,7 +12,7 @@ A request is not an approval. All new model versions start with no operational p
 
 ## Existing production isolation baseline
 
-The deployed `ai-chess-arena.service` already provides a service-level systemd boundary: `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, `ProtectHome=read-only`, kernel hardening, restricted address families, `KillMode=control-group`, and an explicit inaccessible path for `/home/debian/ai-agent/models`. The model-test design reuses this existing baseline; it does not create or modify another always-on sandbox service.
+The deployed `ai-chess-arena.service` already provides a service-level systemd boundary: `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, `ProtectHome=tmpfs` with explicit read-only binds for the fixed worker executable and selected artifact, kernel hardening, restricted address families, `KillMode=control-group`, and an explicit inaccessible path for `/home/debian/ai-agent/models`. The model-test design reuses this existing baseline; it does not create or modify another always-on sandbox service.
 
 This service-level boundary is not, by itself, a per-job sandbox. A model job needs a separate transient systemd service with its own dynamic UID, private runtime directory, read-only bind of exactly one Arena-managed GGUF, no network, and per-job cgroup limits.
 
@@ -24,7 +24,7 @@ This service-level boundary is not, by itself, a per-job sandbox. A model job ne
 - explicitly rejects the shared `/home/debian/ai-agent/models` path;
 - creates a shell-free `systemd-run --system --wait --pipe --collect` argv for a transient service;
 - uses `DynamicUser=yes`, a unique private `RuntimeDirectory`, `PrivateNetwork=yes`, `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, and `KillMode=control-group`;
-- binds the selected model artifact read-only and makes the shared model directory inaccessible;
+- binds only the fixed worker executable and selected model artifact read-only, hides the rest of host home directories, and makes the shared model directory inaccessible;
 - bounds CPU quota (25–800%), memory (512 MiB–8 GiB), runtime (10–1800 seconds), and task count (1–128);
 - computes SHA-256 and byte size by streaming the selected artifact without changing it.
 
