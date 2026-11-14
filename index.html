@@ -111,7 +111,33 @@ button.stop{background:#744b4b;border-color:#986363}
 }
 
 </style></head><body><div class="wrap"><div class="top"><div><h1>♟ Local AI Chess Arena</h1><div class="sub">Lokalne modele GGUF • tryb Pure AI • bez płatnych API</div></div><div id="online" class="pill">Sprawdzanie modelu…</div></div>
-<div class="layout"><section class="panel"><div class="board-topline"><span class="board-kicker">Chess Arena Pro</span><span class="board-live">Local match</span></div><div id="tournament-roster-counters" class="tournament-roster-counters" aria-live="polite">Brak aktywnego turnieju</div><div class="player-strip"><span id="white" class="player-badge player-badge--white">Model lokalny · białe</span><span id="black" class="player-badge player-badge--black">Model lokalny · czarne</span></div><div class="piece-count-strip" aria-label="Pozostałe bierki i materiał"><div class="piece-count" aria-live="polite"><strong>Białe · pozostałe bierki</strong><span id="white-piece-types" class="piece-count__types">♕1 · ♖2 · ♗2 · ♘2 · ♙8 · ♔✓</span><span id="white-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div><div class="piece-count piece-count--black" aria-live="polite"><strong>Czarne · pozostałe bierki</strong><span id="black-piece-types" class="piece-count__types">♛1 · ♜2 · ♝2 · ♞2 · ♟8 · ♚✓</span><span id="black-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div></div><div id="board" class="board" role="img" aria-label="Szachownica z aktualną pozycją"></div><div class="controls"><button id="step">Następny ruch</button><button id="run">Autoplay</button><button id="stop" class="stop">Stop</button><button id="reset" class="secondary">Nowa partia</button></div><div id="status" class="status">Gotowy.</div></section>
+
+<section class="panel" id="operator-auth-panel" aria-labelledby="operator-auth-title" style="margin:0 0 18px">
+ <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+  <div><h2 id="operator-auth-title" style="margin:0;font-size:18px">Dostęp operatora · Passkey</h2><p class="notice" style="margin:5px 0">Logowanie wymagane do zarządzania uprawnieniami modeli. Dostęp zależy od zarejestrowanego klucza Passkey.</p></div>
+  <span id="operator-auth-state" class="pill" role="status" aria-live="polite">Sprawdzanie sesji…</span>
+ </div>
+ <div id="operator-auth-login" class="formrow" hidden>
+  <button type="button" id="operator-passkey-login">Zaloguj przez Passkey</button>
+ </div>
+ <div id="operator-auth-register" hidden style="margin-top:12px;padding-top:12px;border-top:1px solid #304854">
+  <strong>Pierwsza rejestracja / zaproszenie</strong>
+  <p class="notice">Token właściciela generuje się lokalnie na VPS. Operator otrzymuje token zaproszenia od właściciela. Token jest jednorazowy i nie jest wysyłany w adresie URL.</p>
+  <div class="formrow"><input class="field" id="operator-enrollment-token" type="password" autocomplete="off" placeholder="Jednorazowy token rejestracyjny" aria-label="Jednorazowy token rejestracyjny"><button type="button" id="operator-passkey-register">Zarejestruj Passkey</button></div>
+ </div>
+ <div id="operator-auth-account" hidden style="margin-top:12px">
+  <div id="operator-auth-identity" class="status"></div>
+  <div class="formrow"><button type="button" id="operator-passkey-logout" class="secondary">Wyloguj</button></div>
+  <div id="operator-auth-owner" hidden style="padding-top:12px;border-top:1px solid #304854">
+   <strong>Zaproszenie operatora</strong>
+   <div class="formrow"><input class="field" id="operator-invite-name" maxlength="100" placeholder="Nazwa wyświetlana operatora"><button type="button" id="operator-invite-create">Utwórz token zaproszenia</button></div>
+   <p class="notice">Token zostanie pokazany tylko raz. Przekaż go bezpiecznie zapraszanej osobie.</p>
+   <textarea id="operator-invite-result" class="field" rows="2" readonly hidden aria-label="Jednorazowy token zaproszenia"></textarea>
+  </div>
+ </div>
+ <div id="operator-auth-message" class="status" role="status" aria-live="polite"></div>
+</section>
+\n<div class="layout"><section class="panel"><div class="board-topline"><span class="board-kicker">Chess Arena Pro</span><span class="board-live">Local match</span></div><div id="tournament-roster-counters" class="tournament-roster-counters" aria-live="polite">Brak aktywnego turnieju</div><div class="player-strip"><span id="white" class="player-badge player-badge--white">Model lokalny · białe</span><span id="black" class="player-badge player-badge--black">Model lokalny · czarne</span></div><div class="piece-count-strip" aria-label="Pozostałe bierki i materiał"><div class="piece-count" aria-live="polite"><strong>Białe · pozostałe bierki</strong><span id="white-piece-types" class="piece-count__types">♕1 · ♖2 · ♗2 · ♘2 · ♙8 · ♔✓</span><span id="white-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div><div class="piece-count piece-count--black" aria-live="polite"><strong>Czarne · pozostałe bierki</strong><span id="black-piece-types" class="piece-count__types">♛1 · ♜2 · ♝2 · ♞2 · ♟8 · ♚✓</span><span id="black-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div></div><div id="board" class="board" role="img" aria-label="Szachownica z aktualną pozycją"></div><div class="controls"><button id="step">Następny ruch</button><button id="run">Autoplay</button><button id="stop" class="stop">Stop</button><button id="reset" class="secondary">Nowa partia</button></div><div id="status" class="status">Gotowy.</div></section>
 <aside class="panel"><h3 style="margin:0 0 12px">Statystyki partii</h3><div class="metrics"><div class="metric"><small>Ruchy</small><strong id="count">0</strong></div><div class="metric"><small>Średni czas ruchu</small><strong id="avg">—</strong></div><div class="metric"><small>Niepoprawne próby</small><strong id="illegal">0</strong></div><div class="metric"><small>Dostępna pamięć</small><strong id="ram">—</strong></div></div><h3 style="margin:20px 0 8px">Zapis ruchów</h3><div id="moves" class="moves">Brak ruchów.</div><div class="model-status" aria-live="polite">
 <h3 style="margin:16px 0 8px">Status modeli</h3>
 <div class="metrics">
@@ -585,4 +611,132 @@ $('model-search-query').addEventListener('keydown',e=>{if(e.key==='Enter')$('mod
 $('model-form').onsubmit=async e=>{e.preventDefault();const payload={name:$('model-name').value.trim()+' [thinking '+$('model-thinking').value.toUpperCase()+']',format:$('model-format').value,source:$('model-source').value.trim(),license:$('model-license').value.trim(),filename:$('model-file').value.trim()||null,license_verified:$('license-confirm').checked,metadata:{inference:{thinking:$('model-thinking').value==='on',temperature:Number($('model-temperature').value),max_tokens:Number($('model-max-tokens').value)}}};if(payload.license_verified&&(!payload.source||!payload.license)){$('league-message').textContent='Do potwierdzenia licencji podaj źródło i nazwę licencji.';return}try{const r=await fetch('/api/models/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Dodano zawodnika: '+d.name;$('model-form').reset();await loadLeague()}catch(err){$('league-message').textContent='Nie udało się dodać modelu: '+err}};
 $('download-form').onsubmit=async e=>{e.preventDefault();if(!$('download-license').checked){$('league-message').textContent='Potwierdź licencję i źródło.';return}const payload={version_id:Number($('download-version').value),url:$('download-url').value.trim(),filename:$('download-file').value.trim(),sha256:$('download-sha').value.trim(),size_bytes:Number($('download-size').value),license_verified:true,confirm_download:true};if(!confirm('Pobrać wskazany model do prywatnego magazynu areny?'))return;$('league-message').textContent='Pobieranie w toku…';try{const r=await fetch('/api/models/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Pobrano i zweryfikowano '+d.filename+' · SHA-256 '+d.sha256;$('download-form').reset();await loadLeague()}catch(err){$('league-message').textContent='Pobieranie nie powiodło się: '+err}};
 $('tournament-form').onsubmit=async e=>{e.preventDefault();const payload={name:$('tournament-name').value.trim(),format:$('tournament-format').value,qualification_percent:Number($('draft-qualification').value)};try{const r=await fetch('/api/tournaments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Zaplanowano '+d.name+': '+d.players+' zawodników, '+d.games_planned+' partii ligowych + '+(d.draft_games_planned||0)+' draftu (cel '+d.qualification_percent+'%, '+d.expected_qualifiers+' zawodników). Modele z zatwierdzoną licencją nie muszą mieć lokalnego pliku — Arena pobierze GGUF przed użyciem.';$('tournament-form').reset();await loadLeague()}catch(err){$('league-message').textContent='Nie udało się zaplanować turnieju: '+err}};
-</script></body></html>
+
+\n// Operator Passkey UI. The server remains authoritative for identity and role.
+const operatorAuthMessage = (message, error=false) => {
+ const el = document.getElementById('operator-auth-message');
+ if (el) { el.textContent = message; el.classList.toggle('error', !!error); }
+};
+const b64urlToBytes = value => {
+ const normalized = value.replace(/-/g,'+').replace(/_/g,'/');
+ const padded = normalized + '='.repeat((4-normalized.length%4)%4);
+ const raw = atob(padded);
+ return Uint8Array.from(raw, ch => ch.charCodeAt(0));
+};
+const bytesToB64url = value => {
+ const bytes = new Uint8Array(value);
+ let binary = '';
+ for (const byte of bytes) binary += String.fromCharCode(byte);
+ return btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+};
+const serializePasskey = credential => {
+ const response = credential.response;
+ const result = {
+  id: credential.id, rawId: bytesToB64url(credential.rawId), type: credential.type,
+  clientExtensionResults: credential.getClientExtensionResults(),
+  response: {
+   clientDataJSON: bytesToB64url(response.clientDataJSON)
+  }
+ };
+ if (response.attestationObject) result.response.attestationObject = bytesToB64url(response.attestationObject);
+ if (response.authenticatorData) result.response.authenticatorData = bytesToB64url(response.authenticatorData);
+ if (response.signature) result.response.signature = bytesToB64url(response.signature);
+ if (response.userHandle) result.response.userHandle = bytesToB64url(response.userHandle);
+ if (credential.authenticatorAttachment) result.authenticatorAttachment = credential.authenticatorAttachment;
+ return result;
+};
+const csrfCookie = () => {
+ const match = document.cookie.split(';').map(x=>x.trim()).find(x=>x.startsWith('arena_csrf='));
+ return match ? decodeURIComponent(match.slice('arena_csrf='.length)) : '';
+};
+async function operatorAuthRequest(path, payload={}, protectedRequest=false) {
+ const headers={'Content-Type':'application/json'};
+ if(protectedRequest) headers['X-Arena-CSRF']=csrfCookie();
+ const response=await fetch(path,{method:'POST',credentials:'same-origin',cache:'no-store',headers,body:JSON.stringify(payload)});
+ const data=await response.json().catch(()=>({error:'Serwer zwrócił nieprawidłową odpowiedź.'}));
+ if(!response.ok) throw new Error(data.error||('HTTP '+response.status));
+ return data;
+}
+async function operatorAuthRefresh() {
+ const state=document.getElementById('operator-auth-state');
+ try {
+  const r=await fetch('/api/operator-auth/session',{credentials:'same-origin',cache:'no-store'});
+  const data=await r.json();
+  const authenticated=!!(r.ok&&data.authenticated&&data.operator);
+  document.getElementById('operator-auth-login').hidden=authenticated;
+  document.getElementById('operator-auth-register').hidden=authenticated;
+  document.getElementById('operator-auth-account').hidden=!authenticated;
+  if(authenticated){
+   const op=data.operator;
+   state.textContent='Zalogowano · '+op.role;
+   document.getElementById('operator-auth-identity').textContent=op.display_name+' · rola: '+op.role;
+   document.getElementById('operator-auth-owner').hidden=op.role!=='owner';
+  }else{
+   state.textContent='Niezalogowano';
+   document.getElementById('operator-auth-identity').textContent='';
+   document.getElementById('operator-auth-owner').hidden=true;
+  }
+  return authenticated;
+ }catch(e){
+  state.textContent='Logowanie niedostępne';
+  document.getElementById('operator-auth-login').hidden=false;
+  document.getElementById('operator-auth-register').hidden=false;
+  document.getElementById('operator-auth-account').hidden=true;
+  operatorAuthMessage('Konfiguracja logowania nie jest gotowa. Wymagane poprawne RP ID i origin HTTPS.',true);
+  return false;
+ }
+}
+async function operatorPasskeyLogin(){
+ if(!window.PublicKeyCredential||!navigator.credentials) throw new Error('Ta przeglądarka nie obsługuje WebAuthn/Passkey.');
+ const options=await operatorAuthRequest('/api/operator-auth/login/options');
+ const publicKey={...options,challenge:b64urlToBytes(options.challenge)};
+ if(publicKey.allowCredentials) publicKey.allowCredentials=publicKey.allowCredentials.map(x=>({...x,id:b64urlToBytes(x.id)}));
+ const credential=await navigator.credentials.get({publicKey});
+ if(!credential) throw new Error('Logowanie Passkey zostało anulowane.');
+ await operatorAuthRequest('/api/operator-auth/login/verify',{ceremony_id:options.ceremony_id,credential:serializePasskey(credential)});
+ document.getElementById('operator-enrollment-token').value='';
+ operatorAuthMessage('Logowanie Passkey zakończone.');
+ await operatorAuthRefresh();
+}
+async function operatorPasskeyRegister(){
+ if(!window.PublicKeyCredential||!navigator.credentials) throw new Error('Ta przeglądarka nie obsługuje WebAuthn/Passkey.');
+ const token=document.getElementById('operator-enrollment-token').value.trim();
+ if(!token) throw new Error('Wpisz jednorazowy token rejestracyjny.');
+ const options=await operatorAuthRequest('/api/operator-auth/register/options',{token});
+ const publicKey={...options,challenge:b64urlToBytes(options.challenge)};
+ if(publicKey.user) publicKey.user={...publicKey.user,id:b64urlToBytes(publicKey.user.id)};
+ if(publicKey.excludeCredentials) publicKey.excludeCredentials=publicKey.excludeCredentials.map(x=>({...x,id:b64urlToBytes(x.id)}));
+ const credential=await navigator.credentials.create({publicKey});
+ if(!credential) throw new Error('Rejestracja Passkey została anulowana.');
+ await operatorAuthRequest('/api/operator-auth/register/verify',{ceremony_id:options.ceremony_id,credential:serializePasskey(credential)});
+ document.getElementById('operator-enrollment-token').value='';
+ operatorAuthMessage('Passkey zarejestrowany. Zaloguj się nowym kluczem.');
+ document.getElementById('operator-auth-login').hidden=false;
+ await operatorAuthRefresh();
+}
+document.getElementById('operator-passkey-login')?.addEventListener('click',async()=>{
+ const button=document.getElementById('operator-passkey-login');button.disabled=true;
+ try{await operatorPasskeyLogin()}catch(e){operatorAuthMessage('Logowanie nie powiodło się: '+e.message,true)}finally{button.disabled=false}
+});
+document.getElementById('operator-passkey-register')?.addEventListener('click',async()=>{
+ const button=document.getElementById('operator-passkey-register');button.disabled=true;
+ try{await operatorPasskeyRegister()}catch(e){operatorAuthMessage('Rejestracja nie powiodła się: '+e.message,true)}finally{button.disabled=false}
+});
+document.getElementById('operator-passkey-logout')?.addEventListener('click',async()=>{
+ const button=document.getElementById('operator-passkey-logout');button.disabled=true;
+ try{await operatorAuthRequest('/api/operator-auth/logout',{},true);operatorAuthMessage('Wylogowano.');await operatorAuthRefresh()}
+ catch(e){operatorAuthMessage('Nie udało się wylogować: '+e.message,true)}finally{button.disabled=false}
+});
+document.getElementById('operator-invite-create')?.addEventListener('click',async()=>{
+ const button=document.getElementById('operator-invite-create');button.disabled=true;
+ try{
+  const display_name=document.getElementById('operator-invite-name').value.trim();
+  if(!display_name) throw new Error('Podaj nazwę operatora.');
+  const data=await operatorAuthRequest('/api/operator-auth/invite',{display_name},true);
+  const output=document.getElementById('operator-invite-result');
+  output.value=data.invitation_token;output.hidden=false;
+  operatorAuthMessage('Token zaproszenia utworzony. Skopiuj go teraz i przekaż operatorowi.');
+ }catch(e){operatorAuthMessage('Nie udało się utworzyć zaproszenia: '+e.message,true)}finally{button.disabled=false}
+});
+operatorAuthRefresh();
+\n</script></body></html>
