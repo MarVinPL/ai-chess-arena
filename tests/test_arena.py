@@ -42,6 +42,22 @@ class ArenaSmokeTests(unittest.TestCase):
         server.league.DB = cls.old_league_db
         cls.tempdir.cleanup()
 
+    def test_lazy_runtime_preflight_checks_executable_not_running_health(self):
+        original_binary = server.engine_runner.LLAMAFILE
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                binary = Path(directory) / 'llamafile'
+                binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+                binary.chmod(0o755)
+                server.engine_runner.LLAMAFILE = binary
+                self.assertTrue(server.llm_runtime_available())
+                binary.chmod(0o644)
+                self.assertFalse(server.llm_runtime_available())
+                binary.unlink()
+                self.assertFalse(server.llm_runtime_available())
+        finally:
+            server.engine_runner.LLAMAFILE = original_binary
+
     def test_python_chess_legal_start_position(self):
         board = chess.Board()
         self.assertEqual(board.legal_moves.count(), 20)
