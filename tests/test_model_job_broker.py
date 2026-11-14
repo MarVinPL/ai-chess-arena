@@ -64,7 +64,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_claim_consumes_consent_and_returns_fixed_shell_free_plan(self):
         job = self._create()
         plan = claim_job_for_start(
-            self.db, job_id=job["job_id"],
+            self.db, job_id=job["job_id"], actor="test-broker",
             model_root=self.root)
         self.assertEqual(plan["status"], "starting")
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
@@ -85,7 +85,7 @@ class ModelJobBrokerTests(unittest.TestCase):
             "AND status='approved' ORDER BY id DESC LIMIT 1").fetchone()
         model_permissions.decide_permission(
             self.db, request_id=req["id"], action="revoke", confirm=True,
-            reason="cofnięcie zgody", actor="test-reviewer")
+            reason="cofnięcie zgody")
         with self.assertRaises(PermissionError):
             claim_job_for_start(
                 self.db, job_id=job["job_id"], actor="test-broker",
@@ -104,7 +104,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EVALUATION"):
             record_evaluation_metric(
                 self.db, job_id=technical["job_id"], metric_name="latency_ms",
-                metric_value=12.5)
+                metric_value=12.5, actor="test-worker")
         self._grant("EVALUATION")
         evaluation = self._create(scope="EVALUATION")
         plan = claim_job_for_start(
