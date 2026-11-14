@@ -43,7 +43,7 @@ No model is automatically granted a scope. A model download remains a separate o
 Still required before a real model test can run:
 
 1. a narrowly privileged execution broker with a fixed, reviewed worker command (no arbitrary command supplied by the panel);
-2. authenticated actor propagation from the existing panel session (the current actor argument is not authentication);
+2. a real application authentication middleware/session that sets the in-process verified actor; the current deployment has no such mechanism, so the mutation API now fails closed with HTTP 403;
 3. an installed and independently reviewed worker executable that re-hashes the opened GGUF immediately before loading it;
 4. isolated evaluation output storage and proof that no writes can reach official tournament/result/rating tables;
 5. a real systemd stop adapter, timeout/process-tree cleanup and a controlled capacity probe;
@@ -99,3 +99,13 @@ Consequently, neither the current application actor constant (`arena`), the shar
 The branch's `server.py` permission POST handlers do not validate an authenticated session or a trusted proxy identity before processing `/api/model-permissions/{request,approve,reject,revoke}`. They pass the module's default actor value into the permission registry. The API listener is loopback-only, which limits remote reachability but does not authenticate local callers or distinguish local processes sharing the host. Caddy Basic Auth therefore protects the public reverse-proxy path only; it is not an application authorization boundary for direct loopback requests.
 
 This makes the current endpoints unsuitable for privileged decisions even if the Caddy account remains password-protected. Before activation, enforce authentication and authorization in the application itself (or use a narrowly scoped local IPC broker with peer-credential validation), reject unauthenticated direct calls, and record a stable operator identity derived from verified credentials. Do not infer identity from a caller-supplied JSON field or untrusted HTTP header.
+
+
+## Fail-closed application identity gate (implementation slice)
+
+- `model_permission_auth.py` reads only the private in-process `_arena_verified_actor` attribute. It does not trust `Authorization`, `X-Authenticated-User`, `X-Forwarded-User`, JSON fields, the remote address, the shared Caddy Basic Auth account, or the Unix service account.
+- `server.py` checks this identity before reading a mutation request body for `/api/model-permissions/request`, `approve`, `reject`, and `revoke`. Missing or malformed identity returns HTTP 403 and performs no database operation.
+- `model_permissions.py` no longer has a shared default actor. Both request and decision operations require an explicit validated actor and fail closed when it is missing.
+- Unit tests cover spoofed headers, caller-supplied actor data, malformed identities, and missing actor rejection.
+
+**Important limitation:** there is not yet an authentication middleware that sets `_arena_verified_actor`. Therefore these four API mutation routes are intentionally unavailable until a separately reviewed application login/session or trusted local IPC identity mechanism is implemented. The gate is a protective deny-by-default control, not a completed authentication system.
