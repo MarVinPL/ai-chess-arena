@@ -34,6 +34,8 @@ class ModelSandboxTests(unittest.TestCase):
         self.assertIn(f"--property=BindReadOnlyPaths={self.artifact}", argv)
         self.assertIn("--property=DynamicUser=yes", argv)
         self.assertIn("--property=PrivateNetwork=yes", argv)
+        self.assertIn("--property=ProtectHome=tmpfs", argv)
+        self.assertIn("--property=BindReadOnlyPaths=/opt/arena/bin/trusted-worker", argv)
         self.assertIn("--property=KillMode=control-group", argv)
         self.assertTrue(any(x.startswith("--property=CPUQuota=") for x in argv))
         self.assertEqual(argv[-3:], ["/opt/arena/bin/trusted-worker", "--model", str(self.artifact)])
