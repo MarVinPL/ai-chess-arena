@@ -176,7 +176,8 @@ def db_init():
             ('adjudication_status', "TEXT NOT NULL DEFAULT 'not_applicable'"),
             ('adjudication_json', "TEXT NOT NULL DEFAULT '{}'"),
             ('failure_reason', 'TEXT'), ('failure_fen', 'TEXT'),
-            ('failure_color', 'TEXT'), ('failure_model_id', 'INTEGER')
+            ('failure_color', 'TEXT'), ('failure_side_to_move', 'TEXT'),
+            ('failure_model_id', 'INTEGER')
         ):
             if name not in cols:
                 c.execute(f'ALTER TABLE games ADD COLUMN {name} {declaration}')
@@ -215,13 +216,18 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
     attempts = list(getattr(exc, 'uci_attempts', []) or [])
     illegal_attempts = sum(1 for item in attempts
                            if item.get('classification') == 'illegal_uci')
+    try:
+        side_to_move = 'white' if chess.Board(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
+    except (ValueError, TypeError):
+        side_to_move = None
     with sqlite3.connect(DB) as db:
         cur = db.execute("""INSERT INTO games(
             started_at,ended_at,white_model,black_model,result,pgn,move_count,
             illegal_attempts,avg_move_seconds,tournament_id,pairing_id,
             move_times_json,inference_metadata_json,adjudication_status,
-            adjudication_json,failure_reason,failure_fen,failure_color,failure_model_id
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            adjudication_json,failure_reason,failure_fen,failure_color,
+            failure_side_to_move,failure_model_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (game_started, ended, white['name'], black['name'], result, pgn,
              len(moves), illegal_attempts, average, tournament_id, pairing['id'],
              json.dumps(times), json.dumps(moves, ensure_ascii=False),
@@ -999,7 +1005,7 @@ class Handler(BaseHTTPRequestHandler):
                 c.row_factory = sqlite3.Row
                 rows = c.execute('''SELECT id,started_at,white_model,black_model,result,move_count,
                     avg_move_seconds,adjudication_status,adjudication_json,failure_reason,
-                    failure_fen,failure_color,failure_model_id
+                    failure_fen,failure_color,failure_side_to_move,failure_model_id
                     FROM games ORDER BY id DESC LIMIT 30''').fetchall()
             self.send_json([dict(r, white=r['white_model'], black=r['black_model'],
                                    moves=r['move_count'], avg_seconds=round(r['avg_move_seconds'],3))
@@ -1028,7 +1034,7 @@ class Handler(BaseHTTPRequestHandler):
                     c.row_factory = sqlite3.Row
                     row = c.execute('''SELECT id,started_at,ended_at,white_model,black_model,result,pgn,
                         move_count,tournament_id,pairing_id,adjudication_status,adjudication_json,
-                        failure_reason,failure_fen,failure_color,failure_model_id
+                        failure_reason,failure_fen,failure_color,failure_side_to_move,failure_model_id
                         FROM games WHERE id=?''', (game_id,)).fetchone()
                 if row is None:
                     self.send_json({'error': 'Nie znaleziono zapisanej partii'}, 404)
