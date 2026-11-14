@@ -137,6 +137,8 @@ button.stop{background:#744b4b;border-color:#986363}
     <strong>Operatorzy i poświadczenia</strong>
     <p class="notice">Unieważnienie Passkey wylogowuje wszystkie aktywne sesje danego operatora. Zawieszenie konta blokuje dalsze logowanie.</p>
     <div id="operator-auth-inventory" class="status" aria-live="polite">Ładowanie listy operatorów…</div>
+    <strong style="display:block;margin-top:12px">Historia bezpieczeństwa</strong>
+    <div id="operator-auth-events" class="status" aria-live="polite">Ładowanie historii…</div>
    </div>
   </div>
  </div>
@@ -771,7 +773,31 @@ async function operatorAuthLoadOperators(currentOperatorId){
    host.append(card);
   }
   if(!(data.operators||[]).length) host.textContent='Brak zarejestrowanych operatorów.';
+  await operatorAuthLoadEvents();
  }catch(e){host.textContent='Lista operatorów niedostępna: '+e.message}
+}
+async function operatorAuthLoadEvents(){
+ const host=document.getElementById('operator-auth-events');
+ if(!host) return;
+ try{
+  const response=await fetch('/api/operator-auth/events',{credentials:'same-origin',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok) throw new Error(data.error||'Nie udało się pobrać historii.');
+  host.replaceChildren();
+  for(const event of (data.events||[])){
+   const line=document.createElement('div');line.style.cssText='padding:7px 0;border-top:1px solid #304854';
+   const label=document.createElement('span');
+   const action=event.action==='credential_revoked'?'Unieważniono Passkey':event.action==='operator_suspended'?'Zawieszono operatora':event.action;
+   label.textContent=action+' · '+event.actor_operator_id+' → '+event.target_operator_id+' · '+new Date(event.created_at*1000).toLocaleString();
+   line.append(label);
+   if(event.credential_id){
+    const detail=document.createElement('small');detail.className='notice';
+    detail.textContent=' · Passkey …'+String(event.credential_id).slice(-8);line.append(detail);
+   }
+   host.append(line);
+  }
+  if(!(data.events||[]).length) host.textContent='Brak zdarzeń bezpieczeństwa.';
+ }catch(e){host.textContent='Historia niedostępna: '+e.message}
 }
 
 document.getElementById('operator-passkey-login')?.addEventListener('click',async()=>{
