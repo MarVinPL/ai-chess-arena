@@ -34,11 +34,22 @@ class TournamentListUiTests(unittest.TestCase):
         for action in ("Tabela i drabinka", "Sprawdź gotowość", "Uruchom turniej", "Wznów turniej", "Zatrzymaj turniej"):
             self.assertIn(action, self.renderer)
         self.assertIn("loadTournamentView(t.id)", self.renderer)
+        self.assertIn("if(t.status==='planned'){", self.renderer)
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
         self.assertIn("'/api/tournaments/start'", self.renderer)
         self.assertIn("'/api/tournaments/stop'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
+
+    def test_readiness_action_is_limited_to_unstarted_planned_tournaments(self):
+        check_start = self.renderer.index("if(t.status==='planned'){")
+        check_end = self.renderer.index("if(['planned','stopped','failed'].includes(t.status))", check_start)
+        readiness_block = self.renderer[check_start:check_end]
+        self.assertIn("Sprawdź gotowość", readiness_block)
+        self.assertIn("actions.appendChild(check)", readiness_block)
+        self.assertNotIn("Sprawdź gotowość", self.renderer[check_end:])
+        self.assertIn("if(t.status==='running')", self.renderer)
+        self.assertIn("completed:'Zakończony'", self.renderer)
 
     def test_empty_list_state_is_preserved(self):
         self.assertIn("if(!rows.length){host.textContent='Brak turniejów.';return}", self.renderer)
