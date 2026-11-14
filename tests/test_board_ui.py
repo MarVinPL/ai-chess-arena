@@ -47,6 +47,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn("function pieceInventory(fen,color)", HTML)
         self.assertIn("function renderPieceInventory(fen)", HTML)
         self.assertIn("data.figures+' figur · '+data.pawns+' pionków", HTML)
+        self.assertIn("bierek · wartość materialna: '+data.material", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
         self.assertIn('aria-live="polite"', HTML)
@@ -72,7 +73,7 @@ class ChessBoardUiTests(unittest.TestCase):
         start = HTML.index('function pieceInventory(fen,color)')
         end = HTML.index('function formatMaterialScore(score)', start)
         functions = HTML[start:end]
-        script = functions + "\n" + "const initial=pieceInventory('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1','white');" + "\n" + "const promoted=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const black=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "console.log(JSON.stringify({initial,promoted,black}));"
+        script = functions + "\n" + "const initial=pieceInventory('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1','white');" + "\n" + "const promoted=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const black=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "const capturedFen='4k3/8/8/8/8/8/4Q3/4K3 b - - 0 1';" + "\n" + "const capturedWhite=pieceInventory(capturedFen,'white');" + "\n" + "const capturedBlack=pieceInventory(capturedFen,'black');" + "\n" + "const restoredWhite=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const restoredBlack=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "console.log(JSON.stringify({initial,promoted,black,capturedWhite,capturedBlack,restoredWhite,restoredBlack}));"
         result = subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
         data = json.loads(result.stdout)
         self.assertEqual(data['initial']['total'], 16)
@@ -84,6 +85,21 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertEqual(data['black']['counts']['r'], 1)
         self.assertEqual(data['black']['material'], 5)
         self.assertEqual(data['black']['total'], 2)
+
+        # A capture removes the captured pawn from its owner's material total.
+        self.assertEqual(data['capturedWhite']['material'], 9)
+        self.assertEqual(data['capturedBlack']['material'], 0)
+        self.assertEqual(data['capturedBlack']['pawns'], 0)
+
+        # A promoted pawn is valued as the promoted queen; kings remain excluded.
+        self.assertEqual(data['promoted']['material'], 9)
+        self.assertEqual(data['black']['material'], 5)
+        self.assertEqual(data['promoted']['total'], 2)
+        self.assertEqual(data['black']['total'], 2)
+
+        # Restoring a persisted FEN reconstructs identical values for both sides.
+        self.assertEqual(data['restoredWhite']['material'], data['promoted']['material'])
+        self.assertEqual(data['restoredBlack']['material'], data['black']['material'])
 
 
 if __name__ == "__main__":
