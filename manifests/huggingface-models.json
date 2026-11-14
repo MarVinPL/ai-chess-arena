@@ -33,12 +33,24 @@
       "sha256": "75c4346ef9e855ed630f80078a2430cf63aaca599e340360998a313070fcdc47",
       "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
       "license": "apache-2.0",
-      "license_review_status": "review_required",
-      "license_notes": "Pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base and declares Apache-2.0. The pinned upstream card declares Apache-2.0, but the base repository has no separate LICENSE file in the reviewed file list; the full rights-holder license text for the exact weights was not independently obtained.",
-      "license_evidence": "Pinned GGUF README; pinned official HuggingFaceTB model card metadata",
+      "license_review_status": "verified_permissive",
+      "license_notes": "Pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base, declares Apache-2.0 and describes llama.cpp quantization. The exact pinned upstream model card links directly to the canonical Apache License 2.0 text.",
+      "license_evidence": "Pinned GGUF README; pinned official HuggingFaceTB model card with direct link to Apache License 2.0",
       "license_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
       "download_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/resolve/25eef036a8d245a5a188b1b45d4b240a39bc9f24/SmolLM2-360M-Instruct.Q4_K_M.gguf",
-      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0"
+      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "license_audit": {
+        "status": "verified_permissive",
+        "reviewed_at": "2026-11-14",
+        "reviewed_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
+        "report": "docs/model-audit/license-review-2026-11-14.md",
+        "evidence": [
+          "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
+          "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md",
+          "https://www.apache.org/licenses/LICENSE-2.0"
+        ],
+        "summary": "The pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base, declares Apache-2.0 and describes llama.cpp quantization. The exact pinned upstream model card explicitly links to the canonical Apache License 2.0 text. Audit status only, not owner approval to download or use."
+      }
     },
     {
       "model_id": 3,
