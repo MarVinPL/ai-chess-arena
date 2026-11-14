@@ -3,6 +3,9 @@ name: Python test suite
 on:
   pull_request:
     branches: [main]
+  push:
+    branches:
+      - "feat/issue-107-per-ply-fen-checkpoints"
   workflow_dispatch:
 
 permissions:
