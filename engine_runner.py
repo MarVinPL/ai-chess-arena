@@ -264,10 +264,10 @@ class LlamafileRuntime:
             prompt = initial_prompt if attempt == 0 else retry_prompt
             payload_data = {'messages': [{'role': 'user', 'content': prompt}],
                             'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
-                            'chat_template_kwargs': {'enable_thinking': bool(enable_thinking)}}
+                            'chat_template_kwargs': {'enable_thinking': bool(enable_thinking and attempt == 0)}}
             if attempt == 1:
-                # Keep the entrant's normal thinking behavior on the first try;
-                # constrain only recovery generation to one exact legal UCI token.
+                # Recovery must emit only the constrained move; disable reasoning
+                # tokens for this attempt so they cannot conflict with the grammar.
                 payload_data['grammar'] = self._uci_grammar(legal)
             payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,

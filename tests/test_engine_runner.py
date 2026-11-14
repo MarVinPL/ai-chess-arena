@@ -234,12 +234,14 @@ class EngineRunnerTests(unittest.TestCase):
         try:
             with patch.object(runtime, 'ensure_loaded'), patch(
                     'urllib.request.urlopen', side_effect=fake_urlopen):
-                move, _ = runtime.generate('/tmp/model.gguf', chess.Board())
+                move, _ = runtime.generate('/tmp/model.gguf', chess.Board(), enable_thinking=True)
         finally:
             runtime.shutdown()
 
         self.assertEqual(move.uci(), 'g1h3')
         self.assertNotIn('grammar', requests[0])
+        self.assertTrue(requests[0]['chat_template_kwargs']['enable_thinking'])
+        self.assertFalse(requests[1]['chat_template_kwargs']['enable_thinking'])
         grammar = requests[1]['grammar']
         self.assertTrue(grammar.startswith('root ::= '))
         self.assertIn('"g1h3"', grammar)
