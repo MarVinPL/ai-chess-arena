@@ -184,6 +184,49 @@ class OperatorAuthStorageTests(unittest.TestCase):
             self.assertIsNotNone(stored["consumed_at"])
 
 
+
+    def test_revoked_credential_is_rejected_before_webauthn_verification(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from webauthn.helpers import bytes_to_base64url
+        now = operator_auth.time.time()
+        credential_id = b"revoked-credential"
+        user_handle = b"revoked-user-handle-32-bytes!!!!"
+        challenge = b"revoked-login-challenge"
+        encoded_id = bytes_to_base64url(credential_id)
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", user_handle, now),
+            )
+            conn.execute(
+                """INSERT INTO arena_webauthn_credentials
+                (credential_id,operator_id,public_key,sign_count,created_at,revoked_at)
+                VALUES(?,?,?,?,?,?)""",
+                (encoded_id, "owner-id", b"public-key", 0, now, now - 1),
+            )
+            conn.execute(
+                """INSERT INTO arena_auth_challenges
+                (ceremony_id,purpose,challenge,created_at,expires_at)
+                VALUES(?,?,?,?,?)""",
+                ("revoked-ceremony", "authentication", challenge, now, now + 120),
+            )
+        credential = {
+            "id": encoded_id, "rawId": encoded_id, "type": "public-key",
+            "response": {"userHandle": bytes_to_base64url(user_handle)},
+        }
+        with patch.object(operator_auth, "verify_authentication_response") as verify:
+            with self.assertRaises(operator_auth.OperatorAuthError):
+                operator_auth.finish_authentication(
+                    self.db,
+                    operator_auth.WebAuthnConfig("example.test", "https://arena.example.test"),
+                    "revoked-ceremony",
+                    credential,
+                )
+        verify.assert_not_called()
+
+
     def test_persistent_rate_limit_counts_attempts_and_resets_window(self):
         operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1000)
         operator_auth.consume_rate_limit(self.db, "login:ip:192.0.2.10", 2, window_seconds=60, now=1001)
