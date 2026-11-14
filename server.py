@@ -1573,7 +1573,7 @@ class Handler(BaseHTTPRequestHandler):
             permission_role = getattr(self, '_arena_verified_role', None)
             if permission_actor is None or (not path.endswith('/request') and permission_role != 'owner'):
                 self.send_json({
-                    'error': 'Brak poprawnej sesji operatora, CSRF lub wymaganej roli właściciela.'
+                    'error': 'Brak uwierzytelnionej tożsamości operatora lub wymaganej roli właściciela (sesja/CSRF).'
                 }, 403)
                 return
         if path in ('/api/operator-auth/register/options','/api/operator-auth/register/verify','/api/operator-auth/login/options','/api/operator-auth/login/verify','/api/operator-auth/logout','/api/operator-auth/invite'):
