@@ -370,4 +370,34 @@ class LeagueTests(unittest.TestCase):
   self.assertTrue(missing['tournament_entrant'])
   self.assertFalse(missing['manifest_ready'])
   self.assertIn('brak wersji modelu',missing['blockers'])
+ def test_read_only_tournament_view_counts_only_linked_saved_results(self):
+  with league.connect() as c:
+   c.execute('ALTER TABLE games ADD COLUMN tournament_id INTEGER')
+   c.execute('ALTER TABLE games ADD COLUMN pairing_id INTEGER')
+   c.execute('ALTER TABLE games ADD COLUMN ended_at TEXT')
+   c.execute('ALTER TABLE games ADD COLUMN move_count INTEGER')
+  tournament=league.create_round_robin('Read-only tournament view')
+  with league.connect() as c:
+   pairings=c.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? ORDER BY id",(tournament['id'],)).fetchall()
+   first,second=pairings
+   cur=c.execute("INSERT INTO games(white_model,black_model,result,tournament_id,pairing_id,ended_at,move_count) VALUES(?,?,?,?,?,?,?)",
+    ('Alpha','Beta','1-0',tournament['id'],first['id'],'2026-11-14T12:00:00Z',24))
+   c.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(cur.lastrowid,first['id']))
+   # The game row points to another pairing and must not be counted.
+   orphan=c.execute("INSERT INTO games(white_model,black_model,result,tournament_id,pairing_id) VALUES(?,?,?,?,?)",
+    ('Beta','Alpha','0-1',tournament['id'],999999))
+   c.execute("UPDATE tournament_pairings SET game_id=? WHERE id=?",(orphan.lastrowid,second['id']))
+  view=league.tournament_view(tournament['id'],{'tournament_id':tournament['id'],'pairing_id':second['id'],'stage':'game_running'})
+  self.assertEqual(len(view['standings']),2)
+  alpha=next(row for row in view['standings'] if row['name']=='Alpha')
+  beta=next(row for row in view['standings'] if row['name']=='Beta')
+  self.assertEqual((alpha['points'],alpha['played'],alpha['wins'],alpha['draws'],alpha['losses']),(3,1,1,0,0))
+  self.assertEqual((beta['points'],beta['played'],beta['wins'],beta['draws'],beta['losses']),(0,1,0,0,1))
+  self.assertEqual(view['progress']['league'],{'completed':1,'planned':2})
+  self.assertEqual(view['fixtures'][1]['status'],'running')
+  self.assertIsNone(view['fixtures'][1]['saved_game_id'])
+  with league.connect() as c:
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],0)
+   self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],2)
+
 if __name__=='__main__': unittest.main(verbosity=2)
