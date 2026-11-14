@@ -267,27 +267,49 @@ def _version_record(version_id):
 
 
 def _ensure_version_file(version_id):
-    """Use only an already verified Arena-managed file; never download implicitly."""
+    """Fetch a missing GGUF on demand, then verify it against the pinned manifest."""
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
     if not expected.is_file():
-        raise RuntimeError(f'Brak lokalnej kopii GGUF dla wersji {version_id}; pobierz ją jawnie przed startem turnieju')
+        try:
+            metadata = json.loads(version.get('metadata_json') or '{}')
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f'Nie można odczytać manifestu wersji {version_id}') from exc
+        url = metadata.get('download_url')
+        revision = metadata.get('revision')
+        source_path = metadata.get('source_path') or version['filename']
+        if (not isinstance(url, str) or not url.startswith('https://') or
+                not isinstance(revision, str) or not re.fullmatch(r'[0-9a-fA-F]{40}', revision) or
+                f'/resolve/{revision}/' not in url):
+            raise RuntimeError(f'Wersja {version_id} nie ma bezpiecznego URL przypiętego do commita')
+        if not url.endswith('/' + source_path):
+            raise RuntimeError(f'URL pobrania wersji {version_id} nie zgadza się ze ścieżką manifestu')
+        model_store.download_version(
+            version_id, url, version['filename'], version['sha256'],
+            version['size_bytes'], license_verified=True
+        )
+        version = _version_record(version_id)
     if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
-        raise RuntimeError('Znaleziony plik nie jest oznaczoną kopią zarządzaną przez Arenę')
+        raise RuntimeError('Plik GGUF nie jest oznaczoną kopią zarządzaną przez Arenę')
     return str(_version_path(version))
 
 
 def _ensure_version_assets(version_id):
-    """Return target/draft paths only when both are already locally managed."""
+    """Fetch missing target/draft files only when a game actually needs them."""
     target_path = _ensure_version_file(version_id)
     version = _version_record(version_id)
     draft_path = None
     if version.get('draft_filename'):
         expected = model_store.MANAGED_DIR / version['draft_filename']
         if not expected.is_file():
-            raise RuntimeError(f'Brak lokalnej kopii draft dla wersji {version_id}; pobierz ją jawnie przed startem turnieju')
+            model_store.download_draft_version(
+                version_id, version['draft_download_url'], version['draft_filename'],
+                version['draft_sha256'], version['draft_size_bytes'],
+                license_verified=True
+            )
+            version = _version_record(version_id)
         if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
-            raise RuntimeError('Znaleziony plik draft nie jest kopią zarządzaną przez Arenę')
+            raise RuntimeError('Plik draft nie jest oznaczoną kopią zarządzaną przez Arenę')
         digest = hashlib.sha256()
         actual_size = 0
         with expected.open('rb') as draft_file:
@@ -340,12 +362,8 @@ def _prepare_game_models(white, black):
     if usage.free < required_bytes + model_store.MIN_FREE_MARGIN:
         raise OSError('Za mało miejsca na modele potrzebne w tej partii; turniej pozostaje możliwy do wznowienia')
     prepared = []
-    try:
-        for player in (white, black):
-            prepared.append(_ensure_version_assets(player['version_id']))
-    except Exception:
-        cleanup_unneeded_models()
-        raise
+    for player in (white, black):
+        prepared.append(_ensure_version_assets(player['version_id']))
     return prepared
 
 
@@ -388,6 +406,7 @@ class TournamentPreflightError(RuntimeError):
 
 
 def tournament_preflight(tournament_id):
+    """Check metadata, license decision, and runtime; local weights are lazy-cached."""
     entries = league.tournament_entry_status(tournament_id)
     runtime_available = llm_health()
     blocked = []
@@ -395,26 +414,8 @@ def tournament_preflight(tournament_id):
         reasons = list(entry['blockers'])
         if not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
-        if not reasons and entry.get('version_id'):
-            try:
-                version = _version_record(entry['version_id'])
-                _version_path(version)
-                if version.get('draft_filename'):
-                    draft_path = (model_store.MANAGED_DIR / version['draft_filename']).resolve()
-                    if draft_path.parent != model_store.MANAGED_DIR.resolve() or not draft_path.is_file():
-                        raise RuntimeError('brak bezpiecznej lokalnej kopii draft')
-                    digest = hashlib.sha256()
-                    actual_size = 0
-                    with draft_path.open('rb') as stream:
-                        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                            actual_size += len(chunk)
-                            digest.update(chunk)
-                    if (actual_size != version['draft_size_bytes'] or
-                            digest.hexdigest().lower() != version['draft_sha256'].lower()):
-                        raise RuntimeError('draft nie zgadza się z SHA-256/rozmiarem')
-            except Exception as exc:
-                reasons.append('weryfikacja lokalnego pliku nie powiodła się: ' + str(exc))
         entry['runtime_available'] = runtime_available
+        entry['download_on_demand'] = bool(entry.get('manifest_ready') and entry.get('license_verified'))
         entry['blockers'] = reasons
         entry['ready_to_start'] = not reasons
         if reasons:
