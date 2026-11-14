@@ -38,6 +38,7 @@ TOKEN_TTL_SECONDS = 600
 CHALLENGE_TTL_SECONDS = 300
 SESSION_IDLE_SECONDS = 1800
 SESSION_ABSOLUTE_SECONDS = 28800
+RATE_LIMIT_WINDOW_SECONDS = 900
 _OPERATOR_ID = re.compile(r"^[a-f0-9-]{36}$")
 _DISPLAY_NAME = re.compile(r"^[^\x00-\x1f\x7f]{1,100}$")
 _RP_ID = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -120,7 +121,13 @@ def ensure_schema(conn):
         device_type TEXT,
         backed_up INTEGER NOT NULL DEFAULT 0,
         created_at REAL NOT NULL,
-        last_used_at REAL
+        last_used_at REAL,
+        revoked_at REAL
+    );
+    CREATE TABLE IF NOT EXISTS arena_auth_rate_limits (
+        bucket_hash TEXT PRIMARY KEY,
+        window_started_at REAL NOT NULL,
+        attempts INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_arena_credentials_operator
         ON arena_webauthn_credentials(operator_id);
@@ -155,6 +162,9 @@ def ensure_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_arena_sessions_operator
         ON arena_operator_sessions(operator_id);
     """)
+    credential_cols = {row[1] for row in conn.execute("PRAGMA table_info(arena_webauthn_credentials)")}
+    if "revoked_at" not in credential_cols:
+        conn.execute("ALTER TABLE arena_webauthn_credentials ADD COLUMN revoked_at REAL")
     challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(arena_auth_challenges)")}
     if "user_handle" not in challenge_cols:
         conn.execute("ALTER TABLE arena_auth_challenges ADD COLUMN user_handle BLOB")
@@ -418,6 +428,142 @@ def finish_authentication(db_path, config, ceremony_id, credential):
             "csrf_token": csrf_token,
         }
 
+
+
+def consume_rate_limit(db_path, bucket, limit, window_seconds=RATE_LIMIT_WINDOW_SECONDS, now=None):
+    """Atomically count a bounded auth attempt; bucket values are never stored raw."""
+    if not isinstance(bucket, str) or not bucket or len(bucket) > 512:
+        raise OperatorAuthError("Nieprawidłowy klucz limitu prób.")
+    if not isinstance(limit, int) or limit < 1 or not isinstance(window_seconds, int) or window_seconds < 1:
+        raise OperatorAuthError("Nieprawidłowa konfiguracja limitu prób.")
+    now = time.time() if now is None else now
+    digest = hashlib.sha256(bucket.encode("utf-8")).hexdigest()
+    with _db(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT window_started_at,attempts FROM arena_auth_rate_limits WHERE bucket_hash=?",
+            (digest,),
+        ).fetchone()
+        if row is None or row["window_started_at"] + window_seconds <= now:
+            conn.execute(
+                "INSERT INTO arena_auth_rate_limits(bucket_hash,window_started_at,attempts) VALUES(?,?,1) "
+                "ON CONFLICT(bucket_hash) DO UPDATE SET window_started_at=excluded.window_started_at,attempts=1",
+                (digest, now),
+            )
+            remaining = limit - 1
+            retry_after = 0
+        elif row["attempts"] >= limit:
+            remaining = 0
+            retry_after = max(1, int(row["window_started_at"] + window_seconds - now))
+        else:
+            conn.execute(
+                "UPDATE arena_auth_rate_limits SET attempts=attempts+1 WHERE bucket_hash=?",
+                (digest,),
+            )
+            remaining = limit - int(row["attempts"]) - 1
+            retry_after = 0
+        conn.execute(
+            "DELETE FROM arena_auth_rate_limits WHERE window_started_at < ?",
+            (now - 86400,),
+        )
+        conn.commit()
+    if retry_after:
+        raise OperatorRateLimitError(retry_after)
+    return remaining
+
+
+class OperatorRateLimitError(OperatorAuthError):
+    def __init__(self, retry_after):
+        super().__init__("Przekroczono limit prób. Spróbuj ponownie później.")
+        self.retry_after = int(retry_after)
+
+
+def list_operators(db_path):
+    with _db(db_path) as conn:
+        ensure_schema(conn)
+        rows = conn.execute(
+            """SELECT o.operator_id,o.display_name,o.role,o.active,o.created_at,
+            COUNT(CASE WHEN c.revoked_at IS NULL THEN 1 END) AS active_credentials
+            FROM arena_operators o LEFT JOIN arena_webauthn_credentials c
+            ON c.operator_id=o.operator_id
+            GROUP BY o.operator_id ORDER BY o.created_at,o.display_name"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def revoke_credential(db_path, owner_operator_id, credential_id):
+    if not isinstance(credential_id, str) or not credential_id or len(credential_id) > 256:
+        raise OperatorAuthError("Nieprawidłowy identyfikator poświadczenia.")
+    now = time.time()
+    with _db(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        owner = conn.execute(
+            "SELECT 1 FROM arena_operators WHERE operator_id=? AND role='owner' AND active=1",
+            (owner_operator_id,),
+        ).fetchone()
+        if owner is None:
+            raise OperatorAuthError("Wymagane aktywne konto właściciela.")
+        row = conn.execute(
+            """SELECT c.operator_id,o.role,o.active,
+            (SELECT COUNT(*) FROM arena_webauthn_credentials c2
+             WHERE c2.operator_id=c.operator_id AND c2.revoked_at IS NULL) AS active_credentials
+            FROM arena_webauthn_credentials c JOIN arena_operators o
+            ON o.operator_id=c.operator_id
+            WHERE c.credential_id=? AND c.revoked_at IS NULL""",
+            (credential_id,),
+        ).fetchone()
+        if row is None:
+            raise OperatorAuthError("Nie znaleziono aktywnego poświadczenia.")
+        if row["role"] == "owner" and row["active"] and row["active_credentials"] <= 1:
+            raise OperatorAuthError("Nie można odebrać ostatniego aktywnego Passkey właściciela.")
+        conn.execute(
+            "UPDATE arena_webauthn_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
+            (now, credential_id),
+        )
+        conn.execute(
+            "UPDATE arena_operator_sessions SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
+            (now, row["operator_id"]),
+        )
+        conn.commit()
+        return {"operator_id": row["operator_id"], "sessions_revoked": True}
+
+
+def suspend_operator(db_path, owner_operator_id, target_operator_id):
+    if not isinstance(target_operator_id, str) or len(target_operator_id) > 64:
+        raise OperatorAuthError("Nieprawidłowy identyfikator operatora.")
+    now = time.time()
+    with _db(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        owner = conn.execute(
+            "SELECT 1 FROM arena_operators WHERE operator_id=? AND role='owner' AND active=1",
+            (owner_operator_id,),
+        ).fetchone()
+        if owner is None:
+            raise OperatorAuthError("Wymagane aktywne konto właściciela.")
+        target = conn.execute(
+            "SELECT operator_id,role,active FROM arena_operators WHERE operator_id=?",
+            (target_operator_id,),
+        ).fetchone()
+        if target is None:
+            raise OperatorAuthError("Nie znaleziono operatora.")
+        if target["operator_id"] == owner_operator_id:
+            raise OperatorAuthError("Właściciel nie może zawiesić własnego konta.")
+        if target["role"] == "owner" and target["active"]:
+            active_owners = conn.execute(
+                "SELECT COUNT(*) FROM arena_operators WHERE role='owner' AND active=1"
+            ).fetchone()[0]
+            if active_owners <= 1:
+                raise OperatorAuthError("Nie można zawiesić ostatniego aktywnego właściciela.")
+        conn.execute("UPDATE arena_operators SET active=0 WHERE operator_id=?", (target_operator_id,))
+        conn.execute(
+            "UPDATE arena_operator_sessions SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
+            (now, target_operator_id),
+        )
+        conn.commit()
+        return {"operator_id": target_operator_id, "sessions_revoked": True}
 
 def get_session(db_path, session_token, now=None):
     if not isinstance(session_token, str) or len(session_token) > 256:
