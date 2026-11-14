@@ -18,7 +18,7 @@ _ARTIFACT_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 def _add_column_if_missing(connection: sqlite3.Connection, table: str,
                             column: str, declaration: str) -> None:
-    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
