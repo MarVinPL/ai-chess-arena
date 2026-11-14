@@ -96,7 +96,7 @@ class PerGameStorageTests(unittest.TestCase):
             metadata={'filename':'alpha-pair.gguf','sha256':target_sha,'size_bytes':len(target_payload),
                 'revision':'a'*40,'source_path':'alpha-pair.gguf','download_url':'https://huggingface.co/example/alpha/resolve/'+'a'*40+'/alpha-pair.gguf',
                 'draft_model':{'filename':'alpha-draft.gguf','sha256':draft_sha,'size_bytes':len(draft_payload),
-                    'download_url':'https://huggingface.co/example/alpha/resolve/main/alpha-draft.gguf','source_path':'alpha-draft.gguf'}})
+                    'download_url':'https://huggingface.co/example/alpha/resolve/'+'a'*40+'/alpha-draft.gguf','source_path':'alpha-draft.gguf'}})
         player={'name':'Alpha + MTP','version_id':paired['versions'][0]['id']}
         def fake_target(version_id,url,filename,sha,size,approved):
             self.assertEqual((sha,size),(target_sha,len(target_payload)))
