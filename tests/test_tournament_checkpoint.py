@@ -8,6 +8,7 @@ import chess
 import tournament_checkpoint
 import engine_runner
 import server
+import league
 
 
 class TournamentCheckpointTests(unittest.TestCase):
@@ -55,6 +56,64 @@ class TournamentCheckpointTests(unittest.TestCase):
         tournament_checkpoint.delete(self.db, 7)
         tournament_checkpoint.delete(self.db, 7)
         self.assertIsNone(tournament_checkpoint.load(self.db, 7))
+
+
+class CheckpointAdmissionAppendTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.db = Path(self.temp.name) / 'admission-checkpoint.sqlite3'
+        self.old_league_db = league.DB
+        self.old_server_db = server.DB
+        league.DB = self.db
+        server.DB = self.db
+        league.init()
+        with league.connect() as db:
+            db.execute('CREATE TABLE games(id INTEGER PRIMARY KEY,white_model TEXT,black_model TEXT,result TEXT)')
+        for name, digest in (('Alpha','a'*64),('Beta','b'*64)):
+            league.register_model(name,source=f'https://example.test/{name}.gguf',license='Apache-2.0',license_verified=True,
+                metadata={'filename':name.lower()+'.gguf','sha256':digest,'size_bytes':100})
+        self.parent = league.create_round_robin('Parent with checkpoint')
+        league.initialize_late_admission_quota(self.parent['id'])
+        with league.connect() as db:
+            db.execute("UPDATE tournaments SET status='stopped' WHERE id=?",(self.parent['id'],))
+        for name, digest in (('Candidate A','c'*64),('Candidate B','d'*64)):
+            league.register_model(name,source=f'https://example.test/{name}.gguf',license='Apache-2.0',license_verified=True,
+                metadata={'filename':name.lower().replace(' ','-')+'.gguf','sha256':digest,'size_bytes':100})
+        self.batch = league.create_late_admission_batch(self.parent['id'],[3,4])
+        with league.connect() as db:
+            rows=db.execute("SELECT id,white_model_id,black_model_id,leg,stage,round_no,match_no,status,game_id,winner_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league' ORDER BY id",(self.parent['id'],)).fetchall()
+            self.pairing=dict(rows[0])
+            self.saved_schedule=[dict(row) for row in rows]
+            self.saved_entries=[dict(row) for row in db.execute('SELECT e.model_id,e.version_id,m.name,m.format,m.active FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=? ORDER BY e.model_id',(self.parent['id'],)).fetchall()]
+            self.saved_tournament=dict(db.execute('SELECT * FROM tournaments WHERE id=?',(self.parent['id'],)).fetchone())
+        self.players={}
+        for row in self.saved_entries:
+            self.players[row['model_id']]={'model_id':row['model_id'],'name':row['name'],'version_id':row['version_id'],
+                'model_sha256':None,'draft_sha256':'','base_inference':{},'inference':{}}
+        self.checkpoint={'phase':'game','pairing':{'id':self.pairing['id'],'stage':'league',
+            'white_model_id':self.pairing['white_model_id'],'black_model_id':self.pairing['black_model_id']},
+            'white':self.players[self.pairing['white_model_id']],'black':self.players[self.pairing['black_model_id']],
+            'moves':[],'move_times':[],'fen':chess.Board().fen(),'side_to_move':'white',
+            'tournament':self.saved_tournament,'entries':self.saved_entries,'schedule':self.saved_schedule}
+
+    def tearDown(self):
+        league.DB=self.old_league_db
+        server.DB=self.old_server_db
+        self.temp.cleanup()
+
+    def test_append_only_qualified_entrants_do_not_invalidate_existing_checkpoint(self):
+        child_id=self.batch['qualification_tournament_id']
+        with league.connect() as db:
+            pairings=db.execute("SELECT id,white_model_id,black_model_id FROM tournament_pairings WHERE tournament_id=? AND stage='league' ORDER BY id",(child_id,)).fetchall()
+            for pairing in pairings:
+                white=db.execute('SELECT name FROM league_models WHERE id=?',(pairing['white_model_id'],)).fetchone()['name']
+                black=db.execute('SELECT name FROM league_models WHERE id=?',(pairing['black_model_id'],)).fetchone()['name']
+                game=db.execute('INSERT INTO games(white_model,black_model,result) VALUES(?,?,?)',(white,black,'1-0'))
+                db.execute("UPDATE tournament_pairings SET status='completed',game_id=? WHERE id=?",(game.lastrowid,pairing['id']))
+            db.execute("UPDATE tournaments SET status='completed' WHERE id=?",(child_id,))
+        league.finalize_late_admission_batch(child_id)
+        server._validate_tournament_checkpoint(self.parent['id'],self.checkpoint,self.pairing,
+            self.players[self.pairing['white_model_id']],self.players[self.pairing['black_model_id']])
 
 
 class _StopDuringInference:

@@ -15,7 +15,7 @@ def init():
   CREATE TABLE IF NOT EXISTS model_admission_history(id INTEGER PRIMARY KEY,model_id INTEGER NOT NULL,event TEXT NOT NULL CHECK(event IN ('admitted','revoked')),actor TEXT NOT NULL,occurred_at TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',repo_id TEXT NOT NULL,revision TEXT NOT NULL,snapshot_json TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS idx_model_admission_history_model ON model_admission_history(model_id,id);
   CREATE TABLE IF NOT EXISTS model_versions(id INTEGER PRIMARY KEY,model_id INTEGER NOT NULL REFERENCES league_models(id),version_key TEXT NOT NULL,filename TEXT,sha256 TEXT,size_bytes INTEGER,source TEXT NOT NULL DEFAULT '',license TEXT NOT NULL DEFAULT '',metadata_json TEXT NOT NULL DEFAULT '{}',runtime TEXT NOT NULL DEFAULT 'llamafile',status TEXT NOT NULL DEFAULT 'catalogued',managed_copy INTEGER NOT NULL DEFAULT 0,license_verified INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,UNIQUE(model_id,version_key));
-  CREATE TABLE IF NOT EXISTS tournaments(id INTEGER PRIMARY KEY,name TEXT NOT NULL,format TEXT NOT NULL DEFAULT 'PURE_AI',status TEXT NOT NULL DEFAULT 'planned',created_at TEXT NOT NULL,rules_version TEXT NOT NULL DEFAULT '1',qualification_percent INTEGER NOT NULL DEFAULT 80);
+  CREATE TABLE IF NOT EXISTS tournaments(id INTEGER PRIMARY KEY,name TEXT NOT NULL,format TEXT NOT NULL DEFAULT 'PURE_AI',status TEXT NOT NULL DEFAULT 'planned',created_at TEXT NOT NULL,rules_version TEXT NOT NULL DEFAULT '1',qualification_percent INTEGER NOT NULL DEFAULT 80,initial_entrant_count INTEGER,late_admission_limit INTEGER,late_admission_used INTEGER NOT NULL DEFAULT 0,parent_tournament_id INTEGER,admission_batch_id INTEGER);
   CREATE TABLE IF NOT EXISTS tournament_entries(tournament_id INTEGER NOT NULL REFERENCES tournaments(id),model_id INTEGER NOT NULL REFERENCES league_models(id),version_id INTEGER REFERENCES model_versions(id),PRIMARY KEY(tournament_id,model_id));
   CREATE TABLE IF NOT EXISTS tournament_pairings(id INTEGER PRIMARY KEY,tournament_id INTEGER NOT NULL REFERENCES tournaments(id),white_model_id INTEGER NOT NULL REFERENCES league_models(id),black_model_id INTEGER NOT NULL REFERENCES league_models(id),leg INTEGER NOT NULL CHECK(leg IN (1,2)),status TEXT NOT NULL DEFAULT 'pending',game_id INTEGER,UNIQUE(tournament_id,white_model_id,black_model_id,leg));
   CREATE INDEX IF NOT EXISTS idx_pairings_tournament ON tournament_pairings(tournament_id,status);
@@ -36,6 +36,21 @@ def init():
   if 'license_verified' not in cols:
    c.execute('ALTER TABLE model_versions ADD COLUMN license_verified INTEGER NOT NULL DEFAULT 0')
   tournament_cols={r[1] for r in c.execute('PRAGMA table_info(tournaments)')}
+  for name, declaration in (('initial_entrant_count','INTEGER'),('late_admission_limit','INTEGER'),('late_admission_used','INTEGER NOT NULL DEFAULT 0'),('parent_tournament_id','INTEGER'),('admission_batch_id','INTEGER')):
+   if name not in tournament_cols: c.execute(f'ALTER TABLE tournaments ADD COLUMN {name} {declaration}')
+  c.executescript("""
+   CREATE TABLE IF NOT EXISTS tournament_admission_batches(
+    id INTEGER PRIMARY KEY,parent_tournament_id INTEGER NOT NULL REFERENCES tournaments(id),
+    qualification_tournament_id INTEGER NOT NULL UNIQUE REFERENCES tournaments(id),
+    available_slots INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'running',created_at TEXT NOT NULL,completed_at TEXT);
+   CREATE TABLE IF NOT EXISTS tournament_admission_results(
+    id INTEGER PRIMARY KEY,batch_id INTEGER NOT NULL REFERENCES tournament_admission_batches(id),
+    parent_tournament_id INTEGER NOT NULL REFERENCES tournaments(id),model_id INTEGER NOT NULL REFERENCES league_models(id),
+    rank INTEGER NOT NULL,points INTEGER NOT NULL,wins INTEGER NOT NULL,draws INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('qualified','not_qualified','capacity_exhausted')),
+    decided_at TEXT NOT NULL,UNIQUE(parent_tournament_id,model_id),UNIQUE(batch_id,model_id));
+   CREATE INDEX IF NOT EXISTS idx_admission_results_parent ON tournament_admission_results(parent_tournament_id,rank);
+  """)
   if 'qualification_percent' not in tournament_cols: c.execute('ALTER TABLE tournaments ADD COLUMN qualification_percent INTEGER NOT NULL DEFAULT 80')
   pair_cols={r[1] for r in c.execute('PRAGMA table_info(tournament_pairings)')}
   if 'stage' not in pair_cols: c.execute("ALTER TABLE tournament_pairings ADD COLUMN stage TEXT NOT NULL DEFAULT 'league'")
@@ -283,6 +298,138 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   return {'id':tid,'name':name,'format':format,'players':len(ms),'qualification_percent':qualification_percent,'expected_qualifiers':expected_qualifiers,'games_planned':len(ms)*(len(ms)-1),'draft_games_planned':expected_qualifiers-1,'total_games_planned':len(ms)*(len(ms)-1)+expected_qualifiers-1,'draft_format':'ALL_WINNERS_PLUS_TOP_SCORING_REMAINDER','status':'planned'}
 
 
+def add_prestart_tournament_entries(tournament_id, model_ids):
+ """Add any number of eligible registry models before the tournament starts."""
+ if not isinstance(model_ids,list) or not model_ids or any(isinstance(v,bool) or not isinstance(v,int) or v<1 for v in model_ids):
+  raise ValueError('Wybierz co najmniej jednego zawodnika')
+ if len(set(model_ids))!=len(model_ids): raise ValueError('Lista zawodników zawiera duplikaty')
+ with connect() as c:
+  c.execute('BEGIN IMMEDIATE')
+  tournament=c.execute('SELECT format,status,initial_entrant_count,parent_tournament_id FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+  if tournament is None: raise ValueError('Nie znaleziono turnieju')
+  if tournament['parent_tournament_id'] is not None:
+   raise ValueError('Skład turnieju eliminacyjnego jest zamknięty po utworzeniu eliminacji')
+  if tournament['status']!='planned' or tournament['initial_entrant_count'] is not None:
+   raise ValueError('Nowych zawodników bez limitu można dodawać wyłącznie przed pierwszym uruchomieniem turnieju')
+  placeholders=','.join('?' for _ in model_ids)
+  sql=("SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.source,v.metadata_json "
+       "FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id) "
+       f"WHERE m.id IN ({placeholders}) ORDER BY m.id")
+  candidates=c.execute(sql,model_ids).fetchall()
+  if len(candidates)!=len(model_ids): raise ValueError('Nie znaleziono wszystkich wskazanych zawodników')
+  current=[int(r[0]) for r in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=?',(tournament_id,)).fetchall()]
+  for item in candidates:
+   if item['format']!=tournament['format'] or item['active']!=1: raise ValueError(f'{item["name"]} jest nieaktywny lub ma inny format')
+   if item['id'] in current: raise ValueError(f'{item["name"]} już uczestniczy w turnieju')
+   if not item['version_id']: raise ValueError(f'{item["name"]} nie ma zarejestrowanej wersji modelu')
+   if is_excluded_model_identity(name=item['name'],source=item['source'],metadata=item['metadata_json']): raise ValueError(f'{item["name"]} jest wykluczony z AI Chess Arena')
+  added=[]
+  for item in candidates:
+   c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tournament_id,item['id'],item['version_id']))
+   for opponent_id in current+added:
+    c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,1,'league')",(tournament_id,item['id'],opponent_id))
+    c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,2,'league')",(tournament_id,opponent_id,item['id']))
+   added.append(int(item['id']))
+  return {'tournament_id':tournament_id,'added_model_ids':added,'added_count':len(added),'total_entrants':len(current)+len(added)}
+
+
+def initialize_late_admission_quota(tournament_id):
+ """Freeze the original roster size and late-entry quota exactly once."""
+ with connect() as c:
+  c.execute('BEGIN IMMEDIATE')
+  row=c.execute('SELECT initial_entrant_count,late_admission_limit FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+  if row is None: raise ValueError('Nie znaleziono turnieju')
+  if row['initial_entrant_count'] is None:
+   count=int(c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament_id,)).fetchone()[0])
+   limit=max(5,math.ceil(count*0.5))
+   c.execute('UPDATE tournaments SET initial_entrant_count=?,late_admission_limit=? WHERE id=? AND initial_entrant_count IS NULL',(count,limit,tournament_id))
+   return {'initial_entrant_count':count,'late_admission_limit':limit}
+  return {'initial_entrant_count':int(row['initial_entrant_count']),'late_admission_limit':int(row['late_admission_limit'])}
+
+
+def create_late_admission_batch(parent_tournament_id, model_ids):
+ """Create a private round-robin elimination tournament for new candidates."""
+ if not isinstance(model_ids,list) or len(model_ids)<2 or any(isinstance(v,bool) or not isinstance(v,int) or v<1 for v in model_ids):
+  raise ValueError('Wybierz co najmniej dwóch kandydatów do eliminacji')
+ if len(set(model_ids))!=len(model_ids): raise ValueError('Lista kandydatów zawiera duplikaty')
+ with connect() as c:
+  c.execute('BEGIN IMMEDIATE')
+  parent=c.execute('SELECT id,name,format,status,initial_entrant_count,late_admission_limit,late_admission_used,parent_tournament_id FROM tournaments WHERE id=?',(parent_tournament_id,)).fetchone()
+  if parent is None: raise ValueError('Nie znaleziono turnieju')
+  if parent['parent_tournament_id'] is not None: raise ValueError('Nie można tworzyć kolejnych poziomów eliminacji dla turnieju eliminacyjnego')
+  if parent['initial_entrant_count'] is None: raise ValueError('Limit nowych zawodników zostanie ustalony przy pierwszym uruchomieniu turnieju')
+  if parent['status']!='stopped': raise ValueError('Eliminacje nowych zawodników można przygotować wyłącznie po bezpiecznym zatrzymaniu turnieju')
+  if c.execute("SELECT 1 FROM tournament_pairings WHERE tournament_id=? AND stage='draft' LIMIT 1",(parent_tournament_id,)).fetchone():
+   raise ValueError('Nie można dołączać nowych zawodników po rozpoczęciu fazy pucharowej')
+  active=c.execute("SELECT COUNT(*) FROM tournament_admission_batches WHERE parent_tournament_id=? AND status IN ('running','finalizing')",(parent_tournament_id,)).fetchone()[0]
+  if active: raise ValueError('Turniej ma już aktywne eliminacje nowych zawodników')
+  slots=int(parent['late_admission_limit'])-int(parent['late_admission_used'])
+  if slots<=0: raise ValueError('Wykorzystano cały limit nowych zawodników')
+  placeholders=','.join('?' for _ in model_ids)
+  sql=("SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.source,v.metadata_json "
+       "FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id) "
+       f"WHERE m.id IN ({placeholders}) ORDER BY m.id")
+  candidates=c.execute(sql,model_ids).fetchall()
+  if len(candidates)!=len(model_ids): raise ValueError('Nie znaleziono wszystkich wskazanych kandydatów')
+  existing={int(r[0]) for r in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=?',(parent_tournament_id,)).fetchall()}
+  attempted={int(r[0]) for r in c.execute('SELECT model_id FROM tournament_admission_results WHERE parent_tournament_id=?',(parent_tournament_id,)).fetchall()}
+  for item in candidates:
+   if item['format']!=parent['format'] or item['active']!=1: raise ValueError(f'Kandydat {item["name"]} jest nieaktywny lub ma inny format')
+   if item['id'] in existing: raise ValueError(f'{item["name"]} już uczestniczy w turnieju')
+   if item['id'] in attempted: raise ValueError(f'{item["name"]} był już oceniany w eliminacjach tego turnieju')
+   if not item['version_id']: raise ValueError(f'{item["name"]} nie ma zarejestrowanej wersji modelu')
+   if is_excluded_model_identity(name=item['name'],source=item['source'],metadata=item['metadata_json']): raise ValueError(f'{item["name"]} jest wykluczony z AI Chess Arena')
+  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+  child_name=f'Eliminacje nowych zawodników · turniej #{parent_tournament_id} · {now}'
+  child_id=c.execute("INSERT INTO tournaments(name,format,status,created_at,rules_version,qualification_percent,parent_tournament_id) VALUES(?,?, 'planned',?,'1',80,?)",(child_name,parent['format'],now,parent_tournament_id)).lastrowid
+  for item in candidates:
+   c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(child_id,item['id'],item['version_id']))
+  for i,a in enumerate(candidates):
+   for b in candidates[i+1:]:
+    c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,1,'league')",(child_id,a['id'],b['id']))
+    c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,2,'league')",(child_id,b['id'],a['id']))
+  batch_id=c.execute("INSERT INTO tournament_admission_batches(parent_tournament_id,qualification_tournament_id,available_slots,status,created_at) VALUES(?,?,?,'running',?)",(parent_tournament_id,child_id,slots,now)).lastrowid
+  c.execute('UPDATE tournaments SET admission_batch_id=? WHERE id=?',(batch_id,child_id))
+  return {'batch_id':batch_id,'parent_tournament_id':parent_tournament_id,'qualification_tournament_id':child_id,'candidates':len(candidates),'available_slots':slots,'status':'planned'}
+
+
+def finalize_late_admission_batch(qualification_tournament_id):
+ """Persist deterministic elimination ranking and append only qualified entrants."""
+ with connect() as c:
+  c.execute('BEGIN IMMEDIATE')
+  batch=c.execute("SELECT b.*,p.format,p.status AS parent_status,p.initial_entrant_count,p.late_admission_limit,p.late_admission_used FROM tournament_admission_batches b JOIN tournaments p ON p.id=b.parent_tournament_id WHERE b.qualification_tournament_id=?",(qualification_tournament_id,)).fetchone()
+  if batch is None: return None
+  if batch['status']=='completed': return {'batch_id':batch['id'],'status':'completed','already_finalized':True}
+  if batch['parent_status']!='stopped': raise ValueError('Turniej nadrzędny musi pozostać zatrzymany do czasu zatwierdzenia eliminacji')
+  child=c.execute('SELECT status FROM tournaments WHERE id=?',(qualification_tournament_id,)).fetchone()
+  if child is None or child['status']!='completed': raise ValueError('Eliminacje nie zostały jeszcze zakończone')
+  standings=_league_standings(c,qualification_tournament_id)
+  ranked=sorted(standings,key=lambda r:(-int(r['points']),-int(r['wins']),-int(r['draws']),str(r['name']).casefold(),int(r['model_id'])))
+  remaining=max(0,int(batch['late_admission_limit'])-int(batch['late_admission_used']))
+  eligible=[r for r in ranked if int(r['wins'])>=1]
+  selected={int(r['model_id']) for r in eligible[:remaining]}
+  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+  current_ids=[int(r[0]) for r in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=?',(batch['parent_tournament_id'],)).fetchall()]
+  admitted_so_far=[]
+  ranking=[]
+  for rank,row in enumerate(ranked,1):
+   model_id=int(row['model_id'])
+   outcome='qualified' if model_id in selected else ('capacity_exhausted' if int(row['wins'])>=1 and remaining>0 and len(selected)>=remaining else 'not_qualified')
+   c.execute('INSERT INTO tournament_admission_results(batch_id,parent_tournament_id,model_id,rank,points,wins,draws,outcome,decided_at) VALUES(?,?,?,?,?,?,?,?,?)',(batch['id'],batch['parent_tournament_id'],model_id,rank,int(row['points']),int(row['wins']),int(row['draws']),outcome,now))
+   ranking.append({'model_id':model_id,'name':row['name'],'rank':rank,'points':int(row['points']),'wins':int(row['wins']),'draws':int(row['draws']),'outcome':outcome})
+   if model_id in selected:
+    version=c.execute('SELECT version_id FROM tournament_entries WHERE tournament_id=? AND model_id=?',(qualification_tournament_id,model_id)).fetchone()
+    c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(batch['parent_tournament_id'],model_id,version['version_id']))
+    for opponent_id in current_ids+admitted_so_far:
+     c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,1,'league')",(batch['parent_tournament_id'],model_id,opponent_id))
+     c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,2,'league')",(batch['parent_tournament_id'],opponent_id,model_id))
+    admitted_so_far.append(model_id)
+  added=len(selected)
+  c.execute('UPDATE tournaments SET late_admission_used=late_admission_used+? WHERE id=?',(added,batch['parent_tournament_id']))
+  c.execute("UPDATE tournament_admission_batches SET status='completed',completed_at=? WHERE id=?",(now,batch['id']))
+  return {'batch_id':batch['id'],'status':'completed','qualified_model_ids':sorted(selected),'qualified_count':added,'available_slots_before':remaining,'ranking':ranking}
+
+
 def tournament_entry_status(tournament_id):
  """Return every entrant; local cache absence is informational, not a blocker."""
  with connect() as c:
@@ -363,15 +510,17 @@ def tournament_entry_status(tournament_id):
 
 
 
-def tournament_required_version_ids(tournament_id):
- """Versions still needed by pending or resumable games in this tournament."""
+def tournament_required_version_ids(tournament_id=None):
+ """Versions still needed by pending or resumable games, optionally in one tournament."""
  with connect() as c:
-  rows=c.execute("""SELECT DISTINCT e.version_id
-      FROM tournament_entries e
+  sql="""SELECT DISTINCT e.version_id FROM tournament_entries e
       JOIN tournament_pairings p ON p.tournament_id=e.tournament_id
        AND (p.white_model_id=e.model_id OR p.black_model_id=e.model_id)
-      WHERE e.tournament_id=? AND p.status IN ('pending','running')
-       AND e.version_id IS NOT NULL""",(tournament_id,)).fetchall()
+      WHERE p.status IN ('pending','running') AND e.version_id IS NOT NULL"""
+  params=()
+  if tournament_id is not None:
+   sql+=' AND e.tournament_id=?'; params=(tournament_id,)
+  rows=c.execute(sql,params).fetchall()
  return {int(row['version_id']) for row in rows}
 
 
@@ -414,7 +563,7 @@ def tournament_view(tournament_id,live=None):
  """Return a read-only tournament snapshot; never create seeds or pairings here."""
  live=live or {}
  with connect() as c:
-  tournament=c.execute('SELECT id,name,format,status,created_at,qualification_percent FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+  tournament=c.execute('SELECT id,name,format,status,created_at,qualification_percent,initial_entrant_count,late_admission_limit,late_admission_used,parent_tournament_id,admission_batch_id FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
   if not tournament: raise KeyError('Nie znaleziono turnieju')
   standings=_league_standings(c,tournament_id,strict_game_linkage=True)
   game_columns={row[1] for row in c.execute('PRAGMA table_info(games)')}
@@ -442,6 +591,21 @@ def tournament_view(tournament_id,live=None):
   seeds=[dict(r) for r in c.execute('''SELECT s.model_id,s.seed,m.name
     FROM tournament_seeds s JOIN league_models m ON m.id=s.model_id
     WHERE s.tournament_id=? ORDER BY s.seed''',(tournament_id,)).fetchall()]
+  admission_batches=[dict(r) for r in c.execute('''SELECT b.id,b.qualification_tournament_id,b.available_slots,b.status,b.created_at,b.completed_at,
+    q.status AS qualification_status FROM tournament_admission_batches b
+    JOIN tournaments q ON q.id=b.qualification_tournament_id
+    WHERE b.parent_tournament_id=? ORDER BY b.id''',(tournament_id,)).fetchall()]
+  admission_results=[dict(r) for r in c.execute('''SELECT r.model_id,m.name,r.rank,r.points,r.wins,r.draws,r.outcome,r.decided_at
+    FROM tournament_admission_results r JOIN league_models m ON m.id=r.model_id
+    WHERE r.parent_tournament_id=? ORDER BY r.batch_id,r.rank''',(tournament_id,)).fetchall()]
+  existing_ids={int(r[0]) for r in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=?',(tournament_id,)).fetchall()}
+  attempted_ids={int(r[0]) for r in c.execute('SELECT model_id FROM tournament_admission_results WHERE parent_tournament_id=?',(tournament_id,)).fetchall()}
+  candidate_rows=c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.source,v.metadata_json
+    FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id)
+    WHERE m.format=(SELECT format FROM tournaments WHERE id=?) AND m.active=1 ORDER BY m.name COLLATE NOCASE''',(tournament_id,)).fetchall()
+  admission_candidates=[{'model_id':int(r['id']),'name':r['name']} for r in candidate_rows
+    if int(r['id']) not in existing_ids and int(r['id']) not in attempted_ids and r['version_id']
+    and not is_excluded_model_identity(name=r['name'],source=r['source'],metadata=r['metadata_json'])]
   champion_row=c.execute('''SELECT p.winner_model_id,m.name FROM tournament_pairings p
     JOIN league_models m ON m.id=p.winner_model_id
     WHERE p.tournament_id=? AND p.stage='draft' AND p.status='completed'
@@ -488,7 +652,11 @@ def tournament_view(tournament_id,live=None):
    'live':{k:live.get(k) for k in ('stage','message','tournament_id','pairing_id','white','black','model','color','fen','moves','updated_at') if k in live},
    'progress':{'league':{'completed':league_done,'planned':league_total},
     'draft':{'completed':draft_done,'planned':draft_total},
-    'total':{'completed':league_done+draft_done,'planned':league_total+draft_total}}}
+    'total':{'completed':league_done+draft_done,'planned':league_total+draft_total}},
+   'late_admission':{'initial_entrant_count':tournament['initial_entrant_count'],
+    'limit':tournament['late_admission_limit'],'used':int(tournament['late_admission_used'] or 0),
+    'remaining':max(0,int(tournament['late_admission_limit'] or 0)-int(tournament['late_admission_used'] or 0)),
+    'batches':admission_batches,'results':admission_results,'candidates':admission_candidates}}
 
 def _draft_qualifiers(standings,qualification_percent):
  target=max(2,math.ceil(len(standings)*qualification_percent/100))

@@ -58,6 +58,15 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
 
+    def test_prestart_addition_and_poststart_elimination_controls_are_present(self):
+        self.assertIn("Dodaj nowych zawodników bez limitu przed startem", HTML)
+        self.assertIn("'/api/tournaments/entries'", HTML)
+        self.assertIn("Kandydaci do osobnej eliminacji", HTML)
+        self.assertIn("'/api/tournaments/admissions'", HTML)
+        self.assertIn("co najmniej jedno zwycięstwo", HTML)
+        self.assertIn("Historia kwalifikacji nowych zawodników", HTML)
+        self.assertIn("capacity_exhausted", HTML)
+
     def test_empty_list_state_is_preserved(self):
         self.assertIn("if(!rows.length){host.textContent='Brak turniejów.';return}", self.renderer)
 
