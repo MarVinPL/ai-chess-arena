@@ -609,4 +609,34 @@ class LeagueTests(unittest.TestCase):
    self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_seeds WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],0)
    self.assertEqual(c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=?",(tournament['id'],)).fetchone()[0],2)
 
+ def test_tournament_roster_counts_are_unique_and_follow_bracket_eliminations(self):
+  with league.connect() as c:
+   c.executemany("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
+    [(name,'PURE_AI','now') for name in ('Gamma','Delta')])
+   c.execute("INSERT INTO tournaments(name,format,status,created_at,rules_version) VALUES('Roster counters','PURE_AI','running','now','2')")
+   tournament_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+   c.executemany('INSERT INTO tournament_entries(tournament_id,model_id) VALUES(?,?)',
+    [(tournament_id,model_id) for model_id in (1,2,3,4)])
+   c.executemany('INSERT INTO tournament_seeds(tournament_id,model_id,seed) VALUES(?,?,?)',
+    [(tournament_id,model_id,seed) for seed,model_id in enumerate((1,2,3),1)])
+  with league.connect() as c:
+   before=league.tournament_roster_counts(c,tournament_id)
+  self.assertEqual(before,{'eliminated':1,'remaining':3,'total':4})
+  with league.connect() as c:
+   c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage,round_no,match_no,winner_model_id) VALUES(?,?,?,1,'completed','draft',1,1,?)",
+    (tournament_id,1,3,1))
+  with league.connect() as c:
+   after=league.tournament_roster_counts(c,tournament_id)
+   repeated=league.tournament_roster_counts(c,tournament_id)
+  self.assertEqual(after,{'eliminated':2,'remaining':2,'total':4})
+  self.assertEqual(repeated,after)
+  with league.connect() as c:
+   c.execute("UPDATE tournaments SET status='stopped' WHERE id=?",(tournament_id,))
+   stopped=league.tournament_roster_counts(c,tournament_id)
+   c.execute("UPDATE tournaments SET status='running' WHERE id=?",(tournament_id,))
+   resumed=league.tournament_roster_counts(c,tournament_id)
+  self.assertEqual(stopped,after)
+  self.assertEqual(resumed,after)
+
+
 if __name__=='__main__': unittest.main(verbosity=2)
