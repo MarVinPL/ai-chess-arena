@@ -262,6 +262,53 @@ class ArenaSmokeTests(unittest.TestCase):
             columns = {row[1] for row in db.execute('PRAGMA table_info(games)')}
         self.assertTrue({'tournament_id', 'pairing_id', 'move_times_json', 'inference_metadata_json'} <= columns)
 
+
+    def test_tournament_api_reports_only_saved_completed_pairing_games(self):
+        with sqlite3.connect(server.DB) as db:
+            cur = db.execute(
+                "INSERT INTO tournaments(name,format,status,created_at,rules_version,qualification_percent) VALUES(?,?,?,?,?,?)",
+                ('Progress counter test', 'PURE_AI', 'running', '2026-11-14T00:00:00Z', '1', 80),
+            )
+            tournament_id = cur.lastrowid
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
+                       ('Progress White', 'PURE_AI', 'now'))
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
+                       ('Progress Black', 'PURE_AI', 'now'))
+            white_id = db.execute("SELECT id FROM league_models WHERE name='Progress White'").fetchone()[0]
+            black_id = db.execute("SELECT id FROM league_models WHERE name='Progress Black'").fetchone()[0]
+            cur = db.execute(
+                "INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(?,?,?,?,?,?)",
+                (tournament_id, white_id, black_id, 1, 'completed', 'league'),
+            )
+            completed_pairing_id = cur.lastrowid
+            cur = db.execute(
+                "INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ('2026-11-14T00:00:00Z', '2026-11-14T00:01:00Z',
+                 'Progress White', 'Progress Black', '1-0', '[Result "1-0"]\\n\\n1. e4 1-0',
+                 1, 0, 0.5, tournament_id, completed_pairing_id),
+            )
+            db.execute("UPDATE tournament_pairings SET game_id=? WHERE id=?",
+                       (cur.lastrowid, completed_pairing_id))
+            cur = db.execute(
+                "INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(?,?,?,?,?,?)",
+                (tournament_id, black_id, white_id, 1, 'running', 'league'),
+            )
+            running_pairing_id = cur.lastrowid
+            cur = db.execute(
+                "INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ('2026-11-14T00:02:00Z', '2026-11-14T00:03:00Z',
+                 'Progress Black', 'Progress White', '0-1', '[Result "0-1"]\\n\\n1. d4 0-1',
+                 1, 0, 0.5, tournament_id, running_pairing_id),
+            )
+            db.execute("UPDATE tournament_pairings SET game_id=? WHERE id=?",
+                       (cur.lastrowid, running_pairing_id))
+
+        with urllib.request.urlopen(self.base + '/api/tournaments') as response:
+            rows = __import__('json').loads(response.read())
+        tournament = next(row for row in rows if row['id'] == tournament_id)
+        self.assertEqual(tournament['completed_games'], 1)
+        self.assertEqual(tournament['total_games_planned'], 2)
+
     def test_tournament_start_rejects_unknown_id_before_spawning(self):
         with self.assertRaises(ValueError):
             server.start_tournament(999999)
