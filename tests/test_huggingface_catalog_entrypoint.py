@@ -44,5 +44,40 @@ print("entrypoint import OK")
         self.assertIn("entrypoint import OK", result.stdout)
 
 
+    def test_candidate_verification_error_reports_http_status(self):
+        import json
+
+        from huggingface_catalog_sync import CatalogSyncError, HTTPStatusError, sync_catalog
+
+        manifest = {
+            "models": [
+                {
+                    "model_id": model_id,
+                    "repo_id": f"test-org/model-{model_id}",
+                    "revision": f"{model_id:040x}",
+                    "license_review_status": "review_required",
+                }
+                for model_id in range(1, 9)
+            ]
+        }
+
+        def failing_fetcher(url):
+            raise HTTPStatusError(429, url)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "models.json"
+            catalog_path = Path(temp_dir) / "catalog.json"
+            source_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(CatalogSyncError, r"HTTP 429"):
+                sync_catalog(
+                    source_path=source_path,
+                    catalog_path=catalog_path,
+                    fetcher=failing_fetcher,
+                )
+
+            self.assertFalse(catalog_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
