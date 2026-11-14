@@ -23,14 +23,15 @@ def submit(connection, payload, *, allowed_model_ids):
         'restrictions': str(payload.get('restrictions', '')).strip()[:3000],
         'obligations': str(payload.get('obligations', '')).strip()[:3000],
         'block_reason': str(payload.get('block_reason', '')).strip()[:3000],
-        'scope_formats': sorted(set(payload.get('scope_formats', []))) if isinstance(payload.get('scope_formats', []), list) else [],
+        'scope_formats': payload.get('scope_formats', []) if isinstance(payload.get('scope_formats', []), list) else None,
     }
     if fields['license_review'] not in {'pending', 'verified_permissive', 'verified_restricted', 'not_compatible'}:
         raise ValueError('Nieprawidłowy status przeglądu licencji.')
     if fields['proposed_status'] not in {'review_required', 'blocked', 'eligible', 'restricted'}:
         raise ValueError('Nieprawidłowy proponowany status allowlisty.')
-    if not all(isinstance(value, str) for value in fields['scope_formats']) or not set(fields['scope_formats']).issubset({'PURE_AI', 'AI_ENGINE'}):
+    if fields['scope_formats'] is None or not all(isinstance(value, str) for value in fields['scope_formats']) or not set(fields['scope_formats']).issubset({'PURE_AI', 'AI_ENGINE'}):
         raise ValueError('Nieprawidłowy zakres turniejowy.')
+    fields['scope_formats'] = sorted(set(fields['scope_formats']))
     if fields['proposed_status'] in {'eligible', 'restricted'} and not fields['scope_formats']:
         raise ValueError('Pozytywna propozycja wymaga zakresu PURE_AI lub AI_ENGINE.')
     if fields['proposed_status'] in {'eligible', 'restricted'} and not fields['revision_confirmed']:
