@@ -15,11 +15,11 @@ Usługa używa `ProtectHome=read-only` oraz `BindPaths=/home/debian/ai-chess-are
 | GitHub `main` – wdrożony commit | `366b97d85395a9d1b4790326f5086131c9884cf4` |
 | Checkout metadanych Git w katalogu live | `52bd27d0b4da0bef48c61e2ba78edf1b141df9e5` (nie wykonano `git pull`; kod wdrożono z czystego worktree) |
 | Kod aplikacji | zsynchronizowany z `main` `366b97d`; lokalny `index.html` celowo zachowany |
-| Zmiany w docelowym `main` względem VPS HEAD | 10 plików: 1057 insertions, 96 deletions |
+| Zakres wdrożenia | pliki aplikacji z czystego worktree `main`, z wyłączeniem lokalnego `index.html` |
 | Zależności | `requirements.txt` i `requirements-dev.txt` nie zmieniły się |
 | Backend API | `127.0.0.1:8090`, GET-y do state/live/tournaments/models/storage odpowiadają HTTP 200 |
 | Llamafile API | `127.0.0.1:8088/health` nie odpowiada podczas audytu |
-| Bieżący stan aplikacji | `running=false`, `active_model=null`, `llm_online=false`; ostatni błąd turnieju dotyczy UCI `g6d8` |
+| Bieżący stan aplikacji | `running=false`, `tournament_running=false`, `active_model=null`, `llm_online=false`, `live.stage=idle` |
 | Turnieje | #4 = failed; #5 = failed, 3 completed + 3 pending; nie wznawiano |
 | DB | 10 wersji modeli, 12 zapisanych gier; `integrity_check=ok`, `foreign_key_check` bez błędów |
 
