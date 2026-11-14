@@ -84,12 +84,18 @@ No tournament is started automatically when a model is added. Real inference and
 - `scripts/check_model_allowlist_sync.py` checks whether the checkout is exactly at `origin/main` and whether the allowlist file has local changes. It is read-only: it does not fetch, merge, reset, or overwrite anything. Refresh Git refs separately before running it.
 - Use `python -m pytest -q tests/test_model_allowlist.py` to test validation, changes, withdrawals, and stale/dirty consumer detection.
 
-### Periodic Hugging Face candidate discovery
+### Weekly metadata check for existing Hugging Face models
 
-- `.github/workflows/huggingface-catalog-sync.yml` runs weekly and supports manual dispatch; it uses the free public GitHub Actions runner and the unauthenticated public Hugging Face metadata API.
-- `scripts/sync_hf_catalog.py` reads only repository metadata (IDs, commit revisions, tags, timestamps and GGUF file names). It never downloads weights, opens model-card contents, runs inference, imports candidates into SQLite, or changes a tournament.
-- The separate `manifests/huggingface-candidates.json` is informational and does not modify the pinned/curated `manifests/huggingface-models.json` or the admission allowlist. Only public text-generation repositories with at least one non-helper `.gguf` file are listed; sensitive, cyber-offensive, and other restricted/dangerous catalog tags are excluded.
-- New and changed candidates stay `unverified` with `review_required=true`. License tags are recorded as source metadata only and never count as license approval, runtime readiness or tournament admission.
-- Revision/metadata changes, repository renames, and unavailable repositories are kept in each entry's history. A partial scan never marks unseen repositories as removed; a complete scan verifies each previously known repository directly before changing its status.
-- The script writes atomically only after a successful API scan. API errors, rate limits, invalid/empty responses and incomplete metadata preserve the last good manifest. The workflow summary records each successful check; a PR is opened/updated only when the candidate manifest actually changes. Every generated PR requires human review before merge.
-- Run `python -m unittest tests.test_hf_catalog_sync -v` for offline fixture-based tests.
+The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` checks only the eight repositories already pinned as model IDs 1–8. It queries their exact public metadata endpoints and does not perform public model discovery or add new repositories. Results are stored separately in `manifests/huggingface-existing-models-metadata.json`; the existing candidate catalog, pinned model manifest, admission allowlist, database, and tournament state are not changed. Changed revisions or unavailable sources require human review. The workflow downloads no model artifacts, performs no inference, and creates a draft PR only when tracked metadata changes. See `docs/huggingface-catalog-sync.md`.
+
+### Weekly public Hugging Face candidate catalog
+
+The separate free GitHub Actions workflow `.github/workflows/huggingface-candidate-catalog-sync.yml` discovers public GGUF text-generation/conversational repositories and updates only the informational `manifests/huggingface-candidates.json` catalog. New candidates remain `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`; no license or tournament admission is approved automatically. It downloads no model artifacts, runs no inference, and does not modify the pinned model manifest, admission allowlist, database, or tournament state. It creates a draft PR only when tracked catalog metadata changes. See `docs/huggingface-candidate-catalog.md`.
+
+## Safe tournament stop and resume
+
+**Operational rule (Issue #98): a tournament may be stopped at any time, but its complete, consistent state must be durably saved before the runtime is stopped. It must then be resumable from the exact saved point rather than restarted from the beginning.**
+
+The implementation must preserve the tournament configuration and entrants, schedule and pending-game order, every game's status and complete move history/position, results, current side to move, round/game progress, and any runner state needed to resume safely. If stop is requested while a model is generating a move, the in-flight unvalidated response must not be committed as a move; resume from the last verified position and retry generation for that same position.
+
+The checkpoint must be atomic, integrity-checked, and confirmed durable before stopping owned runtime processes. Stop/resume operations must be idempotent and prevent duplicate games, moves, results, or Elo updates. The panel/API must expose the stopped state and a resume action. Preserve existing tournament data and database compatibility; do not reset or discard existing state to implement this feature. All code changes belong on a dedicated branch and PR, with backup and regression testing before production deployment.

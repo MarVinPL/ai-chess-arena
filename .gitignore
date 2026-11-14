@@ -33,3 +33,6 @@ backups/
 *.bak-*
 *-wal
 *-shm
+
+# Transient per-run metadata-only catalog sync report (uploaded as a workflow artifact)
+reports/huggingface-catalog-sync.json

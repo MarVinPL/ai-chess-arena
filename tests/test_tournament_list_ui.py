@@ -19,8 +19,10 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("tournament-status", self.renderer)
         self.assertIn("tournament-card__fields", self.renderer)
         self.assertIn("addField(fields,'Format'", self.renderer)
+        self.assertIn("addField(fields,'Uczestnicy',Number(t.players??0))", self.renderer)
         self.assertIn("addField(fields,'Postęp partii'", self.renderer)
         self.assertIn("addField(fields,'Awans do draftu'", self.renderer)
+        self.assertIn("addField(fields,'Checkpoint'", self.renderer)
         self.assertIn("document.createElement('dt')", self.renderer)
         self.assertIn("document.createElement('dd')", self.renderer)
 
@@ -38,12 +40,13 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
         self.assertIn("'/api/tournaments/start'", self.renderer)
         self.assertIn("'/api/tournaments/stop'", self.renderer)
-        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", self.renderer)
+        self.assertIn("wznowienie zablokowane — wymagany przegląd", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
 
     def test_readiness_action_is_limited_to_unstarted_planned_tournaments(self):
         check_start = self.renderer.index("if(t.status==='planned'){")
-        check_end = self.renderer.index("if(['planned','stopped','failed'].includes(t.status))", check_start)
+        check_end = self.renderer.index("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", check_start)
         readiness_block = self.renderer[check_start:check_end]
         self.assertIn("Sprawdź gotowość", readiness_block)
         self.assertIn("actions.appendChild(check)", readiness_block)

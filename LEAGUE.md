@@ -90,3 +90,15 @@ Test prawdziwej inferencji na pozycji startowej, sekwencyjnie (bez równoczesneg
 - Sprzątanie obejmuje wyłącznie `managed_copy=1` w prywatnym katalogu Areny; zatrzymanie procesu i kontrola użycia pliku poprzedzają usunięcie.
 - Testy regresji po zmianach magazynu per-partia: 38/38 zaliczone.
 - Zmiany kodu są zapisane lokalnie i czekają na bezpieczne przeładowanie serwera; istniejący turniej #2 jest nadal aktywny, więc nie został przerwany.
+
+## Bezpieczne zatrzymywanie i wznawianie turnieju
+
+- Aktywny turniej można zatrzymać na żądanie; nie obowiązuje zasada pozostawiania go uruchomionego do naturalnego końca.
+- **Warunek bezwzględny: przed zatrzymaniem runnera należy zapisać i zweryfikować trwały, atomowy checkpoint całego stanu turnieju.** Nie wolno zatrzymać procesu, jeśli nie ma potwierdzenia, że ostatni poprawny checkpoint jest bezpieczny.
+- Checkpoint obejmuje identyfikator i status turnieju, postęp harmonogramu i parowań, kolejkę, wszystkie aktywne i niedokończone partie, pełną historię ruchów, pozycję/FEN, stronę na ruchu, status i wynik cząstkowy, a także ustawienia i metadane potrzebne do odtworzenia partii. Obejmuje również stan i audyt interwencji AI Arbiter, jeśli wystąpiły.
+- Po ponownym uruchomieniu aplikacji lub wyraźnym wznowieniu system odtwarza turniej z ostatniego poprawnego checkpointu i kontynuuje od dokładnego miejsca przerwania — nie tworzy nowego turnieju ani nie rozpoczyna zakończonych lub rozpoczętych partii od początku.
+- Pauza/przerwanie techniczne nie jest wynikiem sportowym: nie może samo w sobie oznaczać porażki, zwycięstwa ani remisu i nie może tworzyć fikcyjnych wyników.
+- Zapis i wznowienie muszą być idempotentne: ponowienie operacji nie może dopisywać ruchów, wyników ani parowań drugi raz.
+- Jeśli nowy checkpoint jest niekompletny lub nie przechodzi walidacji, zachowaj ostatni poprawny checkpoint i dane źródłowe; zgłoś problem zamiast nadpisywać stan lub kontynuować od niepewnego miejsca.
+- Nie wolno usuwać ani nadpisywać danych turnieju, historii partii lub wyników podczas zatrzymywania, restartu i wznawiania. Zwykły restart usługi również musi zachować możliwość odzyskania i wznowienia turnieju.
+- Sam zapis tej reguły w dokumentacji nie oznacza, że pełna obsługa checkpoint/restore jest już zaimplementowana; stan implementacji musi być potwierdzony testami przed deklaracją gotowości.

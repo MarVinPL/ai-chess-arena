@@ -1,0 +1,68 @@
+name: Weekly metadata check for existing Hugging Face models
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: huggingface-existing-model-metadata-check
+  cancel-in-progress: false
+
+jobs:
+  check-existing-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Test metadata-only checker
+        run: python -m unittest tests.test_existing_model_metadata_check -v
+
+      - name: Check only the eight already-pinned model repositories (IDs 1–8)
+        run: python existing_model_metadata_check.py
+
+      - name: Open draft PR only when tracked metadata changes
+        if: success()
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/huggingface-existing-model-metadata
+          base: main
+          delete-branch: true
+          draft: true
+          add-paths: manifests/huggingface-existing-models-metadata.json
+          commit-message: 'chore: refresh existing model metadata'
+          title: 'chore: refresh existing model metadata'
+          body: |
+            Automated metadata-only check of the eight model repositories already pinned by AI Chess Arena (IDs 1–8).
+
+            - No public model listing or discovery of new repositories is performed.
+            - Changed revisions, moved sources, or unavailable repositories require human review.
+            - License status is never approved automatically and no model becomes tournament-eligible.
+            - No model weights are downloaded and no inference is run.
+            - The pinned model manifest and tournament allowlist are never modified.
+
+            Refs #63
+
+      - name: Upload check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: huggingface-existing-model-check-${{ github.run_id }}
+          path: reports/huggingface-catalog-sync.json
+          if-no-files-found: ignore
+          retention-days: 90
