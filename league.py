@@ -284,7 +284,7 @@ def tournament_entry_status(tournament_id):
  """Return every entrant; local cache absence is informational, not a blocker."""
  with connect() as c:
   rows=c.execute('''SELECT e.model_id,e.version_id,m.name,m.active,
-      v.filename,v.sha256,v.size_bytes,v.source,v.status,v.license_verified,
+      v.filename,v.sha256,v.size_bytes,v.source,v.status,v.license,v.license_verified,
       v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,
       v.draft_status,v.draft_managed_copy,v.metadata_json
       FROM tournament_entries e
@@ -347,7 +347,7 @@ def tournament_entry_status(tournament_id):
    'model_id':item['model_id'],'name':item['name'],
    'active_registry_entry':item.get('active')==1,'tournament_entrant':not excluded,
    'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
-   'repo_id':metadata.get('repo_id'),'revision':revision,'license':item.get('license'),
+   'repo_id':metadata.get('repo_id') or metadata.get('repo'),'revision':revision,'license':item.get('license'),
    'license_verified':license_verified,'local_file_available':local_file_available,
    'local_file_required_before_start':False,
    'download_on_demand':not excluded and manifest_ready and license_verified and not local_file_available,
@@ -357,6 +357,19 @@ def tournament_entry_status(tournament_id):
    'ready':not blockers,'blockers':blockers
   })
  return entries
+
+
+
+def tournament_required_version_ids(tournament_id):
+ """Versions still needed by pending or resumable games in this tournament."""
+ with connect() as c:
+  rows=c.execute("""SELECT DISTINCT e.version_id
+      FROM tournament_entries e
+      JOIN tournament_pairings p ON p.tournament_id=e.tournament_id
+       AND (p.white_model_id=e.model_id OR p.black_model_id=e.model_id)
+      WHERE e.tournament_id=? AND p.status IN ('pending','running')
+       AND e.version_id IS NOT NULL""",(tournament_id,)).fetchall()
+ return {int(row['version_id']) for row in rows}
 
 
 def _seed_order(size):

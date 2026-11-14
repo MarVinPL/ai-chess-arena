@@ -373,6 +373,28 @@ class LeagueTests(unittest.TestCase):
   self.assertFalse(entry['ready'])
   self.assertTrue(any('Issue #71' in reason for reason in entry['blockers']))
 
+ def test_tournament_entry_status_exposes_version_license_and_legacy_repo_key(self):
+  with league.connect() as c:
+   c.execute("UPDATE model_versions SET metadata_json=? WHERE model_id=1", (
+    json.dumps({'repo':'Qwen/Qwen2.5-0.5B-Instruct-GGUF','revision':'a'*40}),))
+  tournament=league.create_round_robin('Version metadata exposure')
+  alpha=next(x for x in league.tournament_entry_status(tournament['id']) if x['model_id']==1)
+  self.assertEqual(alpha['license'],'Apache-2.0')
+  self.assertEqual(alpha['repo_id'],'Qwen/Qwen2.5-0.5B-Instruct-GGUF')
+  self.assertEqual(alpha['revision'],'a'*40)
+
+ def test_required_model_versions_follow_pending_and_resumable_pairings(self):
+  league.register_model('Gamma',source='https://example.test/gamma.gguf',
+   license='Apache-2.0',license_verified=True,
+   metadata={'filename':'gamma.gguf','sha256':'c'*64,'size_bytes':100})
+  tournament=league.create_round_robin('Model cache lifecycle')
+  with league.connect() as c:
+   c.execute("UPDATE tournament_pairings SET status='completed' WHERE tournament_id=? AND (white_model_id=3 OR black_model_id=3)",(tournament['id'],))
+  self.assertEqual(league.tournament_required_version_ids(tournament['id']),{1,2})
+  with league.connect() as c:
+   c.execute("UPDATE tournament_pairings SET status='running' WHERE tournament_id=? AND id=(SELECT id FROM tournament_pairings WHERE tournament_id=? AND status='pending' LIMIT 1)",(tournament['id'],tournament['id']))
+  self.assertEqual(league.tournament_required_version_ids(tournament['id']),{1,2})
+
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')

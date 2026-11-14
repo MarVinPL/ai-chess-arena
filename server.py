@@ -935,6 +935,13 @@ def tournament_loop(tournament_id):
                      pairing_stage=pairing.get('stage','league'),
                      adjudication_status='adjudicated' if result.get('adjudicated') else 'not_applicable',
                      adjudication_reason=(result.get('adjudication') or {}).get('reason'))
+            # Keep cached weights only while some pending/resumable game still needs them.
+            # This also frees models eliminated from the draft bracket immediately.
+            try:
+                cleanup_unneeded_models(league.tournament_required_version_ids(tournament_id))
+            except Exception as cleanup_exc:
+                set_live('model_cleanup_deferred', 'Usuwanie niepotrzebnych modeli odroczone: '+str(cleanup_exc),
+                         tournament_id=tournament_id, pairing_id=pairing['id'])
         with league.connect() as c:
             unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
