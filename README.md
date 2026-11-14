@@ -58,3 +58,12 @@ The default backend listens on `127.0.0.1:8090`. Keep it bound to loopback; use 
 This project is a local prototype, not a hardened public service. Do not expose the API or model-runtime port directly to the Internet. Do not commit credentials, private keys, model binaries, local databases, or user runtime data.
 
 No tournament is started automatically when a model is added. Real inference and model downloads are separate, explicit operations.
+
+## Hugging Face manifests
+
+- Pinned, metadata-only GGUF manifests for the seven catalog entries are stored in `manifests/huggingface-models.json`.
+- Validate/import them explicitly with `model_manifest.load_manifest()` and `model_manifest.apply_manifest(league.DB)`; the importer updates existing registry versions atomically, records an audit trail in `metadata_json`, and never downloads weights.
+- Import deliberately sets `license_verified=0` for these entries. A Hugging Face license tag or model-card declaration is evidence, not approval to download/use a model. Complete a separate human license review before changing that flag.
+- The Bielik 7B entry declares `CC-BY-NC-4.0` (NonCommercial restriction). Llama 3.1/3.2 use Meta Community Licenses, not Apache-2.0. The Qwen3.8 entry retains the base-model license/acceptable-use conditions.
+- The JonathanColetti entry pins the full Q4_K_M model; its separate draft-Q8_0 head is explicitly excluded from standalone model identity.
+- No GGUF weights are committed or fetched by this workflow. Run `python -m unittest tests.test_model_manifest -v` to test the manifest importer.
