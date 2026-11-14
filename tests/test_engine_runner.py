@@ -85,12 +85,12 @@ class EngineRunnerTests(unittest.TestCase):
                     'arbiter_response': 'Ponownie oceniona odpowiedź',
                 }
         runtime = ArbiterRuntime()
-        signal = {'type': 'piece_shuttle', 'reason': 'powtarzany cykl'}
+        signal = {'type': 'piece_cycle', 'reason': 'powtarzany cykl'}
         with patch('engine_runner.arbiter.detect_stagnation', return_value=signal):
             result = SequentialChessRunner(runtime).play_game(
                 {'name': 'Alpha', 'path': '/tmp/a.gguf'},
                 {'name': 'Beta', 'path': '/tmp/b.gguf'})
-        self.assertEqual(runtime.calls[0]['type'], 'piece_shuttle')
+        self.assertEqual(runtime.calls[0]['type'], 'piece_cycle')
         self.assertEqual(result['arbiter_intervention_count'], 3)
         self.assertEqual(result['arbiter_events'][0]['response_seconds'], 0.25)
         self.assertEqual(result['arbiter_events'][0]['selected_move'], 'f2f3')
@@ -187,7 +187,7 @@ class EngineRunnerTests(unittest.TestCase):
         try:
             with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_open):
                 move, meta = runtime.generate('/tmp/model.gguf', chess.Board(),
-                    arbiter_signal={'type':'piece_shuttle'})
+                    arbiter_signal={'type':'piece_cycle'})
         finally:
             runtime.shutdown()
         self.assertEqual(move.uci(), 'e2e4')

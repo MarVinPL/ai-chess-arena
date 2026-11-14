@@ -5,16 +5,14 @@ import arbiter
 
 
 class ArbiterTests(unittest.TestCase):
-    def test_repeated_four_ply_cycle_is_detected(self):
+    def test_repeated_three_square_piece_cycle_is_detected(self):
         board = chess.Board()
-        records = []
-        for ply, (color, uci) in enumerate([
-            ('white', 'g1f3'), ('black', 'g8f6'), ('white', 'f3g1'), ('black', 'b8c6'),
-            ('white', 'g1f3'), ('black', 'c6b8'), ('white', 'f3g1'), ('black', 'f6g8')], 1):
-            records.append({'ply': ply, 'color': color, 'uci': uci})
+        cycle = ['a1b3', 'b3c5', 'c5a1']
+        records = [{'ply': i + 1, 'color': 'white', 'uci': uci}
+                   for i, uci in enumerate(cycle * 2)]
         signal = arbiter.detect_stagnation(board, records)
         self.assertIsNotNone(signal)
-        self.assertEqual(signal['type'], 'piece_shuttle')
+        self.assertEqual(signal['type'], 'piece_cycle')
         self.assertEqual(signal['color'], 'white')
 
     def test_short_or_non_repeating_history_does_not_trigger(self):
@@ -25,7 +23,7 @@ class ArbiterTests(unittest.TestCase):
     def test_heuristic_signal_never_declares_a_draw(self):
         board = chess.Board()
         records = [{'color': 'white', 'uci': uci} for uci in
-                   ['g1f3', 'f3g1', 'g1f3', 'f3g1']]
+                   ['a1b3', 'b3c5', 'c5a1', 'a1b3', 'b3c5', 'c5a1']]
         signal = arbiter.detect_stagnation(board, records)
         self.assertIsNotNone(signal)
         self.assertFalse(board.is_game_over(claim_draw=True))

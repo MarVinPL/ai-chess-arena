@@ -188,7 +188,7 @@ class ArenaSmokeTests(unittest.TestCase):
         move_metadata = [{
             'ply': 12, 'color': 'white', 'model': 'Arbiter Test',
             'arbiter_intervention': True,
-            'arbiter_signal': {'type': 'piece_shuttle', 'reason': 'repeated shuttle'},
+            'arbiter_signal': {'type': 'piece_cycle', 'reason': 'repeated shuttle'},
             'arbiter_response': 'g1f3', 'seconds': 0.42, 'uci': 'g1f3',
         }]
         with sqlite3.connect(server.DB) as db:
@@ -201,7 +201,7 @@ class ArenaSmokeTests(unittest.TestCase):
         try:
             with urllib.request.urlopen(self.base + f'/api/games/{game_id}') as response:
                 payload = __import__('json').loads(response.read())
-            self.assertEqual(payload['arbiter_events'][0]['signal']['type'], 'piece_shuttle')
+            self.assertEqual(payload['arbiter_events'][0]['signal']['type'], 'piece_cycle')
             self.assertEqual(payload['arbiter_events'][0]['response_seconds'], 0.42)
             self.assertEqual(payload['arbiter_events'][0]['selected_move'], 'g1f3')
         finally:

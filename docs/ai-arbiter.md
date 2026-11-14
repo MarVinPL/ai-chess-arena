@@ -4,7 +4,7 @@ AI Arbiter jest warstwą obserwacyjną i doradczą. Nie wybiera ruchu, nie modyf
 
 ## Wykrywanie
 
-- Wykrywa, gdy ta sama strona wykonała dwukrotnie z rzędu ten sam dwuruchowy cykl tej samej figury (ruch tam i z powrotem).
+- Wykrywa, gdy ta sama strona wykonała dwukrotnie z rzędu ten sam trzyruchowy cykl tej samej figury przez trzy pola.
 - Analiza korzysta z historii legalnych ruchów i działa niezależnie dla białych i czarnych.
 - Formalne remisy, w tym trzykrotne powtórzenie pozycji i reguła 50 ruchów, pozostają obsługiwane przez `python-chess` (`is_game_over(claim_draw=True)`). Heurystyka stagnacji nie kończy partii.
 

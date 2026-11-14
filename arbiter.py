@@ -7,22 +7,25 @@ MAX_INTERVENTIONS_PER_GAME = 3
 
 
 def detect_stagnation(board: chess.Board, move_records: list[dict] | None = None) -> dict | None:
-    """Detect repeated two-move shuttles by either side without deciding a result.
+    """Detect a repeated three-move piece cycle by either side without deciding a result.
 
     Formal draws are deliberately left to python-chess. This heuristic catches
-    a piece repeatedly moving back and forth while the opponent's moves vary.
+    a piece cycling through three squares while the opponent's moves vary.
     """
     records = list(move_records or [])
     for color in ('white', 'black'):
         own_moves = [r for r in records if r.get('color') == color]
-        if len(own_moves) < 4:
+        if len(own_moves) < 6:
             continue
-        tail = [str(r.get('uci', '')) for r in own_moves[-4:]]
-        if (all(tail) and tail[0] == tail[2] and tail[1] == tail[3]
-                and tail[0][:2] == tail[1][2:] and tail[0][2:] == tail[1][:2]):
+        tail = [str(r.get('uci', '')) for r in own_moves[-6:]]
+        if (all(len(move) >= 4 for move in tail)
+                and tail[:3] == tail[3:]
+                and tail[0][2:4] == tail[1][:2]
+                and tail[1][2:4] == tail[2][:2]
+                and tail[2][2:4] == tail[0][:2]):
             return {
-                'type': 'piece_shuttle',
-                'reason': f'{color}: ta sama figura wykonała dwukrotnie ruch tam-i-z-powrotem.',
+                'type': 'piece_cycle',
+                'reason': f'{color}: ta sama figura powtórzyła dwukrotnie cykl trzech pól.',
                 'color': color,
                 'cycle_uci': tail,
                 'position_fen': board.fen(),
