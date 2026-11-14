@@ -337,7 +337,34 @@ class LeagueTests(unittest.TestCase):
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')
- def test_unverified_model_cannot_enter_tournament(self):
+ def test_unverified_model_remains_an_entrant_but_is_blocked_at_preflight(self):
   with league.connect() as c: c.execute("UPDATE model_versions SET license_verified=0 WHERE model_id=2")
-  with self.assertRaises(ValueError): league.create_round_robin('Blocked')
+  tournament=league.create_round_robin('Unverified license entrant')
+  self.assertEqual(tournament['players'],2)
+  entries=league.tournament_entry_status(tournament['id'])
+  beta=next(entry for entry in entries if entry['name']=='Beta')
+  self.assertTrue(beta['tournament_entrant'])
+  self.assertFalse(beta['license_verified'])
+  self.assertIn('licencja niezatwierdzona',beta['blockers'])
+
+ def test_missing_local_gguf_is_not_a_start_blocker_and_is_downloaded_on_demand(self):
+  tournament=league.create_round_robin('Lazy download')
+  entries=league.tournament_entry_status(tournament['id'])
+  self.assertEqual(len(entries),2)
+  self.assertTrue(all(entry['ready'] for entry in entries))
+  self.assertTrue(all(entry['download_on_demand'] for entry in entries))
+  self.assertTrue(all(not entry['local_file_available'] for entry in entries))
+  self.assertTrue(all(not entry['local_file_required_before_start'] for entry in entries))
+
+ def test_active_registry_model_without_any_version_is_still_enrolled(self):
+  with league.connect() as c:
+   c.execute("INSERT INTO league_models(name,format,created_at) VALUES('No manifest','PURE_AI','now')")
+  tournament=league.create_round_robin('Includes unmanifested registry entry')
+  self.assertEqual(tournament['players'],3)
+  self.assertEqual(tournament['games_planned'],6)
+  entries=league.tournament_entry_status(tournament['id'])
+  missing=next(entry for entry in entries if entry['name']=='No manifest')
+  self.assertTrue(missing['tournament_entrant'])
+  self.assertFalse(missing['manifest_ready'])
+  self.assertIn('brak wersji modelu',missing['blockers'])
 if __name__=='__main__': unittest.main(verbosity=2)
