@@ -927,6 +927,17 @@ class Handler(BaseHTTPRequestHandler):
             ]
             status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
             self.send_json(status)
+        elif self.path.startswith('/api/tournaments/') and self.path.endswith('/preflight'):
+            try:
+                tournament_id = int(self.path.split('/')[3])
+                with league.connect() as c:
+                    exists = c.execute('SELECT 1 FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+                if not exists:
+                    self.send_json({'error': 'Nie znaleziono turnieju'}, 404)
+                else:
+                    self.send_json(tournament_preflight(tournament_id))
+            except (ValueError, IndexError):
+                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
         elif self.path == '/api/tournaments':
             with league.connect() as c:
                 rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
