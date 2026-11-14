@@ -8,6 +8,7 @@ import model_permissions
 from model_job_broker import (
     WORKER_EXECUTABLE, claim_job_for_start, create_job, finish_job,
     get_job, mark_job_running, record_evaluation_metric,
+    request_job_cancel, confirm_job_stopped, reconcile_orphaned_job,
 )
 
 
