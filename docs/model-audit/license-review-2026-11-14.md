@@ -10,7 +10,7 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 
 | ID | Model / artefakt | Status audytu | Ustalenie |
 |---:|---|---|---|
-| 1 | Qwen2.5-0.5B-Instruct Q4_K_M GGUF | `review_required` | Pinned blob istnieje i SHA-256 zgadza się z rejestrem. README nie występuje w tej samej rewizji artefaktu; karta bieżącej gałęzi i licencja modelu bazowego nie wystarczają do pełnego potwierdzenia warunków dokładnej kwantyzacji. |
+| 1 | Qwen2.5-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Oficjalny pinned README i LICENSE są dostępne w tej samej rewizji; LFS SHA-256 dokładnego GGUF zgadza się z rejestrem, a przypięta licencja modelu bazowego również wskazuje Apache-2.0. |
 | 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; przypięta karta upstream wprost odsyła do kanonicznego tekstu Apache License 2.0. |
 | 3 | Qwen2-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; dokładna przypięta rewizja oficjalnego upstream zawiera pełny tekst Apache License 2.0. |
 | 4 | Meta Llama 3.1 8B Instruct Q3_K_S GGUF | `verified_restricted` | Obowiązuje Llama 3.1 Community License oraz AUP Meta, z warunkami atrybucji, NOTICE, dystrybucji i dodatkowym progiem MAU. |
@@ -24,16 +24,17 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 ### 1. Qwen2.5-0.5B-Instruct Q4_K_M
 
 - Repozytorium GGUF: `Qwen/Qwen2.5-0.5B-Instruct-GGUF`.
-- Rewizja artefaktu: `6dd44a1fb35d11b5d1b28902876ce3cc9e882d0e`.
+- Przypięta rewizja repozytorium: `9217f5db79a29953eb74d5343926648285ec7e67`.
 - Plik: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491,400,032 B.
-- SHA-256 z rejestru i LFS: `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`.
-- Oficjalny model bazowy Qwen2.5-0.5B-Instruct ma przypiętą rewizję `7ae557604adf67be50417f59c2c2f167def9a775` i plik LICENSE z deklaracją Apache-2.0.
-- Ograniczenie dowodowe: README nie istnieje w rewizji GGUF, która zawiera dokładny blob zapisany w rejestrze. Nie przypisuję więc bezwarunkowo licencji modelu bazowego do całego artefaktu pochodnego.
+- SHA-256 z manifestu i metadanych LFS: `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`; wartość jest zgodna z artefaktem w przypiętej rewizji.
+- Pinned README z tej samej rewizji identyfikuje oficjalny model bazowy `Qwen/Qwen2.5-0.5B-Instruct`, opisuje oficjalne wydanie GGUF i deklaruje Apache-2.0.
+- Repozytorium GGUF zawiera w tej rewizji pełny plik LICENSE Apache 2.0. Oficjalny model bazowy ma przypiętą rewizję `7ae557604adf67be50417f59c2c2f167def9a775` i również zawiera pełny tekst Apache-2.0.
+- Wniosek: `verified_permissive` dla dokładnego GGUF i wskazanego zakresu licencji. Apache 2.0 wymaga m.in. zachowania kopii licencji, informacji o zmianach oraz odpowiednich notice/attribution przy redystrybucji. Status audytu nie jest zgodą właściciela projektu na pobranie ani uruchomienie.
 
 Źródła:
-- GGUF blob (pinned): https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/6dd44a1fb35d11b5d1b28902876ce3cc9e882d0e/qwen2.5-0.5b-instruct-q4_k_m.gguf
-- Karta repozytorium GGUF (bieżąca, nie przypięta do rewizji blobu): https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF
-- Oficjalny upstream LICENSE (pinned): https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE
+- Pinned GGUF README: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/README.md
+- Pinned GGUF LICENSE: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE
+- Pinned upstream base-model LICENSE: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE
 
 ### 2. SmolLM2-360M-Instruct Q4_K_M
 
