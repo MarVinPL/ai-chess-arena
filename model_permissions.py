@@ -170,8 +170,6 @@ def decide_permission(connection: sqlite3.Connection, *, request_id: int,
     actor = _validate_actor(actor)
     if confirm is not True:
         raise ValueError("Wymagane jawne potwierdzenie decyzji.")
-    if actor != ACTOR:
-        raise ValueError("Nieprawidłowy aktor audytu.")
     if action not in {"approve", "reject", "revoke"}:
         raise ValueError("Nieznana decyzja.")
     if isinstance(request_id, bool) or not isinstance(request_id, int) or request_id < 1:
