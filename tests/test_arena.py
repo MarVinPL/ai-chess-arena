@@ -263,7 +263,7 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertTrue({
             'tournament_id', 'pairing_id', 'move_times_json', 'inference_metadata_json',
             'adjudication_status', 'adjudication_json', 'failure_reason',
-            'failure_fen', 'failure_color', 'failure_model_id'
+            'failure_fen', 'failure_color', 'failure_side_to_move', 'failure_model_id'
         } <= columns)
 
     def test_failed_game_is_saved_and_only_adjudicated_result_counts_for_elo(self):
@@ -307,7 +307,7 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(adjudicated['result'], '0-1')
         self.assertTrue(adjudicated['adjudicated'])
         with sqlite3.connect(server.DB) as db:
-            failed = db.execute("SELECT result,adjudication_status,failure_reason,failure_fen FROM games WHERE id=?",
+            failed = db.execute("SELECT result,adjudication_status,failure_reason,failure_fen,failure_side_to_move FROM games WHERE id=?",
                                 (unresolved['game_id'],)).fetchone()
             completed = db.execute("SELECT result,adjudication_status FROM games WHERE id=?",
                                    (adjudicated['game_id'],)).fetchone()
@@ -316,6 +316,7 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(failed[0:2], ('failed', 'unresolved'))
         self.assertEqual(failed[2], 'synthetic')
         self.assertEqual(failed[3], chess.Board().fen())
+        self.assertEqual(failed[4], 'white')
         self.assertEqual(completed, ('0-1', 'adjudicated'))
         self.assertEqual(pairing, ('completed', black_id))
         ratings = {row['name']: row for row in server.league.elo_ratings('PURE_AI')}
