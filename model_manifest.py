@@ -17,6 +17,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf$", re.I)
 _ALLOWED_LICENSES = {"apache-2.0", "llama3.1", "llama3.2", "cc-by-nc-4.0"}
+_LICENSE_REVIEW_STATUSES = {"verified_permissive", "verified_restricted", "review_required", "incompatible", "evidence_missing"}
+_LICENSE_AUDIT_REPORT = "docs/model-audit/license-review-2026-11-14.md"
 
 
 class ManifestError(ValueError):
@@ -59,8 +61,26 @@ def validate_manifest(payload: dict) -> None:
             raise ManifestError("Revision musi być pełnym SHA commit")
         if item.get("license") not in _ALLOWED_LICENSES:
             raise ManifestError("Brak rozpoznanej deklaracji licencji")
-        if item.get("license_review_status") != "review_required":
-            raise ManifestError("Manifest nie może sam zatwierdzać licencji")
+        review_status = item.get("license_review_status")
+        if review_status not in _LICENSE_REVIEW_STATUSES:
+            raise ManifestError("Nieznany status audytu licencji")
+        if review_status in {"verified_permissive", "verified_restricted", "incompatible"}:
+            audit = item.get("license_audit")
+            if not isinstance(audit, dict) or audit.get("status") != review_status:
+                raise ManifestError("Status audytu wymaga kompletnego obiektu license_audit")
+            if audit.get("reviewed_revision") != revision:
+                raise ManifestError("Dowód audytu licencji musi dotyczyć dokładnej rewizji artefaktu")
+            if audit.get("report") != _LICENSE_AUDIT_REPORT:
+                raise ManifestError("Brak referencji do raportu audytu licencji")
+            if not isinstance(audit.get("reviewed_at"), str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", audit["reviewed_at"]):
+                raise ManifestError("Nieprawidłowa data audytu licencji")
+            evidence = audit.get("evidence")
+            if not isinstance(evidence, list) or len(evidence) < 2 or not all(
+                isinstance(url, str) and url.startswith("https://") for url in evidence
+            ):
+                raise ManifestError("Audyt licencji wymaga co najmniej dwóch źródeł HTTPS")
+            if not isinstance(audit.get("summary"), str) or not audit["summary"].strip():
+                raise ManifestError("Audyt licencji wymaga uzasadnienia")
         if not isinstance(item.get("license_url"), str) or not item["license_url"].startswith(f"https://huggingface.co/{repo}/"):
             raise ManifestError("Dowód licencji musi wskazywać to samo repozytorium")
         if not isinstance(item.get("license_terms_url"), str) or not item["license_terms_url"].startswith("https://"):
@@ -82,7 +102,8 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
 
     Updates existing registry versions only. It refuses missing/ambiguous rows and
     wraps all seven records in one SQLite transaction. The existing model row's
-    license_verified flag is forced to 0 until a separate human license review.
+    license_verified flag is always forced to 0. Even a revision-bound
+    verified_restricted audit is not owner approval to use or distribute weights.
     """
     payload = payload or load_manifest()
     validate_manifest(payload)
@@ -125,6 +146,7 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
                         "license_evidence_url": item["license_url"],
                         "license_terms_url": item["license_terms_url"],
                         "license_notes": item["license_notes"],
+                        "license_audit": item.get("license_audit"),
                         "weights_downloaded": False,
                     },
                 })
