@@ -313,10 +313,18 @@ def tournament_entry_status(tournament_id):
                          isinstance(item.get('size_bytes'),int) and path.stat().st_size==item['size_bytes'])
   draft_manifest_ready=True
   if item.get('draft_filename'):
+   draft_url=item.get('draft_download_url') or ''
+   draft_path=item.get('draft_source_path') or ''
+   if is_hf_source:
+    draft_prefix=item['source'].rstrip('/')+'/resolve/'
+    draft_revision=draft_url[len(draft_prefix):].split('/',1)[0] if draft_url.startswith(draft_prefix) else ''
+    draft_pinned=bool(re.fullmatch(r'[0-9a-fA-F]{40}',draft_revision) and draft_url.endswith('/'+draft_path))
+   else:
+    draft_pinned=bool(isinstance(draft_url,str) and draft_url.startswith('https://'))
    draft_manifest_ready=bool(
     item.get('draft_sha256') and re.fullmatch(r'[0-9a-fA-F]{64}',item['draft_sha256']) and
     isinstance(item.get('draft_size_bytes'),int) and item['draft_size_bytes']>0 and
-    item.get('draft_download_url') and item.get('draft_source_path')
+    isinstance(draft_path,str) and draft_path and draft_pinned
    )
   draft_file_available=bool(item.get('draft_filename') and item.get('draft_managed_copy')==1 and
                             item.get('draft_status')=='downloaded' and
