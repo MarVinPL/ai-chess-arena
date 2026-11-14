@@ -343,7 +343,9 @@ function renderTournaments(rows){
       const license=reasons.some(x=>/licencj/i.test(x));
       if(admission){const b=document.createElement('button');b.type='button';b.textContent='Otwórz warunki dopuszczenia';b.onclick=()=>openRegistry('model-admission-list');controls.appendChild(b)}
       if(license){const b=document.createElement('button');b.type='button';b.textContent='Otwórz rejestr modeli i licencje';b.onclick=()=>openRegistry('model-list');controls.appendChild(b)}
-      if([1,2,3].includes(Number(e.model_id))){const b=document.createElement('button');b.type='button';b.textContent='Uzupełnij dane modelu '+e.model_id;b.onclick=()=>{const form=$('model-review-form');if(form){form.hidden=false;$('review-model-id').value=String(e.model_id);openRegistry('model-review-form')}else openRegistry('model-admission-list')};controls.appendChild(b)}
+      const reviewSelect=$('review-model-id');
+      const reviewSupported=reviewSelect&&Array.from(reviewSelect.options).some(option=>option.value===String(e.model_id));
+      if(reviewSupported){const b=document.createElement('button');b.type='button';b.textContent='Przygotuj propozycję do audytu · model '+e.model_id;b.onclick=()=>{const form=$('model-review-form');if(form){form.hidden=false;reviewSelect.value=String(e.model_id);$('model-review-status').textContent='Propozycja dotyczy dokładnej rewizji '+e.revision+'. Zapis trafia do audytu i nie zmienia allowlisty ani nie dopuszcza modelu.';openRegistry('model-review-form')}else openRegistry('model-admission-list')};controls.appendChild(b)}
       row.appendChild(controls);
      }
      diagnostic.appendChild(row);
