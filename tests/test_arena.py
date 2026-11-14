@@ -66,6 +66,33 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertEqual(rows[1][5], '1-0')
             self.assertIn('text/csv', response.headers['Content-Type'])
 
+    def test_runtime_model_labels_resolve_to_registry_names(self):
+        names = {'qwen2-0_5b-instruct-q4_k_m.gguf': 'Qwen2-0.5B-Instruct-Q4_K_M'}
+        self.assertEqual(
+            server._registry_display_name_for_runtime_model(
+                '/models/qwen2-0_5b-instruct-q4_k_m.gguf', names),
+            'Qwen2-0.5B-Instruct-Q4_K_M',
+        )
+        self.assertIsNone(server._registry_display_name_for_runtime_model(
+            'unknown.gguf', names))
+
+    def test_pairing_resolves_registry_names_for_both_color_assignments(self):
+        players = {
+            3: {'model_id': 3, 'name': 'Qwen2-0.5B-Instruct-Q4_K_M'},
+            2: {'model_id': 2, 'name': 'SmolLM2-360M-Instruct-Q4_K_M'},
+        }
+        white, black = server._resolve_pairing_players(
+            players, {'white_model_id': 3, 'black_model_id': 2})
+        self.assertEqual((white['name'], black['name']),
+                         ('Qwen2-0.5B-Instruct-Q4_K_M', 'SmolLM2-360M-Instruct-Q4_K_M'))
+        white, black = server._resolve_pairing_players(
+            players, {'white_model_id': 2, 'black_model_id': 3})
+        self.assertEqual((white['name'], black['name']),
+                         ('SmolLM2-360M-Instruct-Q4_K_M', 'Qwen2-0.5B-Instruct-Q4_K_M'))
+        with self.assertRaises(RuntimeError):
+            server._resolve_pairing_players(
+                players, {'white_model_id': 3, 'black_model_id': 3})
+
     def test_live_logs_persist_model_responses_and_recent_events(self):
         server.set_live('move_generated', 'Model zaproponował ruch: e2e4',
                         white='Registry Model A', black='Registry Model B',
