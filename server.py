@@ -278,12 +278,17 @@ def _ensure_version_file(version_id):
         url = metadata.get('download_url')
         revision = metadata.get('revision')
         source_path = metadata.get('source_path') or version['filename']
-        if (not isinstance(url, str) or not url.startswith('https://') or
-                not isinstance(revision, str) or not re.fullmatch(r'[0-9a-fA-F]{40}', revision) or
-                f'/resolve/{revision}/' not in url):
-            raise RuntimeError(f'Wersja {version_id} nie ma bezpiecznego URL przypiętego do commita')
-        if not url.endswith('/' + source_path):
-            raise RuntimeError(f'URL pobrania wersji {version_id} nie zgadza się ze ścieżką manifestu')
+        if not url and not str(version['source']).startswith('https://huggingface.co/') and str(version['source']).lower().endswith('.gguf'):
+            # Non-HF direct GGUF URLs remain supported with the same pinned size/hash checks.
+            url = version['source']
+        if not isinstance(url, str) or not url.startswith('https://'):
+            raise RuntimeError(f'Wersja {version_id} nie ma bezpiecznego URL HTTPS')
+        if str(version['source']).startswith('https://huggingface.co/'):
+            if (not isinstance(revision, str) or not re.fullmatch(r'[0-9a-fA-F]{40}', revision) or
+                    f'/resolve/{revision}/' not in url or not url.endswith('/' + source_path)):
+                raise RuntimeError(f'Wersja {version_id} nie ma URL przypiętego do pełnego commita Hugging Face')
+        elif url != version['source']:
+            raise RuntimeError(f'URL pobrania wersji {version_id} nie zgadza się ze źródłem rejestru')
         model_store.download_version(
             version_id, url, version['filename'], version['sha256'],
             version['size_bytes'], license_verified=True
