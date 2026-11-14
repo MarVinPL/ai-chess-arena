@@ -168,7 +168,8 @@ class ModelJobBrokerTests(unittest.TestCase):
             self.db, job_id=job["job_id"], actor="test-broker",
             capacity_check=lambda: True, model_root=self.root)
         mark_job_running(self.db, job_id=job["job_id"],
-                         systemd_unit=plan["systemd_unit"], actor="test-broker")
+                         systemd_unit=plan["systemd_unit"], actor="test-broker",
+                         unit_is_active=lambda unit: True)
         requested = request_job_cancel(
             self.db, job_id=job["job_id"], actor="test-owner")
         self.assertTrue(requested["systemd_stop_required"])
