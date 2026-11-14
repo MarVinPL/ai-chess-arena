@@ -323,6 +323,36 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(by_id[empty_tournament_id]['completed_games'], 0)
         self.assertEqual(by_id[empty_tournament_id]['total_games_planned'], 0)
 
+    def test_tournament_view_api_and_saved_pgn_preview_are_read_only(self):
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('View API Alpha','PURE_AI','now')")
+            alpha = db.execute("SELECT id FROM league_models WHERE name='View API Alpha'").fetchone()[0]
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES('View API Beta','PURE_AI','now')")
+            beta = db.execute("SELECT id FROM league_models WHERE name='View API Beta'").fetchone()[0]
+            cur = db.execute("INSERT INTO tournaments(name,format,status,created_at) VALUES('Read-only API view','PURE_AI','running','now')")
+            tournament_id = cur.lastrowid
+            db.executemany("INSERT INTO tournament_entries(tournament_id,model_id) VALUES(?,?)", [(tournament_id,alpha),(tournament_id,beta)])
+            cur = db.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(?,?,?,?,?,?)",
+                             (tournament_id,alpha,beta,1,'completed','league'))
+            pairing_id = cur.lastrowid
+            pgn = '[Event "Read-only preview"]\\n[Result "1-0"]\\n\\n1. e4 1-0'
+            cur = db.execute("INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,tournament_id,pairing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                             ('now','now','View API Alpha','View API Beta','1-0',pgn,1,0,0.2,tournament_id,pairing_id))
+            game_id = cur.lastrowid
+            db.execute("UPDATE tournament_pairings SET game_id=? WHERE id=?", (game_id,pairing_id))
+        with urllib.request.urlopen(self.base + f'/api/tournaments/{tournament_id}/view') as response:
+            view = __import__('json').loads(response.read().decode('utf-8'))
+        self.assertEqual(view['tournament']['id'], tournament_id)
+        self.assertEqual(view['progress']['league'], {'completed':1,'planned':1})
+        self.assertEqual(view['standings'][0]['points'], 3)
+        self.assertEqual(view['fixtures'][0]['game_url'], f'/api/games/{game_id}/pgn')
+        with urllib.request.urlopen(self.base + f'/api/games/{game_id}/pgn') as response:
+            self.assertIn('Read-only preview', response.read().decode('utf-8'))
+            self.assertIn('application/x-chess-pgn', response.headers['Content-Type'])
+        with sqlite3.connect(server.DB) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM tournament_seeds WHERE tournament_id=?", (tournament_id,)).fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT status FROM tournaments WHERE id=?", (tournament_id,)).fetchone()[0], 'running')
+
     def test_tournament_start_rejects_unknown_id_before_spawning(self):
         with self.assertRaises(ValueError):
             server.start_tournament(999999)
