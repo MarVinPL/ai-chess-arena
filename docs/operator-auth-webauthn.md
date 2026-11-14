@@ -110,3 +110,15 @@ The UI does not store tokens in local storage or query strings. The enrollment t
 A discoverable-login test mocks the cryptographic verifier and verifies credential lookup, stored user-handle comparison, challenge consumption, and session creation. Full authenticator/browser E2E, persistent rate limiting, alerting, credential revocation, operator suspension, recovery, and global session invalidation remain mandatory before production activation.
 
 The repository CI workflow also extracts the single inline panel script and runs `node --check` (Node.js 22) before the Python suite, so browser JavaScript syntax is validated on pull requests.
+
+
+### Authentication abuse controls and credential lifecycle (2026-11-14)
+
+- Persistent SQLite fixed-window counters are keyed by SHA-256 hashes; raw bucket identifiers, tokens, IP addresses, and credential identifiers are not stored in the rate-limit table.
+- Login and registration endpoints count attempts before performing WebAuthn verification. Registration attempts are additionally bounded by the one-use enrollment token or ceremony; authentication verification is bounded by credential ID. Owner invitations are limited per owner account.
+- HTTP 429 responses include `Retry-After`. Client IP uses the direct socket peer only; untrusted `X-Forwarded-For` headers are ignored. The source-wide threshold is deliberately higher to avoid a shared reverse-proxy address locking out all operators.
+- Owners can inspect operator and active credential inventory, revoke a credential, or suspend a non-self operator. Credential revocation invalidates all sessions for that operator; suspension also prevents future authentication.
+- The last active credential of the last active owner cannot be revoked, and the last active owner cannot be suspended. An owner cannot suspend their own account.
+- Revoked credentials remain in the credential registry as tombstones and cannot authenticate again; their credential IDs cannot be silently re-enrolled as new credentials.
+
+These controls are implemented in the application database and are not yet deployed. Rate-limit thresholds and the reverse-proxy topology require review before production activation. No live owner bootstrap or credential lifecycle action has been run.
