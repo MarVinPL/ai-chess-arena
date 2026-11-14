@@ -1288,6 +1288,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(search_hf_models(query))
             except Exception as e:
                 self.send_json({'error':str(e)}, 422)
+        elif self.path == '/api/model-review-submissions':
+            try:
+                with league.connect() as c:
+                    self.send_json(model_review_submissions.list_submissions(c))
+            except Exception as e:
+                self.send_json({'error': str(e)}, 500)
         elif self.path == '/api/state':
             with lock: self.send_json(state())
         elif self.path == '/api/live':
@@ -1504,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/hf-candidates/audit'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1518,6 +1524,18 @@ class Handler(BaseHTTPRequestHandler):
                         result = report
                     finally:
                         hf_candidate_audit.AUDIT_LOCK.release()
+                elif self.path == '/api/model-review-submissions/action':
+                    sync = model_allowlist.check_repository_sync(ROOT)
+                    if not sync.get('in_sync'):
+                        raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+                    current_allowlist = model_allowlist.load_allowlist()
+                    allowed_ids = {item['model_id'] for item in current_allowlist['models'] if item.get('status') not in {'blocked'}}
+                    allowed_ids.discard(6)
+                    with league.connect() as c:
+                        result = model_review_submissions.apply_action(
+                            c, submission_id=payload.get('submission_id'), action=payload.get('action'),
+                            actor='arena', reason=payload.get('reason', ''), payload=payload.get('proposal'),
+                            allowed_model_ids=allowed_ids)
                 elif self.path == '/api/model-review-submissions':
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):

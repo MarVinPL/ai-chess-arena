@@ -64,6 +64,43 @@ class ModelReviewSubmissionTests(unittest.TestCase):
                    'revision_confirmed': True}
         self.assertEqual(reviews.submit(self.db, payload, allowed_model_ids=self.allowed)['status'], 'pending_review')
 
+    def test_accept_moves_only_submission_to_next_review_stage_and_audits(self):
+        created = reviews.submit(self.db, {'model_id': 1, 'block_reason': 'Wymaga testu runtime.'}, allowed_model_ids=self.allowed)
+        result = reviews.apply_action(self.db, submission_id=created['submission_id'], action='accept')
+        self.assertEqual(result['status'], 'accepted_into_pr')
+        self.assertEqual(self.db.execute('SELECT status FROM model_review_submissions').fetchone()[0], 'accepted_into_pr')
+        event = self.db.execute('SELECT event,previous_status,new_status FROM model_review_events').fetchone()
+        self.assertEqual(event, ('accepted_into_pr', 'pending_review', 'accepted_into_pr'))
+        tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn('model_admission_decisions', tables)
+
+    def test_queue_returns_proposal_and_audit_history(self):
+        created = reviews.submit(self.db, {'model_id': 1, 'block_reason': 'Wymaga testu runtime.'}, allowed_model_ids=self.allowed)
+        reviews.apply_action(self.db, submission_id=created['submission_id'], action='accept')
+        rows = reviews.list_submissions(self.db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['id'], created['submission_id'])
+        self.assertEqual(rows[0]['proposal']['block_reason'], 'Wymaga testu runtime.')
+        self.assertEqual(rows[0]['history'][0]['event'], 'accepted_into_pr')
+
+    def test_rejection_requires_reason_and_is_audited(self):
+        created = reviews.submit(self.db, {'model_id': 1, 'block_reason': 'Wymaga testu runtime.'}, allowed_model_ids=self.allowed)
+        with self.assertRaisesRegex(ValueError, 'wymaga uzasadnienia'):
+            reviews.apply_action(self.db, submission_id=created['submission_id'], action='reject', reason='')
+        result = reviews.apply_action(self.db, submission_id=created['submission_id'], action='reject', reason='Brak dowodów.')
+        self.assertEqual(result['status'], 'rejected')
+        self.assertEqual(self.db.execute('SELECT reason FROM model_review_events').fetchone()[0], 'Brak dowodów.')
+
+    def test_revision_revalidates_payload_and_returns_to_pending(self):
+        created = reviews.submit(self.db, {'model_id': 1, 'block_reason': 'Wymaga testu runtime.'}, allowed_model_ids=self.allowed)
+        reviews.apply_action(self.db, submission_id=created['submission_id'], action='accept')
+        revised = {'model_id': 1, 'block_reason': 'Nadal wymaga niezależnego testu.', 'technical_readiness': 'not_evaluated'}
+        result = reviews.apply_action(self.db, submission_id=created['submission_id'], action='revise', payload=revised, allowed_model_ids=self.allowed)
+        self.assertEqual(result['status'], 'pending_review')
+        stored = self.db.execute('SELECT payload_json FROM model_review_submissions').fetchone()[0]
+        self.assertIn('Nadal wymaga niezależnego testu.', stored)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM model_review_events').fetchone()[0], 2)
+
     def test_blocked_status_requires_reason(self):
         with self.assertRaisesRegex(ValueError, 'wymaga uzasadnienia'):
             reviews.submit(self.db, {'model_id': 2, 'proposed_status': 'blocked'}, allowed_model_ids=self.allowed)

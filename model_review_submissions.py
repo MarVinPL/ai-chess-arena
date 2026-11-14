@@ -73,3 +73,95 @@ def submit(connection, payload, *, allowed_model_ids):
     return {'submission_id': cur.lastrowid, 'model_id': model_id, 'submitted_at': now,
             'status': 'pending_review', 'proposal': fields,
             'note': 'Zapisano propozycję do audytu. Nie zmieniono allowlisty, licencji ani gotowości modelu.'}
+
+
+def _ensure_review_events(connection):
+    connection.execute('''CREATE TABLE IF NOT EXISTS model_review_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        submission_id INTEGER NOT NULL,
+        event TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        previous_status TEXT,
+        new_status TEXT,
+        previous_payload_json TEXT,
+        new_payload_json TEXT
+    )''')
+
+
+def list_submissions(connection):
+    _ensure_review_events(connection)
+    connection.row_factory = __import__('sqlite3').Row
+    rows = connection.execute('''SELECT id,model_id,submitted_at,payload_json,status
+        FROM model_review_submissions ORDER BY
+        CASE status WHEN 'pending_review' THEN 0 WHEN 'accepted_into_pr' THEN 1 ELSE 2 END,
+        id DESC''').fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item['proposal'] = json.loads(item.pop('payload_json'))
+        except (TypeError, json.JSONDecodeError):
+            item['proposal'] = {}
+        events = connection.execute('''SELECT event,actor,occurred_at,reason,previous_status,new_status
+            FROM model_review_events WHERE submission_id=? ORDER BY id''', (item['id'],)).fetchall()
+        item['history'] = [dict(event) for event in events]
+        result.append(item)
+    return result
+
+
+def apply_action(connection, *, submission_id, action, actor='arena', reason='', payload=None,
+                 allowed_model_ids=()):
+    _ensure_review_events(connection)
+    row = connection.execute('''SELECT id,model_id,submitted_at,payload_json,status
+        FROM model_review_submissions WHERE id=?''', (int(submission_id),)).fetchone()
+    if row is None:
+        raise ValueError('Nie znaleziono propozycji audytowej.')
+    # SELECT order: id, model_id, submitted_at, payload_json, status.
+    # Preserve the exact prior JSON in the append-only event log.
+    previous_payload_json = row[3]
+    previous_status = row[4]
+    now = _now()
+    if action == 'accept':
+        if previous_status != 'pending_review':
+            raise ValueError('Akceptować można wyłącznie propozycję oczekującą na przegląd.')
+        if str(reason).strip():
+            reason = str(reason).strip()[:2000]
+        new_status = 'accepted_into_pr'
+        event = 'accepted_into_pr'
+        new_payload_json = previous_payload_json
+    elif action == 'reject':
+        reason = str(reason).strip()[:2000]
+        if len(reason) < 3:
+            raise ValueError('Odrzucenie wymaga uzasadnienia (minimum 3 znaki).')
+        if previous_status == 'rejected':
+            raise ValueError('Propozycja jest już odrzucona.')
+        new_status = 'rejected'
+        event = 'rejected'
+        new_payload_json = previous_payload_json
+    elif action == 'revise':
+        if not isinstance(payload, dict):
+            raise ValueError('Brak poprawionej treści propozycji.')
+        # Reuse the exact submission validator without creating a production row.
+        import sqlite3
+        temporary = sqlite3.connect(':memory:')
+        try:
+            submit_result = submit(temporary, payload, allowed_model_ids=allowed_model_ids)
+            new_payload_json = temporary.execute('SELECT payload_json FROM model_review_submissions WHERE id=?',
+                                                 (submit_result['submission_id'],)).fetchone()[0]
+        finally:
+            temporary.close()
+        new_status = 'pending_review'
+        event = 'revised'
+        reason = str(reason).strip()[:2000]
+    else:
+        raise ValueError('Nieznana akcja przeglądu.')
+    connection.execute('UPDATE model_review_submissions SET payload_json=?,status=? WHERE id=?',
+                       (new_payload_json, new_status, int(submission_id)))
+    connection.execute('''INSERT INTO model_review_events
+        (submission_id,event,actor,occurred_at,reason,previous_status,new_status,previous_payload_json,new_payload_json)
+        VALUES(?,?,?,?,?,?,?,?,?)''', (int(submission_id), event, str(actor)[:120], now, reason,
+        previous_status, new_status, previous_payload_json, new_payload_json))
+    return {'submission_id': int(submission_id), 'status': new_status, 'event': event,
+            'note': 'Zapisano decyzję przeglądu. Allowlista i lokalne dopuszczenie pozostają bez zmian.'}
