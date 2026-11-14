@@ -997,7 +997,9 @@ class Handler(BaseHTTPRequestHandler):
                     avg_move_seconds,adjudication_status,adjudication_json,failure_reason,
                     failure_fen,failure_color,failure_model_id
                     FROM games ORDER BY id DESC LIMIT 30''').fetchall()
-            self.send_json([dict(r, avg_seconds=round(r['avg_move_seconds'],3)) for r in rows])
+            self.send_json([dict(r, white=r['white_model'], black=r['black_model'],
+                                   moves=r['move_count'], avg_seconds=round(r['avg_move_seconds'],3))
+                            for r in rows])
         elif self.path.startswith('/api/games/') and self.path.endswith('/pgn'):
             try:
                 game_id = int(self.path.split('/')[3])
