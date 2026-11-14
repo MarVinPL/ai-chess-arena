@@ -489,7 +489,17 @@ def list_operators(db_path):
             ON c.operator_id=o.operator_id
             GROUP BY o.operator_id ORDER BY o.created_at,o.display_name"""
         ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["credentials"] = [dict(credential) for credential in conn.execute(
+                """SELECT credential_id,created_at,last_used_at,sign_count,device_type,backed_up
+                FROM arena_webauthn_credentials WHERE operator_id=? AND revoked_at IS NULL
+                ORDER BY created_at""",
+                (item["operator_id"],),
+            ).fetchall()]
+            result.append(item)
+        return result
 
 
 def revoke_credential(db_path, owner_operator_id, credential_id):
