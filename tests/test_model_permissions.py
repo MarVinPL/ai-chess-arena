@@ -101,7 +101,7 @@ class ModelPermissionTests(unittest.TestCase):
     def test_reject_requires_reason_and_preserves_history(self):
         req = self.request()
         with self.assertRaisesRegex(ValueError, "uzasadnienie"):
-            decide_permission(self.db, request_id=req["id"], action="reject",
+            self.decide( request_id=req["id"], action="reject",
                               confirm=True, reason=" ")
         decide_permission(self.db, request_id=req["id"], action="reject",
                           confirm=True, reason="brak dowodów")
