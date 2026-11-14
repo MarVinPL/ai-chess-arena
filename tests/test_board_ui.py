@@ -1,4 +1,7 @@
+import json
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -35,6 +38,19 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertRegex(HTML, r'@media\(max-width:760px\)')
         self.assertIn('overflow-x:hidden', HTML)
 
+    def test_piece_inventory_is_above_board_and_updates_for_both_views(self):
+        self.assertIn('class="piece-count-strip"', HTML)
+        self.assertIn('id="white-piece-types"', HTML)
+        self.assertIn('id="black-piece-types"', HTML)
+        self.assertIn('id="white-piece-summary"', HTML)
+        self.assertIn('id="black-piece-summary"', HTML)
+        self.assertIn("function pieceInventory(fen,color)", HTML)
+        self.assertIn("function renderPieceInventory(fen)", HTML)
+        self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
+        self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
+        self.assertIn('aria-live="polite"', HTML)
+        self.assertIn(".piece-count-strip{grid-template-columns:minmax(0,1fr)}", HTML)
+
     def test_material_and_registry_name_rendering_are_unchanged(self):
         self.assertIn('function materialAdvantage(fen)', HTML)
         self.assertIn('function formatMaterialScore(score)', HTML)
@@ -42,6 +58,31 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('s.black', HTML)
         self.assertIn('formatMaterialScore(material.white)', HTML)
         self.assertIn('formatMaterialScore(material.black)', HTML)
+
+    def test_piece_inventory_is_derived_from_fen_and_counts_material(self):
+        self.assertIn('aria-label=\"Pozostałe bierki i materiał\"', HTML)
+        self.assertIn('id=\"white-piece-types\"', HTML)
+        self.assertIn('id=\"black-piece-types\"', HTML)
+        self.assertIn('renderPieceInventory(s.fen||START_FEN)', HTML)
+        live_refresh = HTML[HTML.index('async function refreshLive()'):]
+        self.assertIn('renderPieceInventory(s.fen||START_FEN)', live_refresh)
+        if not shutil.which('node'):
+            self.skipTest('Node.js is not installed')
+        start = HTML.index('function pieceInventory(fen,color)')
+        end = HTML.index('function formatMaterialScore(score)', start)
+        functions = HTML[start:end]
+        script = functions + "\n" + "const initial=pieceInventory('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1','white');" + "\n" + "const promoted=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const black=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "console.log(JSON.stringify({initial,promoted,black}));"
+        result = subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data['initial']['total'], 16)
+        self.assertEqual(data['initial']['material'], 39)
+        self.assertEqual(data['initial']['counts'], {'k': 1, 'q': 1, 'r': 2, 'b': 2, 'n': 2, 'p': 8})
+        self.assertEqual(data['promoted']['counts']['q'], 1)
+        self.assertEqual(data['promoted']['material'], 9)
+        self.assertEqual(data['promoted']['total'], 2)
+        self.assertEqual(data['black']['counts']['r'], 1)
+        self.assertEqual(data['black']['material'], 5)
+        self.assertEqual(data['black']['total'], 2)
 
 
 if __name__ == "__main__":
