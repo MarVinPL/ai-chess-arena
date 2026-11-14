@@ -49,8 +49,8 @@ def validate_manifest(payload: dict) -> None:
             raise ManifestError("Repozytorium występuje więcej niż raz")
         seen_ids.add(model_id); seen_repos.add(repo)
         filename, size, digest, revision = (item.get(k) for k in ("filename", "size_bytes", "sha256", "revision"))
-        if not isinstance(filename, str) or not _FILENAME.fullmatch(filename):
-            raise ManifestError("Nieprawidłowa nazwa GGUF")
+        if not isinstance(filename, str) or not _FILENAME.fullmatch(filename) or "draft" in filename.lower() or ".mmproj" in filename.lower():
+            raise ManifestError("Nieprawidłowa nazwa GGUF albo plik pomocniczy/draft")
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise ManifestError("Brak wiarygodnego rozmiaru pliku")
         if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
@@ -63,6 +63,8 @@ def validate_manifest(payload: dict) -> None:
             raise ManifestError("Manifest nie może sam zatwierdzać licencji")
         if not isinstance(item.get("license_url"), str) or not item["license_url"].startswith(f"https://huggingface.co/{repo}/"):
             raise ManifestError("Dowód licencji musi wskazywać to samo repozytorium")
+        if not isinstance(item.get("license_terms_url"), str) or not item["license_terms_url"].startswith("https://"):
+            raise ManifestError("Brak odnośnika do warunków licencji")
         expected_repo_url = f"https://huggingface.co/{repo}"
         expected_download = f"{expected_repo_url}/resolve/{revision}/{quote(item.get('source_path', ''), safe='/')}"
         if item.get("source_path") != filename:
@@ -103,6 +105,8 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
                 if len(rows) != 1:
                     raise ManifestError(f"Model {item['model_id']} ({item['repo_id']}): oczekiwano 1 wersji, znaleziono {len(rows)}")
                 row = rows[0]
+                if row["managed_copy"] == 1:
+                    raise ManifestError("Import nie może przepinać już zarządzanego pliku GGUF")
                 metadata = json.loads(row["metadata_json"] or "{}")
                 metadata.update({
                     "provider": "Hugging Face",
@@ -119,6 +123,7 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
                         "license": item["license"],
                         "license_review_status": item["license_review_status"],
                         "license_evidence_url": item["license_url"],
+                        "license_terms_url": item["license_terms_url"],
                         "license_notes": item["license_notes"],
                         "weights_downloaded": False,
                     },
