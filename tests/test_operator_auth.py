@@ -270,6 +270,10 @@ class OperatorAuthStorageTests(unittest.TestCase):
         inventory = operator_auth.list_operators(self.db)
         target = next(item for item in inventory if item["operator_id"] == "operator-id")
         self.assertEqual(target["active_credentials"], 0)
+        events = operator_auth.list_operator_events(self.db)
+        self.assertEqual(events[0]["action"], "credential_revoked")
+        self.assertEqual(events[0]["actor_operator_id"], "owner-id")
+        self.assertEqual(events[0]["target_operator_id"], "operator-id")
 
     def test_owner_can_suspend_operator_and_revoke_all_sessions(self):
         now = operator_auth.time.time()
@@ -289,6 +293,10 @@ class OperatorAuthStorageTests(unittest.TestCase):
                 "SELECT active FROM arena_operators WHERE operator_id='operator-id'"
             ).fetchone()["active"]
         self.assertEqual(active, 0)
+        events = operator_auth.list_operator_events(self.db)
+        self.assertEqual(events[0]["action"], "operator_suspended")
+        self.assertEqual(events[0]["actor_operator_id"], "owner-id")
+        self.assertEqual(events[0]["target_operator_id"], "operator-id")
 
     def test_owner_cannot_suspend_self_or_last_active_owner(self):
         now = operator_auth.time.time()
