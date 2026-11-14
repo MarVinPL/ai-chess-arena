@@ -185,7 +185,7 @@ class PairingSelectionRecoveryTests(unittest.TestCase):
         self.save_checkpoint()
         with server.league.connect() as db:
             db.execute("UPDATE tournament_pairings SET id=102 WHERE id=101")
-        with self.assertRaisesRegex(RuntimeError, 'nie jest oczekujące ani aktywne'):
+        with self.assertRaisesRegex(RuntimeError, 'inne parowanie'):
             server._select_tournament_pairing(77, False)
 
 
