@@ -25,10 +25,13 @@ class ModelManifestTests(unittest.TestCase):
             for item in manifest["models"]:
                 connection.execute("INSERT INTO league_models(id,name) VALUES(?,?)",
                                    (item["model_id"], item["repo_id"]))
+                repo_url = f"https://huggingface.co/{item['repo_id']}"
+                source = repo_url
+                if item["model_id"] in (1, 2):
+                    source = f"{repo_url}/resolve/{item['revision']}/{item['filename']}"
                 connection.execute(
                     "INSERT INTO model_versions(id,model_id,source,license_verified,metadata_json) VALUES(?,?,?,?,?)",
-                    (item["model_id"], item["model_id"],
-                     f"https://huggingface.co/{item['repo_id']}", 1,
+                    (item["model_id"], item["model_id"], source, 1,
                      json.dumps({"inference": {"thinking": False}})),
                 )
 
@@ -37,8 +40,8 @@ class ModelManifestTests(unittest.TestCase):
 
     def test_checked_in_manifest_is_complete_and_pinned(self):
         payload = load_manifest()
-        self.assertEqual(len(payload["models"]), 7)
-        self.assertEqual(len({m["model_id"] for m in payload["models"]}), 7)
+        self.assertEqual(len(payload["models"]), 10)
+        self.assertEqual(len({m["model_id"] for m in payload["models"]}), 10)
         self.assertEqual(len({m["repo_id"] for m in payload["models"]}), 7)
         self.assertTrue(all(len(m["sha256"]) == 64 and len(m["revision"]) == 40
                             for m in payload["models"]))
@@ -76,22 +79,23 @@ class ModelManifestTests(unittest.TestCase):
     def test_draft_head_cannot_be_used_as_the_target_model(self):
         payload = load_manifest()
         broken = json.loads(json.dumps(payload))
-        broken["models"][5]["filename"] = "Qwen3.8-27B-Uncensored-draft-Q8_0.gguf"
-        broken["models"][5]["source_path"] = broken["models"][5]["filename"]
+        draft_model = next(m for m in broken["models"] if m["model_id"] == 9)
+        draft_model["filename"] = "draft-placeholder.gguf"
+        draft_model["source_path"] = draft_model["filename"]
         with self.assertRaises(ManifestError):
             validate_manifest(broken)
 
     def test_manifest_application_persists_metadata_but_does_not_approve_license(self):
         payload = load_manifest()
         result = apply_manifest(self.db, payload, applied_at="2026-11-14T12:00:00Z")
-        self.assertEqual(len(result["updated"]), 7)
+        self.assertEqual(len(result["updated"]), 10)
         self.assertFalse(result["weights_downloaded"])
         with sqlite3.connect(self.db) as connection:
             rows = connection.execute(
                 "SELECT filename,sha256,size_bytes,license,license_verified,status,managed_copy,metadata_json FROM model_versions ORDER BY model_id"
             ).fetchall()
-        self.assertEqual(len(rows), 7)
-        for item, row in zip(payload["models"], rows):
+        self.assertEqual(len(rows), 10)
+        for item, row in zip(sorted(payload["models"], key=lambda x: x["model_id"]), rows):
             self.assertEqual(row[:4], (item["filename"], item["sha256"], item["size_bytes"], item["license"]))
             self.assertEqual(row[4], 0)
             self.assertEqual(row[5], "catalogued")
