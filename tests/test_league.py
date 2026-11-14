@@ -9,8 +9,8 @@ class LeagueTests(unittest.TestCase):
    c.execute('CREATE TABLE games(id INTEGER PRIMARY KEY,white_model TEXT,black_model TEXT,result TEXT)')
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Alpha','PURE_AI','now')")
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Beta','PURE_AI','now')")
-   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(1,'alpha-v1','alpha.gguf',? ,100,'https://example.test/alpha','Apache-2.0',1,'now')", ('a'*64,))
-   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(2,'beta-v1','beta.gguf',?,100,'https://example.test/beta','Apache-2.0',1,'now')", ('b'*64,))
+   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(1,'alpha-v1','alpha.gguf',? ,100,'https://example.test/alpha.gguf','Apache-2.0',1,'now')", ('a'*64,))
+   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(2,'beta-v1','beta.gguf',?,100,'https://example.test/beta.gguf','Apache-2.0',1,'now')", ('b'*64,))
  def tearDown(self):
   league.DB=self.old; self.tmp.cleanup()
  def test_truncated_move_schedules_larger_budget_only_for_next_tournament(self):
@@ -306,7 +306,7 @@ class LeagueTests(unittest.TestCase):
                                    'inference':{'thinking':True}})
   tournament=league.create_round_robin('Thinking variants')
   self.assertEqual(tournament['players'],4)
-  self.assertEqual(tournament['games_planned'],6)
+  self.assertEqual(tournament['games_planned'],12)
   with league.connect() as c:
    rows=c.execute('''SELECT m.name,json_extract(v.metadata_json,'$.inference.thinking') AS thinking
     FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
