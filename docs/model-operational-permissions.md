@@ -94,11 +94,11 @@ Consequently, neither the current application actor constant (`arena`), the shar
 
 **Status: BLOCKED — authenticated actor propagation is not implemented.** This audit is evidence for the blocker only; it does not authorize or perform a production Caddy, systemd, application, or database change.
 
-### Additional application-layer finding
+### Application-layer finding and mitigation
 
-The branch's `server.py` permission POST handlers do not validate an authenticated session or a trusted proxy identity before processing `/api/model-permissions/{request,approve,reject,revoke}`. They pass the module's default actor value into the permission registry. The API listener is loopback-only, which limits remote reachability but does not authenticate local callers or distinguish local processes sharing the host. Caddy Basic Auth therefore protects the public reverse-proxy path only; it is not an application authorization boundary for direct loopback requests.
+The initial audit found that the permission POST handlers had no application-level session check and relied on a shared actor constant. The API listener is loopback-only, which limits remote reachability but does not authenticate local callers or distinguish local processes sharing the host. Caddy Basic Auth therefore protects the public reverse-proxy path only; it is not an application authorization boundary for direct loopback requests.
 
-This makes the current endpoints unsuitable for privileged decisions even if the Caddy account remains password-protected. Before activation, enforce authentication and authorization in the application itself (or use a narrowly scoped local IPC broker with peer-credential validation), reject unauthenticated direct calls, and record a stable operator identity derived from verified credentials. Do not infer identity from a caller-supplied JSON field or untrusted HTTP header.
+The current branch now adds a deny-by-default gate before reading the request body for all four permission mutation routes. If the in-process verified-actor attribute is absent or malformed, the handler returns HTTP 403 without touching the permission database. The permission registry also requires an explicit actor and no longer supplies a shared default. This mitigates unauthenticated mutation, but it does not yet provide a way for a legitimate operator to authenticate: the four routes remain unavailable until a real application session/authentication middleware or trusted local IPC broker is implemented and reviewed.
 
 
 ## Fail-closed application identity gate (implementation slice)
