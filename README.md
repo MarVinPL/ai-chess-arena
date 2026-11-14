@@ -61,17 +61,25 @@ No tournament is started automatically when a model is added. Real inference and
 
 ## Hugging Face manifests
 
-- Pinned, metadata-only GGUF manifests for the seven catalog entries are stored in `manifests/huggingface-models.json`.
+- Pinned, metadata-only GGUF manifests for the ten catalog entries are stored in `manifests/huggingface-models.json`.
 - Validate/import them explicitly with `model_manifest.load_manifest()` and `model_manifest.apply_manifest(league.DB)`; the importer updates existing registry versions atomically, records an audit trail in `metadata_json`, and never downloads weights.
 - Import deliberately sets `license_verified=0` for these entries. A Hugging Face license tag or model-card declaration is evidence, not approval to download/use a model. Complete a separate human license review before changing that flag.
 - The Bielik 7B entry declares `CC-BY-NC-4.0` (NonCommercial restriction). Llama 3.1/3.2 use Meta Community Licenses, not Apache-2.0. The Qwen3.8 entry retains the base-model license/acceptable-use conditions.
-- The JonathanColetti entry pins the full Q4_K_M model; its separate draft-Q8_0 head is explicitly excluded from standalone model identity.
+- Manifest entries 9–10 are explicitly excluded by Issue #71; their declared repository licenses do not authorize admission. The separate draft-Q8_0 head in entry 9 is also excluded from standalone model identity.
 - No GGUF weights are committed or fetched by this workflow. Run `python -m unittest tests.test_model_manifest -v` to test the manifest importer.
 
 ## Tournament enrollment and on-demand model cache
 
-- New tournaments enroll every active registry row, including entries with no version or incomplete manifest; those rows remain visible with explicit readiness blockers. No entrant is silently dropped.
+- New tournaments enroll every active, non-excluded registry row, including entries with no version or incomplete manifest; those rows remain visible with explicit readiness blockers. The exact repositories in manifest entries 9–10 are deliberately excluded and cannot enter a new tournament.
 - Round-robin scheduling uses the actual registry model IDs and never creates self-pairings. With `n` active entrants, the league schedule contains `n × (n − 1)` games.
 - The read-only `GET /api/tournaments/{id}/preflight` endpoint reports each entrant's manifest, license, local-cache and runtime state. Missing local GGUF files are informational, not a start blocker.
 - When a game actually needs a model, the runner downloads its target and optional draft into the private Arena cache only if the license is explicitly verified and the download URL is safe. Hugging Face downloads must use a full immutable commit revision. Size and SHA-256 are verified before the file is activated; failed downloads do not create results or remove entrants.
 - A missing/incomplete manifest, unapproved license, unavailable runtime, insufficient disk space, or integrity failure remains a visible blocker. No automatic download is performed for unverified licenses.
+
+### Versioned model admission register
+
+- `manifests/model-allowlist.json` is the GitHub-sourced decision register. `main` is the sole source of truth; every change must be made on a dedicated branch and PR.
+- The allowlist is informational and read-only for consumers. `eligible` and `restricted` are explicit review decisions, not proof of runtime readiness; `license_verified=1`, complete local files, and runtime checks remain separate requirements. The current entries remain `review_required` or `blocked` until an owner-approved PR changes them.
+- `model_allowlist.load_allowlist()` validates each entry against the pinned model manifest, including repository, exact revision, license status, evidence references, and required restrictions. It never writes to the database or changes a tournament.
+- `scripts/check_model_allowlist_sync.py` checks whether the checkout is exactly at `origin/main` and whether the allowlist file has local changes. It is read-only: it does not fetch, merge, reset, or overwrite anything. Refresh Git refs separately before running it.
+- Use `python -m pytest -q tests/test_model_allowlist.py` to test validation, changes, withdrawals, and stale/dirty consumer detection.
