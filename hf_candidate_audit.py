@@ -183,6 +183,18 @@ def audit_candidate(catalog_id: str, *, catalog=None, fetcher=None):
             'scope_formats': []
         }
     }
+    # Per-field provenance keeps observed source facts separate from human decisions.
+    report['field_provenance'] = {
+        'repo_id': {'value': repo, 'source': f'https://huggingface.co/api/models/{repo}/revision/{revision}', 'confidence': 'source_confirmed', 'decision': 'identity still requires operator review'},
+        'pinned_revision': {'value': revision, 'source': f'https://huggingface.co/{repo}/tree/{revision}', 'confidence': 'manifest_pinned', 'decision': 'human confirmation remains false'},
+        'observed_revision': {'value': observed_revision, 'source': api_url, 'confidence': 'source_confirmed', 'decision': 'SHA equality is not a license or admission approval'},
+        'declared_license': {'value': declared, 'source': 'catalog tag and/or Hugging Face model card', 'confidence': 'declaration_only', 'decision': 'requires human license review; LICENSE text is evidence, not legal interpretation'},
+        'license_review': {'value': 'pending', 'source': None, 'confidence': 'not_determined', 'decision': 'must be decided by an authorized human'},
+        'technical_readiness': {'value': 'not_evaluated', 'source': None, 'confidence': 'not_tested', 'decision': 'requires a separate authorized technical test'},
+        'proposed_status': {'value': 'review_required', 'source': 'fail-closed audit policy', 'confidence': 'automatic_suggestion', 'decision': 'not an admission decision'},
+        'scope_formats': {'value': [], 'source': None, 'confidence': 'not_determined', 'decision': 'must remain empty until separately approved'},
+        'revision_confirmed': {'value': False, 'source': 'operator decision required', 'confidence': 'not_confirmed', 'decision': 'never set automatically'},
+    }
     return report
 
 
