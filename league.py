@@ -260,11 +260,20 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   if len(candidates)<2:
    raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
   ms=[dict(row) for row in candidates]
-  # Never create self-play pairings or schedule two aliases of identical weights.
-  hashes=[(m.get('model_sha256') or '').lower() for m in ms]
-  nonempty=[value for value in hashes if value]
-  if len(nonempty)!=len(set(nonempty)):
-   raise ValueError('Rejestr zawiera duplikaty wag; turniej wymaga dwóch różnych modeli')
+  # Same weights with different inference settings are distinct competitors;
+  # identical weights under the same inference configuration are not.
+  identities=[]
+  for model in ms:
+   digest=(model.get('model_sha256') or '').lower()
+   if not digest: continue
+   try:
+    metadata=json.loads(model.get('metadata_json') or '{}')
+   except (TypeError,json.JSONDecodeError):
+    metadata={}
+   inference=json.dumps(normalize_inference_config(metadata),sort_keys=True,separators=(',',':'))
+   identities.append((digest,inference))
+  if len(identities)!=len(set(identities)):
+   raise ValueError('Rejestr zawiera duplikaty wag z identyczną konfiguracją inferencji; turniej wymaga dwóch różnych modeli')
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
   for model in ms:
