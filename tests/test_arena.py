@@ -42,6 +42,22 @@ class ArenaSmokeTests(unittest.TestCase):
         server.league.DB = cls.old_league_db
         cls.tempdir.cleanup()
 
+    def test_lazy_runtime_preflight_checks_executable_not_running_health(self):
+        original_binary = server.engine_runner.LLAMAFILE
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                binary = Path(directory) / 'llamafile'
+                binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+                binary.chmod(0o755)
+                server.engine_runner.LLAMAFILE = binary
+                self.assertTrue(server.llm_runtime_available())
+                binary.chmod(0o644)
+                self.assertFalse(server.llm_runtime_available())
+                binary.unlink()
+                self.assertFalse(server.llm_runtime_available())
+        finally:
+            server.engine_runner.LLAMAFILE = original_binary
+
     def test_python_chess_legal_start_position(self):
         board = chess.Board()
         self.assertEqual(board.legal_moves.count(), 20)
@@ -117,6 +133,16 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(event_record['proposed_move'], 'e2e4')
         self.assertEqual(event_record['white'], 'Registry Model A')
         self.assertEqual(event_record['black'], 'Registry Model B')
+
+    def test_live_status_keeps_pairing_stage_separate_from_runtime_stage(self):
+        server.set_live('game_finished', 'Partia zakończona: 1-0',
+                        white='Model A', black='Model B', pairing_stage='league')
+        self.assertEqual(server.live_status['stage'], 'game_finished')
+        self.assertEqual(server.live_status['pairing_stage'], 'league')
+        event_record = __import__('json').loads(
+            server.LIVE_EVENTS_LOG.read_text(encoding='utf-8').splitlines()[-1])
+        self.assertEqual(event_record['stage'], 'game_finished')
+        self.assertEqual(event_record['pairing_stage'], 'league')
 
     def test_diagnostic_logs_apply_separate_age_retention(self):
         import json

@@ -93,7 +93,7 @@ def set_live(stage, message, **fields):
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
-        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason')
+        event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
                  'stage':stage,'message':message,
                  **{k:v for k,v in fields.items() if k in event_fields}}
@@ -247,11 +247,21 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
 
 
 def llm_health():
+    """Report health of an already-running local inference server."""
     try:
         req = urllib.request.Request('http://127.0.0.1:8088/health')
         with urllib.request.urlopen(req, timeout=2) as r:
             return r.status == 200
     except Exception:
+        return False
+
+
+def llm_runtime_available():
+    """Check whether the lazy-start runtime executable is present and executable."""
+    try:
+        binary = Path(engine_runner.LLAMAFILE)
+        return binary.is_file() and bool(binary.stat().st_mode & 0o111)
+    except OSError:
         return False
 
 
@@ -493,7 +503,9 @@ class TournamentPreflightError(RuntimeError):
 def tournament_preflight(tournament_id):
     """Check metadata, license decision, and runtime; local weights are lazy-cached."""
     entries = league.tournament_entry_status(tournament_id)
-    runtime_available = llm_health()
+    # The runner starts Llamafile only after this preflight succeeds.
+    # Requiring /health here would deadlock the lazy-start lifecycle.
+    runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
@@ -702,7 +714,7 @@ def tournament_loop(tournament_id):
                      white=white['name'], black=black['name'], result=result['result'],
                      game_id=game_id, move_count=len(result['moves']), fen=result['fen'],
                      moves=result['moves'], generation_started_at=None,
-                     stage=pairing.get('stage','league'),
+                     pairing_stage=pairing.get('stage','league'),
                      adjudication_status='adjudicated' if result.get('adjudicated') else 'not_applicable',
                      adjudication_reason=(result.get('adjudication') or {}).get('reason'))
         with league.connect() as c:
