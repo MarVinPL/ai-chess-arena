@@ -379,6 +379,8 @@ def finish_authentication(db_path, config, ceremony_id, credential):
     if not isinstance(ceremony_id, str) or len(ceremony_id) > 128 or not isinstance(credential, dict):
         raise OperatorAuthError("Nieprawidłowa odpowiedź logowania.")
     raw_id = credential.get("rawId") or credential.get("id")
+    if not isinstance(raw_id, str) or not raw_id or len(raw_id) > 8192:
+        raise OperatorAuthError("Nieprawidłowy identyfikator Passkey.")
     try:
         credential_id = __import__("webauthn.helpers", fromlist=["bytes_to_base64url"]).bytes_to_base64url(
             base64url_to_bytes(raw_id)
