@@ -33,24 +33,28 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn('data-status="failed"', HTML)
 
     def test_existing_actions_and_visibility_conditions_are_preserved(self):
-        for action in ("Tabela i drabinka", "Sprawdź gotowość", "Uruchom turniej", "Wznów turniej", "Zatrzymaj turniej"):
+        for action in ("Tabela i drabinka", "Dlaczego nie startuje?", "Ponów diagnostykę", "Start zablokowany", "Uruchom turniej", "Wznów turniej", "Zatrzymaj turniej"):
             self.assertIn(action, self.renderer)
         self.assertIn("loadTournamentView(t.id)", self.renderer)
-        self.assertIn("if(t.status==='planned'){", self.renderer)
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
+        self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
+        self.assertIn("Otwórz warunki dopuszczenia", self.renderer)
+        self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
+        self.assertIn("Uzupełnij dane modelu '+e.model_id", self.renderer)
+        self.assertIn("Brak lokalnego GGUF nie blokuje startu", self.renderer)
         self.assertIn("'/api/tournaments/start'", self.renderer)
         self.assertIn("'/api/tournaments/stop'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", self.renderer)
         self.assertIn("wznowienie zablokowane — wymagany przegląd", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
 
-    def test_readiness_action_is_limited_to_unstarted_planned_tournaments(self):
-        check_start = self.renderer.index("if(t.status==='planned'){")
-        check_end = self.renderer.index("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", check_start)
-        readiness_block = self.renderer[check_start:check_end]
-        self.assertIn("Sprawdź gotowość", readiness_block)
-        self.assertIn("actions.appendChild(check)", readiness_block)
-        self.assertNotIn("Sprawdź gotowość", self.renderer[check_end:])
+    def test_diagnostics_are_available_for_unstarted_and_failed_tournaments(self):
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
+        self.assertIn("check.textContent='Dlaczego nie startuje?'", self.renderer)
+        self.assertIn("check.onclick=showPreflight", self.renderer)
+        self.assertIn("if(t.status==='planned')showPreflight()", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
 

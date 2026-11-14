@@ -88,6 +88,15 @@ button.stop{background:#744b4b;border-color:#986363}
 .tournament-card__field dt{margin:0 0 5px;color:var(--arena-muted);font-size:11px;font-weight:650}
 .tournament-card__field dd{margin:0;color:var(--arena-text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
 .tournament-card__actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid #263d48}
+.tournament-preflight{margin-top:12px;padding:12px;border:1px solid #52627a;border-radius:9px;background:#111f29}
+.tournament-preflight[data-ready="false"]{border-color:#956363}
+.tournament-preflight__title{font-weight:750;margin-bottom:8px}
+.tournament-preflight__entrant{padding:9px 0;border-top:1px solid #263d48}
+.tournament-preflight__entrant strong{display:block;margin-bottom:5px}
+.tournament-preflight__reasons{margin:4px 0 8px;padding-left:20px}
+.tournament-preflight__actions{display:flex;flex-wrap:wrap;gap:7px}
+.tournament-preflight__actions button{font-size:12px;padding:7px 10px}
+
 .tournament-card__actions button{flex:0 1 auto;min-width:0}
 .tournament-card button:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
 @media(max-width:760px){
@@ -246,22 +255,46 @@ function renderTournaments(rows){
   card.appendChild(fields);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
-  if(t.status==='planned'){
-   const check=document.createElement('button');check.textContent='Sprawdź gotowość';check.onclick=async()=>{
-    try{
-     const r=await fetch('/api/tournaments/'+t.id+'/preflight');const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
-     const entrants=d.entrants||[];const blocked=d.blocked||[];
-     const summary=entrants.map(e=>{const state=e.ready_to_start?'GOTOWY':'BLOKADA';const reasons=(e.blockers||[]).join(', ');const cache=e.local_file_available?'plik lokalny':(e.download_on_demand?'plik pobierze się przed partią':'pobranie zablokowane do czasu weryfikacji manifestu/licencji');return e.name+': '+state+'; '+cache+(reasons?'; '+reasons:'')}).join('\\n');
-     $('league-message').textContent='Preflight turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.\\n'+summary;
-    }catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}
-   };actions.appendChild(check);
+  const diagnostic=document.createElement('section');diagnostic.className='tournament-preflight';diagnostic.hidden=true;diagnostic.setAttribute('aria-live','polite');
+  card.appendChild(diagnostic);
+  const openRegistry=(target)=>{const el=$(target);if(el){el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
+  const showPreflight=async()=>{
+   diagnostic.hidden=false;diagnostic.dataset.ready='unknown';diagnostic.textContent='Sprawdzam warunki startu…';
+   try{
+    const r=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
+    const entrants=d.entrants||[];const blocked=d.blocked||[];diagnostic.replaceChildren();diagnostic.dataset.ready=String(Boolean(d.ready));
+    const heading=document.createElement('div');heading.className='tournament-preflight__title';heading.textContent=d.ready?'Gotowy do startu — wszystkie warunki spełnione':'Start zablokowany — '+blocked.length+' zawodników wymaga działania';diagnostic.appendChild(heading);
+    const runtime=document.createElement('p');runtime.textContent='Runtime Llamafile: '+(d.runtime_available?'dostępny':'niedostępny')+'. Brak lokalnego GGUF nie blokuje startu — modele są pobierane na żądanie, jeśli ich manifest i dopuszczenie są poprawne.';diagnostic.appendChild(runtime);
+    entrants.forEach(e=>{
+     const row=document.createElement('div');row.className='tournament-preflight__entrant';
+     const name=document.createElement('strong');name.textContent=(e.ready_to_start?'✓ ':'⚠ ')+e.name+' · model '+e.model_id;row.appendChild(name);
+     const reasons=e.blockers||[];
+     if(reasons.length){const list=document.createElement('ul');list.className='tournament-preflight__reasons';reasons.forEach(reason=>{const li=document.createElement('li');li.textContent=reason;list.appendChild(li)});row.appendChild(list)}
+     else{const ok=document.createElement('p');ok.textContent='Brak blokad. '+(e.local_file_available?'Plik jest dostępny lokalnie.':(e.download_on_demand?'Model zostanie pobrany na żądanie.':'Model nie wymaga obecnie lokalnego pliku.'));row.appendChild(ok)}
+     if(reasons.length){const controls=document.createElement('div');controls.className='tournament-preflight__actions';
+      const admission=reasons.some(x=>/allowlist|dopuszc|manifest|rewizj|scope|repozytor/i.test(x));
+      const license=reasons.some(x=>/licencj/i.test(x));
+      if(admission){const b=document.createElement('button');b.type='button';b.textContent='Otwórz warunki dopuszczenia';b.onclick=()=>openRegistry('model-admission-list');controls.appendChild(b)}
+      if(license){const b=document.createElement('button');b.type='button';b.textContent='Otwórz rejestr modeli i licencje';b.onclick=()=>openRegistry('model-list');controls.appendChild(b)}
+      if([1,2,3].includes(Number(e.model_id))){const b=document.createElement('button');b.type='button';b.textContent='Uzupełnij dane modelu '+e.model_id;b.onclick=()=>{const form=$('model-review-form');if(form){form.hidden=false;$('review-model-id').value=String(e.model_id);openRegistry('model-review-form')}else openRegistry('model-admission-list')};controls.appendChild(b)}
+      row.appendChild(controls);
+     }
+     diagnostic.appendChild(row);
+    });
+    const refresh=document.createElement('button');refresh.type='button';refresh.textContent='Ponów diagnostykę';refresh.onclick=showPreflight;diagnostic.appendChild(refresh);
+    $('league-message').textContent='Diagnostyka turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.';
+   }catch(e){diagnostic.textContent='Nie udało się sprawdzić gotowości: '+e;$('league-message').textContent=diagnostic.textContent}
+  };
+  if(['planned','stopped','failed'].includes(t.status)){
+   const check=document.createElement('button');check.textContent='Dlaczego nie startuje?';check.onclick=showPreflight;actions.appendChild(check);
   }
   if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked){
    const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';
    start.onclick=async()=>{
-    if(!confirm('Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;
-    try{const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await loadLeague()}
-    catch(e){$('league-message').textContent='Nie uruchomiono turnieju: '+e}
+    try{const check=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const readiness=await check.json();if(!check.ok)throw Error(readiness.error||check.status);if(!readiness.ready){await showPreflight();diagnostic.scrollIntoView({behavior:'smooth',block:'nearest'});return;}
+     if(!confirm('Wszystkie warunki preflight są spełnione. Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;
+     const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok){await showPreflight();throw Error(d.error||r.status)}$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await loadLeague();
+    }catch(e){$('league-message').textContent='Nie uruchomiono turnieju: '+e}
    };actions.appendChild(start);
   }
   if(t.status==='running'){
@@ -273,6 +306,7 @@ function renderTournaments(rows){
    };actions.appendChild(stop);
   }
   card.appendChild(actions);host.appendChild(card);
+  if(t.status==='planned')showPreflight();
  });
 }
 function renderModelStatus(models,storage){
