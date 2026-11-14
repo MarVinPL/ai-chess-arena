@@ -40,7 +40,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
-        self.assertIn("Otwórz warunki dopuszczenia", self.renderer)
+        self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
         self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
         self.assertIn("Przygotuj propozycję do audytu · model '+e.model_id", self.renderer)
         self.assertIn("Brak lokalnego GGUF nie blokuje startu", self.renderer)
@@ -56,6 +56,14 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(reviewSupported)", self.renderer)
         self.assertIn("Propozycja dotyczy dokładnej rewizji '+e.revision", self.renderer)
         self.assertNotIn("if([1,2,3].includes(Number(e.model_id)))", self.renderer)
+
+    def test_preflight_admission_action_targets_the_matching_allowlist_card(self):
+        self.assertIn("const openModelAdmission=(modelId)=>", self.renderer)
+        self.assertIn("$('model-admission-'+modelId)", self.renderer)
+        self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
+        self.assertIn("b.onclick=()=>openModelAdmission(e.model_id)", self.renderer)
+        self.assertIn("card.id='model-admission-'+item.model_id", HTML)
+        self.assertIn("card.dataset.modelId=String(item.model_id)", HTML)
 
     def test_diagnostics_are_available_for_unstarted_and_failed_tournaments(self):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
