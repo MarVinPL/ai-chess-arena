@@ -527,7 +527,7 @@ function renderModelPermissions(rows, allowlistRows){
  if(!host||!select)return;
  const previous=select.value;
  select.innerHTML='<option value="">Wybierz model z allowlisty</option>';
- (allowlistRows||[]).filter(x=>x.status!=='blocked').forEach(x=>{
+ (allowlistRows||[]).filter(x=>x.status!=='blocked'&&Number(x.model_id)!==6).forEach(x=>{
   const option=document.createElement('option');option.value=String(x.model_id);
   option.textContent='#'+x.model_id+' · '+x.repo_id+' · '+x.status;select.appendChild(option);
  });
