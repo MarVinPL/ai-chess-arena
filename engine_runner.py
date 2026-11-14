@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 import chess
+import arbiter
 
 LLAMAFILE = Path('/home/debian/ai-agent/bin/llamafile')
 API_BASE = 'http://127.0.0.1:8088'
@@ -235,7 +236,8 @@ class LlamafileRuntime:
                  stop_event: threading.Event | None = None,
                  draft_model_path: str | Path | None = None,
                  recent_moves: list[dict] | None = None, enable_thinking: bool = False,
-                 temperature: float = 0.0, max_tokens: int = 16) -> tuple[chess.Move, dict]:
+                 temperature: float = 0.0, max_tokens: int = 16,
+                 arbiter_signal: dict | None = None) -> tuple[chess.Move, dict]:
         self.ensure_loaded(model_path, draft_model_path)
         if stop_event and stop_event.is_set():
             raise RunnerError('Turniej zatrzymany przez operatora')
@@ -250,7 +252,8 @@ class LlamafileRuntime:
         initial_prompt = (
             'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
             'Zwróć wyłącznie ruch UCI.' + anti_loop_note + '\n'
-            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\nMOVE:')
+            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+            + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '') + 'MOVE:')
         retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
         started = time.monotonic()
@@ -348,7 +351,10 @@ class LlamafileRuntime:
                       'draft_model_path': str(Path(draft_model_path).resolve()) if draft_model_path else None,
                       'response': content[:160], 'thinking': bool(enable_thinking),
                       'temperature': float(temperature), 'max_tokens': int(max_tokens),
-                      'budget_observations': budget_observations}
+                      'budget_observations': budget_observations,
+                      'arbiter_intervention': bool(arbiter_signal),
+                      'arbiter_signal': dict(arbiter_signal) if arbiter_signal else None,
+                      'arbiter_response': content[:300] if arbiter_signal else None}
 
 
 class SequentialChessRunner:
@@ -361,7 +367,8 @@ class SequentialChessRunner:
                   stop_event: threading.Event | None = None,
                   progress: Callable[[dict], None] | None = None) -> dict:
         board = chess.Board()
-        move_records, times = [], []
+        move_records, times, arbiter_events = [], [], []
+        intervention_count = 0
         while not board.is_game_over(claim_draw=True):
             if stop_event and stop_event.is_set():
                 return {'status': 'stopped', 'fen': board.fen(), 'moves': move_records,
@@ -369,6 +376,13 @@ class SequentialChessRunner:
             player = white if board.turn == chess.WHITE else black
             color = 'white' if board.turn == chess.WHITE else 'black'
             kwargs = {'recent_moves': move_records}
+            signal = arbiter.detect_stagnation(board, move_records)
+            if signal and intervention_count < arbiter.MAX_INTERVENTIONS_PER_GAME:
+                intervention_count += 1
+                signal = {**signal, 'intervention_no': intervention_count,
+                          'model': player['name'], 'model_id': player.get('model_id'),
+                          'color': color}
+                kwargs['arbiter_signal'] = signal
             if player.get('draft_path'):
                 kwargs['draft_model_path'] = player['draft_path']
             inference = player.get('inference') or {
@@ -412,7 +426,15 @@ class SequentialChessRunner:
                       'inference': dict(inference),
                       'budget_observations': meta.get('budget_observations', []),
                       'uci': move.uci(), 'san': san, 'piece': piece_symbol,
-                      'seconds': meta['seconds'], 'fen': board.fen()}
+                      'seconds': meta['seconds'], 'fen': board.fen(),
+                      'arbiter_intervention': bool(meta.get('arbiter_intervention')),
+                      'arbiter_signal': meta.get('arbiter_signal'),
+                      'arbiter_response': meta.get('arbiter_response')}
+            if meta.get('arbiter_intervention'):
+                arbiter_events.append({**(meta.get('arbiter_signal') or {}),
+                    'response': meta.get('arbiter_response'),
+                    'response_seconds': meta.get('seconds'),
+                    'selected_move': move.uci(), 'intervention_outcome': 'legal_move_selected'})
             move_records.append(record); times.append(meta['seconds'])
             if progress:
                 progress(record)
@@ -420,6 +442,8 @@ class SequentialChessRunner:
         return {'status': 'finished', 'result': outcome.result(),
                 'termination': outcome.termination.name, 'fen': board.fen(),
                 'moves': move_records, 'move_times': times,
+                'arbiter_events': arbiter_events,
+                'arbiter_intervention_count': len(arbiter_events),
                 'avg_move_seconds': round(sum(times) / len(times), 4) if times else 0.0,
                 'pgn': self._pgn(board, white['name'], black['name'], outcome.result())}
 

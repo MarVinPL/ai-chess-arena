@@ -184,6 +184,30 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(payload[0]['black'], 'Model B')
         self.assertEqual(payload[0]['result'], '1-0')
 
+    def test_game_detail_exposes_arbiter_intervention_audit(self):
+        move_metadata = [{
+            'ply': 12, 'color': 'white', 'model': 'Arbiter Test',
+            'arbiter_intervention': True,
+            'arbiter_signal': {'type': 'piece_shuttle', 'reason': 'repeated shuttle'},
+            'arbiter_response': 'g1f3', 'seconds': 0.42, 'uci': 'g1f3',
+        }]
+        with sqlite3.connect(server.DB) as db:
+            cur = db.execute(
+                "INSERT INTO games(started_at,ended_at,white_model,black_model,result,pgn,move_count,illegal_attempts,avg_move_seconds,inference_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                ('now', 'now', 'Arbiter Test', 'Opponent', '1/2-1/2', '[Result \"1/2-1/2\"]',
+                 1, 0, 0.42, __import__('json').dumps(move_metadata)),
+            )
+            game_id = cur.lastrowid
+        try:
+            with urllib.request.urlopen(self.base + f'/api/games/{game_id}') as response:
+                payload = __import__('json').loads(response.read())
+            self.assertEqual(payload['arbiter_events'][0]['signal']['type'], 'piece_shuttle')
+            self.assertEqual(payload['arbiter_events'][0]['response_seconds'], 0.42)
+            self.assertEqual(payload['arbiter_events'][0]['selected_move'], 'g1f3')
+        finally:
+            with sqlite3.connect(server.DB) as db:
+                db.execute('DELETE FROM games WHERE id=?', (game_id,))
+
     def test_model_registry_exposes_version_and_ownership_fields(self):
         with urllib.request.urlopen(self.base + '/api/models') as response:
             self.assertEqual(response.status, 200)

@@ -72,6 +72,30 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(progress[-1]['san'], 'Qh4#')
         self.assertEqual(progress[-1]['fen'], result['fen'])
 
+    def test_arbiter_intervention_is_passed_to_model_and_audited(self):
+        from unittest.mock import patch
+        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        class ArbiterRuntime:
+            def __init__(self): self.calls = []
+            def generate(self, path, board, stop_event=None, recent_moves=None, arbiter_signal=None):
+                self.calls.append(arbiter_signal)
+                return chess.Move.from_uci(sequence[len(self.calls)-1]), {
+                    'seconds': 0.25, 'arbiter_intervention': bool(arbiter_signal),
+                    'arbiter_signal': arbiter_signal,
+                    'arbiter_response': 'Ponownie oceniona odpowiedź',
+                }
+        runtime = ArbiterRuntime()
+        signal = {'type': 'piece_shuttle', 'reason': 'powtarzany cykl'}
+        with patch('engine_runner.arbiter.detect_stagnation', return_value=signal):
+            result = SequentialChessRunner(runtime).play_game(
+                {'name': 'Alpha', 'path': '/tmp/a.gguf'},
+                {'name': 'Beta', 'path': '/tmp/b.gguf'})
+        self.assertEqual(runtime.calls[0]['type'], 'piece_shuttle')
+        self.assertEqual(result['arbiter_intervention_count'], 3)
+        self.assertEqual(result['arbiter_events'][0]['response_seconds'], 0.25)
+        self.assertEqual(result['arbiter_events'][0]['selected_move'], 'f2f3')
+        self.assertEqual(result['moves'][0]['uci'], 'f2f3')  # arbiter never makes a move
+
     def test_stop_before_first_move_returns_stopped(self):
         event = threading.Event(); event.set()
         result = SequentialChessRunner(FakeRuntime()).play_game(
