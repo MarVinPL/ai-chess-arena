@@ -236,7 +236,7 @@ def sync_catalog(source_path=SOURCE_MANIFEST,catalog_path=CATALOG_PATH,fetcher=f
             if exc.status in (404,410):
                 if _mark_source_state(entry,'missing',now): counts['changed']+=1; counts['missing']+=1
                 continue
-            raise CatalogSyncError(f'Nie udało się zweryfikować repozytorium {repo}; zachowano poprzedni katalog') from exc
+            raise CatalogSyncError(f'Nie udało się zweryfikować repozytorium {repo} (HTTP {exc.status}); zachowano poprzedni katalog') from exc
         moved=_repo_from_api_url(final)
         if moved and moved!=repo:
             if _mark_source_state(entry,'moved',now,moved_to_repo_id=moved): counts['changed']+=1; counts['moved']+=1
