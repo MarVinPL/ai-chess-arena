@@ -25,6 +25,17 @@
 - Do not add unrelated scope to an existing PR. Create a separate issue and a separate PR instead.
 - Keep the issue/PR relationship explicit in the PR description and issue discussion.
 
+## Canonical Issue identity and PR numbering
+
+- The **Issue number is the canonical identifier of the task**. Use it consistently in the implementation branch, commit subjects, PR title/body, issue discussion, and work reports.
+- Name implementation branches with the canonical Issue number, for example `feat/issue-57-short-description` or `docs/issue-57-short-description`.
+- Every implementation PR must link to exactly one canonical Issue and include the exact closing keyword `Closes #<issue-number>` in its body.
+- Include a direct link to the canonical Issue in the PR description when useful; do not rely on title similarity alone to establish the relationship.
+- PR titles and commit subjects should include the canonical Issue number, for example `Issue #57: describe the change` and `issue-57: describe the change`.
+- GitHub assigns Issue and PR numbers automatically from one repository-wide sequence. A separately created Issue and its PR therefore have different numbers; neither can be chosen or edited to force equality.
+- In every status report, identify the pair explicitly as `Issue #N → PR #M`. Never label the PR number as the Issue number, or imply that two different GitHub objects share one number.
+- Do not create fake aliases, renumber references, or try to reserve future numbers. If a task must have only one GitHub number, the PR itself can serve as the task record only after the repository owner explicitly changes the `One issue = one pull request` policy; do not make that policy change implicitly.
+
 ## Completion and release
 
 - A task is not complete merely because code exists in a branch or on a server.
