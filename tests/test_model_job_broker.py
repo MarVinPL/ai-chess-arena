@@ -76,6 +76,8 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.assertIn(f"/run/ai-chess-model-test-{job['job_id']}", plan["argv"])
         self.assertFalse(plan["side_effects_performed"])
         self.assertIn("--", plan["argv"])
+        self.assertIn("--expected-sha256", plan["argv"])
+        self.assertIn(self.artifact_sha256, plan["argv"])
         self.assertEqual(plan["argv"][-9], WORKER_EXECUTABLE)
         self.assertFalse(any(x in {"sh", "bash", "-c"} for x in plan["argv"]))
         with self.assertRaisesRegex(ValueError, "zużyta"):
