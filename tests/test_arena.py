@@ -75,6 +75,15 @@ class ArenaSmokeTests(unittest.TestCase):
         )
         self.assertIsNone(server._registry_display_name_for_runtime_model(
             'unknown.gguf', names))
+        self.assertEqual(
+            server._registry_runtime_message(
+                'Ładowanie modelu: qwen2-0_5b-instruct-q4_k_m.gguf', names),
+            'Ładowanie modelu: Qwen2-0.5B-Instruct-Q4_K_M',
+        )
+        self.assertEqual(
+            server._registry_runtime_message('Model loading', names),
+            'Model loading',
+        )
 
     def test_pairing_resolves_registry_names_for_both_color_assignments(self):
         players = {
