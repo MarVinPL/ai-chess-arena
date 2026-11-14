@@ -9,6 +9,7 @@ import model_store
 import model_allowlist
 import model_admission
 import model_permissions
+import model_permission_auth
 import model_review_submissions
 import hf_candidate_audit
 from model_exclusions import is_excluded_model_identity
@@ -1531,6 +1532,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+        permission_actor = None
+        if path.startswith('/api/model-permissions/'):
+            permission_actor = model_permission_auth.authenticated_actor(self)
+            if permission_actor is None:
+                self.send_json({
+                    'error': 'Brak uwierzytelnionej tożsamości operatora. Operacje na uprawnieniach modeli są zablokowane do czasu wdrożenia zaufanego mechanizmu logowania.'
+                }, 403)
+                return
         if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-permissions/request','/api/model-permissions/approve','/api/model-permissions/reject','/api/model-permissions/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
@@ -1597,7 +1606,7 @@ class Handler(BaseHTTPRequestHandler):
                                 c, model_id=model_id, repo_id=repo_id, revision=revision,
                                 artifact_sha256=payload.get('artifact_sha256'),
                                 scope=payload.get('scope'), confirm=payload.get('confirm') is True,
-                                reason=payload.get('reason', ''), snapshot=entry)
+                                reason=payload.get('reason', ''), snapshot=entry, actor=permission_actor)
                         else:
                             request_id = int(payload.get('request_id', 0))
                             existing = next((item for item in model_permissions.list_permissions(c)
@@ -1613,7 +1622,7 @@ class Handler(BaseHTTPRequestHandler):
                             result = model_permissions.decide_permission(
                                 c, request_id=request_id, action=action,
                                 confirm=payload.get('confirm') is True,
-                                reason=payload.get('reason', ''))
+                                reason=payload.get('reason', ''), actor=permission_actor)
                 elif path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
