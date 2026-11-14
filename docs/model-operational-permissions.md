@@ -79,3 +79,17 @@ The job ledger now supports:
 - reconciling a starting/running row after a service restart: an active or unknown unit leaves the row unchanged; a confirmed inactive unit becomes `failed`, or `cancelled` if cancellation had already been requested.
 
 These functions do not call `systemctl`, `systemd-run`, or `systemd` D-Bus. They accept a state-reader callback so unit inspection and stop privileges remain outside the web/API process. The real stop adapter and its authorization boundary are still outstanding.
+
+## Read-only production authentication audit (2026-11-14)
+
+The production deployment was inspected without changing files, reloading services, or touching the database:
+
+- The active Caddy configuration imports per-site modules from `/etc/caddy/sites/*.caddy`.
+- The Arena site module currently uses one Caddy Basic Auth account named `arena`, then proxies to `127.0.0.1:8090`.
+- The active site module does not configure an authenticated-identity forwarding header (for example, a Caddy placeholder written by the proxy itself).
+- The systemd service runs the application as the shared Unix account `debian`; this is not an authenticated human identity either.
+- The production service is running the live worktree `/home/debian/ai-chess-arena-live-b0759ee`, with a drop-in overriding the working directory and bind/write paths. No production files or settings were changed during this audit.
+
+Consequently, neither the current application actor constant (`arena`), the shared Basic Auth username, nor the Unix service account can provide per-operator attribution. A client-supplied actor value or arbitrary forwarded header must not be trusted. Before privileged decisions or job execution can be enabled, a separate authentication design must provide a stable, authenticated operator identity and a trusted boundary that strips inbound spoofable identity headers and overwrites them after authentication. The application must also reject direct requests that bypass that boundary, or independently validate the session itself.
+
+**Status: BLOCKED — authenticated actor propagation is not implemented.** This audit is evidence for the blocker only; it does not authorize or perform a production Caddy, systemd, application, or database change.
