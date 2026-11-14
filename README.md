@@ -67,3 +67,11 @@ No tournament is started automatically when a model is added. Real inference and
 - The Bielik 7B entry declares `CC-BY-NC-4.0` (NonCommercial restriction). Llama 3.1/3.2 use Meta Community Licenses, not Apache-2.0. The Qwen3.8 entry retains the base-model license/acceptable-use conditions.
 - The JonathanColetti entry pins the full Q4_K_M model; its separate draft-Q8_0 head is explicitly excluded from standalone model identity.
 - No GGUF weights are committed or fetched by this workflow. Run `python -m unittest tests.test_model_manifest -v` to test the manifest importer.
+
+## Tournament enrollment and on-demand model cache
+
+- New tournaments enroll every active registry row, including entries with no version or incomplete manifest; those rows remain visible with explicit readiness blockers. No entrant is silently dropped.
+- Round-robin scheduling uses the actual registry model IDs and never creates self-pairings. With `n` active entrants, the league schedule contains `n × (n − 1)` games.
+- The read-only `GET /api/tournaments/{id}/preflight` endpoint reports each entrant's manifest, license, local-cache and runtime state. Missing local GGUF files are informational, not a start blocker.
+- When a game actually needs a model, the runner downloads its target and optional draft into the private Arena cache only if the license is explicitly verified and the download URL is safe. Hugging Face downloads must use a full immutable commit revision. Size and SHA-256 are verified before the file is activated; failed downloads do not create results or remove entrants.
+- A missing/incomplete manifest, unapproved license, unavailable runtime, insufficient disk space, or integrity failure remains a visible blocker. No automatic download is performed for unverified licenses.

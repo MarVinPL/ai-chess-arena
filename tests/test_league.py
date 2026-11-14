@@ -9,8 +9,8 @@ class LeagueTests(unittest.TestCase):
    c.execute('CREATE TABLE games(id INTEGER PRIMARY KEY,white_model TEXT,black_model TEXT,result TEXT)')
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Alpha','PURE_AI','now')")
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Beta','PURE_AI','now')")
-   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(1,'alpha-v1','alpha.gguf',? ,100,'https://example.test/alpha','Apache-2.0',1,'now')", ('a'*64,))
-   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(2,'beta-v1','beta.gguf',?,100,'https://example.test/beta','Apache-2.0',1,'now')", ('b'*64,))
+   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(1,'alpha-v1','alpha.gguf',? ,100,'https://example.test/alpha.gguf','Apache-2.0',1,'now')", ('a'*64,))
+   c.execute("INSERT INTO model_versions(model_id,version_key,filename,sha256,size_bytes,source,license,license_verified,created_at) VALUES(2,'beta-v1','beta.gguf',?,100,'https://example.test/beta.gguf','Apache-2.0',1,'now')", ('b'*64,))
  def tearDown(self):
   league.DB=self.old; self.tmp.cleanup()
  def test_truncated_move_schedules_larger_budget_only_for_next_tournament(self):
@@ -296,24 +296,24 @@ class LeagueTests(unittest.TestCase):
   self.assertTrue(any(r['name']=='Alpha target + MTP' for r in entries))
   self.assertEqual(paired['versions'][0]['draft_filename'],'alpha-draft.gguf')
 
- def test_same_weights_with_thinking_on_and_off_are_distinct_competitors(self):
+ def test_every_active_registry_entry_is_enrolled_including_duplicate_configurations(self):
   league.register_model('Alpha thinking ON',source='https://example.test/alpha',license='Apache-2.0',
    license_verified=True,metadata={'filename':'alpha-on.gguf','sha256':'a'*64,'size_bytes':100,
                                    'inference':{'thinking':True}})
-  # An exact duplicate of the ON configuration is still deduplicated.
+  # Every active registry model is enrolled, even if two registry rows share a configuration.
   league.register_model('Alpha thinking ON duplicate',source='https://example.test/alpha',license='Apache-2.0',
    license_verified=True,metadata={'filename':'alpha-on-duplicate.gguf','sha256':'a'*64,'size_bytes':100,
                                    'inference':{'thinking':True}})
   tournament=league.create_round_robin('Thinking variants')
-  self.assertEqual(tournament['players'],3)
-  self.assertEqual(tournament['games_planned'],6)
+  self.assertEqual(tournament['players'],4)
+  self.assertEqual(tournament['games_planned'],12)
   with league.connect() as c:
    rows=c.execute('''SELECT m.name,json_extract(v.metadata_json,'$.inference.thinking') AS thinking
     FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
     JOIN model_versions v ON v.id=e.version_id WHERE e.tournament_id=?''',(tournament['id'],)).fetchall()
    pairings=c.execute('SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND white_model_id=black_model_id',(tournament['id'],)).fetchone()[0]
   self.assertEqual({(r['name'],bool(r['thinking'])) for r in rows if r['name'].startswith('Alpha')},
-                   {('Alpha',False),('Alpha thinking ON',True)})
+                   {('Alpha',False),('Alpha thinking ON',True),('Alpha thinking ON duplicate',True)})
   self.assertEqual(pairings,0)
 
  def test_inference_config_rejects_non_boolean_thinking(self):
@@ -328,16 +328,46 @@ class LeagueTests(unittest.TestCase):
    with self.assertRaises(ValueError):
     league.register_model('Bad config '+str(invalid),metadata={'inference':invalid})
 
- def test_identical_weights_under_different_names_are_not_two_competitors(self):
+ def test_identical_weights_under_different_registry_ids_are_still_enrolled(self):
   with league.connect() as c:
    c.execute("UPDATE model_versions SET sha256=? WHERE model_id=2", ('a'*64,))
-  with self.assertRaisesRegex(ValueError, 'dwóch różnych modeli'):
-   league.create_round_robin('Duplicate weights')
+  tournament=league.create_round_robin('Duplicate weights remain visible')
+  self.assertEqual(tournament['players'],2)
+  with league.connect() as c:
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament['id'],)).fetchone()[0],2)
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND white_model_id=black_model_id',(tournament['id'],)).fetchone()[0],0)
 
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')
- def test_unverified_model_cannot_enter_tournament(self):
+ def test_unverified_model_remains_an_entrant_but_is_blocked_at_preflight(self):
   with league.connect() as c: c.execute("UPDATE model_versions SET license_verified=0 WHERE model_id=2")
-  with self.assertRaises(ValueError): league.create_round_robin('Blocked')
+  tournament=league.create_round_robin('Unverified license entrant')
+  self.assertEqual(tournament['players'],2)
+  entries=league.tournament_entry_status(tournament['id'])
+  beta=next(entry for entry in entries if entry['name']=='Beta')
+  self.assertTrue(beta['tournament_entrant'])
+  self.assertFalse(beta['license_verified'])
+  self.assertIn('licencja niezatwierdzona',beta['blockers'])
+
+ def test_missing_local_gguf_is_not_a_start_blocker_and_is_downloaded_on_demand(self):
+  tournament=league.create_round_robin('Lazy download')
+  entries=league.tournament_entry_status(tournament['id'])
+  self.assertEqual(len(entries),2)
+  self.assertTrue(all(entry['ready'] for entry in entries))
+  self.assertTrue(all(entry['download_on_demand'] for entry in entries))
+  self.assertTrue(all(not entry['local_file_available'] for entry in entries))
+  self.assertTrue(all(not entry['local_file_required_before_start'] for entry in entries))
+
+ def test_active_registry_model_without_any_version_is_still_enrolled(self):
+  with league.connect() as c:
+   c.execute("INSERT INTO league_models(name,format,created_at) VALUES('No manifest','PURE_AI','now')")
+  tournament=league.create_round_robin('Includes unmanifested registry entry')
+  self.assertEqual(tournament['players'],3)
+  self.assertEqual(tournament['games_planned'],6)
+  entries=league.tournament_entry_status(tournament['id'])
+  missing=next(entry for entry in entries if entry['name']=='No manifest')
+  self.assertTrue(missing['tournament_entrant'])
+  self.assertFalse(missing['manifest_ready'])
+  self.assertIn('brak wersji modelu',missing['blockers'])
 if __name__=='__main__': unittest.main(verbosity=2)

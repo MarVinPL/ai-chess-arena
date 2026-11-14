@@ -248,29 +248,22 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
  if isinstance(qualification_percent,bool) or not isinstance(qualification_percent,int) or not 75<=qualification_percent<=90:
   raise ValueError('Procent awansu do draftu musi wynosić od 75 do 90')
  with connect() as c:
-  candidates=c.execute('''SELECT m.id,v.id AS version_id,v.sha256 AS model_sha256,
+  # Every active registry row is an entrant. A missing version or manifest is
+  # represented explicitly and blocks execution later; it never hides a player.
+  candidates=c.execute('''SELECT m.id,m.name,
+      v.id AS version_id,v.sha256 AS model_sha256,
       COALESCE(v.draft_sha256,'') AS draft_sha256,v.metadata_json
-      FROM league_models m JOIN model_versions v ON v.id=(
-       SELECT v2.id FROM model_versions v2 WHERE v2.model_id=m.id AND v2.license_verified=1
-       AND v2.source<>'' AND v2.filename IS NOT NULL AND v2.sha256 IS NOT NULL AND v2.size_bytes>0
-       ORDER BY v2.id DESC LIMIT 1)
+      FROM league_models m
+      LEFT JOIN model_versions v ON v.id=(
+       SELECT MAX(v2.id) FROM model_versions v2 WHERE v2.model_id=m.id)
       WHERE m.active=1 AND m.format=? ORDER BY m.id''',(format,)).fetchall()
-  # A competitor is an immutable model+draft+inference configuration. The same
-  # GGUF may therefore enter twice when thinking differs, but exact duplicates do not.
-  ms=[]; seen_configs=set()
-  for candidate in candidates:
-   metadata=json.loads(candidate['metadata_json'] or '{}')
-   inference=normalize_inference_config(metadata)
-   identity=((candidate['model_sha256'] or '').lower(),
-             (candidate['draft_sha256'] or '').lower(),
-             json.dumps(inference,sort_keys=True,separators=(',',':')))
-   if identity in seen_configs: continue
-   seen_configs.add(identity); ms.append(candidate)
-  if len(ms)<2: raise ValueError('Potrzeba co najmniej dwóch różnych modeli z jawnie zweryfikowaną licencją')
+  if len(candidates)<2:
+   raise ValueError('Potrzeba co najmniej dwóch aktywnych wpisów rejestru')
+  ms=[dict(row) for row in candidates]
   now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
   tid=c.execute("INSERT INTO tournaments(name,format,created_at,rules_version,qualification_percent) VALUES(?,?,?,'2',?)",(name,format,now,qualification_percent)).lastrowid
-  for m in ms:
-   c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tid,m['id'],m['version_id']))
+  for model in ms:
+   c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tid,model['id'],model['version_id']))
   for i,a in enumerate(ms):
    for b in ms[i+1:]:
     c.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,stage) VALUES(?,?,?,1,'league')",(tid,a['id'],b['id']))
@@ -278,6 +271,83 @@ def create_round_robin(name,format='PURE_AI',qualification_percent=80):
   expected_qualifiers=max(2,math.ceil(len(ms)*qualification_percent/100))
   expected_qualifiers=min(len(ms),expected_qualifiers)
   return {'id':tid,'name':name,'format':format,'players':len(ms),'qualification_percent':qualification_percent,'expected_qualifiers':expected_qualifiers,'games_planned':len(ms)*(len(ms)-1),'draft_games_planned':expected_qualifiers-1,'total_games_planned':len(ms)*(len(ms)-1)+expected_qualifiers-1,'draft_format':'ALL_WINNERS_PLUS_TOP_SCORING_REMAINDER','status':'planned'}
+
+
+def tournament_entry_status(tournament_id):
+ """Return every entrant; local cache absence is informational, not a blocker."""
+ with connect() as c:
+  rows=c.execute('''SELECT e.model_id,e.version_id,m.name,m.active,
+      v.filename,v.sha256,v.size_bytes,v.source,v.status,v.license_verified,
+      v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,
+      v.draft_status,v.draft_managed_copy,v.metadata_json
+      FROM tournament_entries e
+      JOIN league_models m ON m.id=e.model_id
+      LEFT JOIN model_versions v ON v.id=e.version_id
+      WHERE e.tournament_id=? ORDER BY m.id''',(tournament_id,)).fetchall()
+ entries=[]
+ for row in rows:
+  item=dict(row); blockers=[]
+  try:
+   metadata=json.loads(item.get('metadata_json') or '{}')
+  except (TypeError,json.JSONDecodeError):
+   metadata={}
+  revision=metadata.get('revision')
+  download_url=metadata.get('download_url') or ''
+  is_hf_source=isinstance(item.get('source'),str) and item['source'].startswith('https://huggingface.co/')
+  pinned_hf=bool(isinstance(revision,str) and re.fullmatch(r'[0-9a-fA-F]{40}',revision) and
+                  isinstance(download_url,str) and f'/resolve/{revision}/' in download_url)
+  direct_https=bool(isinstance(item.get('source'),str) and item['source'].startswith('https://') and
+                    item['source'].lower().endswith('.gguf'))
+  manifest_ready=bool(
+   item.get('version_id') and
+   isinstance(item.get('filename'),str) and item['filename'].lower().endswith('.gguf') and
+   isinstance(item.get('sha256'),str) and re.fullmatch(r'[0-9a-fA-F]{64}',item['sha256']) and
+   isinstance(item.get('size_bytes'),int) and item['size_bytes']>0 and
+   (pinned_hf if is_hf_source else direct_https or pinned_hf)
+  )
+  license_verified=item.get('license_verified')==1
+  local_file_available=False
+  if item.get('filename') and item.get('managed_copy')==1 and item.get('status')=='downloaded':
+   path=(MODEL_DIR/item['filename']).resolve()
+   local_file_available=(path.parent==MODEL_DIR.resolve() and path.is_file() and
+                         isinstance(item.get('size_bytes'),int) and path.stat().st_size==item['size_bytes'])
+  draft_manifest_ready=True
+  if item.get('draft_filename'):
+   draft_url=item.get('draft_download_url') or ''
+   draft_path=item.get('draft_source_path') or ''
+   if is_hf_source:
+    draft_prefix=item['source'].rstrip('/')+'/resolve/'
+    draft_revision=draft_url[len(draft_prefix):].split('/',1)[0] if draft_url.startswith(draft_prefix) else ''
+    draft_pinned=bool(re.fullmatch(r'[0-9a-fA-F]{40}',draft_revision) and draft_url.endswith('/'+draft_path))
+   else:
+    draft_pinned=bool(isinstance(draft_url,str) and draft_url.startswith('https://'))
+   draft_manifest_ready=bool(
+    item.get('draft_sha256') and re.fullmatch(r'[0-9a-fA-F]{64}',item['draft_sha256']) and
+    isinstance(item.get('draft_size_bytes'),int) and item['draft_size_bytes']>0 and
+    isinstance(draft_path,str) and draft_path and draft_pinned
+   )
+  draft_file_available=bool(item.get('draft_filename') and item.get('draft_managed_copy')==1 and
+                            item.get('draft_status')=='downloaded' and
+                            (MODEL_DIR/item['draft_filename']).is_file())
+  if item.get('active')!=1: blockers.append('wpis rejestru jest nieaktywny')
+  if not item.get('version_id'): blockers.append('brak wersji modelu')
+  if not manifest_ready: blockers.append('niekompletny lub nieprzypięty manifest')
+  if not draft_manifest_ready: blockers.append('niekompletny manifest modelu draft')
+  if not license_verified: blockers.append('licencja niezatwierdzona')
+  entries.append({
+   'model_id':item['model_id'],'name':item['name'],
+   'active_registry_entry':item.get('active')==1,'tournament_entrant':True,
+   'version_id':item.get('version_id'),'manifest_ready':manifest_ready,
+   'license_verified':license_verified,'local_file_available':local_file_available,
+   'local_file_required_before_start':False,
+   'download_on_demand':manifest_ready and license_verified and not local_file_available,
+   'draft_manifest_ready':draft_manifest_ready,
+   'draft_file_available':draft_file_available,
+   'draft_download_on_demand':draft_manifest_ready and license_verified and bool(item.get('draft_filename')) and not draft_file_available,
+   'ready':not blockers,'blockers':blockers
+  })
+ return entries
+
 
 def _seed_order(size):
  order=[1,2]
