@@ -42,13 +42,20 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
         self.assertIn("Otwórz warunki dopuszczenia", self.renderer)
         self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
-        self.assertIn("Uzupełnij dane modelu '+e.model_id", self.renderer)
+        self.assertIn("Przygotuj propozycję do audytu · model '+e.model_id", self.renderer)
         self.assertIn("Brak lokalnego GGUF nie blokuje startu", self.renderer)
         self.assertIn("'/api/tournaments/start'", self.renderer)
         self.assertIn("'/api/tournaments/stop'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", self.renderer)
         self.assertIn("wznowienie zablokowane — wymagany przegląd", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
+
+    def test_preflight_review_action_tracks_all_models_supported_by_review_form(self):
+        self.assertIn("const reviewSelect=$('review-model-id')", self.renderer)
+        self.assertIn("Array.from(reviewSelect.options).some(option=>option.value===String(e.model_id))", self.renderer)
+        self.assertIn("if(reviewSupported)", self.renderer)
+        self.assertIn("Propozycja dotyczy dokładnej rewizji '+e.revision", self.renderer)
+        self.assertNotIn("if([1,2,3].includes(Number(e.model_id)))", self.renderer)
 
     def test_diagnostics_are_available_for_unstarted_and_failed_tournaments(self):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
