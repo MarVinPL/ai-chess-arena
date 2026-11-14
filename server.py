@@ -2,6 +2,7 @@
 import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 import chess, chess.pgn
 import league
 import model_store
@@ -14,6 +15,11 @@ import engine_runner
 import adjudication
 import passkey_test
 import tournament_checkpoint
+
+def _route_path(request_target):
+    """Return the URL path without its query string for HTTP route matching."""
+    return urlsplit(request_target).path
+
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
@@ -1277,28 +1283,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if self.path == '/api/models/random':
+        raw_path = path
+        path = _route_path(raw_path)
+        if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
             except Exception as e: self.send_json({'error':str(e)},422)
-        elif self.path.startswith('/api/models/search'):
+        elif path.startswith('/api/models/search'):
             try:
                 from urllib.parse import urlparse, parse_qs
-                query = parse_qs(urlparse(self.path).query).get('q',[''])[0]
+                query = parse_qs(urlparse(raw_path).query).get('q',[''])[0]
                 self.send_json(search_hf_models(query))
             except Exception as e:
                 self.send_json({'error':str(e)}, 422)
-        elif self.path == '/api/model-review-submissions':
+        elif path == '/api/model-review-submissions':
             try:
                 with league.connect() as c:
                     self.send_json(model_review_submissions.list_submissions(c))
             except Exception as e:
                 self.send_json({'error': str(e)}, 500)
-        elif self.path == '/api/state':
+        elif path == '/api/state':
             with lock: self.send_json(state())
-        elif self.path == '/api/live':
+        elif path == '/api/live':
             self.send_json(get_live())
-        elif self.path == '/api/games':
+        elif path == '/api/games':
             with sqlite3.connect(DB) as c:
                 c.row_factory = sqlite3.Row
                 rows = c.execute('''SELECT id,started_at,white_model,black_model,result,move_count,
@@ -1320,9 +1328,9 @@ class Handler(BaseHTTPRequestHandler):
                 item.pop('inference_metadata_json', None)
                 games.append(item)
             self.send_json(games)
-        elif self.path.startswith('/api/games/') and self.path.endswith('/pgn'):
+        elif path.startswith('/api/games/') and path.endswith('/pgn'):
             try:
-                game_id = int(self.path.split('/')[3])
+                game_id = int(path.split('/')[3])
                 with sqlite3.connect(DB) as c:
                     row = c.execute('SELECT pgn FROM games WHERE id=?', (game_id,)).fetchone()
                 if row is None:
@@ -1337,9 +1345,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(body)
             except ValueError:
                 self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
-        elif self.path.startswith('/api/games/'):
+        elif path.startswith('/api/games/'):
             try:
-                game_id = int(self.path.rsplit('/', 1)[1])
+                game_id = int(path.rsplit('/', 1)[1])
                 with sqlite3.connect(DB) as c:
                     c.row_factory = sqlite3.Row
                     row = c.execute('''SELECT id,started_at,ended_at,white_model,black_model,result,pgn,
@@ -1364,7 +1372,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(payload)
             except ValueError:
                 self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
-        elif self.path == '/api/models':
+        elif path == '/api/models':
             with league.connect() as c:
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
                   FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
@@ -1384,10 +1392,10 @@ class Handler(BaseHTTPRequestHandler):
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)
-        elif self.path.startswith('/api/hf-candidates/audit?'):
+        elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
-                params = parse_qs(urlparse(self.path).query)
+                params = parse_qs(urlparse(raw_path).query)
                 catalog_id = params.get('catalog_id', [''])[0]
                 revision = params.get('revision', [''])[0]
                 with league.connect() as c:
@@ -1398,7 +1406,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(report)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 422)
-        elif self.path == '/api/hf-candidates':
+        elif path == '/api/hf-candidates':
             try:
                 items = hf_candidate_audit.load_catalog()
                 with league.connect() as c:
@@ -1412,7 +1420,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(result)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 503)
-        elif self.path == '/api/model-admission':
+        elif path == '/api/model-admission':
             try:
                 sync = model_allowlist.check_repository_sync(ROOT)
                 if not sync.get('in_sync'):
@@ -1421,11 +1429,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(model_admission.list_decisions(c))
             except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
                 self.send_json({'error': str(exc)}, 503)
-        elif self.path == '/api/league':
+        elif path == '/api/league':
             self.send_json(league.elo_ratings('PURE_AI'))
-        elif self.path == '/api/league/engine':
+        elif path == '/api/league/engine':
             self.send_json(league.elo_ratings('AI_ENGINE'))
-        elif self.path == '/api/storage':
+        elif path == '/api/storage':
             status = league.storage_status()
             managed = model_store.MANAGED_DIR
             managed.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1436,17 +1444,17 @@ class Handler(BaseHTTPRequestHandler):
             ]
             status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
             self.send_json(status)
-        elif self.path.startswith('/api/tournaments/') and self.path.endswith('/view'):
+        elif path.startswith('/api/tournaments/') and path.endswith('/view'):
             try:
-                tournament_id = int(self.path.split('/')[3])
+                tournament_id = int(path.split('/')[3])
                 self.send_json(league.tournament_view(tournament_id, get_live()))
             except KeyError as exc:
                 self.send_json({'error': str(exc)}, 404)
             except (ValueError, IndexError):
                 self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif self.path.startswith('/api/tournaments/') and self.path.endswith('/preflight'):
+        elif path.startswith('/api/tournaments/') and path.endswith('/preflight'):
             try:
-                tournament_id = int(self.path.split('/')[3])
+                tournament_id = int(path.split('/')[3])
                 with league.connect() as c:
                     exists = c.execute('SELECT 1 FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
                 if not exists:
@@ -1455,7 +1463,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(tournament_preflight(tournament_id))
             except (ValueError, IndexError):
                 self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif self.path == '/api/tournaments':
+        elif path == '/api/tournaments':
             with league.connect() as c:
                 rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
                     (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
@@ -1479,21 +1487,21 @@ class Handler(BaseHTTPRequestHandler):
                     ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
                     FROM tournaments t ORDER BY t.id DESC''').fetchall()
             self.send_json([dict(x) for x in rows])
-        elif self.path.startswith('/api/passkey-tests'):
+        elif path.startswith('/api/passkey-tests'):
             from urllib.parse import urlparse, parse_qs
-            tid = parse_qs(urlparse(self.path).query).get('tournament_id', [None])[0]
+            tid = parse_qs(urlparse(raw_path).query).get('tournament_id', [None])[0]
             with sqlite3.connect(DB) as c:
                 c.row_factory = sqlite3.Row
                 rows = c.execute('SELECT tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at FROM passkey_test_answers' + (' WHERE tournament_id=?' if tid else '') + ' ORDER BY tournament_id,model_name,question_no', ((int(tid),) if tid else ())).fetchall()
             self.send_json([dict(x) for x in rows])
-        elif self.path == '/api/export/pgn':
+        elif path == '/api/export/pgn':
             with sqlite3.connect(DB) as c:
                 rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
             body = ('\n\n'.join(row[0].strip() for row in rows if row[0].strip()) + ('\n' if rows else '')).encode('utf-8')
             self.send_response(200); self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
             self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.pgn"')
             self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
-        elif self.path == '/api/export/csv':
+        elif path == '/api/export/csv':
             output = io.StringIO(newline='')
             writer = csv.writer(output)
             writer.writerow(['id','started_at','ended_at','white_model','black_model','result','move_count','illegal_attempts','avg_move_seconds','pgn'])
@@ -1504,17 +1512,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header('Content-Type', 'text/csv; charset=utf-8')
             self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.csv"')
             self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
-        elif self.path == '/':
+        elif path == '/':
             data = (ROOT/'index.html').read_bytes(); self.send_response(200)
             self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
         else: self.send_error(404)
     def do_POST(self):
+        path = _route_path(path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path == '/api/hf-candidates/audit':
+                if path == '/api/hf-candidates/audit':
                     if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
                         raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
                     try:
@@ -1524,7 +1533,7 @@ class Handler(BaseHTTPRequestHandler):
                         result = report
                     finally:
                         hf_candidate_audit.AUDIT_LOCK.release()
-                elif self.path == '/api/model-review-submissions/action':
+                elif path == '/api/model-review-submissions/action':
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
@@ -1536,7 +1545,7 @@ class Handler(BaseHTTPRequestHandler):
                             c, submission_id=payload.get('submission_id'), action=payload.get('action'),
                             actor='arena', reason=payload.get('reason', ''), payload=payload.get('proposal'),
                             allowed_model_ids=allowed_ids)
-                elif self.path == '/api/model-review-submissions':
+                elif path == '/api/model-review-submissions':
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
@@ -1546,17 +1555,17 @@ class Handler(BaseHTTPRequestHandler):
                     allowed_ids.discard(6)
                     with league.connect() as c:
                         result = model_review_submissions.submit(c, payload, allowed_model_ids=allowed_ids)
-                elif self.path in ('/api/model-admission/admit','/api/model-admission/revoke'):
+                elif path in ('/api/model-admission/admit','/api/model-admission/revoke'):
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
                     with league.connect() as c:
                         result = model_admission.apply_decision(
                             c, model_id=int(payload.get('model_id', 0)),
-                            action='admit' if self.path.endswith('/admit') else 'revoke',
+                            action='admit' if path.endswith('/admit') else 'revoke',
                             confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
                         )
-                elif self.path == '/api/models/license-evidence':
+                elif path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
@@ -1577,7 +1586,7 @@ class Handler(BaseHTTPRequestHandler):
                         metadata['license_evidence'] = evidence
                         c.execute('UPDATE model_versions SET metadata_json=? WHERE id=?', (json.dumps(metadata, ensure_ascii=False), version_id))
                     result = {'version_id': version_id, 'evidence': evidence, 'license_verified': False}
-                elif self.path == '/api/models/verify-license':
+                elif path == '/api/models/verify-license':
                     if payload.get('confirm_review') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
                     version_id = int(payload.get('version_id', 0))
@@ -1601,35 +1610,35 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('Najpierw pobierz dowody z repozytorium; nie znaleziono deklaracji ani pliku licencji')
                         c.execute('UPDATE model_versions SET license=?,license_verified=1 WHERE id=?', (license_name, version_id))
                     result = {'version_id': version_id, 'license_verified': True}
-                elif self.path == '/api/models/register':
+                elif path == '/api/models/register':
                     result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
-                elif self.path == '/api/tournaments/start':
+                elif path == '/api/tournaments/start':
                     result = start_tournament(int(payload.get('tournament_id', 0)))
-                elif self.path == '/api/tournaments/admissions':
+                elif path == '/api/tournaments/admissions':
                     if tournament_thread and tournament_thread.is_alive():
                         raise RuntimeError('Najpierw bezpiecznie zatrzymaj aktywny turniej')
                     result = league.create_late_admission_batch(
                         int(payload.get('parent_tournament_id', 0)), payload.get('model_ids'))
-                elif self.path == '/api/tournaments/entries':
+                elif path == '/api/tournaments/entries':
                     if tournament_thread and tournament_thread.is_alive():
                         raise RuntimeError('Nie można zmieniać składu podczas aktywnego turnieju')
                     result = league.add_prestart_tournament_entries(
                         int(payload.get('tournament_id', 0)), payload.get('model_ids'))
-                elif self.path == '/api/tournaments/stop':
+                elif path == '/api/tournaments/stop':
                     active = bool(tournament_thread and tournament_thread.is_alive())
                     if active:
                         tournament_stop_event.set()
                         result = {'status': 'stop_requested', 'checkpoint_required': True}
                     else:
                         result = {'status': 'not_running'}
-                elif self.path == '/api/models/download':
+                elif path == '/api/models/download':
                     if payload.get('confirm_download') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie pobrania')
                     result = model_store.download_version(
                         int(payload.get('version_id',0)), payload.get('url',''), payload.get('filename',''),
                         payload.get('sha256',''), int(payload.get('size_bytes',0)),
                         bool(payload.get('license_verified',False)))
-                elif self.path == '/api/models/cleanup':
+                elif path == '/api/models/cleanup':
                     if payload.get('confirm_delete') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
                     if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
@@ -1640,22 +1649,22 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if self.path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
-        elif self.path == '/api/step':
+        elif path == '/api/step':
             try:
                 with lock: do_step(); self.send_json(state())
             except Exception as e:
                 with lock: self.send_json({'error':str(e), **state()}, 422)
-        elif self.path == '/api/run':
+        elif path == '/api/run':
             with lock:
                 running = True
                 threading.Thread(target=autoplay_loop, daemon=True).start()
                 self.send_json(state())
-        elif self.path == '/api/stop':
+        elif path == '/api/stop':
             with lock: running = False; self.send_json(state())
-        elif self.path == '/api/reset':
+        elif path == '/api/reset':
             with lock:
                 running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
                 started_at = time.time(); last_error = ''; last_move = None
