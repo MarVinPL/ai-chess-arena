@@ -398,7 +398,8 @@ def tournament_view(tournament_id,live=None):
     p.white_model_id,p.black_model_id,p.winner_model_id,p.game_id,
     w.name AS white_name,b.name AS black_name,
     sw.seed AS white_seed,sb.seed AS black_seed,
-    g.id AS saved_game_id,g.result,g.ended_at,g.move_count
+    g.id AS saved_game_id,g.result,g.ended_at,g.move_count,
+    g.adjudication_status,g.adjudication_json
     FROM tournament_pairings p
     JOIN league_models w ON w.id=p.white_model_id
     JOIN league_models b ON b.id=p.black_model_id
@@ -561,7 +562,7 @@ def draft_champion(tournament_id):
 def elo_ratings(format='PURE_AI',k=32.0):
  with connect() as c:
   ps=c.execute('SELECT id,name FROM league_models WHERE active=1 AND format=? ORDER BY name',(format,)).fetchall(); ratings={p['id']:INITIAL_ELO for p in ps}; stats={p['id']:{'wins':0,'draws':0,'losses':0,'games':0,'score':0.0} for p in ps}
-  rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? AND g.white_model<>g.black_model ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
+  rows=c.execute('SELECT g.white_model,g.black_model,g.result FROM games g JOIN league_models w ON w.name=g.white_model JOIN league_models b ON b.name=g.black_model WHERE w.format=? AND b.format=? AND g.white_model<>g.black_model AND g.result IN ('1-0','0-1','1/2-1/2') ORDER BY g.id',(format,format)).fetchall(); ids={p['name']:p['id'] for p in ps}
   for g in rows:
    w=ids.get(g['white_model']); b=ids.get(g['black_model'])
    if w is None or b is None: continue
