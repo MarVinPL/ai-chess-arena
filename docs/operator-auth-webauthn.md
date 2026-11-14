@@ -69,3 +69,29 @@ The application validates that the origin host is the RP ID or a valid subdomain
 7. Perform a security review before any production configuration or database change.
 
 Until every gate is met, model_permission_auth.authenticated_actor() remains fail-closed and all four mutation routes return HTTP 403. No production enrollment, DB migration, configuration edit, deployment, model download, or model execution is authorized by this design decision.
+
+
+## Implementation progress (2026-11-14)
+
+The first backend slice is now present on the Issue #136 branch:
+
+- `operator_auth.py` pins RP ID and exact HTTPS origin from explicit environment configuration; it rejects missing configuration, HTTP, IP-literal RP IDs, malformed origins, and origins outside the RP ID.
+- WebAuthn registration uses required user verification, required resident/discoverable credentials, and no attestation collection. Credential verification is delegated to the maintained `webauthn==3.0.1` library.
+- The first owner bootstrap is a local CLI operation: `python operator_auth_admin.py create-owner --display-name "..."`. It creates a 10-minute, one-use token and stores only its SHA-256 hash. The token is printed once to the local terminal.
+- Registration challenges are short-lived and bound to the enrollment token. The random WebAuthn user handle is stored and reused for the operator record.
+- Discoverable login verifies the credential ID, stored public key, signature counter, exact origin/RP ID, user verification, and returned user handle.
+- Sessions use random opaque tokens; only the session-token hash is stored. The HTTP session cookie is Secure, HttpOnly, SameSite=Strict and bounded by an 8-hour absolute lifetime and 30-minute idle timeout. Mutating protected requests require the exact Origin and a session-bound CSRF header.
+- Backend endpoints exist for registration options/verification, login options/verification, session inspection, logout, and owner-only operator invitations.
+- Model-permission requests require a valid operator session; approve/reject/revoke additionally require the owner role. The actor is populated only by server-side session verification. Spoofed headers and JSON actor fields remain untrusted.
+
+### Not yet complete / not production-ready
+
+- The browser UI does not yet provide the Passkey registration/login flow or operator-session controls.
+- Persistent rate limiting and alerting for failed authentication/enrollment attempts are not implemented.
+- Credential revocation, operator suspension, role-change workflows, recovery, and global session invalidation are not implemented.
+- Ceremony failure-attempt handling and end-to-end browser tests need further security review.
+- No real RP ID/origin values have been configured or verified for the live site.
+- No owner enrollment token has been generated; no credentials or sessions have been created.
+- No production database migration, environment change, service restart, or deployment has been performed.
+
+Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until the UI, rate limits, lifecycle/recovery controls, security review, and end-to-end tests are complete. The production environment remains unchanged.
