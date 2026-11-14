@@ -219,6 +219,16 @@ class LlamafileRuntime:
             blocked.clear()
         return allowed, sorted(move.uci() for move in blocked)
 
+    @staticmethod
+    def _uci_grammar(legal_moves: list[str]) -> str:
+        """Build a GBNF grammar that permits exactly one supplied UCI move."""
+        if not legal_moves:
+            raise RunnerError('Nie można zbudować gramatyki bez legalnych ruchów')
+        # UCI coordinates contain only ASCII letters/digits, so no GBNF escaping
+        # is needed. Constrained decoding prevents a model from sampling an
+        # illegal move even when it ignores the natural-language instruction.
+        return 'root ::= ' + ' | '.join(json.dumps(move) for move in legal_moves)
+
     def generate(self, model_path: str | Path, board: chess.Board,
                  stop_event: threading.Event | None = None,
                  draft_model_path: str | Path | None = None,
@@ -252,9 +262,14 @@ class LlamafileRuntime:
             if attempt and stop_event and stop_event.is_set():
                 raise RunnerError('Turniej zatrzymany przez operatora')
             prompt = initial_prompt if attempt == 0 else retry_prompt
-            payload = json.dumps({'messages': [{'role': 'user', 'content': prompt}],
-                                  'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
-                                  'chat_template_kwargs': {'enable_thinking': bool(enable_thinking)}}).encode()
+            payload_data = {'messages': [{'role': 'user', 'content': prompt}],
+                            'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
+                            'chat_template_kwargs': {'enable_thinking': bool(enable_thinking)}}
+            if attempt == 1:
+                # Keep the entrant's normal thinking behavior on the first try;
+                # constrain only recovery generation to one exact legal UCI token.
+                payload_data['grammar'] = self._uci_grammar(legal)
+            payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(request, timeout=None) as response:
