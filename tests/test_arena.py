@@ -68,7 +68,8 @@ class ArenaSmokeTests(unittest.TestCase):
 
     def test_live_logs_persist_model_responses_and_recent_events(self):
         server.set_live('move_generated', 'Model zaproponował ruch: e2e4',
-                        model='TestModel.gguf', color='white', response='e2e4',
+                        white='Registry Model A', black='Registry Model B',
+                        model='Registry Model A', color='white', response='e2e4',
                         proposed_move='e2e4', elapsed_seconds=1.25)
         self.assertTrue(server.MODEL_RESPONSES_LOG.is_file())
         self.assertTrue(server.LIVE_EVENTS_LOG.is_file())
@@ -78,6 +79,8 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(response_record['model'], 'TestModel.gguf')
         self.assertEqual(event_record['stage'], 'move_generated')
         self.assertEqual(event_record['proposed_move'], 'e2e4')
+        self.assertEqual(event_record['white'], 'Registry Model A')
+        self.assertEqual(event_record['black'], 'Registry Model B')
 
     def test_diagnostic_logs_apply_separate_age_retention(self):
         import json
