@@ -373,6 +373,16 @@ class LeagueTests(unittest.TestCase):
   self.assertFalse(entry['ready'])
   self.assertTrue(any('Issue #71' in reason for reason in entry['blockers']))
 
+ def test_tournament_entry_status_exposes_version_license_and_legacy_repo_key(self):
+  with league.connect() as c:
+   c.execute("UPDATE model_versions SET metadata_json=? WHERE model_id=1", (
+    json.dumps({'repo':'Qwen/Qwen2.5-0.5B-Instruct-GGUF','revision':'a'*40}),))
+  tournament=league.create_round_robin('Version metadata exposure')
+  alpha=next(x for x in league.tournament_entry_status(tournament['id']) if x['model_id']==1)
+  self.assertEqual(alpha['license'],'Apache-2.0')
+  self.assertEqual(alpha['repo_id'],'Qwen/Qwen2.5-0.5B-Instruct-GGUF')
+  self.assertEqual(alpha['revision'],'a'*40)
+
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")
   with self.assertRaises(ValueError): league.create_round_robin('Invalid')
