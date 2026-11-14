@@ -337,6 +337,7 @@ def cleanup_unneeded_models(keep_version_ids=()):
 
 
 def _prepare_single_model(player):
+    model_store.MANAGED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     version_id = player['version_id']
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
@@ -353,6 +354,7 @@ def _prepare_single_model(player):
 
 
 def _prepare_game_models(white, black):
+    model_store.MANAGED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     needed = {white['version_id'], black['version_id']}
     versions = [_version_record(value) for value in (white['version_id'], black['version_id'])]
     required_bytes = sum((int(v['size_bytes']) if not (model_store.MANAGED_DIR / v['filename']).is_file() else 0) +
