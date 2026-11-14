@@ -84,9 +84,9 @@ No tournament is started automatically when a model is added. Real inference and
 - `scripts/check_model_allowlist_sync.py` checks whether the checkout is exactly at `origin/main` and whether the allowlist file has local changes. It is read-only: it does not fetch, merge, reset, or overwrite anything. Refresh Git refs separately before running it.
 - Use `python -m pytest -q tests/test_model_allowlist.py` to test validation, changes, withdrawals, and stale/dirty consumer detection.
 
-### Weekly Hugging Face candidate catalog sync
+### Weekly metadata check for existing Hugging Face models
 
-The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` discovers public Hugging Face GGUF repositories tagged for text-generation/conversational tasks and separately verifies the eight already-pinned repositories for model IDs 1–8. New candidates are added only to the informational `manifests/huggingface-candidates.json` catalog with `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`. It does not change the tournament admission allowlist. The workflow runs weekly and manually, downloads no model artifacts, performs no inference, and creates a draft PR only when tracked metadata changes. Excluded identities and unsafe categories are filtered fail-closed. See `docs/huggingface-catalog-sync.md`.
+The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` checks only the eight repositories already pinned as model IDs 1–8. It queries their exact public metadata endpoints and does not perform public model discovery or add new repositories. Results are stored separately in `manifests/huggingface-existing-models-metadata.json`; the existing candidate catalog, pinned model manifest, admission allowlist, database, and tournament state are not changed. Changed revisions or unavailable sources require human review. The workflow downloads no model artifacts, performs no inference, and creates a draft PR only when tracked metadata changes. See `docs/huggingface-catalog-sync.md`.
 
 ## Safe tournament stop and resume
 
