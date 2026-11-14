@@ -96,7 +96,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.artifact.write_bytes(b"changed-after-approval")
         with self.assertRaisesRegex(ValueError, "zmienił się"):
             claim_job_for_start(
-                self.db, job_id=job["job_id"], actor="test-broker",
+                self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
                 model_root=self.root)
 
     def test_evaluation_metrics_are_separate_and_scope_gated(self):
