@@ -92,7 +92,7 @@ class ModelPermissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EVALUATION"):
             self.decide( request_id=test_req["id"], action="revoke",
                               confirm=True, reason="wycofanie")
-        decide_permission(self.db, request_id=eval_req["id"], action="revoke",
+        self.decide( request_id=eval_req["id"], action="revoke",
                           confirm=True, reason="koniec ewaluacji")
         decide_permission(self.db, request_id=test_req["id"], action="revoke",
                           confirm=True, reason="koniec testów")
