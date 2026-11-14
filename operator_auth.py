@@ -129,6 +129,17 @@ def ensure_schema(conn):
         window_started_at REAL NOT NULL,
         attempts INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS arena_operator_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_operator_id TEXT NOT NULL,
+        target_operator_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK(action IN ('credential_revoked','operator_suspended')),
+        credential_id TEXT,
+        created_at REAL NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_arena_operator_events_created
+        ON arena_operator_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_arena_credentials_operator
         ON arena_webauthn_credentials(operator_id);
     CREATE TABLE IF NOT EXISTS arena_operator_enrollments (
@@ -433,7 +444,7 @@ def finish_authentication(db_path, config, ceremony_id, credential):
 
 def consume_rate_limit(db_path, bucket, limit, window_seconds=RATE_LIMIT_WINDOW_SECONDS, now=None):
     """Atomically count a bounded auth attempt; bucket values are never stored raw."""
-    if not isinstance(bucket, str) or not bucket or len(bucket) > 4096:
+    if not isinstance(bucket, str) or not bucket or len(bucket) > 8192:
         raise OperatorAuthError("Nieprawidłowy klucz limitu prób.")
     if not isinstance(limit, int) or limit < 1 or not isinstance(window_seconds, int) or window_seconds < 1:
         raise OperatorAuthError("Nieprawidłowa konfiguracja limitu prób.")
@@ -543,6 +554,13 @@ def revoke_credential(db_path, owner_operator_id, credential_id):
             "UPDATE arena_operator_sessions SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
             (now, row["operator_id"]),
         )
+        conn.execute(
+            """INSERT INTO arena_operator_events
+            (actor_operator_id,target_operator_id,action,credential_id,created_at,metadata_json)
+            VALUES(?,?,?,?,?,?)""",
+            (owner_operator_id, row["operator_id"], "credential_revoked", credential_id,
+             now, json.dumps({"sessions_revoked": True}, separators=(",", ":"))),
+        )
         conn.commit()
         return {"operator_id": row["operator_id"], "sessions_revoked": True}
 
@@ -579,8 +597,37 @@ def suspend_operator(db_path, owner_operator_id, target_operator_id):
             "UPDATE arena_operator_sessions SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
             (now, target_operator_id),
         )
+        conn.execute(
+            """INSERT INTO arena_operator_events
+            (actor_operator_id,target_operator_id,action,created_at,metadata_json)
+            VALUES(?,?,?,?,?)""",
+            (owner_operator_id, target_operator_id, "operator_suspended", now,
+             json.dumps({"sessions_revoked": True}, separators=(",", ":"))),
+        )
         conn.commit()
         return {"operator_id": target_operator_id, "sessions_revoked": True}
+
+
+def list_operator_events(db_path, limit=50):
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+        raise OperatorAuthError("Nieprawidłowy limit historii zdarzeń.")
+    with _db(db_path) as conn:
+        ensure_schema(conn)
+        rows = conn.execute(
+            """SELECT event_id,actor_operator_id,target_operator_id,action,
+            credential_id,created_at,metadata_json
+            FROM arena_operator_events ORDER BY event_id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["metadata"] = {}
+            result.append(item)
+        return result
 
 def get_session(db_path, session_token, now=None):
     if not isinstance(session_token, str) or len(session_token) > 256:
