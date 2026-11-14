@@ -103,8 +103,8 @@ class ModelPermissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "uzasadnienie"):
             self.decide( request_id=req["id"], action="reject",
                               confirm=True, reason=" ")
-        decide_permission(self.db, request_id=req["id"], action="reject",
-                          confirm=True, reason="brak dowodów")
+        self.decide(request_id=req["id"], action="reject",
+                    confirm=True, reason="brak dowodów")
         self.assertEqual([x["event"] for x in self.db.execute(
             "SELECT event FROM model_permission_events ORDER BY id")],
             ["requested", "rejected"])
