@@ -375,7 +375,7 @@ def finish_authentication(db_path, config, ceremony_id, credential):
         if challenge is None:
             raise OperatorAuthError("Wyzwanie logowania wygasło lub zostało już użyte.")
         row = conn.execute(
-            """SELECT c.*,o.operator_id,o.role,o.display_name,o.active
+            """SELECT c.*,o.operator_id,o.role,o.display_name,o.active,o.user_handle
             FROM arena_webauthn_credentials c JOIN arena_operators o
             ON o.operator_id=c.operator_id WHERE c.credential_id=?""",
             (credential_id,),
