@@ -143,13 +143,15 @@ class ModelJobBrokerTests(unittest.TestCase):
                              systemd_unit="untrusted.service", actor="test-broker",
                              unit_is_active=lambda unit: True)
         mark_job_running(self.db, job_id=job["job_id"],
-                         systemd_unit=plan["systemd_unit"], actor="test-broker")
+                         systemd_unit=plan["systemd_unit"], actor="test-broker",
+                         unit_is_active=lambda unit: True)
         finish_job(self.db, job_id=job["job_id"], success=False,
                    actor="test-broker", unit_is_active=lambda unit: False,
                    result={"reason": "fixture"})
         with self.assertRaisesRegex(ValueError, "zakończone"):
             finish_job(self.db, job_id=job["job_id"], success=True,
-                       actor="test-broker")
+                       actor="test-broker",
+                       unit_is_active=lambda unit: False)
 
 
     def test_queued_job_can_be_cancelled_without_starting_systemd(self):
