@@ -423,7 +423,9 @@ def tournament_view(tournament_id,live=None):
    valid_saved=bool(item.get('saved_game_id'))
    status=item['status']
    if status=='completed' and not valid_saved: status='failed'
-   if (not valid_saved and status=='pending' and
+   live_stage=live.get('stage')
+   live_active=live_stage in ('game_prepare','game_ready','game_running','move_played')
+   if (not valid_saved and status=='pending' and live_active and
        live.get('tournament_id')==tournament_id and live.get('pairing_id')==item['id']):
     status='running'
    item['status']=status
