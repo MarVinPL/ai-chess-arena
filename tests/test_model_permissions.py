@@ -23,9 +23,11 @@ class ModelPermissionTests(unittest.TestCase):
         return request_permission(self.db, **self.ident, scope=scope,
                                   confirm=True, reason="kontrolowany test", actor="test-operator")
 
+    def decide(self, **kwargs):
+        return decide_permission(self.db, actor="test-operator", **kwargs)
+
     def approve(self, request):
-        return decide_permission(self.db, actor="test-operator", request_id=request["id"],
-                                  action="approve", confirm=True, actor="test-operator")
+        return self.decide(request_id=request["id"], action="approve", confirm=True)
 
     def test_mutation_requires_explicit_operator_identity(self):
         with self.assertRaisesRegex(ValueError, "tożsamości operatora"):
@@ -74,7 +76,7 @@ class ModelPermissionTests(unittest.TestCase):
         self.approve(first)
         renewal = self.request()
         self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
-        decide_permission(self.db, request_id=renewal["id"], action="reject",
+        self.decide(request_id=renewal["id"], action="reject",
                           confirm=True, reason="brak dodatkowej potrzeby")
         self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
 
@@ -112,10 +114,10 @@ class ModelPermissionTests(unittest.TestCase):
     def test_missing_confirmation_and_invalid_identity_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "potwierdzenie"):
             request_permission(self.db, **self.ident, scope="TEST_ONLY",
-                               confirm=False, reason="kontrola")
+                               confirm=False, reason="kontrola", actor="test-operator")
         with self.assertRaisesRegex(ValueError, "SHA"):
             request_permission(self.db, **{**self.ident, "revision": "latest"},
-                               scope="TEST_ONLY", confirm=True, reason="kontrola")
+                               scope="TEST_ONLY", confirm=True, reason="kontrola", actor="test-operator")
 
 if __name__ == "__main__":
     unittest.main()
