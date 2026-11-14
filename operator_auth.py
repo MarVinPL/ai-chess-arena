@@ -202,7 +202,7 @@ def create_operator_invitation(db_path, owner_operator_id, display_name, ttl=TOK
         raise OperatorAuthError("Nieprawidłowy czas ważności zaproszenia.")
     token = secrets.token_urlsafe(32)
     now = time.time()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         if not conn.execute(
             "SELECT 1 FROM arena_operators WHERE operator_id=? AND role='owner' AND active=1",
@@ -219,7 +219,7 @@ def create_operator_invitation(db_path, owner_operator_id, display_name, ttl=TOK
 def begin_registration(db_path, config, token):
     token_hash = _token_hash(token)
     now = time.time()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         enrollment = conn.execute(
             "SELECT * FROM arena_operator_enrollments WHERE token_hash=? AND consumed_at IS NULL AND expires_at>?",
@@ -259,7 +259,7 @@ def finish_registration(db_path, config, ceremony_id, credential):
     if not isinstance(ceremony_id, str) or len(ceremony_id) > 128 or not isinstance(credential, dict):
         raise OperatorAuthError("Nieprawidłowa odpowiedź rejestracji.")
     now = time.time()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         challenge = conn.execute(
@@ -329,7 +329,7 @@ def begin_authentication(db_path, config):
         user_verification=UserVerificationRequirement.REQUIRED,
     )
     ceremony_id = secrets.token_urlsafe(24)
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         conn.execute(
             "INSERT INTO arena_auth_challenges(ceremony_id,purpose,challenge,created_at,expires_at) VALUES(?,?,?,?,?)",
@@ -365,7 +365,7 @@ def finish_authentication(db_path, config, ceremony_id, credential):
     except Exception as exc:
         raise OperatorAuthError("Nieprawidłowy identyfikator Passkey.") from exc
     now = time.time()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         ensure_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         challenge = conn.execute(
@@ -424,7 +424,7 @@ def get_session(db_path, session_token, now=None):
         return None
     now = time.time() if now is None else now
     session_hash = hashlib.sha256(session_token.encode()).hexdigest()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         row = conn.execute(
             """SELECT s.csrf_hash,s.created_at,s.last_seen_at,s.expires_at,
             o.operator_id,o.display_name,o.role,o.active
@@ -482,7 +482,7 @@ def revoke_session(db_path, session_token):
     if not isinstance(session_token, str) or len(session_token) > 256:
         return False
     digest = hashlib.sha256(session_token.encode()).hexdigest()
-    with _connect(db_path) as conn:
+    with _db(db_path) as conn:
         cur = conn.execute(
             "UPDATE arena_operator_sessions SET revoked_at=? WHERE session_hash=? AND revoked_at IS NULL",
             (time.time(), digest),
