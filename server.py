@@ -903,6 +903,35 @@ class Handler(BaseHTTPRequestHandler):
             with sqlite3.connect(DB) as c:
                 rows = c.execute('SELECT id,started_at,white_model,black_model,result,move_count,avg_move_seconds FROM games ORDER BY id DESC LIMIT 30').fetchall()
             self.send_json([dict(id=x[0],started_at=x[1],white=x[2],black=x[3],result=x[4],moves=x[5],avg_seconds=round(x[6],3)) for x in rows])
+        elif self.path.startswith('/api/games/') and self.path.endswith('/pgn'):
+            try:
+                game_id = int(self.path.split('/')[3])
+                with sqlite3.connect(DB) as c:
+                    row = c.execute('SELECT pgn FROM games WHERE id=?', (game_id,)).fetchone()
+                if row is None:
+                    self.send_error(404, 'Nie znaleziono zapisanej partii')
+                else:
+                    body = row[0].encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
+                    self.send_header('Content-Disposition', f'inline; filename="game-{game_id}.pgn"')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+            except ValueError:
+                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
+        elif self.path.startswith('/api/games/'):
+            try:
+                game_id = int(self.path.rsplit('/', 1)[1])
+                with sqlite3.connect(DB) as c:
+                    c.row_factory = sqlite3.Row
+                    row = c.execute('SELECT id,started_at,ended_at,white_model,black_model,result,pgn,move_count,tournament_id,pairing_id FROM games WHERE id=?', (game_id,)).fetchone()
+                if row is None:
+                    self.send_json({'error': 'Nie znaleziono zapisanej partii'}, 404)
+                else:
+                    self.send_json(dict(row))
+            except ValueError:
+                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
         elif self.path == '/api/models':
             with league.connect() as c:
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
@@ -938,6 +967,14 @@ class Handler(BaseHTTPRequestHandler):
             ]
             status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
             self.send_json(status)
+        elif self.path.startswith('/api/tournaments/') and self.path.endswith('/view'):
+            try:
+                tournament_id = int(self.path.split('/')[3])
+                self.send_json(league.tournament_view(tournament_id, get_live()))
+            except KeyError as exc:
+                self.send_json({'error': str(exc)}, 404)
+            except (ValueError, IndexError):
+                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
         elif self.path.startswith('/api/tournaments/') and self.path.endswith('/preflight'):
             try:
                 tournament_id = int(self.path.split('/')[3])

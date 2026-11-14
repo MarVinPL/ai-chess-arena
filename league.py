@@ -356,19 +356,109 @@ def _seed_order(size):
   order=[x for seed in order for x in (seed,last-seed)]
  return order
 
-def _league_standings(c,tournament_id):
- rows=c.execute('''SELECT e.model_id,m.name,
+def _league_standings(c,tournament_id,strict_game_linkage=False):
+ game_columns={row[1] for row in c.execute('PRAGMA table_info(games)')}
+ if strict_game_linkage and not {'tournament_id','pairing_id'} <= game_columns:
+  raise RuntimeError('Brak kolumn audytowych tournament_id/pairing_id w tabeli games')
+ if strict_game_linkage:
+  game_join="""g.id=p.game_id AND g.tournament_id=p.tournament_id
+   AND g.pairing_id=p.id AND p.status='completed'
+   AND g.result IN ('1-0','0-1','1/2-1/2')"""
+ else:
+  game_join="""g.id=p.game_id AND p.status='completed'
+   AND g.result IN ('1-0','0-1','1/2-1/2')"""
+ rows=c.execute(f'''SELECT e.model_id,m.name,
+   COUNT(g.id) AS played,
    COALESCE(SUM(CASE
     WHEN (g.result='1-0' AND p.white_model_id=e.model_id) OR (g.result='0-1' AND p.black_model_id=e.model_id) THEN 3
     WHEN g.result='1/2-1/2' THEN 1 ELSE 0 END),0) AS points,
    COALESCE(SUM(CASE WHEN (g.result='1-0' AND p.white_model_id=e.model_id) OR (g.result='0-1' AND p.black_model_id=e.model_id) THEN 1 ELSE 0 END),0) AS wins,
-   COALESCE(SUM(CASE WHEN g.result='1/2-1/2' THEN 1 ELSE 0 END),0) AS draws
+   COALESCE(SUM(CASE WHEN g.result='1/2-1/2' THEN 1 ELSE 0 END),0) AS draws,
+   COALESCE(SUM(CASE WHEN g.id IS NOT NULL AND g.result IN ('1-0','0-1') AND NOT
+    ((g.result='1-0' AND p.white_model_id=e.model_id) OR (g.result='0-1' AND p.black_model_id=e.model_id)) THEN 1 ELSE 0 END),0) AS losses
    FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
    LEFT JOIN tournament_pairings p ON p.tournament_id=e.tournament_id AND p.stage='league'
     AND (p.white_model_id=e.model_id OR p.black_model_id=e.model_id)
-   LEFT JOIN games g ON g.id=p.game_id
+   LEFT JOIN games g ON {game_join}
    WHERE e.tournament_id=? GROUP BY e.model_id,m.name''',(tournament_id,)).fetchall()
  return sorted((dict(r) for r in rows),key=lambda r:(-r['points'],-r['wins'],-r['draws'],r['name'].casefold()))
+
+
+def tournament_view(tournament_id,live=None):
+ """Return a read-only tournament snapshot; never create seeds or pairings here."""
+ live=live or {}
+ with connect() as c:
+  tournament=c.execute('SELECT id,name,format,status,created_at,qualification_percent FROM tournaments WHERE id=?',(tournament_id,)).fetchone()
+  if not tournament: raise KeyError('Nie znaleziono turnieju')
+  standings=_league_standings(c,tournament_id,strict_game_linkage=True)
+  game_columns={row[1] for row in c.execute('PRAGMA table_info(games)')}
+  if not {'tournament_id','pairing_id'} <= game_columns:
+   raise RuntimeError('Brak kolumn audytowych gier; widok turnieju pozostaje niedostępny')
+  rows=c.execute('''SELECT p.id,p.stage,p.round_no,p.match_no,p.leg,p.status,
+    p.white_model_id,p.black_model_id,p.winner_model_id,p.game_id,
+    w.name AS white_name,b.name AS black_name,
+    sw.seed AS white_seed,sb.seed AS black_seed,
+    g.id AS saved_game_id,g.result,g.ended_at,g.move_count
+    FROM tournament_pairings p
+    JOIN league_models w ON w.id=p.white_model_id
+    JOIN league_models b ON b.id=p.black_model_id
+    LEFT JOIN tournament_seeds sw ON sw.tournament_id=p.tournament_id AND sw.model_id=p.white_model_id
+    LEFT JOIN tournament_seeds sb ON sb.tournament_id=p.tournament_id AND sb.model_id=p.black_model_id
+    LEFT JOIN games g ON g.id=p.game_id AND g.tournament_id=p.tournament_id
+      AND g.pairing_id=p.id AND g.result IN ('1-0','0-1','1/2-1/2')
+      AND p.status='completed'
+    WHERE p.tournament_id=? ORDER BY CASE p.stage WHEN 'league' THEN 0 ELSE 1 END,
+      COALESCE(p.round_no,0),COALESCE(p.match_no,p.id),p.leg''',(tournament_id,)).fetchall()
+  seeds=[dict(r) for r in c.execute('''SELECT s.model_id,s.seed,m.name
+    FROM tournament_seeds s JOIN league_models m ON m.id=s.model_id
+    WHERE s.tournament_id=? ORDER BY s.seed''',(tournament_id,)).fetchall()]
+  champion_row=c.execute('''SELECT p.winner_model_id,m.name FROM tournament_pairings p
+    JOIN league_models m ON m.id=p.winner_model_id
+    WHERE p.tournament_id=? AND p.stage='draft' AND p.status='completed'
+      AND p.round_no=(SELECT MAX(round_no) FROM tournament_pairings WHERE tournament_id=? AND stage='draft')
+    ORDER BY p.match_no''',(tournament_id,tournament_id)).fetchone()
+  fixtures=[]
+  for row in rows:
+   item=dict(row)
+   valid_saved=bool(item.get('saved_game_id'))
+   status=item['status']
+   if status=='completed' and not valid_saved: status='failed'
+   live_stage=live.get('stage')
+   live_active=live_stage in ('game_prepare','game_ready','game_running','move_played')
+   if (not valid_saved and status=='pending' and live_active and
+       live.get('tournament_id')==tournament_id and live.get('pairing_id')==item['id']):
+    status='running'
+   item['status']=status
+   item['game_url']=f"/api/games/{item['saved_game_id']}/pgn" if valid_saved else None
+   fixtures.append(item)
+  league_fixtures=[x for x in fixtures if x['stage']=='league']
+  draft_fixtures=[x for x in fixtures if x['stage']=='draft']
+  def completed(items): return sum(1 for x in items if x['saved_game_id'] is not None)
+  rounds={}
+  for item in draft_fixtures:
+   key=item['round_no'] if item['round_no'] is not None else 0
+   rounds.setdefault(key,[]).append(item)
+  bye_ids=set()
+  if 0 in rounds and 1 in rounds:
+   playin_ids={v for match in rounds[0] for v in (match['white_model_id'],match['black_model_id'])}
+   first_round_ids={v for match in rounds[1] for v in (match['white_model_id'],match['black_model_id'])}
+   bye_ids=first_round_ids-playin_ids
+  bracket=[{'round_no':key,'matches':value,
+    'byes':[s for s in seeds if s['model_id'] in bye_ids] if key==0 else []}
+    for key,value in sorted(rounds.items())]
+  league_total=len(league_fixtures); draft_total=len(draft_fixtures)
+  league_done=completed(league_fixtures); draft_done=completed(draft_fixtures)
+  active_pairing=next((x for x in fixtures if x['status']=='running'),None)
+  if seeds: bracket_status='available'
+  elif league_total and league_done==league_total: bracket_status='awaiting_bracket_generation'
+  else: bracket_status='awaiting_league_completion'
+  return {'tournament':dict(tournament),'standings':standings,'fixtures':fixtures,
+   'bracket':bracket,'seeds':seeds,'champion':dict(champion_row) if champion_row else None,
+   'bracket_status':bracket_status,'active_pairing':active_pairing,
+   'live':{k:live.get(k) for k in ('stage','message','tournament_id','pairing_id','white','black','model','color','fen','moves','updated_at') if k in live},
+   'progress':{'league':{'completed':league_done,'planned':league_total},
+    'draft':{'completed':draft_done,'planned':draft_total},
+    'total':{'completed':league_done+draft_done,'planned':league_total+draft_total}}}
 
 def _draft_qualifiers(standings,qualification_percent):
  target=max(2,math.ceil(len(standings)*qualification_percent/100))
