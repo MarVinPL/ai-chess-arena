@@ -65,7 +65,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         job = self._create()
         plan = claim_job_for_start(
             self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
-            capacity_check=lambda: True, model_root=self.root)
+            model_root=self.root)
         self.assertEqual(plan["status"], "starting")
         self.assertEqual(plan["worker"], WORKER_EXECUTABLE)
         self.assertFalse(plan["side_effects_performed"])
@@ -74,7 +74,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         self.assertFalse(any(x in {"sh", "bash", "-c"} for x in plan["argv"]))
         with self.assertRaisesRegex(ValueError, "zużyta"):
             claim_job_for_start(
-                self.db, job_id=job["job_id"], actor="test-broker",
+                self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
                 model_root=self.root)
         self.assertEqual(get_job(self.db, job["job_id"])["consent_consumed"], 1)
 
@@ -108,7 +108,7 @@ class ModelJobBrokerTests(unittest.TestCase):
         self._grant("EVALUATION")
         evaluation = self._create(scope="EVALUATION")
         plan = claim_job_for_start(
-            self.db, job_id=evaluation["job_id"], actor="test-broker",
+            self.db, job_id=evaluation["job_id"], actor="test-broker", capacity_check=lambda: True,
             model_root=self.root)
         mark_job_running(
             self.db, job_id=evaluation["job_id"],
