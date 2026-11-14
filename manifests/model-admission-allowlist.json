@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "source_main_sha": "1cd4f3c9cc51f4061bd892e7b6b2605882a64129",
+  "policy": {
+    "default_decision": "blocked",
+    "empty_list_means_no_models_eligible": true,
+    "note": "Fail-closed allowlist. No model is eligible until its exact artifact revision has complete license evidence and a separate technical readiness review."
+  },
+  "models": []
+}
