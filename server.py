@@ -8,6 +8,7 @@ import model_store
 import model_allowlist
 import model_admission
 import model_review_submissions
+import hf_candidate_audit
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1377,6 +1378,34 @@ class Handler(BaseHTTPRequestHandler):
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)
+        elif self.path.startswith('/api/hf-candidates/audit?'):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                params = parse_qs(urlparse(self.path).query)
+                catalog_id = params.get('catalog_id', [''])[0]
+                revision = params.get('revision', [''])[0]
+                with league.connect() as c:
+                    report = hf_candidate_audit.get_report(c, catalog_id, revision)
+                if report is None:
+                    self.send_json({'error': 'Brak zapisanego audytu dla tej rewizji.'}, 404)
+                else:
+                    self.send_json(report)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 422)
+        elif self.path == '/api/hf-candidates':
+            try:
+                items = hf_candidate_audit.load_catalog()
+                with league.connect() as c:
+                    reports = hf_candidate_audit.list_reports(c)
+                report_map = {(x['catalog_id'], x['revision']): x for x in reports}
+                result = []
+                for item in items:
+                    row = {key: item.get(key) for key in ('catalog_id','arena_model_id','display_name','repo_id','revision','audited_revision','declared_license_tag','gated','source_status','metadata_status','license_review_status','technical_readiness','admission_status')}
+                    row['last_audit'] = report_map.get((item.get('catalog_id'), item.get('revision') or item.get('audited_revision')))
+                    result.append(row)
+                self.send_json(result)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 503)
         elif self.path == '/api/model-admission':
             try:
                 sync = model_allowlist.check_repository_sync(ROOT)
@@ -1475,11 +1504,21 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions'):
+        if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if self.path == '/api/model-review-submissions':
+                if self.path == '/api/hf-candidates/audit':
+                    if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
+                        raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
+                    try:
+                        report = hf_candidate_audit.audit_candidate(payload.get('catalog_id'))
+                        with league.connect() as c:
+                            hf_candidate_audit.save_report(c, report)
+                        result = report
+                    finally:
+                        hf_candidate_audit.AUDIT_LOCK.release()
+                elif self.path == '/api/model-review-submissions':
                     sync = model_allowlist.check_repository_sync(ROOT)
                     if not sync.get('in_sync'):
                         raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
@@ -1583,7 +1622,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if self.path in ('/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if self.path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif self.path == '/api/step':

@@ -165,6 +165,12 @@ button.stop{background:#744b4b;border-color:#986363}
    <div class="formrow"><button type="submit">Zapisz propozycję do audytu</button><button type="button" class="secondary" id="model-review-cancel">Anuluj</button></div>
    <div id="model-review-status" class="status" role="status"></div>
   </form>
+  <h4>Wstępny audyt kandydatów Hugging Face</h4>
+  <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
+  <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
+  <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
+  <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
+  <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
   <div class="formrow"><input class="field" id="model-source" placeholder="Źródło (opcjonalnie)"><input class="field" id="model-license" placeholder="Licencja (wymagana do użycia)"></div>
@@ -414,6 +420,57 @@ if(reviewForm)reviewForm.addEventListener('submit',async event=>{
  const payload={model_id:Number($('review-model-id').value),license_id:$('review-license-id').value,license_review:$('review-license-status').value,license_notes:$('review-license-notes').value,proposed_status:proposedStatus,scope_formats:selectedScopes,restrictions:$('review-restrictions').value,obligations:$('review-obligations').value,block_reason:$('review-block-reason').value,technical_readiness:$('review-technical').value,technical_evidence:$('review-technical-evidence').value,technical_blockers:$('review-technical-blockers').value,revision_confirmed:$('review-revision-confirmed').checked,revision_notes:$('review-revision-notes').value};
  try{const response=await fetch('/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);$('model-review-status').textContent=`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;reviewForm.reset();syncReviewScopeControls();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;}finally{button.disabled=false;}
 });
+let hfCandidateItems=[];
+function renderHfCandidates(){
+ const host=$('hf-candidate-list');if(!host)return;host.replaceChildren();
+ const query=String($('hf-candidate-query')?.value||'').trim().toLowerCase();
+ const filtered=hfCandidateItems.filter(x=>!query||[x.display_name,x.repo_id,x.declared_license_tag,x.catalog_id].some(v=>String(v||'').toLowerCase().includes(query)));
+ $('hf-candidate-count').textContent='Katalog: '+hfCandidateItems.length+' kandydatów · widoczne: '+Math.min(filtered.length,30)+' / '+filtered.length+'. Audyt uruchamiany osobno dla wybranego wpisu.';
+ if(!filtered.length){host.textContent='Brak kandydatów pasujących do wyszukiwania.';return;}
+ filtered.slice(0,30).forEach(item=>{
+  const card=document.createElement('div');card.style.cssText='padding:9px;margin:7px 0;border:1px solid #34445c;border-radius:8px';
+  const title=document.createElement('strong');title.textContent=item.display_name+' · '+item.repo_id;card.appendChild(title);
+  const meta=document.createElement('div');meta.style.cssText='font-size:12px;color:#aebbd0';meta.textContent='Licencja deklarowana: '+(item.declared_license_tag||'brak')+' · rewizja: '+String(item.revision||item.audited_revision||'brak').slice(0,12)+' · status: '+(item.source_status||'—')+' · '+(item.last_audit?'audyt: '+item.last_audit.audited_at:'bez audytu');card.appendChild(meta);
+  if(item.last_audit){const show=document.createElement('button');show.type='button';show.className='secondary';show.textContent='Pokaż zapisany audyt';show.style.marginTop='7px';show.onclick=async()=>{try{const url='/api/hf-candidates/audit?catalog_id='+encodeURIComponent(item.catalog_id)+'&revision='+encodeURIComponent(item.last_audit.revision);const r=await fetch(url,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);renderHfAuditReport(d);}catch(e){$('hf-candidate-audit-result').textContent='Nie udało się odczytać raportu: '+e;}};card.appendChild(show);}
+  const canAudit=['active','not_checked'].includes(item.source_status);
+  const button=document.createElement('button');button.type='button';button.textContent=canAudit?'Wykonaj wstępny audyt':'Audyt niedostępny · źródło nieaktywne';button.disabled=!canAudit;button.style.marginTop='7px';button.onclick=async()=>{
+   button.disabled=true;button.textContent='Analizuję publiczne metadane…';const output=$('hf-candidate-audit-result');output.textContent='Audyt '+item.repo_id+'…';
+   try{const r=await fetch('/api/hf-candidates/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({catalog_id:item.catalog_id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);renderHfAuditReport(d);item.last_audit={audited_at:d.audited_at,revision:d.pinned_revision};}
+   catch(e){output.textContent='Audyt nie został ukończony: '+e;}finally{button.disabled=false;button.textContent='Wykonaj ponowny audyt';meta.textContent='Licencja deklarowana: '+(item.declared_license_tag||'brak')+' · rewizja: '+String(item.revision||item.audited_revision||'brak').slice(0,12)+' · '+(item.last_audit?'audyt: '+item.last_audit.audited_at:'bez audytu');}
+  };card.appendChild(button);host.appendChild(card);
+ });
+}
+function renderHfAuditReport(report){
+ const host=$('hf-candidate-audit-result');host.replaceChildren();
+ const title=document.createElement('strong');title.textContent='Wynik wstępnego audytu: '+report.repo_id;host.appendChild(title);
+ const summary=document.createElement('p');summary.textContent='Wynik: public_metadata_only · rewizja zgodna: '+(report.revision_matches?'tak':'nie')+' · licencja deklarowana: '+(report.declared_license||'brak')+' · pliki licencji: '+((report.license_files||[]).join(', ')||'brak');host.appendChild(summary);
+ const notes=document.createElement('ul');(report.sources||[]).forEach(source=>{const li=document.createElement('li');li.textContent=source;notes.appendChild(li)});host.appendChild(notes);
+ const blockers=document.createElement('p');blockers.textContent='Ograniczenia: '+(report.limitations||[]).join(' ');host.appendChild(blockers);
+ const link=document.createElement('a');link.href='https://huggingface.co/'+report.repo_id+'/tree/'+report.pinned_revision;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz przypiętą rewizję Hugging Face';host.appendChild(link);
+ const f=report.suggested_form||{};
+ if(report.arena_model_id){
+  const fill=document.createElement('button');fill.type='button';fill.textContent='Wypełnij formularz propozycji tymi danymi';fill.style.display='block';fill.style.marginTop='9px';fill.onclick=()=>{
+   const form=$('model-review-form');form.hidden=false;$('review-model-id').value=String(report.arena_model_id);
+   $('review-license-id').value=f.license_id||'';$('review-license-status').value='pending';$('review-license-notes').value=f.license_notes||'';
+   $('review-proposed-status').value='review_required';$('review-technical').value='not_evaluated';
+   $('review-restrictions').value='';$('review-obligations').value='';$('review-block-reason').value=f.block_reason||'';
+   $('review-technical-evidence').value=f.technical_evidence||'';$('review-technical-blockers').value=f.technical_blockers||'';
+   $('review-revision-confirmed').checked=false;$('review-revision-notes').value=f.revision_notes||'';
+   if(typeof syncReviewScopeControls==='function')syncReviewScopeControls();$('model-review-status').textContent='Pola wypełniono wstępną analizą. Sprawdź źródła i popraw dane; nic nie zapisano ani nie zatwierdzono.';form.scrollIntoView({behavior:'smooth',block:'start'});
+  };host.appendChild(fill);
+ }else{const note=document.createElement('p');note.textContent='To kandydat katalogowy bez aktywnego model_id w allowliście. Raport zapisano osobno; nie można wysłać go do formularza decyzji admission.';host.appendChild(note)}
+ const evidence=document.createElement('details');const summaryEl=document.createElement('summary');summaryEl.textContent='Szczegóły techniczne i odczytane pliki tekstowe';evidence.appendChild(summaryEl);
+ const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify({metadata:report.metadata,license_file_texts:report.license_file_texts,readme_excerpt:report.readme_excerpt,suggested_form:f},null,2);evidence.appendChild(pre);host.appendChild(evidence);
+}
+async function loadHfCandidates(){
+ const host=$('hf-candidate-list');if(!host)return;host.textContent='Odczytuję katalog…';
+ try{const r=await fetch('/api/hf-candidates',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);hfCandidateItems=Array.isArray(d)?d:[];renderHfCandidates();}
+ catch(e){host.textContent='Nie udało się odczytać katalogu kandydatów: '+e;}
+}
+$('hf-candidate-query')?.addEventListener('input',renderHfCandidates);
+$('hf-candidate-refresh')?.addEventListener('click',loadHfCandidates);
+loadHfCandidates();
+
 function renderModelAdmission(items){
  const host=$('model-admission-list');host.textContent='';
  if(!Array.isArray(items)||!items.length){host.textContent='Brak wpisów na jawnej allowliście.';return}
