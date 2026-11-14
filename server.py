@@ -1054,7 +1054,8 @@ def start_tournament(tournament_id):
             raise TournamentPreflightError(_preflight_error_message(preflight))
         # Freeze the original roster only after all start checks passed. The
         # snapshot is immutable across stops, resumes, and process restarts.
-        league.initialize_late_admission_quota(tournament_id)
+        if row['parent_tournament_id'] is None:
+            league.initialize_late_admission_quota(tournament_id)
         tournament_stop_event.clear()
         tournament_error = ''
         tournament_thread = threading.Thread(target=tournament_loop, args=(tournament_id,), daemon=True)
