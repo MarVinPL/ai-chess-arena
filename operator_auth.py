@@ -467,6 +467,12 @@ def consume_rate_limit(db_path, bucket, limit, window_seconds=RATE_LIMIT_WINDOW_
             "DELETE FROM arena_auth_rate_limits WHERE window_started_at < ?",
             (now - 86400,),
         )
+        conn.execute("DELETE FROM arena_auth_challenges WHERE expires_at < ?", (now - 3600,))
+        conn.execute("DELETE FROM arena_operator_enrollments WHERE expires_at < ?", (now - 86400,))
+        conn.execute(
+            "DELETE FROM arena_operator_sessions WHERE expires_at < ? OR revoked_at < ?",
+            (now - 604800, now - 604800),
+        )
         conn.commit()
     if retry_after:
         raise OperatorRateLimitError(retry_after)
