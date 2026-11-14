@@ -13,7 +13,8 @@ def test_dedicated_unit_is_independent_and_uses_existing_runtime():
     assert "ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py" in unit
     assert "KillMode=control-group" in unit
     assert "sentinelx-cloud-core.service" not in unit
-    assert "/home/debian/ai-agent/models" not in unit
+    assert "InaccessiblePaths=/home/debian/ai-agent/models" in unit
+    assert "BindPaths=/home/debian/ai-chess-arena" in unit
 
 
 def test_handoff_guards_exact_process_and_preserves_tournament_state():
