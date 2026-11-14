@@ -227,6 +227,24 @@ class LeagueTests(unittest.TestCase):
   with league.connect() as c:
    c.execute("INSERT INTO league_models(name,format,created_at) VALUES('Engine','AI_ENGINE','now')")
   self.assertEqual(len(league.elo_ratings('AI_ENGINE')),1)
+ def test_self_play_is_excluded_from_elo_and_comparison_stats(self):
+  with league.connect() as c:
+   c.execute("INSERT INTO games(white_model,black_model,result) VALUES('Alpha','Alpha','1-0')")
+  rows={x['name']:x for x in league.elo_ratings()}
+  for name in ('Alpha','Beta'):
+   self.assertEqual(rows[name]['elo'],1200)
+   self.assertEqual(rows[name]['games'],0)
+   self.assertEqual((rows[name]['wins'],rows[name]['draws'],rows[name]['losses']),(0,0,0))
+
+ def test_self_play_does_not_distort_a_real_model_match(self):
+  with league.connect() as c:
+   c.execute("INSERT INTO games(white_model,black_model,result) VALUES('Alpha','Alpha','1-0')")
+   c.execute("INSERT INTO games(white_model,black_model,result) VALUES('Alpha','Beta','1-0')")
+  rows={x['name']:x for x in league.elo_ratings()}
+  self.assertEqual((rows['Alpha']['elo'],rows['Beta']['elo']),(1216,1184))
+  self.assertEqual((rows['Alpha']['games'],rows['Beta']['games']),(1,1))
+  self.assertEqual((rows['Alpha']['wins'],rows['Beta']['losses']),(1,1))
+
  def test_elo_changes_after_a_decisive_game(self):
   with league.connect() as c:
    c.execute("INSERT INTO games(white_model,black_model,result) VALUES('Alpha','Beta','1-0')")
