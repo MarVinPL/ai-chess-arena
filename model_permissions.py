@@ -11,7 +11,14 @@ import sqlite3
 import time
 
 SCOPES = frozenset({"TEST_ONLY", "EVALUATION", "TOURNAMENT"})
-ACTOR = "arena"
+_ACTOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}$")
+
+
+def _validate_actor(actor: str | None) -> str:
+    """Require an explicit actor supplied by a trusted authentication boundary."""
+    if not isinstance(actor, str) or not _ACTOR.fullmatch(actor):
+        raise ValueError("Brak zweryfikowanej tożsamości operatora; decyzja odmówiona.")
+    return actor
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _ARTIFACT_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -111,13 +118,12 @@ def list_permissions(connection: sqlite3.Connection) -> list[dict]:
 def request_permission(connection: sqlite3.Connection, *, model_id: int,
                        repo_id: str, revision: str, artifact_sha256: str,
                        scope: str, confirm: bool, reason: str = "",
-                       snapshot: dict | None = None, actor: str = ACTOR) -> dict:
+                       snapshot: dict | None = None, actor: str | None = None) -> dict:
     ensure_schema(connection)
+    actor = _validate_actor(actor)
     _validate_identity(model_id, repo_id, revision, artifact_sha256)
     if confirm is not True:
         raise ValueError("Wymagane jawne potwierdzenie żądania.")
-    if actor != ACTOR:
-        raise ValueError("Nieprawidłowy aktor audytu.")
     if scope not in SCOPES:
         raise ValueError("Nieznany zakres uprawnień.")
     if scope == "TOURNAMENT":
@@ -159,8 +165,9 @@ def request_permission(connection: sqlite3.Connection, *, model_id: int,
 
 def decide_permission(connection: sqlite3.Connection, *, request_id: int,
                       action: str, confirm: bool, reason: str = "",
-                      actor: str = ACTOR) -> dict:
+                      actor: str | None = None) -> dict:
     ensure_schema(connection)
+    actor = _validate_actor(actor)
     if confirm is not True:
         raise ValueError("Wymagane jawne potwierdzenie decyzji.")
     if actor != ACTOR:
