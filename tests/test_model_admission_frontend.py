@@ -17,6 +17,18 @@ class ModelAdmissionFrontendTests(unittest.TestCase):
         self.assertIn('await loadLeague()', HTML)
         self.assertIn('Podaj uzasadnienie wycofania', HTML)
 
+
+    def test_panel_has_per_model_blocker_actions_and_proposal_fields(self):
+        self.assertIn('Uzupełnij blokady / przygotuj propozycję', HTML)
+        self.assertIn('review-proposed-status', HTML)
+        self.assertIn('review-scope-format', HTML)
+        self.assertIn('review-restrictions', HTML)
+        self.assertIn('review-obligations', HTML)
+        self.assertIn('review-technical-evidence', HTML)
+        self.assertIn('review-technical-blockers', HTML)
+        self.assertIn("[6,9,10].includes(Number(item.model_id))", HTML)
+        self.assertIn('warunki Bielik v3 zawierają wymóg wieku 18+', HTML)
+
     def test_registry_list_is_rendered_with_text_content(self):
         self.assertIn('function renderModelAdmission(items)', HTML)
         self.assertIn('title.textContent', HTML)

@@ -60,6 +60,8 @@ def evaluate_candidates(*, allowlist=None, manifest=None):
             'admission_scope': entry.get('admission_scope', []),
             'license': license_info.get('manifest_license'),
             'technical_readiness': entry.get('technical_readiness'),
+            'block_reason': entry.get('block_reason'),
+            'technical_blockers': entry.get('technical_blockers', []),
             'blockers': blockers, 'eligible': not blockers,
             'display_name': (source or {}).get('repo_id', entry['repo_id']).rsplit('/', 1)[-1],
         })
