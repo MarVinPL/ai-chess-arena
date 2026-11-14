@@ -1,4 +1,4 @@
-import tempfile,unittest,sqlite3
+import tempfile,unittest,sqlite3,json
 from pathlib import Path
 import league
 
@@ -336,6 +336,42 @@ class LeagueTests(unittest.TestCase):
   with league.connect() as c:
    self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?',(tournament['id'],)).fetchone()[0],2)
    self.assertEqual(c.execute('SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND white_model_id=black_model_id',(tournament['id'],)).fetchone()[0],0)
+
+ def test_excluded_manifest_models_cannot_be_registered_even_with_license_approval(self):
+  for repo in ('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
+               'mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF'):
+   with self.subTest(repo=repo), self.assertRaisesRegex(ValueError,'Issue #71'):
+    league.register_model('Excluded '+repo,source='https://huggingface.co/'+repo,
+     license='Apache-2.0',license_verified=True,metadata={'repo_id':repo})
+
+ def test_excluded_manifest_models_never_enter_new_tournaments(self):
+  for idx,repo in enumerate(('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
+                             'mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF'),3):
+   with league.connect() as c:
+    c.execute('INSERT INTO league_models(id,name,format,created_at) VALUES(?,?,?,?)',
+              (idx,repo,'PURE_AI','now'))
+    c.execute('INSERT INTO model_versions(model_id,version_key,source,license,license_verified,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)',
+              (idx,'excluded-'+str(idx),'https://huggingface.co/'+repo,'Apache-2.0',1,
+               json.dumps({'repo_id':repo,'revision':'a'*40,'download_url':'https://huggingface.co/'+repo+'/resolve/'+'a'*40+'/model.gguf','filename':'model.gguf','sha256':'a'*64,'size_bytes':100}),'now'))
+  tournament=league.create_round_robin('Excluded catalog entries')
+  self.assertEqual(tournament['players'],2)
+  with league.connect() as c:
+   entrants={r[0] for r in c.execute('SELECT model_id FROM tournament_entries WHERE tournament_id=?',(tournament['id'],))}
+  self.assertEqual(entrants,{1,2})
+
+ def test_existing_tournament_entry_for_excluded_model_is_not_runnable_or_downloadable(self):
+  with league.connect() as c:
+   c.execute("INSERT INTO league_models(name,format,created_at) VALUES('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF','PURE_AI','now')")
+   c.execute("INSERT INTO model_versions(model_id,version_key,source,license,license_verified,metadata_json,created_at) VALUES(3,'excluded','https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF','Apache-2.0',1,?,'now')",
+             (json.dumps({'repo_id':'JonathanColetti/Qwen3.8-27B-Uncensored-GGUF'}),))
+  tournament=league.create_round_robin('Legacy tournament')
+  with league.connect() as c:
+   c.execute('INSERT INTO tournament_entries(tournament_id,model_id,version_id) VALUES(?,?,?)',(tournament['id'],3,3))
+  entry=next(x for x in league.tournament_entry_status(tournament['id']) if x['model_id']==3)
+  self.assertFalse(entry['tournament_entrant'])
+  self.assertFalse(entry['download_on_demand'])
+  self.assertFalse(entry['ready'])
+  self.assertTrue(any('Issue #71' in reason for reason in entry['blockers']))
 
  def test_single_player_tournament_rejected(self):
   with league.connect() as c: c.execute("UPDATE league_models SET active=0 WHERE name='Beta'")

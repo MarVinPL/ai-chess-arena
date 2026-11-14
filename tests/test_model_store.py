@@ -20,6 +20,16 @@ class ModelStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): model_store.download_version(1,'https://example.test/a.gguf','../a.gguf','0'*64,10,True)
     def test_rejects_unpinned_hash(self):
         with self.assertRaises(ValueError): model_store.download_version(1,'https://example.test/a.gguf','a.gguf','bad',10,True)
+    def test_excluded_model_cannot_be_downloaded_even_if_license_flag_is_set(self):
+        repo='JonathanColetti/Qwen3.8-27B-Uncensored-GGUF'
+        with league.connect() as c:
+            c.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)", (repo,'PURE_AI','now'))
+            c.execute("INSERT INTO model_versions(model_id,version_key,source,license,license_verified,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)",
+                      (2,'excluded','https://huggingface.co/'+repo,'Apache-2.0',1,'{}','now'))
+        with self.assertRaisesRegex(ValueError,'Issue #71'):
+            model_store.download_version(2,'https://huggingface.co/'+repo+'/resolve/'+'a'*40+'/model.gguf',
+                                         'model.gguf','a'*64,100,True)
+
     def test_download_success_verifies_hash_and_marks_managed(self):
         payload=b'GGUF-mock-payload'; digest=hashlib.sha256(payload).hexdigest()
         class Response:

@@ -5,6 +5,7 @@ from pathlib import Path
 import chess, chess.pgn
 import league
 import model_store
+from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
 import passkey_test
@@ -512,7 +513,7 @@ def tournament_preflight(tournament_id):
         if not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
-        entry['download_on_demand'] = bool(entry.get('manifest_ready') and entry.get('license_verified'))
+        entry['download_on_demand'] = bool(entry.get('download_on_demand') and entry.get('manifest_ready') and entry.get('license_verified'))
         entry['blockers'] = reasons
         entry['ready_to_start'] = not reasons
         if reasons:
@@ -1170,9 +1171,13 @@ class Handler(BaseHTTPRequestHandler):
                     if version_id < 1:
                         raise ValueError('Nieprawidłowy identyfikator wersji modelu')
                     with league.connect() as c:
-                        row = c.execute('SELECT id,source FROM model_versions WHERE id=?', (version_id,)).fetchone()
+                        row = c.execute('''SELECT v.id,v.source,v.metadata_json,m.name
+                            FROM model_versions v JOIN league_models m ON m.id=v.model_id
+                            WHERE v.id=?''', (version_id,)).fetchone()
                     if row is None:
                         raise ValueError('Nieznana wersja modelu')
+                    if is_excluded_model_identity(name=row['name'], source=row['source'], metadata=row['metadata_json']):
+                        raise ValueError('Model jest wyłączony z AI Chess Arena (Issue #71); nie można przetwarzać go jako kandydata do zatwierdzenia')
                     evidence = fetch_hf_license_evidence(row['source'])
                     with league.connect() as c:
                         current = c.execute('SELECT metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
@@ -1195,6 +1200,9 @@ class Handler(BaseHTTPRequestHandler):
                         source = (row['source'] or '').strip()
                         license_name = (payload.get('license') or row['license'] or '').strip()
                         metadata = json.loads(row['metadata_json'] or '{}')
+                        model_name = c.execute('SELECT name FROM league_models WHERE id=(SELECT model_id FROM model_versions WHERE id=?)', (version_id,)).fetchone()['name']
+                        if is_excluded_model_identity(name=model_name, source=source, metadata=metadata):
+                            raise ValueError('Model jest trwale wyłączony z AI Chess Arena (Issue #71); nie można zatwierdzić licencji')
                         evidence = metadata.get('license_evidence') or {}
                         has_license_document = bool(evidence.get('license_files') or evidence.get('license'))
                         if not source or not source.startswith('https://') or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
