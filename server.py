@@ -267,45 +267,34 @@ def _version_record(version_id):
 
 
 def _ensure_version_file(version_id):
+    """Use only an already verified Arena-managed file; never download implicitly."""
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
-    if expected.exists():
-        if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
-            raise RuntimeError('Znaleziony plik nie jest oznaczoną kopią zarządzaną przez Arenę')
-        if expected.stat().st_size != version['size_bytes']:
-            raise RuntimeError(f'Rozmiar istniejącego modelu {version_id} nie zgadza się z manifestem')
-        return str(_version_path(version))
-    import urllib.parse
-    metadata = json.loads(version.get('metadata_json') or '{}')
-    download_url = metadata.get('download_url') or (
-        version['source'].rstrip('/') + '/resolve/main/' + '/'.join(urllib.parse.quote(part, safe='') for part in (metadata.get('source_path') or version['filename']).split('/')))
-    model_store.download_version(version_id, download_url, version['filename'],
-                                 version['sha256'], int(version['size_bytes']), True)
-    with league.connect() as c:
-        refreshed = c.execute("SELECT id,filename,status,license_verified,managed_copy,sha256,size_bytes FROM model_versions WHERE id=?", (version_id,)).fetchone()
-    return str(_version_path(dict(refreshed)))
+    if not expected.is_file():
+        raise RuntimeError(f'Brak lokalnej kopii GGUF dla wersji {version_id}; pobierz ją jawnie przed startem turnieju')
+    if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
+        raise RuntimeError('Znaleziony plik nie jest oznaczoną kopią zarządzaną przez Arenę')
+    return str(_version_path(version))
 
 
 def _ensure_version_assets(version_id):
-    """Return target/draft paths, fetching and verifying both assets on demand."""
+    """Return target/draft paths only when both are already locally managed."""
     target_path = _ensure_version_file(version_id)
     version = _version_record(version_id)
     draft_path = None
     if version.get('draft_filename'):
         expected = model_store.MANAGED_DIR / version['draft_filename']
-        if expected.exists():
-            if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
-                raise RuntimeError('Znaleziony plik draft nie jest kopią zarządzaną przez Arenę')
-            digest = hashlib.sha256()
-            actual_size = 0
-            with expected.open('rb') as draft_file:
-                for chunk in iter(lambda: draft_file.read(1024 * 1024), b''):
-                    actual_size += len(chunk); digest.update(chunk)
-            if actual_size != version['draft_size_bytes'] or digest.hexdigest().lower() != version['draft_sha256'].lower():
-                raise RuntimeError('Plik draft nie zgadza się z manifestem SHA-256/rozmiaru')
-        else:
-            model_store.download_draft_version(version_id, version['draft_download_url'],
-                version['draft_filename'], version['draft_sha256'], int(version['draft_size_bytes']), True)
+        if not expected.is_file():
+            raise RuntimeError(f'Brak lokalnej kopii draft dla wersji {version_id}; pobierz ją jawnie przed startem turnieju')
+        if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
+            raise RuntimeError('Znaleziony plik draft nie jest kopią zarządzaną przez Arenę')
+        digest = hashlib.sha256()
+        actual_size = 0
+        with expected.open('rb') as draft_file:
+            for chunk in iter(lambda: draft_file.read(1024 * 1024), b''):
+                actual_size += len(chunk); digest.update(chunk)
+        if actual_size != version['draft_size_bytes'] or digest.hexdigest().lower() != version['draft_sha256'].lower():
+            raise RuntimeError('Plik draft nie zgadza się z manifestem SHA-256/rozmiaru')
         draft_path = str(expected)
     return {'path': target_path, 'draft_path': draft_path}
 
@@ -327,7 +316,6 @@ def cleanup_unneeded_models(keep_version_ids=()):
 
 def _prepare_single_model(player):
     version_id = player['version_id']
-    cleanup_unneeded_models({version_id})
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
     required_bytes = 0 if expected.is_file() else int(version['size_bytes'])
@@ -339,13 +327,11 @@ def _prepare_single_model(player):
     try:
         return _ensure_version_assets(version_id)
     except Exception:
-        cleanup_unneeded_models()
         raise
 
 
 def _prepare_game_models(white, black):
     needed = {white['version_id'], black['version_id']}
-    cleanup_unneeded_models(needed)
     versions = [_version_record(value) for value in (white['version_id'], black['version_id'])]
     required_bytes = sum((int(v['size_bytes']) if not (model_store.MANAGED_DIR / v['filename']).is_file() else 0) +
                          (int(v['draft_size_bytes'] or 0) if v['draft_filename'] and not (model_store.MANAGED_DIR / v['draft_filename']).is_file() else 0)
@@ -397,6 +383,55 @@ def _resolve_pairing_players(players, pairing):
     return white, black
 
 
+class TournamentPreflightError(RuntimeError):
+    """Tournament cannot start until every entrant is independently ready."""
+
+
+def tournament_preflight(tournament_id):
+    entries = league.tournament_entry_status(tournament_id)
+    runtime_available = llm_health()
+    blocked = []
+    for entry in entries:
+        reasons = list(entry['blockers'])
+        if not runtime_available:
+            reasons.append('lokalny runtime Llamafile jest niedostępny')
+        if not reasons and entry.get('version_id'):
+            try:
+                version = _version_record(entry['version_id'])
+                _version_path(version)
+                if version.get('draft_filename'):
+                    draft_path = (model_store.MANAGED_DIR / version['draft_filename']).resolve()
+                    if draft_path.parent != model_store.MANAGED_DIR.resolve() or not draft_path.is_file():
+                        raise RuntimeError('brak bezpiecznej lokalnej kopii draft')
+                    digest = hashlib.sha256()
+                    actual_size = 0
+                    with draft_path.open('rb') as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                            actual_size += len(chunk)
+                            digest.update(chunk)
+                    if (actual_size != version['draft_size_bytes'] or
+                            digest.hexdigest().lower() != version['draft_sha256'].lower()):
+                        raise RuntimeError('draft nie zgadza się z SHA-256/rozmiarem')
+            except Exception as exc:
+                reasons.append('weryfikacja lokalnego pliku nie powiodła się: ' + str(exc))
+        entry['runtime_available'] = runtime_available
+        entry['blockers'] = reasons
+        entry['ready_to_start'] = not reasons
+        if reasons:
+            blocked.append({'model_id': entry['model_id'], 'name': entry['name'],
+                            'reasons': reasons})
+    return {'tournament_id': tournament_id, 'ready': not blocked,
+            'runtime_available': runtime_available, 'entrants': entries,
+            'blocked': blocked}
+
+
+def _preflight_error_message(preflight):
+    details = []
+    for item in preflight['blocked']:
+        details.append(item['name'] + ': ' + ', '.join(item['reasons']))
+    return 'Preflight zablokował start turnieju. ' + '; '.join(details)
+
+
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -404,6 +439,9 @@ def tournament_loop(tournament_id):
     # a later turn reloads it. Downloads and cleanup use the same re-entrant lock.
     model_store.MODEL_LIFECYCLE_LOCK.acquire()
     try:
+        preflight = tournament_preflight(tournament_id)
+        if not preflight['ready']:
+            raise TournamentPreflightError(_preflight_error_message(preflight))
         with league.connect() as c:
             tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
             if tournament is None:
@@ -476,7 +514,6 @@ def tournament_loop(tournament_id):
                              passkey_test.question_fingerprint(question)))
             finally:
                 tournament_runtime.stop()
-                cleanup_unneeded_models()
             if tournament_stop_event.is_set():
                 break
 
@@ -533,7 +570,6 @@ def tournament_loop(tournament_id):
                     raise
             finally:
                 tournament_runtime.stop()
-                cleanup_unneeded_models()
             if result['status'] == 'stopped':
                 break
             game_ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -558,18 +594,22 @@ def tournament_loop(tournament_id):
         set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
     except Exception as exc:
         tournament_error = str(exc)
-        diagnostics = {}
-        if isinstance(exc, engine_runner.RunnerError):
-            diagnostics = {
-                'model': exc.model_name,
-                'color': exc.color,
-                'fen': exc.fen,
-                'legal_moves': exc.legal_moves,
-                'uci_attempts': exc.uci_attempts,
-            }
-        set_live('error','Błąd turnieju: '+str(exc), error=str(exc), **diagnostics)
-        with league.connect() as c:
-            c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
+        if isinstance(exc, TournamentPreflightError):
+            set_live('blocked','Start turnieju zablokowany przez preflight: '+str(exc),
+                     error=str(exc), tournament_id=tournament_id)
+        else:
+            diagnostics = {}
+            if isinstance(exc, engine_runner.RunnerError):
+                diagnostics = {
+                    'model': exc.model_name,
+                    'color': exc.color,
+                    'fen': exc.fen,
+                    'legal_moves': exc.legal_moves,
+                    'uci_attempts': exc.uci_attempts,
+                }
+            set_live('error','Błąd turnieju: '+str(exc), error=str(exc), **diagnostics)
+            with league.connect() as c:
+                c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
     finally:
         try:
             if tournament_runtime:
@@ -597,22 +637,23 @@ def start_tournament(tournament_id):
                 raise ValueError('Nie znaleziono turnieju')
             if row['status'] not in ('planned', 'stopped', 'failed'):
                 raise RuntimeError(f'Nie można uruchomić turnieju ze statusem: {row["status"]}')
-            entries = c.execute('''SELECT e.model_id,e.version_id,m.name,v.id,v.filename,v.status,v.license_verified,v.managed_copy
-                FROM tournament_entries e JOIN league_models m ON m.id=e.model_id
-                JOIN model_versions v ON v.id=e.version_id WHERE e.tournament_id=?''', (tournament_id,)).fetchall()
+            entries_count = c.execute('SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?', (tournament_id,)).fetchone()[0]
             pairings = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status='pending'", (tournament_id,)).fetchone()[0]
-        if len(entries) < 2 or pairings < 1:
-            raise RuntimeError('Turniej nie ma co najmniej dwóch zawodników i oczekujących par')
-        # Validate immutable manifests now; GGUF files are fetched only for each game.
-        for version in entries:
-            manifest = _version_record(version['version_id'])
-            if manifest['license_verified'] != 1:
-                raise RuntimeError('Model bez jawnie zweryfikowanej licencji')
+        if entries_count < 2 or pairings < 1:
+            raise RuntimeError('Turniej nie ma co najmniej dwóch uczestników i oczekujących par')
+        # Serialize preflight against manual cleanup. The worker repeats it after
+        # acquiring the same lifecycle lock to close the start/cleanup race.
+        with model_store.MODEL_LIFECYCLE_LOCK:
+            preflight = tournament_preflight(tournament_id)
+        if not preflight['ready']:
+            raise TournamentPreflightError(_preflight_error_message(preflight))
         tournament_stop_event.clear()
         tournament_error = ''
         tournament_thread = threading.Thread(target=tournament_loop, args=(tournament_id,), daemon=True)
         tournament_thread.start()
-        return {'id': tournament_id, 'status': 'starting'}
+        return {'id': tournament_id, 'status': 'starting',
+                'entrants': len(preflight['entrants']),
+                'runtime_available': preflight['runtime_available']}
 
 
 def state():
