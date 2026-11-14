@@ -89,12 +89,25 @@
       "sha256": "b5a76329d1bbd28c2b3e95968d1b2b9c85d2c68d56b6708fde8200c6a6560fa9",
       "revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1",
       "license": "cc-by-nc-4.0",
-      "license_review_status": "review_required",
-      "license_notes": "CC BY-NC 4.0 zawiera ograniczenie NonCommercial. Nie zatwierdzac do uzycia komercyjnego; zachowac blokade pobierania do przegladu.",
-      "license_evidence": "Hugging Face model metadata license tag",
-      "license_url": "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1-GGUF/blob/main/README.md",
+      "license_review_status": "verified_restricted",
+      "license_notes": "Pinned GGUF README at the exact registry revision identifies the Instruct fine-tune and explicitly declares CC BY-NC 4.0. SpeakLeash confirms the restriction is intentional because parts of the OpenHermes training data do not have a commercial license. NonCommercial restriction applies; this audit is not owner permission to download, run or distribute.",
+      "license_evidence": "Pinned GGUF README, upstream Instruct model card and SpeakLeash licensing discussion; official Creative Commons BY-NC 4.0 legal code",
+      "license_url": "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1-GGUF/blob/b482400d6d36fa02167bc32f5f7b2d368271b4a1/README.md",
       "download_url": "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1-GGUF/resolve/b482400d6d36fa02167bc32f5f7b2d368271b4a1/bielik-7b-instruct-v0.1.Q3_K_S.gguf",
-      "license_terms_url": "https://creativecommons.org/licenses/by-nc/4.0/"
+      "license_terms_url": "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en",
+      "license_audit": {
+        "status": "verified_restricted",
+        "reviewed_at": "2026-11-14",
+        "reviewed_revision": "b482400d6d36fa02167bc32f5f7b2d368271b4a1",
+        "report": "docs/model-audit/license-review-2026-11-14.md",
+        "evidence": [
+          "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1-GGUF/blob/b482400d6d36fa02167bc32f5f7b2d368271b4a1/README.md",
+          "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1/blob/main/README.md",
+          "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1/discussions/1",
+          "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en"
+        ],
+        "summary": "The exact pinned GGUF README declares CC BY-NC 4.0 and identifies the Instruct model it quantizes. SpeakLeash states the non-commercial restriction is intentional because parts of the OpenHermes training data do not have a commercial license. Attribution and NonCommercial terms apply; no owner approval to use or distribute is implied."
+      }
     },
     {
       "model_id": 8,
