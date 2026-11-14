@@ -37,8 +37,8 @@ CHALLENGE_TTL_SECONDS = 300
 SESSION_IDLE_SECONDS = 1800
 SESSION_ABSOLUTE_SECONDS = 28800
 _OPERATOR_ID = re.compile(r"^[a-f0-9-]{36}$")
-_DISPLAY_NAME = re.compile(r"^[^\\x00-\\x1f\\x7f]{1,100}$")
-_RP_ID = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_DISPLAY_NAME = re.compile(r"^[^\x00-\x1f\x7f]{1,100}$")
+_RP_ID = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class OperatorAuthError(ValueError):
@@ -120,7 +120,8 @@ def ensure_schema(conn):
         operator_id TEXT,
         created_at REAL NOT NULL,
         expires_at REAL NOT NULL,
-        consumed_at REAL
+        consumed_at REAL,
+        user_handle BLOB
     );
     CREATE TABLE IF NOT EXISTS arena_operator_sessions (
         session_hash TEXT PRIMARY KEY,
@@ -134,6 +135,9 @@ def ensure_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_arena_sessions_operator
         ON arena_operator_sessions(operator_id);
     """)
+    challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(arena_auth_challenges)")}
+    if "user_handle" not in challenge_cols:
+        conn.execute("ALTER TABLE arena_auth_challenges ADD COLUMN user_handle BLOB")
 
 
 def _token_hash(token):
@@ -170,7 +174,7 @@ def create_owner_enrollment(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
     return token
 
 
-def create_operator_invitation(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
+def create_operator_invitation(db_path, owner_operator_id, display_name, ttl=TOKEN_TTL_SECONDS):
     """Create an operator invitation; caller must already have verified owner role."""
     if not isinstance(display_name, str) or not _DISPLAY_NAME.fullmatch(display_name.strip()):
         raise OperatorAuthError("Nieprawidłowa nazwa operatora.")
@@ -181,9 +185,10 @@ def create_operator_invitation(db_path, display_name, ttl=TOKEN_TTL_SECONDS):
     with _connect(db_path) as conn:
         ensure_schema(conn)
         if not conn.execute(
-            "SELECT 1 FROM arena_operators WHERE role='owner' AND active=1 LIMIT 1"
+            "SELECT 1 FROM arena_operators WHERE operator_id=? AND role='owner' AND active=1",
+            (owner_operator_id,),
         ).fetchone():
-            raise OperatorAuthError("Brak aktywnego właściciela.")
+            raise OperatorAuthError("Wymagane jest uwierzytelnione konto właściciela.")
         conn.execute(
             "INSERT INTO arena_operator_enrollments(token_hash,role,display_name,created_at,expires_at) VALUES(?,?,?,?,?)",
             (_token_hash(token), "operator", display_name.strip(), now, now + ttl),
@@ -222,8 +227,8 @@ def begin_registration(db_path, config, token):
         )
         ceremony_id = secrets.token_urlsafe(24)
         conn.execute(
-            "INSERT INTO arena_auth_challenges(ceremony_id,purpose,challenge,token_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-            (ceremony_id, "registration", options.challenge, token_hash, now, now + CHALLENGE_TTL_SECONDS),
+            "INSERT INTO arena_auth_challenges(ceremony_id,purpose,challenge,token_hash,created_at,expires_at,user_handle) VALUES(?,?,?,?,?,?,?)",
+            (ceremony_id, "registration", options.challenge, token_hash, now, now + CHALLENGE_TTL_SECONDS, user_handle),
         )
         result = json.loads(options_to_json(options))
         result["ceremony_id"] = ceremony_id
@@ -268,7 +273,9 @@ def finish_registration(db_path, config, ceremony_id, credential):
         ).fetchone():
             raise OperatorAuthError("Właściciel jest już zarejestrowany.")
         operator_id = str(uuid.uuid4())
-        user_handle = secrets.token_bytes(32)
+        user_handle = bytes(challenge["user_handle"] or b"")
+        if len(user_handle) < 16 or len(user_handle) > 64:
+            raise OperatorAuthError("Brak prawidłowego uchwytu użytkownika dla rejestracji.")
         conn.execute(
             "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
             (operator_id, enrollment["display_name"], enrollment["role"], user_handle, now),
