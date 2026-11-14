@@ -325,6 +325,7 @@ function renderTournaments(rows){
   const diagnostic=document.createElement('section');diagnostic.className='tournament-preflight';diagnostic.hidden=true;diagnostic.setAttribute('aria-live','polite');
   card.appendChild(diagnostic);
   const openRegistry=(target)=>{const el=$(target);if(el){el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
+  const openModelAdmission=(modelId)=>{const target=$('model-admission-'+modelId);if(!target){openRegistry('model-admission-list');$('league-message').textContent='Model '+modelId+' nie ma osobnego wpisu na jawnej allowliście. Sprawdź manifest i zakres dopuszczenia.';return;}target.scrollIntoView({behavior:'smooth',block:'center'});target.focus({preventScroll:true});target.style.outline='3px solid #f1d99d';target.style.outlineOffset='3px';};
   const showPreflight=async()=>{
    diagnostic.hidden=false;diagnostic.dataset.ready='unknown';diagnostic.textContent='Sprawdzam warunki startu…';
    try{
@@ -341,7 +342,7 @@ function renderTournaments(rows){
      if(reasons.length){const controls=document.createElement('div');controls.className='tournament-preflight__actions';
       const admission=reasons.some(x=>/allowlist|dopuszc|manifest|rewizj|scope|repozytor/i.test(x));
       const license=reasons.some(x=>/licencj/i.test(x));
-      if(admission){const b=document.createElement('button');b.type='button';b.textContent='Otwórz warunki dopuszczenia';b.onclick=()=>openRegistry('model-admission-list');controls.appendChild(b)}
+      if(admission){const b=document.createElement('button');b.type='button';b.textContent='Pokaż warunki dopuszczenia · model '+e.model_id;b.onclick=()=>openModelAdmission(e.model_id);controls.appendChild(b)}
       if(license){const b=document.createElement('button');b.type='button';b.textContent='Otwórz rejestr modeli i licencje';b.onclick=()=>openRegistry('model-list');controls.appendChild(b)}
       const reviewSelect=$('review-model-id');
       const reviewSupported=reviewSelect&&Array.from(reviewSelect.options).some(option=>option.value===String(e.model_id));
@@ -401,7 +402,7 @@ function renderModelAdmission(items){
  const host=$('model-admission-list');host.textContent='';
  if(!Array.isArray(items)||!items.length){host.textContent='Brak wpisów na jawnej allowliście.';return}
  items.forEach(item=>{
-  const card=document.createElement('div');card.style.cssText='padding:10px;margin:8px 0;border:1px solid #34445c;border-radius:9px';
+  const card=document.createElement('div');card.id='model-admission-'+item.model_id;card.dataset.modelId=String(item.model_id);card.tabIndex=-1;card.style.cssText='padding:10px;margin:8px 0;border:1px solid #34445c;border-radius:9px;scroll-margin:24px';
   const title=document.createElement('strong');title.textContent=`${item.model_id}. ${item.display_name} · ${item.repo_id}`;card.appendChild(title);
   const meta=document.createElement('div');meta.textContent=`Allowlista: ${item.status} · techniczna: ${item.technical_readiness} · zakres: ${(item.admission_scope||[]).join(', ')||'brak'}`;card.appendChild(meta);
   const decision=document.createElement('div');decision.textContent=item.decision?`Decyzja lokalna: ${item.decision.status} · ${item.decision.actor} · ${item.decision.decided_at}${item.decision.reason?' · '+item.decision.reason:''}`:'Decyzja lokalna: brak';card.appendChild(decision);
