@@ -11,7 +11,7 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 | ID | Model / artefakt | Status audytu | Ustalenie |
 |---:|---|---|---|
 | 1 | Qwen2.5-0.5B-Instruct Q4_K_M GGUF | `review_required` | Pinned blob istnieje i SHA-256 zgadza się z rejestrem. README nie występuje w tej samej rewizji artefaktu; karta bieżącej gałęzi i licencja modelu bazowego nie wystarczają do pełnego potwierdzenia warunków dokładnej kwantyzacji. |
-| 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `review_required` | Pinned README wskazuje model bazowy i deklaruje Apache-2.0. Karta upstream również deklaruje Apache-2.0, ale nie uzyskano osobnego pełnego tekstu licencji z repozytorium bazowego. |
+| 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; przypięta karta upstream wprost odsyła do kanonicznego tekstu Apache License 2.0. |
 | 3 | Qwen2-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; dokładna przypięta rewizja oficjalnego upstream zawiera pełny tekst Apache License 2.0. |
 | 4 | Meta Llama 3.1 8B Instruct Q3_K_S GGUF | `verified_restricted` | Obowiązuje Llama 3.1 Community License oraz AUP Meta, z warunkami atrybucji, NOTICE, dystrybucji i dodatkowym progiem MAU. |
 | 5 | Llama 3.2 3B Instruct UD-IQ3_XXS GGUF | `verified_restricted` | Obowiązuje Llama 3.2 Community License oraz AUP Meta, z warunkami atrybucji, NOTICE, dystrybucji i dodatkowym progiem MAU. |
@@ -43,11 +43,12 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 - SHA-256 z rejestru i LFS: `75c4346ef9e855ed630f80078a2430cf63aaca599e340360998a313070fcdc47`.
 - Pinned README wskazuje `HuggingFaceTB/SmolLM2-360M-Instruct` jako źródło i deklaruje Apache-2.0.
 - Oficjalna karta modelu bazowego na przypiętej rewizji `a10cc1512eabd3dde888204e902eca88bddb4951` deklaruje Apache-2.0.
-- Ograniczenie dowodowe: nie znaleziono osobnego pliku LICENSE w repozytorium modelu bazowego; sam tag i deklaracja karty nie zastępują pełnego tekstu licencji.
+- Karta modelu bazowego w dokładnej przypiętej rewizji wskazuje Apache 2.0 i zawiera bezpośredni link do kanonicznego tekstu licencji Apache. To stanowi dowód warunków upstream; nie znaleziono dodatkowych ograniczeń w sprawdzonych plikach.
 
 Źródła:
 - GGUF README (pinned): https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md
-- Model bazowy (pinned): https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/tree/a10cc1512eabd3dde888204e902eca88bddb4951
+- Model bazowy README (pinned): https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md
+- Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 ### 3. Qwen2-0.5B-Instruct Q4_K_M
 
@@ -124,7 +125,7 @@ Warunki Meta nie są Apache-2.0 ani bezwarunkową licencją permissive. Audyt od
 
 ## Pozostałe blokady
 
-- Wpisy 1 i 2 pozostają `review_required`: brakuje pełnego tekstu licencji lub kompletnego dowodu przypiętego do dokładnego artefaktu pochodnego.
+- Wpis 1 pozostaje `review_required`: w rewizji zawierającej dokładny blob nie ma README ani pliku LICENSE, więc brakuje przypiętego dowodu warunków dla artefaktu pochodnego.
 - Dwa pozostałe wpisy rejestru nie zostały objęte analizą w tym bezpiecznym zakresie. Ich statusy pozostają bez zmian i nie wolno traktować ich jako zatwierdzonych.
 - Status audytu nie jest zgodą właściciela projektu. Import manifestu nadal wymusza `license_verified=0`; żadna zmiana w tym raporcie nie przyznaje uprawnień do pobrania, uruchomienia ani udziału w turnieju.
 - Do zamknięcia Issue #52 wymagane jest rozstrzygnięcie wszystkich wpisów i ewentualna decyzja właściciela; przypadki niejasne muszą pozostać zablokowane.
