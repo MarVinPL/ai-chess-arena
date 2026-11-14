@@ -94,7 +94,7 @@ class ModelPermissionTests(unittest.TestCase):
                               confirm=True, reason="wycofanie")
         self.decide( request_id=eval_req["id"], action="revoke",
                           confirm=True, reason="koniec ewaluacji")
-        decide_permission(self.db, request_id=test_req["id"], action="revoke",
+        self.decide( request_id=test_req["id"], action="revoke",
                           confirm=True, reason="koniec testów")
         self.assertFalse(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
 
