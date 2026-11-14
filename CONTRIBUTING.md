@@ -37,3 +37,13 @@
 - Treat active and planned tournaments, their rosters, pairings, and results as protected state.
 - Do not change tournament state, model files, inference runtime, or database contents as part of unrelated repository work.
 - Put follow-up behavior or additional improvements in their own issues and PRs.
+
+## Periodic VPS-to-main drift detection and controlled synchronization
+
+- Periodically perform a read-only comparison of the deployed VPS revision with the current `main`, including repository status, tracked and untracked changes, and the running service/release identity where available.
+- Distinguish an expected deployment lag from uncommitted VPS edits, a divergent checkout, and a deployment that was intentionally held back.
+- When drift is detected, report the exact revisions, ahead/behind commits, affected paths, local modifications, operational risk, and whether an active tournament or inference process could be affected.
+- Detection is read-only. Never run automatic `git pull`, `reset`, `clean`, `stash`, checkout, deployment, migration, or service restart as part of monitoring.
+- Before any approved synchronization, inspect and preserve all local edits and untracked files, confirm a usable backup/rollback path, and assess active tournament/runtime state. Never overwrite changes merely to make VPS match `main`.
+- Synchronizing VPS code requires explicit user approval. Deployment, service restart, database migration, and tournament-state changes each require their own explicit approval.
+- Repository changes that implement this workflow still follow the dedicated branch/PR process, and the PR must be synchronized with current `main` before merge.
