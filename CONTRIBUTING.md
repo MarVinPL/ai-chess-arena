@@ -6,6 +6,16 @@
 - Finish or explicitly resolve that item before moving to the next one. Do not skip an older PR to start a newer issue.
 - At the start of each work cycle, inspect both open issues and open PRs; a PR may be the active implementation of an older issue.
 
+## Keep every PR synchronized with main
+
+- Before continuing work on an existing PR, compare its head branch with the current `main` and record its ahead/behind state.
+- If `main` has advanced, synchronize the PR branch with `main` before implementing more changes.
+- Re-check and synchronize after meaningful changes land on `main`, and always immediately before final review and merge.
+- Resolve conflicts only on the PR's own branch. Preserve both the PR's intended changes and all relevant updates from `main`; never reset, overwrite, or force-push an unverified branch to make synchronization easier.
+- After synchronization, rerun relevant tests and syntax checks, inspect the complete diff, and verify that the PR still implements exactly one Issue.
+- Before merging, verify that the PR is not behind the current `main`. If safe synchronization cannot be completed, stop and report the blocker rather than merging a stale branch.
+- Synchronization is maintenance of the same PR branch; it never authorizes combining Issues. **One Issue = one branch = one PR** remains mandatory.
+
 ## One issue = one pull request
 
 - Every implementation issue must have exactly one dedicated PR.
