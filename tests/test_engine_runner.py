@@ -509,5 +509,31 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(fake.histories[2][1]['piece'], 'p')
 
 
+    def test_runner_error_preserves_final_position_and_legal_history(self):
+        from engine_runner import RunnerError, SequentialChessRunner
+
+        class FailingRuntime:
+            def __init__(self): self.calls = 0
+            def generate(self, path, board, stop_event=None, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return chess.Move.from_uci('e2e4'), {'seconds': 0.01}
+                raise RunnerError('synthetic runtime failure')
+
+        runtime = FailingRuntime()
+        runner = SequentialChessRunner(runtime)
+        with self.assertRaises(RunnerError) as caught:
+            runner.play_game(
+                {'name': 'Alpha', 'path': '/tmp/a.gguf', 'model_id': 1},
+                {'name': 'Beta', 'path': '/tmp/b.gguf', 'model_id': 2})
+        error = caught.exception
+        self.assertEqual(error.color, 'black')
+        self.assertEqual(error.model_id, 2)
+        self.assertEqual(len(error.move_records), 1)
+        self.assertEqual(error.move_records[0]['uci'], 'e2e4')
+        self.assertEqual(error.move_times, [0.01])
+        self.assertEqual(error.fen, 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

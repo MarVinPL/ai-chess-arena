@@ -30,6 +30,8 @@ class RunnerError(RuntimeError):
         self.color = None
         self.fen = None
         self.legal_moves = []
+        self.move_records = []
+        self.move_times = []
 
 
 class LlamafileRuntime:
@@ -380,7 +382,14 @@ class SequentialChessRunner:
             if inference.get('max_tokens', 16) != 16:
                 kwargs['max_tokens'] = int(inference['max_tokens'])
             try:
-                move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+                try:
+                    move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+                except RunnerError:
+                    raise
+                except Exception as runtime_error:
+                    raise RunnerError(
+                        f'Błąd wykonania inferencji: {type(runtime_error).__name__}: {runtime_error}'
+                    ) from runtime_error
             except RunnerError as exc:
                 exc.model_id = player.get('model_id')
                 exc.model_name = player.get('name')
@@ -390,6 +399,8 @@ class SequentialChessRunner:
                 exc.color = color
                 exc.fen = board.fen()
                 exc.legal_moves = [move.uci() for move in board.legal_moves]
+                exc.move_records = [dict(record) for record in move_records]
+                exc.move_times = list(times)
                 raise
             san = board.san(move)
             piece = board.piece_at(move.from_square)

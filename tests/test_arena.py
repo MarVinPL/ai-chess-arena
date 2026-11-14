@@ -257,10 +257,79 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertIn('managed_models', data)
             self.assertIn('managed_free_bytes', data)
 
-    def test_game_schema_has_tournament_audit_columns(self):
+    def test_game_schema_has_tournament_and_adjudication_audit_columns(self):
         with sqlite3.connect(server.DB) as db:
             columns = {row[1] for row in db.execute('PRAGMA table_info(games)')}
-        self.assertTrue({'tournament_id', 'pairing_id', 'move_times_json', 'inference_metadata_json'} <= columns)
+        self.assertTrue({
+            'tournament_id', 'pairing_id', 'move_times_json', 'inference_metadata_json',
+            'adjudication_status', 'adjudication_json', 'failure_reason',
+            'failure_fen', 'failure_color', 'failure_side_to_move', 'failure_model_id'
+        } <= columns)
+
+    def test_failed_game_is_saved_and_only_adjudicated_result_counts_for_elo(self):
+        failure = RuntimeError('synthetic')
+        failure.move_records = []
+        failure.move_times = []
+        failure.uci_attempts = []
+        failure.fen = chess.Board().fen()
+        failure.color = 'white'
+        failure.model_id = 1
+        with sqlite3.connect(server.DB) as db:
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
+                       ('Adjudication White', 'PURE_AI', 'now'))
+            db.execute("INSERT INTO league_models(name,format,created_at) VALUES(?,?,?)",
+                       ('Adjudication Black', 'PURE_AI', 'now'))
+            white_id = db.execute("SELECT id FROM league_models WHERE name='Adjudication White'").fetchone()[0]
+            black_id = db.execute("SELECT id FROM league_models WHERE name='Adjudication Black'").fetchone()[0]
+            pairings = []
+            for suffix in ('unresolved', 'adjudicated'):
+                cur = db.execute("INSERT INTO tournaments(name,format,status,created_at) VALUES(?,?,?,?)",
+                                 ('Adjudication ' + suffix, 'PURE_AI', 'running', 'now'))
+                tournament_id = cur.lastrowid
+                cur = db.execute("INSERT INTO tournament_entries(tournament_id,model_id) VALUES(?,?)",
+                                 (tournament_id, white_id))
+                db.execute("INSERT INTO tournament_entries(tournament_id,model_id) VALUES(?,?)",
+                           (tournament_id, black_id))
+                cur = db.execute("INSERT INTO tournament_pairings(tournament_id,white_model_id,black_model_id,leg,status,stage) VALUES(?,?,?,?,?,?)",
+                                 (tournament_id, white_id, black_id, 1, 'pending', 'league'))
+                pairings.append({'id': cur.lastrowid, 'stage': 'league', 'tournament_id': tournament_id})
+        white = {'model_id': white_id, 'name': 'Adjudication White'}
+        black = {'model_id': black_id, 'name': 'Adjudication Black'}
+        failure.model_id = white_id
+        unresolved = server._persist_failed_game(
+            pairings[0]['tournament_id'], pairings[0], white, black, 'start', failure,
+            {'status': 'unresolved', 'reason': 'analysis_engine_not_configured'})
+        adjudicated = server._persist_failed_game(
+            pairings[1]['tournament_id'], pairings[1], white, black, 'start', failure,
+            {'status': 'adjudicated', 'winner_color': 'black', 'reason': 'stable_decisive_advantage'})
+        self.assertEqual(unresolved['result'], 'failed')
+        self.assertFalse(unresolved['adjudicated'])
+        self.assertEqual(adjudicated['result'], '0-1')
+        self.assertTrue(adjudicated['adjudicated'])
+        with sqlite3.connect(server.DB) as db:
+            failed = db.execute("SELECT result,adjudication_status,failure_reason,failure_fen,failure_side_to_move FROM games WHERE id=?",
+                                (unresolved['game_id'],)).fetchone()
+            completed = db.execute("SELECT result,adjudication_status FROM games WHERE id=?",
+                                   (adjudicated['game_id'],)).fetchone()
+            pairing = db.execute("SELECT status,winner_model_id FROM tournament_pairings WHERE id=?",
+                                 (pairings[1]['id'],)).fetchone()
+        self.assertEqual(failed[0:2], ('failed', 'unresolved'))
+        self.assertEqual(failed[2], 'synthetic')
+        self.assertEqual(failed[3], chess.Board().fen())
+        self.assertEqual(failed[4], 'white')
+        self.assertEqual(completed, ('0-1', 'adjudicated'))
+        self.assertEqual(pairing, ('completed', black_id))
+        ratings = {row['name']: row for row in server.league.elo_ratings('PURE_AI')}
+        self.assertEqual((ratings['Adjudication White']['games'], ratings['Adjudication White']['losses']), (1, 1))
+        self.assertEqual((ratings['Adjudication Black']['games'], ratings['Adjudication Black']['wins']), (1, 1))
+        with sqlite3.connect(server.DB) as db:
+            tournament_ids = [item['tournament_id'] for item in pairings]
+            placeholders = ','.join('?' for _ in tournament_ids)
+            db.execute(f"DELETE FROM games WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournament_pairings WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournament_entries WHERE tournament_id IN ({placeholders})", tournament_ids)
+            db.execute(f"DELETE FROM tournaments WHERE id IN ({placeholders})", tournament_ids)
+            db.execute("DELETE FROM league_models WHERE id IN (?,?)", (white_id, black_id))
 
 
     def test_tournament_api_reports_only_saved_completed_pairing_games(self):
