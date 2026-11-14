@@ -6,6 +6,7 @@ downloads a model, changes systemd state, or touches tournament data.
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -47,6 +48,23 @@ def validate_artifact(artifact_path: str | Path,
     if SHARED_MODEL_ROOT == artifact or SHARED_MODEL_ROOT in artifact.parents:
         raise ValueError("Współdzielony katalog modeli jest bezwzględnie zabroniony.")
     return artifact
+
+
+def artifact_fingerprint(artifact_path: str | Path,
+                        model_root: str | Path = MODEL_ROOT) -> dict:
+    """Return immutable artifact evidence without modifying or executing the file."""
+    artifact = validate_artifact(artifact_path, model_root)
+    digest = hashlib.sha256()
+    size = 0
+    with artifact.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return {
+        "sha256": digest.hexdigest(),
+        "size_bytes": size,
+        "artifact_name": artifact.name,
+    }
 
 
 def build_systemd_run_argv(*, job_id: str, artifact_path: str | Path,
