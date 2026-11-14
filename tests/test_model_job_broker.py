@@ -34,10 +34,10 @@ class ModelJobBrokerTests(unittest.TestCase):
     def _grant(self, scope):
         req = model_permissions.request_permission(
             self.db, **self.ident, scope=scope, confirm=True,
-            reason="kontrolowany test")
+            reason="kontrolowany test", actor="test-owner")
         model_permissions.decide_permission(
             self.db, request_id=req["id"], action="approve",
-            confirm=True)
+            confirm=True, actor="test-owner")
 
     def _create(self, scope="TEST_ONLY", **overrides):
         args = dict(
@@ -53,7 +53,7 @@ class ModelJobBrokerTests(unittest.TestCase):
     def test_no_active_scope_fails_closed(self):
         model_permissions.decide_permission(
             self.db, request_id=1, action="revoke", confirm=True,
-            reason="test zakończony")
+            reason="test zakończony", actor="test-owner")
         with self.assertRaises(PermissionError):
             self._create()
 
@@ -93,7 +93,7 @@ class ModelJobBrokerTests(unittest.TestCase):
             "AND status='approved' ORDER BY id DESC LIMIT 1").fetchone()
         model_permissions.decide_permission(
             self.db, request_id=req["id"], action="revoke", confirm=True,
-            reason="cofnięcie zgody")
+            reason="cofnięcie zgody", actor="test-owner")
         with self.assertRaises(PermissionError):
             claim_job_for_start(
                 self.db, job_id=job["job_id"], actor="test-broker", capacity_check=lambda: True,
