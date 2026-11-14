@@ -8,6 +8,7 @@ import league
 import model_store
 import model_allowlist
 import model_admission
+import model_permissions
 import model_review_submissions
 import hf_candidate_audit
 from model_exclusions import is_excluded_model_identity
@@ -163,6 +164,8 @@ def active_model():
 def db_init():
     league.init()
     tournament_checkpoint.ensure_schema(DB)
+    with sqlite3.connect(DB) as permission_db:
+        model_permissions.ensure_schema(permission_db)
     with sqlite3.connect(DB) as c:
         c.execute('''CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
@@ -1429,6 +1432,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(model_admission.list_decisions(c))
             except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
                 self.send_json({'error': str(exc)}, 503)
+        elif path == '/api/model-permissions':
+            try:
+                sync = model_allowlist.check_repository_sync(ROOT)
+                if not sync.get('in_sync'):
+                    raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+                with league.connect() as c:
+                    self.send_json(model_permissions.list_permissions(c))
+            except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
+                self.send_json({'error': str(exc)}, 503)
         elif path == '/api/league':
             self.send_json(league.elo_ratings('PURE_AI'))
         elif path == '/api/league/engine':
@@ -1519,7 +1531,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-permissions/request','/api/model-permissions/approve','/api/model-permissions/reject','/api/model-permissions/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1565,6 +1577,30 @@ class Handler(BaseHTTPRequestHandler):
                             action='admit' if path.endswith('/admit') else 'revoke',
                             confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
                         )
+                elif path.startswith('/api/model-permissions/'):
+                    sync = model_allowlist.check_repository_sync(ROOT)
+                    if not sync.get('in_sync'):
+                        raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
+                    current = model_allowlist.load_allowlist()
+                    model_id = int(payload.get('model_id', 0))
+                    entry = next((item for item in current['models'] if item.get('model_id') == model_id), None)
+                    if entry is None or entry.get('status') == 'blocked':
+                        raise ValueError('Model nie ma aktywnego wpisu w allowliście lub jest zablokowany.')
+                    repo_id = payload.get('repo_id', entry.get('repo_id'))
+                    revision = payload.get('revision', entry.get('revision'))
+                    if repo_id != entry.get('repo_id') or revision != entry.get('revision'):
+                        raise ValueError('Żądanie musi wskazywać dokładne repozytorium i rewizję z allowlisty.')
+                    with league.connect() as c:
+                        if path.endswith('/request'):
+                            result = model_permissions.request_permission(
+                                c, model_id=model_id, repo_id=repo_id, revision=revision,
+                                scope=payload.get('scope'), confirm=payload.get('confirm') is True,
+                                reason=payload.get('reason', ''), snapshot=entry)
+                        else:
+                            result = model_permissions.decide_permission(
+                                c, request_id=int(payload.get('request_id', 0)),
+                                action=path.rsplit('/', 1)[-1], confirm=payload.get('confirm') is True,
+                                reason=payload.get('reason', ''))
                 elif path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
@@ -1649,7 +1685,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke','/api/model-permissions/approve','/api/model-permissions/reject','/api/model-permissions/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':
