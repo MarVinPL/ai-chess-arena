@@ -231,14 +231,16 @@ function renderTournaments(rows){
   card.appendChild(fields);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
-  const check=document.createElement('button');check.textContent='Sprawdź gotowość';check.onclick=async()=>{
-   try{
-    const r=await fetch('/api/tournaments/'+t.id+'/preflight');const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
-    const entrants=d.entrants||[];const blocked=d.blocked||[];
-    const summary=entrants.map(e=>{const state=e.ready_to_start?'GOTOWY':'BLOKADA';const reasons=(e.blockers||[]).join(', ');const cache=e.local_file_available?'plik lokalny':(e.download_on_demand?'plik pobierze się przed partią':'pobranie zablokowane do czasu weryfikacji manifestu/licencji');return e.name+': '+state+'; '+cache+(reasons?'; '+reasons:'')}).join('\\n');
-    $('league-message').textContent='Preflight turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.\\n'+summary;
-   }catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}
-  };actions.appendChild(check);
+  if(t.status==='planned'){
+   const check=document.createElement('button');check.textContent='Sprawdź gotowość';check.onclick=async()=>{
+    try{
+     const r=await fetch('/api/tournaments/'+t.id+'/preflight');const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
+     const entrants=d.entrants||[];const blocked=d.blocked||[];
+     const summary=entrants.map(e=>{const state=e.ready_to_start?'GOTOWY':'BLOKADA';const reasons=(e.blockers||[]).join(', ');const cache=e.local_file_available?'plik lokalny':(e.download_on_demand?'plik pobierze się przed partią':'pobranie zablokowane do czasu weryfikacji manifestu/licencji');return e.name+': '+state+'; '+cache+(reasons?'; '+reasons:'')}).join('\\n');
+     $('league-message').textContent='Preflight turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.\\n'+summary;
+    }catch(e){$('league-message').textContent='Nie udało się sprawdzić gotowości: '+e}
+   };actions.appendChild(check);
+  }
   if(['planned','stopped','failed'].includes(t.status)){
    const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';
    start.onclick=async()=>{
