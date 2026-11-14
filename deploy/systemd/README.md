@@ -19,8 +19,10 @@ Arena API. It is intentionally separate from sentinelx-cloud-core.service.
 
 ## Installation gate
 
-This file is committed to Git only. It has not been copied to
-/etc/systemd/system, enabled, started, or applied.
+Deployment status (2026-11-14): this unit is installed at
+/etc/systemd/system/ai-chess-arena.service and currently active. It is not
+enabled for boot persistence (UnitFileState=disabled); enabling it requires
+an explicit operational decision. The service is independent of SentinelX.
 
 Before installing or starting it:
 1. Obtain separate, explicit approval for the deployment and restart.
