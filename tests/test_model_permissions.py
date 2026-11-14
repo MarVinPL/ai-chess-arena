@@ -45,6 +45,15 @@ class ModelPermissionTests(unittest.TestCase):
         self.approve(eval_req)
         self.assertTrue(has_permission(self.db, **self.ident, scope="EVALUATION"))
 
+    def test_pending_or_rejected_renewal_does_not_cancel_existing_grant(self):
+        first = self.request()
+        self.approve(first)
+        renewal = self.request()
+        self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
+        decide_permission(self.db, request_id=renewal["id"], action="reject",
+                          confirm=True, reason="brak dodatkowej potrzeby")
+        self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
+
     def test_tournament_is_never_granted_by_operational_permission_registry(self):
         with self.assertRaisesRegex(ValueError, "allowlist"):
             self.request("TOURNAMENT")
