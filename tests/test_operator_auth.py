@@ -129,5 +129,60 @@ class OperatorAuthStorageTests(unittest.TestCase):
             self.db, config, invalid_csrf, require_csrf=True))
 
 
+    def test_discoverable_login_uses_stored_user_handle_and_creates_session(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from webauthn.helpers import bytes_to_base64url
+        now = operator_auth.time.time()
+        credential_id = b"credential-id"
+        user_handle = b"operator-user-handle-32-bytes!!!"
+        challenge = b"fresh-login-challenge"
+        with operator_auth._db(self.db) as conn:
+            operator_auth.ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO arena_operators(operator_id,display_name,role,user_handle,created_at) VALUES(?,?,?,?,?)",
+                ("owner-id", "Owner", "owner", user_handle, now),
+            )
+            conn.execute(
+                """INSERT INTO arena_webauthn_credentials
+                (credential_id,operator_id,public_key,sign_count,created_at)
+                VALUES(?,?,?,?,?)""",
+                (bytes_to_base64url(credential_id), "owner-id", b"public-key", 0, now),
+            )
+            conn.execute(
+                """INSERT INTO arena_auth_challenges
+                (ceremony_id,purpose,challenge,created_at,expires_at)
+                VALUES(?,?,?,?,?)""",
+                ("login-ceremony", "authentication", challenge, now, now + 120),
+            )
+        credential = {
+            "id": bytes_to_base64url(credential_id),
+            "rawId": bytes_to_base64url(credential_id),
+            "type": "public-key",
+            "response": {"userHandle": bytes_to_base64url(user_handle)},
+        }
+        verified = SimpleNamespace(
+            credential_id=credential_id, new_sign_count=1,
+            credential_device_type="single_device", credential_backed_up=False,
+        )
+        with patch.object(operator_auth, "verify_authentication_response", return_value=verified) as verify:
+            result = operator_auth.finish_authentication(
+                self.db, operator_auth.WebAuthnConfig("example.test", "https://arena.example.test"),
+                "login-ceremony", credential,
+            )
+        verify.assert_called_once()
+        self.assertEqual(verify.call_args.kwargs["credential_public_key"], b"public-key")
+        self.assertEqual(result["operator"]["operator_id"], "owner-id")
+        self.assertEqual(result["operator"]["role"], "owner")
+        session = operator_auth.get_session(self.db, result["session_token"])
+        self.assertEqual(session["operator_id"], "owner-id")
+        self.assertTrue(operator_auth.verify_csrf(session, result["csrf_token"]))
+        with operator_auth._db(self.db) as conn:
+            stored = conn.execute(
+                "SELECT consumed_at FROM arena_auth_challenges WHERE ceremony_id='login-ceremony'"
+            ).fetchone()
+            self.assertIsNotNone(stored["consumed_at"])
+
+
 if __name__ == "__main__":
     unittest.main()
