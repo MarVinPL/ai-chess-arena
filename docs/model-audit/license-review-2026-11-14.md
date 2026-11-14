@@ -126,7 +126,7 @@ Warunki Meta nie są Apache-2.0 ani bezwarunkową licencją permissive. Audyt od
 
 ## Pozostałe blokady
 
-- Wpis 1 pozostaje `review_required`: w rewizji zawierającej dokładny blob nie ma README ani pliku LICENSE, więc brakuje przypiętego dowodu warunków dla artefaktu pochodnego.
+- Wpisy 9 i 10 pozostają `review_required` i nie zostały zatwierdzone: ich pochodzenie/warunki wymagają odrębnego przeglądu. Nie należy interpretować samej deklaracji Apache-2.0 w metadanych pochodnego repozytorium jako wystarczającego dowodu ani dopuszczenia do użycia.
 - Dwa pozostałe wpisy rejestru nie zostały objęte analizą w tym bezpiecznym zakresie. Ich statusy pozostają bez zmian i nie wolno traktować ich jako zatwierdzonych.
 - Status audytu nie jest zgodą właściciela projektu. Import manifestu nadal wymusza `license_verified=0`; żadna zmiana w tym raporcie nie przyznaje uprawnień do pobrania, uruchomienia ani udziału w turnieju.
 - Do zamknięcia Issue #52 wymagane jest rozstrzygnięcie wszystkich wpisów i ewentualna decyzja właściciela; przypadki niejasne muszą pozostać zablokowane.
