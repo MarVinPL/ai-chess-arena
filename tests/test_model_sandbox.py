@@ -101,5 +101,15 @@ class ModelSandboxTests(unittest.TestCase):
         self.assertNotIn("sh", argv)
 
 
+    def test_rejects_whitespace_in_systemd_bind_paths(self):
+        spaced = self.root / "candidate with spaces.gguf"
+        spaced.write_bytes(b"fixture")
+        with self.assertRaisesRegex(ValueError, "białych znaków"):
+            build_systemd_run_argv(
+                job_id="d" * 16, artifact_path=spaced,
+                worker_argv=["/opt/arena/bin/trusted-worker"],
+                model_root=self.root)
+
+
 if __name__ == "__main__":
     unittest.main()
