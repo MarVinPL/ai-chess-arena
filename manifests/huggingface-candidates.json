@@ -1,6 +1,6 @@
 {
   "inference_run": false,
-  "last_catalog_change_at": "2026-11-14T12:27:55Z",
+  "last_catalog_change_at": "2026-11-14T13:18:41Z",
   "models": [
     {
       "admission_status": "not_admitted",
@@ -292,6 +292,44 @@
         "qwen3.5",
         "region:us",
         "rust"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:Anbeeld/Qwen3.8-27B-GGUF-Bartowski-SINQ",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "Qwen3.8-27B-GGUF-Bartowski-SINQ",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "62d5f2b1e5e58d577a01487bd196255a3b64fb94"
+        }
+      ],
+      "last_modified": "2026-11-14T12:53:01.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "Anbeeld/Qwen3.8-27B-GGUF-Bartowski-SINQ",
+      "revision": "62d5f2b1e5e58d577a01487bd196255a3b64fb94",
+      "source_status": "active",
+      "tags": [
+        "base_model:Qwen/Qwen3.8-27B",
+        "base_model:quantized:Qwen/Qwen3.8-27B",
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "image-text-to-text",
+        "imatrix",
+        "license:apache-2.0",
+        "region:us"
       ],
       "technical_readiness": "not_evaluated"
     },
@@ -1058,6 +1096,40 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
+      "catalog_id": "hf:BlackSaltStudios/noquarter-blackflag-omni-2b-q4_k_m",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "noquarter-blackflag-omni-2b-q4_k_m",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "8532d3908f835e65531c8a1bf156733e8e720a38"
+        }
+      ],
+      "last_modified": "2026-11-14T13:16:24.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "BlackSaltStudios/noquarter-blackflag-omni-2b-q4_k_m",
+      "revision": "8532d3908f835e65531c8a1bf156733e8e720a38",
+      "source_status": "active",
+      "tags": [
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "license:apache-2.0",
+        "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
       "catalog_id": "hf:bloomer010/Ling-3.0-tiny-GGUF",
       "declared_license_tag": "mit",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -1558,13 +1630,18 @@
           "at": "2026-11-14T12:25:58Z",
           "event": "discovered",
           "revision": "031ceda6a619775a6a6ca910926b1d0f9949d0ff"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "metadata_changed",
+          "revision": "031ceda6a619775a6a6ca910926b1d0f9949d0ff"
         }
       ],
       "last_modified": "2026-11-14T08:18:45.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
-      "metadata_status": "review_required",
+      "metadata_status": "metadata_changed",
       "pipeline_tag": "text-generation",
       "repo_id": "CyberBuddyAI/CyberBuddy-CloudSec-9B",
       "revision": "031ceda6a619775a6a6ca910926b1d0f9949d0ff",
@@ -1584,6 +1661,7 @@
         "conversational",
         "cybersecurity",
         "devsecops",
+        "doi:10.57967/hf/11629",
         "en",
         "endpoints_compatible",
         "function-calling",
@@ -1817,6 +1895,45 @@
       "pipeline_tag": "text-generation",
       "repo_id": "dendriteholdings/Ingot-XXXVI-27B-Q2",
       "revision": "6ac3ef43ff43790ae0cdd653a1150551109f1ebf",
+      "source_status": "active",
+      "tags": [
+        "base_model:finetune:prism-ml/Ternary-Bonsai-2-27B-gguf",
+        "base_model:prism-ml/Ternary-Bonsai-2-27B-gguf",
+        "bittensor",
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "ingot",
+        "llama.cpp",
+        "region:us",
+        "text-generation"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:dendriteholdings/Ingot-XXXVII-27B-Q2",
+      "declared_license_tag": null,
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "Ingot-XXXVII-27B-Q2",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "2353d718b416a69b72be0e91cb229163dd181a30"
+        }
+      ],
+      "last_modified": "2026-11-14T13:18:13.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "text-generation",
+      "repo_id": "dendriteholdings/Ingot-XXXVII-27B-Q2",
+      "revision": "2353d718b416a69b72be0e91cb229163dd181a30",
       "source_status": "active",
       "tags": [
         "base_model:finetune:prism-ml/Ternary-Bonsai-2-27B-gguf",
@@ -2661,17 +2778,21 @@
           "at": "2026-11-14T12:26:58Z",
           "event": "discovered",
           "revision": "c2f0468f6d8414f397ff730f1a863026695fb64b"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "access_denied"
         }
       ],
       "last_modified": "2026-11-14T11:36:59.000Z",
-      "last_verified_at": "2026-11-14T12:26:58Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
       "repo_id": "Gghhayy/Bz-4B-GGUF",
       "revision": "c2f0468f6d8414f397ff730f1a863026695fb64b",
-      "source_status": "active",
+      "source_status": "access_denied",
       "tags": [
         "base_model:Gghhayy/Bz-4B",
         "base_model:quantized:Gghhayy/Bz-4B",
@@ -2990,16 +3111,22 @@
           "at": "2026-11-14T12:27:55Z",
           "event": "discovered",
           "revision": "79475e7abfda8569e619abb6300d9dde867b1413"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "revision_changed",
+          "previous_revision": "79475e7abfda8569e619abb6300d9dde867b1413",
+          "revision": "343133a9300bf8f0793954cdcc847e31ee1c5d51"
         }
       ],
-      "last_modified": "2026-11-14T12:27:18.000Z",
-      "last_verified_at": "2026-11-14T12:27:55Z",
+      "last_modified": "2026-11-14T12:30:02.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "text-generation",
       "repo_id": "GOPAE/idibo-tiny-aya-earth",
-      "revision": "79475e7abfda8569e619abb6300d9dde867b1413",
+      "revision": "343133a9300bf8f0793954cdcc847e31ee1c5d51",
       "source_status": "active",
       "tags": [
         "aligntune",
@@ -4128,6 +4255,161 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
+      "catalog_id": "hf:kaxing/doxa",
+      "declared_license_tag": null,
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "doxa",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "b73223dcb30a387473b44af172b39d29f0848940"
+        }
+      ],
+      "last_modified": "2026-11-14T12:51:29.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "kaxing/doxa",
+      "revision": "b73223dcb30a387473b44af172b39d29f0848940",
+      "source_status": "active",
+      "tags": [
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:krummholz-ai/atlantic-lite-4b-v6.3-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "atlantic-lite-4b-v6.3-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "3fcba6d7ddfb0a2acb4d672fd799d44db9f80460"
+        }
+      ],
+      "last_modified": "2026-11-14T13:01:49.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "krummholz-ai/atlantic-lite-4b-v6.3-GGUF",
+      "revision": "3fcba6d7ddfb0a2acb4d672fd799d44db9f80460",
+      "source_status": "active",
+      "tags": [
+        "atlantic-lite",
+        "base_model:Qwen/Qwen3.5-4B",
+        "base_model:finetune:Qwen/Qwen3.5-4B",
+        "beta",
+        "conversational",
+        "en",
+        "endpoints_compatible",
+        "gguf",
+        "image-text-to-text",
+        "krummholz",
+        "license:apache-2.0",
+        "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:krummholz-ai/atlantic-lite-4b-v7-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "atlantic-lite-4b-v7-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "0220f77f84e1f3f6757d88765252c906aae4476e"
+        }
+      ],
+      "last_modified": "2026-11-14T13:01:45.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "krummholz-ai/atlantic-lite-4b-v7-GGUF",
+      "revision": "0220f77f84e1f3f6757d88765252c906aae4476e",
+      "source_status": "active",
+      "tags": [
+        "atlantic-lite",
+        "base_model:Qwen/Qwen3.5-4B",
+        "base_model:finetune:Qwen/Qwen3.5-4B",
+        "beta",
+        "conversational",
+        "en",
+        "endpoints_compatible",
+        "gguf",
+        "image-text-to-text",
+        "krummholz",
+        "license:apache-2.0",
+        "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:krummholz-ai/atlantic-lite-4b-v8-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "atlantic-lite-4b-v8-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "3a4c80de9bd4a57a2d8c0aea0222d936242b1bc5"
+        }
+      ],
+      "last_modified": "2026-11-14T13:01:41.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "krummholz-ai/atlantic-lite-4b-v8-GGUF",
+      "revision": "3a4c80de9bd4a57a2d8c0aea0222d936242b1bc5",
+      "source_status": "active",
+      "tags": [
+        "atlantic-lite",
+        "base_model:Qwen/Qwen3.5-4B",
+        "base_model:quantized:Qwen/Qwen3.5-4B",
+        "conversational",
+        "en",
+        "endpoints_compatible",
+        "gguf",
+        "krummholz",
+        "license:apache-2.0",
+        "region:us",
+        "safetensors"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
       "catalog_id": "hf:Kujira/Underdog-Saluki-27B-1.0-MTP-GGUF",
       "declared_license_tag": "apache-2.0",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -4184,15 +4466,54 @@
           "at": "2026-11-14T12:26:58Z",
           "event": "discovered",
           "revision": "192f5c7d63d2b278f71dd9aaf1d313a1793f492c"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "moved",
+          "moved_to_repo_id": "labadain/labadain-E2B-it-Tetun-GGUF"
         }
       ],
       "last_modified": "2026-11-14T12:00:16.000Z",
-      "last_verified_at": "2026-11-14T12:26:58Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "moved_to_repo_id": "labadain/labadain-E2B-it-Tetun-GGUF",
+      "pipeline_tag": "conversational",
+      "repo_id": "labadain/labadain-E2B-GGUF",
+      "revision": "192f5c7d63d2b278f71dd9aaf1d313a1793f492c",
+      "source_status": "moved",
+      "tags": [
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:labadain/labadain-E2B-it-Tetun-GGUF",
+      "declared_license_tag": null,
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "labadain-E2B-it-Tetun-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "192f5c7d63d2b278f71dd9aaf1d313a1793f492c"
+        }
+      ],
+      "last_modified": "2026-11-14T12:00:16.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
-      "repo_id": "labadain/labadain-E2B-GGUF",
+      "repo_id": "labadain/labadain-E2B-it-Tetun-GGUF",
       "revision": "192f5c7d63d2b278f71dd9aaf1d313a1793f492c",
       "source_status": "active",
       "tags": [
@@ -4357,17 +4678,21 @@
           "event": "revision_changed",
           "previous_revision": "722a3b87398751de69d9b1a5ac647c628eab9669",
           "revision": "b4baa30cc13f6ae321391ec0c7d0825edacf1ca4"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "not_text_generation"
         }
       ],
       "last_modified": "2026-11-14T12:27:03.000Z",
-      "last_verified_at": "2026-11-14T12:27:55Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
       "repo_id": "lhh5051/Qwen3.8-Flash-Next-UD-Q4_K_XL-Huihui-Abliterated",
       "revision": "b4baa30cc13f6ae321391ec0c7d0825edacf1ca4",
-      "source_status": "active",
+      "source_status": "not_text_generation",
       "tags": [
         "base_model:quantized:unsloth/Qwen3.8-Flash-Next-GGUF",
         "base_model:unsloth/Qwen3.8-Flash-Next-GGUF",
@@ -4394,16 +4719,22 @@
           "at": "2026-11-14T12:26:58Z",
           "event": "discovered",
           "revision": "f0877433d28ad5e217bf3482b8430b33bb636a78"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "revision_changed",
+          "previous_revision": "f0877433d28ad5e217bf3482b8430b33bb636a78",
+          "revision": "14a4d85de8be583f2ee828ecd18cb6ff0ab471b8"
         }
       ],
-      "last_modified": "2026-11-14T12:24:23.000Z",
-      "last_verified_at": "2026-11-14T12:26:58Z",
+      "last_modified": "2026-11-14T13:12:14.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
       "repo_id": "lijie1228/liemo-0.8b-vl",
-      "revision": "f0877433d28ad5e217bf3482b8430b33bb636a78",
+      "revision": "14a4d85de8be583f2ee828ecd18cb6ff0ab471b8",
       "source_status": "active",
       "tags": [
         "chinese",
@@ -4738,6 +5069,47 @@
         "gguf",
         "license:apache-2.0",
         "region:us"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:markldn/SenseNova-Loop-9B-Preview-Q8_0-MTP-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "SenseNova-Loop-9B-Preview-Q8_0-MTP-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "0e06fd9fc2119410749feeb3b446e24e3266e9d1"
+        }
+      ],
+      "last_modified": "2026-11-14T13:17:16.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "text-generation",
+      "repo_id": "markldn/SenseNova-Loop-9B-Preview-Q8_0-MTP-GGUF",
+      "revision": "0e06fd9fc2119410749feeb3b446e24e3266e9d1",
+      "source_status": "active",
+      "tags": [
+        "base_model:AtomicChat/SenseNova-Loop-9B-Preview-GGUF",
+        "base_model:quantized:AtomicChat/SenseNova-Loop-9B-Preview-GGUF",
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "license:apache-2.0",
+        "llama.cpp",
+        "q8_0",
+        "region:us",
+        "sensenova-loop",
+        "speculative-decoding",
+        "text-generation"
       ],
       "technical_readiness": "not_evaluated"
     },
@@ -5660,6 +6032,48 @@
         "region:us",
         "text-generation",
         "vocabulary-trimming"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:NotRIK/auri-v3-qwen",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "auri-v3-qwen",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "70a73eb19dd3e0c8143c9f6965cceb17c974b2d5"
+        }
+      ],
+      "last_modified": "2026-11-14T13:09:28.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "NotRIK/auri-v3-qwen",
+      "revision": "70a73eb19dd3e0c8143c9f6965cceb17c974b2d5",
+      "source_status": "active",
+      "tags": [
+        "android-agent",
+        "base_model:quantized:unsloth/Qwen3.5-2B",
+        "base_model:unsloth/Qwen3.5-2B",
+        "bengali",
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "hindi",
+        "hinglish",
+        "license:apache-2.0",
+        "mobile-ai",
+        "region:us",
+        "tool-calling"
       ],
       "technical_readiness": "not_evaluated"
     },
@@ -6594,16 +7008,22 @@
           "at": "2026-11-14T12:25:58Z",
           "event": "discovered",
           "revision": "b5f6cc2713f1ae507fc03fe3bddfc962419a3f18"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "revision_changed",
+          "previous_revision": "b5f6cc2713f1ae507fc03fe3bddfc962419a3f18",
+          "revision": "e0e5102d6440bb1a0778c4ade8f4b5a4f10943ce"
         }
       ],
-      "last_modified": "2026-11-14T12:24:53.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
+      "last_modified": "2026-11-14T12:33:59.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "text-generation",
       "repo_id": "qtum/DeepSeek-V4.1-Flash-1017-GGUF",
-      "revision": "b5f6cc2713f1ae507fc03fe3bddfc962419a3f18",
+      "revision": "e0e5102d6440bb1a0778c4ade8f4b5a4f10943ce",
       "source_status": "active",
       "tags": [
         "base_model:deepseek-ai/DeepSeek-V4.1-Flash-1017",
@@ -7168,6 +7588,39 @@
         "license:apache-2.0",
         "region:us",
         "transformers"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:RadinR/SoroushAI",
+      "declared_license_tag": null,
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "SoroushAI",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "dc94ef08f6f82f9f2f863a9250c5b8aacb494efc"
+        }
+      ],
+      "last_modified": "2026-11-14T12:37:00.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "RadinR/SoroushAI",
+      "revision": "dc94ef08f6f82f9f2f863a9250c5b8aacb494efc",
+      "source_status": "active",
+      "tags": [
+        "conversational",
+        "endpoints_compatible",
+        "gguf",
+        "region:us"
       ],
       "technical_readiness": "not_evaluated"
     },
@@ -8271,6 +8724,49 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
+      "catalog_id": "hf:spicysweetner/LegalTrace-Qwen3-4B-LSI-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "LegalTrace-Qwen3-4B-LSI-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "728b237e43142af8735eaf575ce9e0174e826e87"
+        }
+      ],
+      "last_modified": "2026-11-14T13:00:34.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "text-generation",
+      "repo_id": "spicysweetner/LegalTrace-Qwen3-4B-LSI-GGUF",
+      "revision": "728b237e43142af8735eaf575ce9e0174e826e87",
+      "source_status": "active",
+      "tags": [
+        "base_model:Qwen/Qwen3-4B-Instruct-2507",
+        "base_model:quantized:Qwen/Qwen3-4B-Instruct-2507",
+        "conversational",
+        "en",
+        "endpoints_compatible",
+        "gguf",
+        "indian-penal-code",
+        "legal",
+        "legal-statute-identification",
+        "license:apache-2.0",
+        "llama.cpp",
+        "ollama",
+        "region:us",
+        "text-generation"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
       "catalog_id": "hf:superwhisper/s1-mini-GGUF",
       "declared_license_tag": "other",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -8456,6 +8952,51 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
+      "catalog_id": "hf:tabisai/tabis-1.0",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "tabis-1.0",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "47c85b69bbe3c5def3816ab76065470a14f9b960"
+        }
+      ],
+      "last_modified": "2026-11-14T13:17:25.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "text-generation",
+      "repo_id": "tabisai/tabis-1.0",
+      "revision": "47c85b69bbe3c5def3816ab76065470a14f9b960",
+      "source_status": "active",
+      "tags": [
+        "base_model:Qwen/Qwen3.5-0.8B",
+        "base_model:quantized:Qwen/Qwen3.5-0.8B",
+        "conversational",
+        "dataset:ailabykt/sakha-russian-parallel",
+        "endpoints_compatible",
+        "gguf",
+        "license:apache-2.0",
+        "llama-cpp",
+        "low-resource-languages",
+        "region:us",
+        "ru",
+        "sah",
+        "sakha",
+        "slm",
+        "text-generation",
+        "yakut"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
       "catalog_id": "hf:tapiocaTakeshi/Qubit",
       "declared_license_tag": "mit",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -8560,6 +9101,50 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
+      "catalog_id": "hf:tattrongvu/Jeffan-9B-1211-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "Jeffan-9B-1211-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "da71dc641f08f8f8591f328c2e885a9127ce1c5a"
+        }
+      ],
+      "last_modified": "2026-11-14T12:43:05.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "tattrongvu/Jeffan-9B-1211-GGUF",
+      "revision": "da71dc641f08f8f8591f328c2e885a9127ce1c5a",
+      "source_status": "active",
+      "tags": [
+        "base_model:quantized:tattrongvu/Jeffan-9B-1211",
+        "base_model:tattrongvu/Jeffan-9B-1211",
+        "conversational",
+        "decision-making",
+        "decision-model",
+        "endpoints_compatible",
+        "gguf",
+        "imatrix",
+        "license:apache-2.0",
+        "llama.cpp",
+        "multiple-choice",
+        "ollama",
+        "qwen3.5",
+        "region:us",
+        "text-classification"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
       "catalog_id": "hf:tencent/Hy-MT2-7B-GGUF",
       "declared_license_tag": "apache-2.0",
       "discovered_at": "2026-11-14T12:26:58Z",
@@ -8607,16 +9192,63 @@
           "at": "2026-11-14T12:26:58Z",
           "event": "discovered",
           "revision": "5430c0962d73ecb58beb93ed34b0d104457d18b8"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "access_denied"
         }
       ],
       "last_modified": "2026-11-14T11:33:35.000Z",
-      "last_verified_at": "2026-11-14T12:26:58Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
       "repo_id": "thekraftors/kraftlens-vl",
       "revision": "5430c0962d73ecb58beb93ed34b0d104457d18b8",
+      "source_status": "access_denied",
+      "tags": [
+        "OCR",
+        "chart",
+        "conversational",
+        "custom_code",
+        "document-understanding",
+        "endpoints_compatible",
+        "formula",
+        "gguf",
+        "image-text-to-text",
+        "kraftlens",
+        "layout",
+        "license:apache-2.0",
+        "region:us",
+        "table"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:thekraftors/kraftors_ocr",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "kraftors_ocr",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "8abbd56e1309678528a27c30139ef05c178f8739"
+        }
+      ],
+      "last_modified": "2026-11-14T13:13:10.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "conversational",
+      "repo_id": "thekraftors/kraftors_ocr",
+      "revision": "8abbd56e1309678528a27c30139ef05c178f8739",
       "source_status": "active",
       "tags": [
         "OCR",
@@ -8684,16 +9316,22 @@
           "at": "2026-11-14T12:26:58Z",
           "event": "discovered",
           "revision": "a7d45e20a0ababe32594e25e22b7980770eaf46b"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "revision_changed",
+          "previous_revision": "a7d45e20a0ababe32594e25e22b7980770eaf46b",
+          "revision": "76dbd1e761b74f7c1b6af0a478ae533ab8fb2cb4"
         }
       ],
-      "last_modified": "2026-11-14T12:26:46.000Z",
-      "last_verified_at": "2026-11-14T12:26:58Z",
+      "last_modified": "2026-11-14T13:10:18.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "conversational",
       "repo_id": "tracinginsights/tif1-lfm3-runs",
-      "revision": "a7d45e20a0ababe32594e25e22b7980770eaf46b",
+      "revision": "76dbd1e761b74f7c1b6af0a478ae533ab8fb2cb4",
       "source_status": "active",
       "tags": [
         "conversational",
@@ -10307,16 +10945,22 @@
           "at": "2026-11-14T12:25:58Z",
           "event": "discovered",
           "revision": "41c3d3ff4b3eeff53db222120a72422a2983e99d"
+        },
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "revision_changed",
+          "previous_revision": "41c3d3ff4b3eeff53db222120a72422a2983e99d",
+          "revision": "fe1c87e97e4a074ec8df8f1d9aeb79829bc2efb1"
         }
       ],
-      "last_modified": "2026-11-14T11:45:16.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
+      "last_modified": "2026-11-14T13:02:14.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
       "license_review_status": "review_required",
       "license_verified": false,
       "metadata_status": "review_required",
       "pipeline_tag": "text-generation",
       "repo_id": "vividh111/Indus-1.1B-GGUF",
-      "revision": "41c3d3ff4b3eeff53db222120a72422a2983e99d",
+      "revision": "fe1c87e97e4a074ec8df8f1d9aeb79829bc2efb1",
       "source_status": "active",
       "tags": [
         "base_model:nickmalhotra/ProjectIndus",
@@ -10804,6 +11448,49 @@
         "llama-cpp",
         "quantized",
         "qwen35",
+        "region:us",
+        "text-generation"
+      ],
+      "technical_readiness": "not_evaluated"
+    },
+    {
+      "admission_status": "not_admitted",
+      "arena_model_id": null,
+      "audited_revision": null,
+      "catalog_id": "hf:Xylolabs/Qwen3.8-27B-GGUF",
+      "declared_license_tag": "apache-2.0",
+      "discovered_at": "2026-11-14T13:18:41Z",
+      "display_name": "Qwen3.8-27B-GGUF",
+      "gated": false,
+      "history": [
+        {
+          "at": "2026-11-14T13:18:41Z",
+          "event": "discovered",
+          "revision": "ea68e5625407379d0632672518e6ed30d233c5c1"
+        }
+      ],
+      "last_modified": "2026-11-14T12:50:58.000Z",
+      "last_verified_at": "2026-11-14T13:18:41Z",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "metadata_status": "review_required",
+      "pipeline_tag": "text-generation",
+      "repo_id": "Xylolabs/Qwen3.8-27B-GGUF",
+      "revision": "ea68e5625407379d0632672518e6ed30d233c5c1",
+      "source_status": "active",
+      "tags": [
+        "base_model:Qwen/Qwen3.8-27B",
+        "base_model:quantized:Qwen/Qwen3.8-27B",
+        "conversational",
+        "en",
+        "endpoints_compatible",
+        "gguf",
+        "imatrix",
+        "ko",
+        "license:apache-2.0",
+        "llama-cpp",
+        "quantized",
+        "qwen38",
         "region:us",
         "text-generation"
       ],
