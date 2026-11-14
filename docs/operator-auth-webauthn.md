@@ -86,7 +86,6 @@ The first backend slice is now present on the Issue #136 branch:
 
 ### Not yet complete / not production-ready
 
-- The browser UI now provides Passkey registration, login, session status, logout, and owner-only operator invitations. It uses the browser WebAuthn API and sends credential responses to the server for cryptographic verification.
 - Persistent rate limiting and alerting for failed authentication/enrollment attempts are not implemented.
 - Credential revocation, operator suspension, role-change workflows, recovery, and global session invalidation are not implemented.
 - Ceremony failure-attempt handling and end-to-end browser tests need further security review. Unit tests now cover discoverable login, stored user-handle binding, session creation, CSRF, and origin enforcement.
@@ -94,7 +93,7 @@ The first backend slice is now present on the Issue #136 branch:
 - No owner enrollment token has been generated; no credentials or sessions have been created.
 - No production database migration, environment change, service restart, or deployment has been performed.
 
-Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until the UI, rate limits, lifecycle/recovery controls, security review, and end-to-end tests are complete. The production environment remains unchanged.
+Therefore, do not treat the backend slice as a completed identity system. Keep all production permission mutations unavailable until rate limits, lifecycle/recovery controls, security review, and end-to-end tests are complete. The production environment remains unchanged.
 
 
 ### Browser UI implementation update (2026-11-14)
