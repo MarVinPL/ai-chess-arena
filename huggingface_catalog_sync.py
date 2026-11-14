@@ -179,6 +179,7 @@ def _verify_existing(entry,source,fetcher,now):
     try: data,final=fetcher(url)
     except HTTPStatusError as exc:
         if exc.status in (404,410): return _mark_source_state(entry,'missing',now),'missing'
+        if exc.status in (401,403): return _mark_source_state(entry,'access_denied',now),'access_denied'
         raise CatalogSyncError(f'Nie udało się zweryfikować istniejącego modelu {repo} (HTTP {exc.status}); zachowano poprzedni katalog') from exc
     moved=_repo_from_api_url(final)
     if moved and moved!=repo: return _mark_source_state(entry,'moved',now,moved_to_repo_id=moved),'moved'
@@ -235,6 +236,10 @@ def sync_catalog(source_path=SOURCE_MANIFEST,catalog_path=CATALOG_PATH,fetcher=f
         except HTTPStatusError as exc:
             if exc.status in (404,410):
                 if _mark_source_state(entry,'missing',now): counts['changed']+=1; counts['missing']+=1
+                continue
+            if exc.status in (401,403):
+                if _mark_source_state(entry,'access_denied',now): counts['changed']+=1
+                counts['filtered_by_reason']['access_denied']=counts['filtered_by_reason'].get('access_denied',0)+1
                 continue
             raise CatalogSyncError(f'Nie udało się zweryfikować repozytorium {repo} (HTTP {exc.status}); zachowano poprzedni katalog') from exc
         moved=_repo_from_api_url(final)
