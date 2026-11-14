@@ -82,3 +82,34 @@ Nie pobierano wag, nie uruchamiano inferencji, nie zmieniano produkcyjnej bazy d
 ## Zastrzeżenie
 
 To techniczny przegląd publicznych warunków i dowodów, nie porada prawna. W razie komercyjnej dystrybucji, udostępniania wag lub niejasności co do warunków bazowych potrzebna jest odrębna decyzja właściciela projektu i — w razie potrzeby — konsultacja prawna.
+
+
+## Uzupełnienie dowodów publicznych — 2026-11-14
+
+To uzupełnienie zapisuje wyniki dodatkowego przeglądu publicznych kart modeli. Nie zastępuje odczytu plików z dokładnej rewizji GGUF. Z tego powodu nie podnosi statusów audytu w manifeście ani nie zmienia `license_verified`.
+
+### Wpisy 1–3: Qwen i SmolLM2
+
+- **Qwen2.5-0.5B-Instruct GGUF**: oficjalna karta repozytorium Qwen oznacza artefakt jako Apache-2.0 i opisuje własny wariant GGUF oraz dostępne kwantyzacje. To silniejszy dowód pochodzenia niż ogólny tag modelu bazowego, ale bieżąca karta nie jest przypięta w tym raporcie pełnym SHA rewizji. Status pozostaje `review_required`.
+- **SmolLM2-360M-Instruct GGUF**: karta repozytorium HuggingFaceTB deklaruje Apache-2.0, a README identyfikuje `HuggingFaceTB/SmolLM2-360M-Instruct` jako model bazowy i wskazuje konwersję do GGUF. Widoczny identyfikator rewizji README w publicznym widoku jest skrócony; nie potwierdzono pełnego SHA artefaktu z lokalnym wpisem rejestru. Status pozostaje `review_required`.
+- **Qwen2-0.5B-Instruct GGUF**: README QuantFactory deklaruje Apache-2.0, wskazuje `Qwen/Qwen2-0.5B-Instruct` jako bazę i opisuje kwantyzację przy użyciu llama.cpp. Nie zapisano pełnego SHA dokładnej rewizji README/artefaktu powiązanej z wpisem rejestru. Status pozostaje `review_required`.
+
+### Wpisy 6–8
+
+- **Bielik 11B v3.0 Instruct GGUF**: karta repozytorium GGUF deklaruje Apache-2.0; dokumentacja wariantu wskazuje kwantyzację modelu Instruct oraz bazę `Bielik-11B-v3-Base-20250730`. Karta bazowa wymaga zaakceptowania Terms of Use i udostępnienia danych kontaktowych, aby uzyskać dostęp do warunków. Sama etykieta Apache-2.0 nie rozstrzyga dodatkowych Terms of Use. Status pozostaje `review_required`; wymagany jest pełny tekst warunków i ich relacja do dokładnej rewizji artefaktu.
+- **Bielik 7B v0.1 Instruct GGUF**: karta SpeakLeash identyfikuje bazę fine-tuningową `Bielik-7B-v0.1`, źródłowy model Instruct i deklaruje CC BY-NC 4.0 (NonCommercial). Jest to jawne ograniczenie użycia niekomercyjnego, nie licencja permissive. Dokładny pinned README/tekst licencji dla rewizji zapisanej w rejestrze nie został niezależnie odczytany w tym przeglądzie. Status pozostaje `review_required`; nie zatwierdzać do zastosowań komercyjnych.
+- **Qwen3.8-27B GGUF**: bieżąca karta Unsloth oznacza repozytorium tagiem Apache-2.0, opisuje model jako multimodalny i zawiera informacje o bazie architektonicznej. Nie uzyskano treści README i pełnego zestawu plików z rewizji zapisanej w rejestrze ani dowodu dotyczącego wszystkich komponentów multimodalnych. Status pozostaje `review_required`.
+
+### Źródła dodatkowego przeglądu
+
+- Qwen2.5-0.5B-Instruct-GGUF (repozytorium i karta): https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF
+- SmolLM2-360M-Instruct-GGUF (repozytorium i karta): https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF
+- QuantFactory Qwen2-0.5B-Instruct-GGUF README: https://huggingface.co/QuantFactory/Qwen2-0.5B-Instruct-GGUF/blob/main/README.md
+- SpeakLeash Bielik 11B v3.0 Instruct GGUF: https://huggingface.co/speakleash/Bielik-11B-v3.0-Instruct-GGUF
+- SpeakLeash Bielik 11B v3 Base Terms of Use gate and model card: https://huggingface.co/speakleash/Bielik-11B-v3-Base-20250730
+- SpeakLeash Bielik 7B v0.1 Instruct GGUF: https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1-GGUF
+- Unsloth Qwen3.8-27B-GGUF: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+
+### Wpływ na decyzje
+
+Nie zmieniono statusów modeli w manifeście. Żaden z powyższych wpisów nie uzyskał w tym uzupełnieniu statusu `verified_permissive` ani zgody na pobranie, uruchomienie lub udział w turnieju. Brak pełnego pinned evidence pozostaje blockerem. Nie analizowano wpisów pozostających poza bezpiecznym zakresem tego przeglądu.
