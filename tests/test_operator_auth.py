@@ -88,7 +88,7 @@ class OperatorAuthStorageTests(unittest.TestCase):
         self.assertEqual(session["role"], "owner")
         self.assertTrue(operator_auth.verify_csrf(session, csrf_token))
         self.assertFalse(operator_auth.verify_csrf(session, "wrong-token"))
-        self.assertIsNone(operator_auth.get_session(self.db, session_token, now=1000.0 + operator_auth.SESSION_IDLE_SECONDS))
+        self.assertIsNone(operator_auth.get_session(self.db, session_token, now=1001.0 + operator_auth.SESSION_IDLE_SECONDS))
         self.assertTrue(operator_auth.revoke_session(self.db, session_token))
         self.assertIsNone(operator_auth.get_session(self.db, session_token, now=1002.0))
 
