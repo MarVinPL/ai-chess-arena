@@ -10,7 +10,7 @@
   "model_target": "HuggingFaceTB/SmolLM2-360M-Instruct",
   "purpose": "format and validator smoke-test only; not sufficient for model training",
   "rows": 8,
-  "sha256": "PENDING_GENERATION",
+  "sha256": "219c4fdeadf941b9bc382d4bbd5e3e2b8f53262cf1488d599e524a985fa882d5",
   "split_counts": {
     "train": 5,
     "validation": 1,
