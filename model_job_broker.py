@@ -18,7 +18,6 @@ from model_sandbox import (
 )
 
 WORKER_EXECUTABLE = "/home/debian/ai-chess-arena/bin/model-test-worker"
-JOB_ROOT = Path("/run/ai-chess-model-jobs")
 _JOB_ID = re.compile(r"^[a-f0-9]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SCOPES = {"TEST_ONLY", "EVALUATION"}
@@ -142,6 +141,7 @@ def create_job(connection: sqlite3.Connection, *, model_id: int, repo_id: str,
 
 def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
                          actor: str, model_root: str | Path,
+                         capacity_check=None,
                          limits: SandboxLimits = SandboxLimits()) -> dict:
     """Atomically consume operation consent and return a fixed-worker argv plan.
 
@@ -150,6 +150,8 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
     """
     ensure_schema(connection)
     actor = _actor(actor)
+    if capacity_check is None or capacity_check() is not True:
+        raise RuntimeError("Brak aktualnego potwierdzenia dostępności zasobów przed startem.")
     if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
         raise ValueError("Nieprawidłowy identyfikator zadania.")
     with connection:
@@ -172,7 +174,7 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
         worker_argv = [
             WORKER_EXECUTABLE, "--job-id", job_id,
             "--model", row["artifact_path"],
-            "--output-dir", str(JOB_ROOT / job_id),
+            "--output-dir", f"/run/ai-chess-model-test-{job_id[:16]}",
             "--scope", row["scope"],
         ]
         argv = build_systemd_run_argv(
