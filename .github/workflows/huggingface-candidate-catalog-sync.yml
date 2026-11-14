@@ -48,7 +48,7 @@ jobs:
             Automated metadata-only discovery and verification of public Hugging Face GGUF text-generation/conversational repositories.
 
             - New candidates remain review_required, license_verified=false, technical_readiness=not_evaluated, and admission_status=not_admitted.
-            - Existing pinned repositories are checked separately; changed or unavailable sources require human review.
+            - Pinned source endpoints are reconciled separately in the candidate catalog; the dedicated pinned-model metadata workflow remains independent.
             - Excluded identities and unsafe categories are filtered fail-closed.
             - No license is approved, no model is admitted, and the tournament allowlist is not changed.
             - No model weights are downloaded and no inference is run.

@@ -90,7 +90,7 @@ The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sy
 
 ### Weekly public Hugging Face candidate catalog
 
-The separate free GitHub Actions workflow `.github/workflows/huggingface-candidate-catalog-sync.yml` discovers public GGUF text-generation/conversational repositories and updates only the informational `manifests/huggingface-candidates.json` catalog. New candidates remain `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`; no license or tournament admission is approved automatically. It downloads no model artifacts, runs no inference, and does not modify the pinned model manifest, admission allowlist, database, or tournament state. It creates a draft PR only when tracked catalog metadata changes. See `docs/huggingface-candidate-catalog.md`.
+The separate free GitHub Actions workflow `.github/workflows/huggingface-candidate-catalog-sync.yml` discovers public GGUF text-generation/conversational repositories and updates only the informational `manifests/huggingface-candidates.json` catalog. New candidates remain `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`; no license or tournament admission is approved automatically. It downloads no model artifacts, runs no inference, and does not modify the pinned model manifest, admission allowlist, database, or tournament state. It creates a draft PR only when tracked catalog metadata changes. The original 14 November 2026 snapshot (436 entries from a partial scan) is preserved separately under `manifests/archive/` and is not used by the workflow. See `docs/huggingface-candidate-catalog.md`.
 
 ## Safe tournament stop and resume
 
