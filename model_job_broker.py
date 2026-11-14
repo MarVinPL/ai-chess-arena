@@ -42,6 +42,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             finished_at TEXT,
             systemd_unit TEXT,
             consent_consumed INTEGER NOT NULL DEFAULT 0 CHECK(consent_consumed IN (0,1)),
+            cancel_requested_at TEXT,
             limits_json TEXT NOT NULL,
             result_json TEXT NOT NULL DEFAULT '{}'
         );
@@ -66,6 +67,9 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             FOREIGN KEY(job_id) REFERENCES model_test_jobs(job_id)
         );
     """)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(model_test_jobs)")}
+    if "cancel_requested_at" not in columns:
+        connection.execute("ALTER TABLE model_test_jobs ADD COLUMN cancel_requested_at TEXT")
 
 
 def _now() -> str:
@@ -279,3 +283,109 @@ def get_job(connection: sqlite3.Connection, job_id: str) -> dict | None:
         "SELECT metric_name,metric_value,recorded_at FROM model_evaluation_metrics WHERE job_id=? ORDER BY id",
         (job_id,)).fetchall()]
     return item
+
+
+def request_job_cancel(connection: sqlite3.Connection, *, job_id: str,
+                       actor: str) -> dict:
+    """Request cancellation; never claim an active systemd process has stopped."""
+    ensure_schema(connection)
+    actor = _actor(actor)
+    if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+        raise ValueError("Nieprawidłowy identyfikator zadania.")
+    with connection:
+        row = connection.execute(
+            "SELECT status,cancel_requested_at,systemd_unit FROM model_test_jobs WHERE job_id=?",
+            (job_id,)).fetchone()
+        if row is None:
+            raise ValueError("Nie znaleziono zadania.")
+        if row["status"] == "queued":
+            now = _now()
+            connection.execute("""
+                UPDATE model_test_jobs SET status='cancelled',finished_at=? WHERE job_id=?
+                  AND status='queued'
+            """, (now, job_id))
+            _event(connection, job_id, "cancelled_before_start", actor,
+                   {"reason": "queued job cancelled before systemd start"})
+            return {"job_id": job_id, "status": "cancelled", "systemd_stop_required": False}
+        if row["status"] not in {"starting", "running"}:
+            raise ValueError("Zadania zakończonego nie można anulować.")
+        if row["cancel_requested_at"]:
+            return {"job_id": job_id, "status": row["status"],
+                    "cancel_requested": True, "systemd_unit": row["systemd_unit"],
+                    "systemd_stop_required": True}
+        now = _now()
+        connection.execute("""
+            UPDATE model_test_jobs SET cancel_requested_at=?
+            WHERE job_id=? AND status IN ('starting','running') AND cancel_requested_at IS NULL
+        """, (now, job_id))
+        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            raise RuntimeError("Nie udało się atomowo zapisać żądania anulowania.")
+        _event(connection, job_id, "cancel_requested", actor,
+               {"systemd_unit": row["systemd_unit"]})
+        return {"job_id": job_id, "status": row["status"],
+                "cancel_requested": True, "systemd_unit": row["systemd_unit"],
+                "systemd_stop_required": True}
+
+
+def confirm_job_stopped(connection: sqlite3.Connection, *, job_id: str,
+                        actor: str, unit_is_active) -> dict:
+    """Mark a cancellation complete only after an authoritative systemd inactive check."""
+    ensure_schema(connection)
+    actor = _actor(actor)
+    if not callable(unit_is_active):
+        raise ValueError("Wymagany jest kontrolowany odczyt stanu jednostki systemd.")
+    with connection:
+        row = connection.execute(
+            "SELECT status,cancel_requested_at,systemd_unit FROM model_test_jobs WHERE job_id=?",
+            (job_id,)).fetchone()
+        if row is None or row["status"] not in {"starting", "running"}:
+            raise ValueError("Zadanie nie jest aktywne.")
+        if not row["cancel_requested_at"] or not row["systemd_unit"]:
+            raise ValueError("Brak wcześniejszego żądania anulowania.")
+        active = unit_is_active(row["systemd_unit"])
+        if active is not False:
+            return {"job_id": job_id, "status": row["status"],
+                    "cancel_requested": True, "stopped": False}
+        now = _now()
+        connection.execute("""
+            UPDATE model_test_jobs SET status='cancelled',finished_at=?
+            WHERE job_id=? AND status IN ('starting','running') AND cancel_requested_at IS NOT NULL
+        """, (now, job_id))
+        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            raise RuntimeError("Nie udało się zatwierdzić zakończenia zadania.")
+        _event(connection, job_id, "cancelled", actor,
+               {"systemd_unit": row["systemd_unit"], "systemd_inactive_confirmed": True})
+        return {"job_id": job_id, "status": "cancelled", "stopped": True}
+
+
+def reconcile_orphaned_job(connection: sqlite3.Connection, *, job_id: str,
+                           actor: str, unit_is_active) -> dict:
+    """Reconcile a starting/running ledger row after restart using systemd's exact unit state."""
+    ensure_schema(connection)
+    actor = _actor(actor)
+    if not callable(unit_is_active):
+        raise ValueError("Wymagany jest kontrolowany odczyt stanu jednostki systemd.")
+    with connection:
+        row = connection.execute(
+            "SELECT status,cancel_requested_at,systemd_unit FROM model_test_jobs WHERE job_id=?",
+            (job_id,)).fetchone()
+        if row is None:
+            raise ValueError("Nie znaleziono zadania.")
+        if row["status"] not in {"starting", "running"} or not row["systemd_unit"]:
+            raise ValueError("Zadanie nie wymaga uzgodnienia po restarcie.")
+        active = unit_is_active(row["systemd_unit"])
+        if active is not False:
+            return {"job_id": job_id, "status": row["status"], "reconciled": False}
+        now = _now()
+        status = "cancelled" if row["cancel_requested_at"] else "failed"
+        detail = {"systemd_unit": row["systemd_unit"],
+                  "systemd_inactive_confirmed": True,
+                  "recovered_after_restart": True}
+        connection.execute("""
+            UPDATE model_test_jobs SET status=?,finished_at=?,result_json=?
+            WHERE job_id=? AND status IN ('starting','running')
+        """, (status, now, json.dumps(detail, sort_keys=True), job_id))
+        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            raise RuntimeError("Nie udało się atomowo uzgodnić stanu osieroconego zadania.")
+        _event(connection, job_id, "reconciled_" + status, actor, detail)
+        return {"job_id": job_id, "status": status, "reconciled": True}
