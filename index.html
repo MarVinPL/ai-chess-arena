@@ -165,6 +165,10 @@ button.stop{background:#744b4b;border-color:#986363}
    <div class="formrow"><button type="submit">Zapisz propozycję do audytu</button><button type="button" class="secondary" id="model-review-cancel">Anuluj</button></div>
    <div id="model-review-status" class="status" role="status"></div>
   </form>
+  <h4>Propozycje oczekujące na przegląd</h4>
+  <p class="notice">Akceptacja przenosi wyłącznie propozycję do etapu PR. Nie dopuszcza modelu i nie zmienia allowlisty ani gotowości technicznej.</p>
+  <div class="formrow"><button type="button" class="secondary" id="model-review-refresh">Odśwież kolejkę</button><span id="model-review-queue-status" class="notice" role="status" aria-live="polite">Ładowanie kolejki…</span></div>
+  <div id="model-review-queue" class="moves">Ładowanie zgłoszeń…</div>
   <h4>Wstępny audyt kandydatów Hugging Face</h4>
   <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
   <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
@@ -397,9 +401,9 @@ function renderModelStatus(models,storage){
  $('model-status-note').textContent='Rejestr: '+active.length+' aktywnych wpisów. Lokalnie gotowe do uruchomienia: '+ready.length+'. Wpisy skatalogowane bez zweryfikowanej kopii w magazynie areny nie są liczone jako dostępne.';
 }
 const reviewOpen=$('model-review-open');
-if(reviewOpen)reviewOpen.addEventListener('click',()=>{$('model-review-form').hidden=false;$('model-review-status').textContent='';});
+if(reviewOpen)reviewOpen.addEventListener('click',()=>{delete $('model-review-form').dataset.editSubmissionId;$('model-review-form').hidden=false;$('model-review-status').textContent='';});
 const reviewCancel=$('model-review-cancel');
-if(reviewCancel)reviewCancel.addEventListener('click',()=>{$('model-review-form').hidden=true;});
+if(reviewCancel)reviewCancel.addEventListener('click',()=>{delete $('model-review-form').dataset.editSubmissionId;$('model-review-form').hidden=true;});
 const reviewForm=$('model-review-form');
 const reviewProposedStatus=$('review-proposed-status');
 const reviewScopeInputs=reviewForm?[...reviewForm.querySelectorAll('input[name=review-scope-format]')]:[];
@@ -418,8 +422,31 @@ if(reviewForm)reviewForm.addEventListener('submit',async event=>{
  if(['review_required','blocked'].includes(proposedStatus)&&selectedScopes.length){$('model-review-status').textContent='Nie zapisano propozycji: status blokujący nie może mieć zakresu dopuszczenia.';return;}
  const button=reviewForm.querySelector('button[type="submit"]');button.disabled=true;
  const payload={model_id:Number($('review-model-id').value),license_id:$('review-license-id').value,license_review:$('review-license-status').value,license_notes:$('review-license-notes').value,proposed_status:proposedStatus,scope_formats:selectedScopes,restrictions:$('review-restrictions').value,obligations:$('review-obligations').value,block_reason:$('review-block-reason').value,technical_readiness:$('review-technical').value,technical_evidence:$('review-technical-evidence').value,technical_blockers:$('review-technical-blockers').value,revision_confirmed:$('review-revision-confirmed').checked,revision_notes:$('review-revision-notes').value};
- try{const response=await fetch('/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);$('model-review-status').textContent=`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;reviewForm.reset();syncReviewScopeControls();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;}finally{button.disabled=false;}
+ try{const editingId=reviewForm.dataset.editSubmissionId;const response=await fetch(editingId?'/api/model-review-submissions/action':'/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(editingId?{submission_id:Number(editingId),action:'revise',proposal:payload,reason:'Poprawiono w panelu'}:payload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);$('model-review-status').textContent=editingId?`Zaktualizowano propozycję #${editingId}; wróciła do kolejki przeglądu.`:`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;delete reviewForm.dataset.editSubmissionId;reviewForm.reset();syncReviewScopeControls();await loadModelReviewSubmissions();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;}finally{button.disabled=false;}
 });
+async function loadModelReviewSubmissions(){
+ const host=$('model-review-queue');if(!host)return;host.textContent='Pobieram propozycje…';
+ try{const r=await fetch('/api/model-review-submissions',{cache:'no-store'});const rows=await r.json();if(!r.ok)throw Error(rows.error||r.status);host.replaceChildren();
+  if(!Array.isArray(rows)||!rows.length){host.textContent='Brak propozycji do przeglądu.';$('model-review-queue-status').textContent='0 zgłoszeń';return;}
+  $('model-review-queue-status').textContent=rows.length+' zgłoszeń';
+  rows.forEach(item=>{const card=document.createElement('article');card.style.cssText='padding:12px;margin:9px 0;border:1px solid #52627a;border-radius:9px;overflow-wrap:anywhere';
+   const title=document.createElement('strong');title.textContent='Propozycja #'+item.id+' · model '+item.model_id+' · '+item.status;card.appendChild(title);
+   const meta=document.createElement('p');meta.textContent='Zapisano: '+item.submitted_at+' · licencja: '+(item.proposal.license_id||'brak')+' ('+(item.proposal.license_review||'pending')+') · techniczna: '+(item.proposal.technical_readiness||'not_evaluated')+' · proponowany status: '+(item.proposal.proposed_status||'review_required');card.appendChild(meta);
+   const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Pełna propozycja i dowody';details.appendChild(summary);const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px';pre.textContent=JSON.stringify(item.proposal,null,2);details.appendChild(pre);card.appendChild(details);
+   if(item.history?.length){const hist=document.createElement('details');const hs=document.createElement('summary');hs.textContent='Historia decyzji ('+item.history.length+')';hist.appendChild(hs);const ul=document.createElement('ul');item.history.forEach(ev=>{const li=document.createElement('li');li.textContent=ev.event+' · '+ev.actor+' · '+ev.occurred_at+(ev.reason?' · '+ev.reason:'');ul.appendChild(li)});hist.appendChild(ul);card.appendChild(hist)}
+   const actions=document.createElement('div');actions.className='formrow';actions.style.marginTop='10px';
+   if(item.status==='pending_review'){
+    const accept=document.createElement('button');accept.type='button';accept.textContent='Akceptuj do kolejnego etapu';accept.onclick=async()=>{if(!confirm('Przenieść propozycję #'+item.id+' do etapu accepted_into_pr? Allowlista pozostanie bez zmian.'))return;await submitReviewAction(item.id,'accept',{},'')};actions.appendChild(accept);
+    const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='Popraw propozycję';edit.onclick=()=>{const p=item.proposal;$('model-review-form').hidden=false;$('review-model-id').value=String(item.model_id);$('review-license-id').value=p.license_id||'';$('review-license-status').value=p.license_review||'pending';$('review-license-notes').value=p.license_notes||'';$('review-proposed-status').value=p.proposed_status||'review_required';$('review-technical').value=p.technical_readiness||'not_evaluated';$('review-restrictions').value=p.restrictions||'';$('review-obligations').value=p.obligations||'';$('review-block-reason').value=p.block_reason||'';$('review-technical-evidence').value=p.technical_evidence||'';$('review-technical-blockers').value=p.technical_blockers||'';$('review-revision-confirmed').checked=!!p.revision_confirmed;$('review-revision-notes').value=p.revision_notes||'';reviewScopeInputs.forEach(x=>x.checked=(p.scope_formats||[]).includes(x.value));syncReviewScopeControls();reviewForm.dataset.editSubmissionId=String(item.id);$('model-review-status').textContent='Poprawiasz propozycję #'+item.id+'. Zapis ponownie umieści ją w kolejce oczekujących.';reviewForm.scrollIntoView({behavior:'smooth',block:'start'})};actions.appendChild(edit);
+    const reject=document.createElement('button');reject.type='button';reject.className='stop';reject.textContent='Odrzuć';reject.onclick=async()=>{const reason=prompt('Uzasadnienie odrzucenia propozycji #'+item.id+':');if(!reason||reason.trim().length<3)return;await submitReviewAction(item.id,'reject',{},reason)};actions.appendChild(reject);
+   }
+   card.appendChild(actions);host.appendChild(card);
+  });
+ }catch(e){host.textContent='Nie udało się pobrać kolejki: '+e;$('model-review-queue-status').textContent='Błąd odczytu'}
+}
+async function submitReviewAction(id,action,proposal={},reason=''){try{const r=await fetch('/api/model-review-submissions/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({submission_id:id,action,proposal,reason})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('model-review-queue-status').textContent='Propozycja #'+id+': '+d.status+'. '+d.note;await loadModelReviewSubmissions()}catch(e){$('model-review-queue-status').textContent='Nie zapisano decyzji: '+e}}
+$('model-review-refresh')?.addEventListener('click',loadModelReviewSubmissions);loadModelReviewSubmissions();
+
 let hfCandidateItems=[];
 function renderHfCandidates(){
  const host=$('hf-candidate-list');if(!host)return;host.replaceChildren();
