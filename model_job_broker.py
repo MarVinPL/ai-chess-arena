@@ -179,14 +179,14 @@ def claim_job_for_start(connection: sqlite3.Connection, *, job_id: str,
         worker_argv = [
             WORKER_EXECUTABLE, "--job-id", job_id,
             "--model", row["artifact_path"],
-            "--output-dir", f"/run/ai-chess-model-test-{job_id[:16]}",
+            "--output-dir", f"/run/ai-chess-model-test-{job_id}",
             "--scope", row["scope"],
         ]
         argv = build_systemd_run_argv(
-            job_id=job_id[:16], artifact_path=row["artifact_path"],
+            job_id=job_id, artifact_path=row["artifact_path"],
             worker_argv=worker_argv, limits=limits, model_root=model_root)
         now = _now()
-        unit = f"ai-chess-model-test-{job_id[:16]}.service"
+        unit = f"ai-chess-model-test-{job_id}.service"
         connection.execute("""
             UPDATE model_test_jobs
             SET status='starting', consent_consumed=1, started_at=?, systemd_unit=?
