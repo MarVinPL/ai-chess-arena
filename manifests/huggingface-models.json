@@ -33,7 +33,8 @@
           "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE",
           "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE"
         ],
-        "summary": "The pinned official Qwen GGUF README identifies Qwen2.5-0.5B-Instruct as the base model and declares Apache-2.0. The pinned GGUF repository contains the full Apache License 2.0 text. The LFS SHA-256 of the exact GGUF file matches the registry hash; the pinned upstream base-model LICENSE also declares Apache-2.0. Audit status only, not owner permission to download or use."
+        "summary": "The pinned official Qwen GGUF README identifies Qwen2.5-0.5B-Instruct as the base model and declares Apache-2.0. The pinned GGUF repository contains the full Apache License 2.0 text. The LFS SHA-256 of the exact GGUF file matches the registry hash; the pinned upstream base-model LICENSE also declares Apache-2.0. Audit status only, not owner permission to download or use. The pinned derived GGUF tree was also inspected for separate tokenizer, code, dataset and helper files; see component_review in this record and the report.",
+        "component_review": "Pinned GGUF tree contains LICENSE, README and GGUF files; no standalone tokenizer/code/dataset file identified. Exact base model revision and license are separately pinned. Training-corpus rights are not independently asserted by this artifact audit."
       }
     },
     {
@@ -45,14 +46,14 @@
       "sha256": "75c4346ef9e855ed630f80078a2430cf63aaca599e340360998a313070fcdc47",
       "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
       "license": "apache-2.0",
-      "license_review_status": "verified_permissive",
+      "license_review_status": "review_required",
       "license_notes": "Pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base, declares Apache-2.0 and describes llama.cpp quantization. The exact pinned upstream model card links directly to the canonical Apache License 2.0 text.",
       "license_evidence": "Pinned GGUF README; pinned official HuggingFaceTB model card with direct link to Apache License 2.0",
       "license_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
       "download_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/resolve/25eef036a8d245a5a188b1b45d4b240a39bc9f24/SmolLM2-360M-Instruct.Q4_K_M.gguf",
       "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
       "license_audit": {
-        "status": "verified_permissive",
+        "status": "review_required",
         "reviewed_at": "2026-11-14",
         "reviewed_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
         "report": "docs/model-audit/license-review-2026-11-14.md",
@@ -61,7 +62,8 @@
           "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md",
           "https://www.apache.org/licenses/LICENSE-2.0"
         ],
-        "summary": "The pinned GGUF README identifies the HuggingFaceTB/SmolLM2-360M-Instruct base, declares Apache-2.0 and describes llama.cpp quantization. The exact pinned upstream model card explicitly links to the canonical Apache License 2.0 text. Audit status only, not owner approval to download or use."
+        "summary": "Pinned GGUF file SHA-256 and size match the exact revision. The pinned SmolLM2 model card identifies training corpora including FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen; separate dataset terms and rights were not audited, so the combined entry remains review_required.",
+        "component_review": "The derived GGUF tree contains the selected GGUF and README, but no standalone tokenizer/code/dataset files. The source model card names training datasets; their individual licences and provenance remain unresolved."
       }
     },
     {
@@ -89,7 +91,8 @@
           "https://huggingface.co/Qwen/Qwen2-0.5B-Instruct/blob/c540970f9e29518b1d8f06ab8b24cba66ad77b6d/LICENSE",
           "https://huggingface.co/Qwen/Qwen2-0.5B-Instruct/blob/c540970f9e29518b1d8f06ab8b24cba66ad77b6d/README.md"
         ],
-        "summary": "The pinned derived README identifies the exact Qwen2 instruction model and declares Apache-2.0; the official pinned upstream repository contains the full Apache License 2.0 text. Audit status only, not owner approval to download or use."
+        "summary": "The pinned derived README identifies the exact Qwen2 instruction model and declares Apache-2.0; the official pinned upstream repository contains the full Apache License 2.0 text. Audit status only, not owner approval to download or use. The pinned derived GGUF tree was also inspected for separate tokenizer, code, dataset and helper files; see component_review in this record and the report.",
+        "component_review": "Pinned GGUF tree contains LICENSE, README and GGUF files; no standalone tokenizer/code/dataset file identified. Exact base model revision and license are separately pinned. Training-corpus rights are not independently asserted by this artifact audit."
       }
     },
     {
@@ -101,14 +104,14 @@
       "sha256": "756c317e12ce5a57ab095df69b1ae8dd2f51d5f8660ba500999912d0638689c6",
       "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
       "license": "llama3.1",
-      "license_review_status": "verified_restricted",
+      "license_review_status": "review_required",
       "license_notes": "Pinned README identifies the Meta base model and includes the Llama 3.1 Community License. The official agreement and AUP were reviewed; redistribution, attribution, notice, acceptable-use and 700M MAU conditions apply. Audit status only; no permission to download, run or distribute.",
       "license_evidence": "Pinned GGUF README with base-model metadata and embedded license reference; official Meta Community License and Acceptable Use Policy",
       "license_url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/blob/bf5b95e96dac0462e2a09145ec66cae9a3f12067/README.md",
       "download_url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/bf5b95e96dac0462e2a09145ec66cae9a3f12067/Meta-Llama-3.1-8B-Instruct-Q3_K_S.gguf",
       "license_terms_url": "https://dev.meta.ai/llama/llama3_1/license",
       "license_audit": {
-        "status": "verified_restricted",
+        "status": "review_required",
         "reviewed_at": "2026-11-14",
         "reviewed_revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
         "report": "docs/model-audit/license-review-2026-11-14.md",
@@ -117,7 +120,8 @@
           "https://dev.meta.ai/llama/llama3_1/license",
           "https://dev.meta.ai/llama/llama3_1/use-policy"
         ],
-        "summary": "Pinned README identifies the Meta base model and includes the Llama 3.1 Community License. The official agreement and AUP were reviewed; redistribution, attribution, notice, acceptable-use and 700M MAU conditions apply. Audit status only; no permission to download, run or distribute."
+        "summary": "The exact selected GGUF SHA-256 and size match the pinned GGUF repository revision. Its README identifies meta-llama/Meta-Llama-3.1-8B-Instruct as base model and declares Llama 3.1 terms; however, the derived README does not pin the exact upstream base-model revision. Keep review_required until that lineage is established.",
+        "component_review": "The pinned GGUF tree contains quantized GGUF files and README, with no separate tokenizer/code/dataset files identified. Exact upstream base-model revision is not stated in the source README; do not infer it from current upstream HEAD."
       }
     },
     {
@@ -129,14 +133,14 @@
       "sha256": "33d2b042a1bc0ab57b046328a89f27616a973c98fea7ed9163b295bd7afc2073",
       "revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31",
       "license": "llama3.2",
-      "license_review_status": "verified_restricted",
+      "license_review_status": "review_required",
       "license_notes": "Pinned README identifies the Meta text-only base model and Llama 3.2 Community License. The official agreement and AUP were reviewed; redistribution, attribution, notice, acceptable-use and 700M MAU conditions apply. Audit status only; no permission to download, run or distribute.",
       "license_evidence": "Pinned GGUF README with base-model metadata and embedded license reference; official Meta Community License and Acceptable Use Policy",
       "license_url": "https://huggingface.co/unsloth/Llama-3.2-3B-Instruct-GGUF/blob/e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31/README.md",
       "download_url": "https://huggingface.co/unsloth/Llama-3.2-3B-Instruct-GGUF/resolve/e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31/Llama-3.2-3B-Instruct-UD-IQ3_XXS.gguf",
       "license_terms_url": "https://dev.meta.ai/llama/llama3_2/license",
       "license_audit": {
-        "status": "verified_restricted",
+        "status": "review_required",
         "reviewed_at": "2026-11-14",
         "reviewed_revision": "e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31",
         "report": "docs/model-audit/license-review-2026-11-14.md",
@@ -145,7 +149,8 @@
           "https://dev.meta.ai/llama/llama3_2/license",
           "https://dev.meta.ai/llama/llama3_2/use-policy"
         ],
-        "summary": "Pinned README identifies the Meta text-only base model and Llama 3.2 Community License. The official agreement and AUP were reviewed; redistribution, attribution, notice, acceptable-use and 700M MAU conditions apply. Audit status only; no permission to download, run or distribute."
+        "summary": "The exact selected GGUF SHA-256 and size match the pinned GGUF repository revision. Its README identifies meta-llama/Llama-3.2-3B-Instruct as base model and declares Llama 3.2 terms; however, the derived README does not pin the exact upstream base-model revision. Keep review_required until that lineage is established.",
+        "component_review": "The pinned GGUF tree contains quantized GGUF files, README and config.json; no separate tokenizer/code/dataset files identified. Exact upstream base-model revision is not stated in the source README; do not infer it from current upstream HEAD."
       }
     },
     {
@@ -174,7 +179,8 @@
           "https://www.bielik.ai/en/terms/",
           "https://www.apache.org/licenses/LICENSE-2.0"
         ],
-        "summary": "The pinned GGUF README identifies the Bielik 11B v3.0 Instruct model and Apache-2.0. Official supplementary Terms v1.1 dated 2025-07-31 apply to base and fine-tuned versions; they impose an 18+ age condition and additional use restrictions. This is a verified restricted audit finding, not permission to use."
+        "summary": "The pinned GGUF README identifies the Bielik 11B v3.0 Instruct model and Apache-2.0. Official supplementary Terms v1.1 dated 2025-07-31 apply to base and fine-tuned versions; they impose an 18+ age condition and additional use restrictions. This is a verified restricted audit finding, not permission to use. The pinned derived GGUF tree was also inspected for separate tokenizer, code, dataset and helper files; see component_review in this record and the report.",
+        "component_review": "Pinned GGUF tree contains README and GGUF files; no standalone tokenizer/code/dataset file identified. Official Bielik supplementary Terms apply to base and fine-tuned model; 18+ condition and personal-data prohibition remain binding."
       }
     },
     {
@@ -202,7 +208,8 @@
           "https://huggingface.co/speakleash/Bielik-7B-Instruct-v0.1/blob/ff00a0b55e9a64be87f9a8d2dcb65882f264aba4/README.md",
           "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en"
         ],
-        "summary": "Pinned GGUF and upstream Instruct cards declare CC BY-NC 4.0. The official legal code restricts use to non-commercial purposes and imposes attribution and modification-notice requirements. This is a verified restricted audit finding, not permission for commercial use."
+        "summary": "Pinned GGUF and upstream Instruct cards declare CC BY-NC 4.0. The official legal code restricts use to non-commercial purposes and imposes attribution and modification-notice requirements. This is a verified restricted audit finding, not permission for commercial use. The pinned derived GGUF tree was also inspected for separate tokenizer, code, dataset and helper files; see component_review in this record and the report.",
+        "component_review": "Pinned GGUF tree contains README, config.json and GGUF files; no standalone tokenizer/code/dataset file identified. Upstream Instruct model declares CC BY-NC 4.0; no separate code/dataset package is included in the reviewed GGUF tree."
       }
     },
     {
@@ -214,14 +221,14 @@
       "sha256": "3895b6eaa91e705c06ad1938d16c22e86f073c6a67df86260a1da79be3d1f887",
       "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
       "license": "apache-2.0",
-      "license_review_status": "verified_permissive",
+      "license_review_status": "review_required",
       "license_notes": "Pinned Unsloth GGUF README identifies Qwen/Qwen3.8-27B as the base model and declares Apache-2.0. The pinned official Qwen base repository includes the complete Apache License 2.0 text. No additional model-specific use policy was found in the reviewed pinned files; audit status does not approve use.",
       "license_evidence": "Pinned GGUF README and pinned upstream model/official license or supplementary terms",
       "license_url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4af51b3542f775b0a8e4b310bfb3f17e01c306c9/README.md",
       "download_url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4af51b3542f775b0a8e4b310bfb3f17e01c306c9/Qwen3.8-27B-UD-IQ1_S.gguf",
       "license_terms_url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/37561816e66b5b9153b1b64c10968c18c1e6f4a0/LICENSE",
       "license_audit": {
-        "status": "verified_permissive",
+        "status": "review_required",
         "reviewed_at": "2026-11-14",
         "reviewed_revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
         "report": "docs/model-audit/license-review-2026-11-14.md",
@@ -230,7 +237,8 @@
           "https://huggingface.co/Qwen/Qwen3.8-27B/blob/37561816e66b5b9153b1b64c10968c18c1e6f4a0/LICENSE",
           "https://huggingface.co/Qwen/Qwen3.8-27B/blob/37561816e66b5b9153b1b64c10968c18c1e6f4a0/README.md"
         ],
-        "summary": "The pinned GGUF README identifies the official Qwen3.8-27B base model and declares Apache-2.0. The exact pinned upstream repository contains the full Apache License 2.0 text. No additional model-specific policy was found in the reviewed files. Audit status only, not owner approval to download or use."
+        "summary": "The exact selected GGUF SHA-256 and size match the pinned revision and the official Qwen base model identifies Apache-2.0. The same pinned derived repository also contains separate imatrix_unsloth.gguf and mmproj-BF16/F16.gguf helper artifacts; their provenance and terms were not independently reviewed, so the combined entry remains review_required.",
+        "component_review": "No separate tokenizer/code/dataset files identified in the pinned derived tree. Optional imatrix_unsloth.gguf and mmproj-BF16.gguf/mmproj-F16.gguf are present but are not the selected manifest target and need a separate component review."
       }
     },
     {

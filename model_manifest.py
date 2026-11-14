@@ -19,6 +19,7 @@ _FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf$", re.I)
 _ALLOWED_LICENSES = {"apache-2.0", "llama3.1", "llama3.2", "cc-by-nc-4.0"}
 _LICENSE_REVIEW_STATUSES = {"verified_permissive", "verified_restricted", "review_required", "incompatible", "evidence_missing"}
 _LICENSE_AUDIT_REPORT = "docs/model-audit/license-review-2026-11-14.md"
+_AUDIT_MODEL_IDS = frozenset(range(1, 9))
 
 
 class ManifestError(ValueError):
@@ -101,12 +102,16 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
     """Persist verified remote file metadata, without approving licenses or downloading.
 
     Updates existing registry versions only. It refuses missing/ambiguous rows and
-    wraps all manifest records in one SQLite transaction. The existing model row's
-    license_verified flag is always forced to 0. Even a revision-bound
+    wraps only audit-scope records (model IDs 1–8) in one SQLite transaction.
+    Entries 9–10 are preserved verbatim for the separate Issue #71. The existing
+    model row's license_verified flag is always forced to 0. Even a revision-bound
     verified_restricted audit is not owner approval to use or distribute weights.
     """
     payload = payload or load_manifest()
     validate_manifest(payload)
+    audit_models = [item for item in payload["models"] if item["model_id"] in _AUDIT_MODEL_IDS]
+    if {item["model_id"] for item in audit_models} != _AUDIT_MODEL_IDS:
+        raise ManifestError("Audyt #52 wymaga dokładnie wpisów model_id 1–8")
     applied_at = applied_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     updated = []
     connection = sqlite3.connect(str(db_path), timeout=10)
@@ -114,7 +119,7 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
     try:
         connection.execute("PRAGMA foreign_keys=ON")
         with connection:
-            for item in payload["models"]:
+            for item in audit_models:
                 repo_url = f"https://huggingface.co/{item['repo_id']}"
                 rows = connection.execute(
                     """SELECT v.id, v.metadata_json, v.managed_copy, v.status
