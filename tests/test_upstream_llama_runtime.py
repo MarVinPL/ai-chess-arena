@@ -7,7 +7,7 @@ import chess
 from unittest.mock import Mock
 
 from runtime_factory import create_runtime
-from engine_runner import RunnerError
+from engine_runner import RunnerError, LlamafileRuntime
 from runtime_upgrade_plan import RuntimeContractError, UpstreamLlamaServerProfile
 from upstream_llama_runtime import UpstreamLlamaServerRuntime
 
@@ -208,19 +208,27 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
     def test_factory_defaults_to_existing_llamafile_runtime(self):
         runtime = create_runtime(environ={}, popen=lambda *_a, **_k: FakeProcess())
         try:
-            from engine_runner import LlamafileRuntime
             self.assertIs(type(runtime), LlamafileRuntime)
             self.assertEqual(runtime.api_base, "http://127.0.0.1:8088")
         finally:
             runtime.shutdown()
 
-    def test_factory_requires_explicit_upstream_enablement(self):
+    def test_factory_preserves_llamafile_for_unknown_or_blank_selector(self):
+        for selector in ("automatic", "", "  "):
+            with self.subTest(selector=selector):
+                runtime = create_runtime(
+                    environ={"ARENA_RUNTIME": selector},
+                    popen=lambda *_a, **_k: FakeProcess(),
+                )
+                try:
+                    self.assertIs(type(runtime), LlamafileRuntime)
+                    self.assertEqual(runtime.api_base, "http://127.0.0.1:8088")
+                finally:
+                    runtime.shutdown()
+
+    def test_factory_requires_explicit_upstream_enablement_without_fallback(self):
         with self.assertRaises(ValueError):
             create_runtime(environ={"ARENA_RUNTIME": "llama-server"})
-
-    def test_factory_rejects_unknown_runtime_without_fallback(self):
-        with self.assertRaises(ValueError):
-            create_runtime(environ={"ARENA_RUNTIME": "automatic"})
 
     def test_factory_selects_upstream_only_after_both_opt_ins(self):
         runtime = create_runtime(
