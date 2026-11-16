@@ -442,3 +442,68 @@ The audit now distinguishes:
 The Stack-Edu schema supplies useful per-file SWHID and license-detection metadata, but does not on its own supply complete source snapshot lineage. The historical SFT/DPO recipe commit confirms the dataset names, mixture weights, and splits but has no dataset commit pins.
 
 No new evidence justifies changing `review_required`. Do not change manifest, allowlist, license verification, technical readiness, admission scope, production, database, roster, or tournament state.
+
+
+## 14. Public availability of the complete SmolLM2 pretraining corpus — upstream confirmation
+
+### 14.1 Upstream issue #35 — direct project discussion
+
+The upstream `huggingface/smollm` issue #35, “SmolLM2 Pretrain Dataset”, was opened on 18 December 2024. Its question explicitly notes that model cards described the pretraining dataset as forthcoming.
+
+The maintainer response on 23 December 2024 states that FineWeb-Edu, DCLM and FineMath were already public, while the code dataset built on The Stack v2 was the exception; information about how the sources were mixed was promised in a technical report.
+
+A later follow-up on 7 March 2025 asks whether the exact training samples were publicly available and notes that the configuration points to a single `smollm2-corpus` dataset folder which was not available as a whole. The thread does not provide a later response releasing the complete corpus. On 29 July 2025, a contributor only confirms that Stack-Edu is now available.
+
+This is direct upstream evidence that:
+- public availability of individual source datasets is not equivalent to publication of the assembled training corpus;
+- the complete sample-level corpus and its reproducible manifest were not established by the public repository/configuration discussed in the thread;
+- the later publication of Stack-Edu closes only the availability gap for that component, not the full corpus assembly/provenance gap.
+
+### 14.2 Public model card and paper — reconciled scope
+
+The official SmolLM2-360M-Instruct model card says the model was trained on 4T tokens using FineWeb-Edu, DCLM, The Stack, and additional curated/filtered datasets; it points to the SmolLM2 paper for further detail. The model card's broad summary is not itself a full bill of materials.
+
+The paper's dedicated section for 135M/360M identifies the single-stage mixture more precisely:
+- DCLM filtered with the FineWeb-Edu classifier; score 0 removed, scores 1 and 2 downsampled;
+- Stack-Edu;
+- InfiMM-WebMath;
+- FineMath;
+- Cosmopedia.
+
+It states 4T tokens for 360M and 2T for 135M. The paper's 1.7B multi-stage percentages and stage-4 additions must not be projected onto 360M.
+
+### 14.3 Related public 135M sample — explicitly not transferable to 360M
+
+The public `EleutherAI/SmolLM2-135M-10B` dataset describes a 10B-token sample from the 135M pretraining data. It lists FineMath (34B), Stack-Edu (125B), InfiMM-WebMath (40B), Cosmopedia V2 (30B), FineWeb-Edu (710.4B sampled from 1.2T) and DCLM-Edu (1065.6B sampled from 3.8T), with selected DCLM-Edu/FineWeb-Edu portions sampled at 6:4.
+
+This is evidence about a public sample derived from the 135M mixture, not a source manifest for the 360M run. It cannot be used to infer 360M proportions, source revisions, sample IDs, or token counts. The 360M paper independently confirms the source family but does not publish a complete 360M sample-level manifest in the materials examined.
+
+### 14.4 Updated evidence matrix
+
+| Question | Evidence | Status |
+|---|---|---|
+| 360M pretraining token budget | Official model card and paper: 4T | confirmed |
+| 360M training strategy | Paper §6: single-stage | confirmed |
+| 360M source dataset families | Paper §6: filtered DCLM, Stack-Edu, InfiMM-WebMath, FineMath, Cosmopedia | confirmed |
+| Exact 360M source proportions | No complete 360M table or training manifest found | unresolved |
+| Complete assembled `smollm2-corpus` publicly downloadable | Upstream issue #35 says config referenced a corpus unavailable as a whole; no full corpus release is evidenced in the thread | not_established |
+| Exact sample IDs and per-source revisions for 360M | No immutable training BOM/sample manifest found | unresolved |
+| Can 135M-10B sample proportions be used for 360M? | No; dataset explicitly samples 135M pretraining data | not_transferable |
+| Does Stack-Edu publication alone close corpus gap? | No; it publishes one component, not the entire assembled corpus | confirmed_missing |
+
+### 14.5 Sources
+
+- Upstream project issue and maintainer/contributor replies: https://github.com/huggingface/smollm/issues/35
+- Official SmolLM2-360M-Instruct model card, especially Model Summary: https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct
+- SmolLM2 paper, §6 “SmolLM2 135M and 360M”: https://arxiv.org/abs/2502.02737
+- Public 135M-10B sample and its scope: https://huggingface.co/datasets/EleutherAI/SmolLM2-135M-10B
+- Stack-Edu component published in 2025: https://huggingface.co/datasets/HuggingFaceTB/stack-edu
+- Official 360M checkpoint config points to one local folder `datasets/smollm2-corpus`, with dataset weight 1.0, but contains no component-level bill of materials: https://huggingface.co/HuggingFaceTB/SmolLM2-nanotron-ckpt/blob/main/360M/final/config.yaml
+
+## 15. Final status of the pretraining-corpus provenance gap
+
+The new upstream issue evidence materially strengthens the conclusion: the public sources identify the 360M training recipe at the dataset-family level, but the exact assembled corpus, 360M source proportions, sample IDs, and immutable dataset revisions remain unverified. The separate 135M sample is not a substitute.
+
+This is a documentation/provenance limitation, not proof that the training data was never released through any private or later channel. No such complete release was established in this audit.
+
+The correct fail-closed result remains `review_required`. Do not infer legal clearance, source-level compliance, or reproducibility from the Apache-2.0 model-card tag alone. No manifest, allowlist, permission, technical-readiness, admission, production, DB, roster, or tournament changes.
