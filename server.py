@@ -21,6 +21,7 @@ import adjudication
 import passkey_test
 import tournament_checkpoint
 import arena_auth
+import model_permissions
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1335,7 +1336,13 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
             return
-        if path == '/api/models/random':
+        if path == '/api/model-permissions':
+            try:
+                with league.connect() as c:
+                    self.send_json(model_permissions.list_permissions(c))
+            except Exception as exc:
+                self.send_json({'error': str(exc)}, 500)
+        elif path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
             except Exception as e: self.send_json({'error':str(e)},422)
@@ -1665,11 +1672,28 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if path == '/api/hf-candidates/download-cancel':
+                if path == '/api/model-permissions/request':
+                    with league.connect() as c:
+                        result = model_permissions.request_permission(
+                            c, model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
+                            revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
+                            scope=payload.get('scope'), confirm=payload.get('confirm') is True,
+                            reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
+                            actor=self.authenticated_user())
+                elif path == '/api/model-permissions/decision':
+                    request_id = payload.get('request_id')
+                    if isinstance(request_id, bool) or not isinstance(request_id, int):
+                        raise ValueError('Nieprawidłowy identyfikator żądania.')
+                    with league.connect() as c:
+                        result = model_permissions.decide_permission(
+                            c, request_id=request_id, action=payload.get('action'),
+                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
+                            actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/download-cancel':
                     result = hf_candidate_downloads.cancel(payload.get('job_id'))
                 elif path == '/api/hf-candidates/download-resume':
                     if payload.get('confirm_resume') is not True:
@@ -1810,7 +1834,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':

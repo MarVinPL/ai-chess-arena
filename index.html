@@ -172,6 +172,18 @@ button.stop{background:#744b4b;border-color:#986363}
   <p class="notice">Akceptacja przenosi wyłącznie propozycję do etapu PR. Nie dopuszcza modelu i nie zmienia allowlisty ani gotowości technicznej.</p>
   <div class="formrow"><button type="button" class="secondary" id="model-review-refresh">Odśwież kolejkę</button><span id="model-review-queue-status" class="notice" role="status" aria-live="polite">Ładowanie kolejki…</span></div>
   <div id="model-review-queue" class="moves">Ładowanie zgłoszeń…</div>
+  <section id="model-permissions" class="hf-dashboard" aria-live="polite">
+   <div class="hf-dashboard__heading"><div><h4>Uprawnienia operacyjne modeli</h4><p class="notice">TEST_ONLY i EVALUATION są przypięte do konkretnej rewizji i SHA-256. Żądanie nie jest zgodą. Ten rejestr nie dopuszcza do turniejów i nie uruchamia modeli.</p></div><button type="button" class="secondary" id="model-permissions-refresh">Odśwież</button></div>
+   <form id="model-permission-request-form">
+    <div class="formrow"><input class="field" id="permission-model-id" type="number" min="1" placeholder="ID modelu" required><input class="field" id="permission-repo-id" placeholder="repo_id, np. org/model" required></div>
+    <div class="formrow"><input class="field" id="permission-revision" minlength="40" maxlength="40" placeholder="Pełny commit SHA (40 znaków)" required><input class="field" id="permission-artifact-sha" minlength="64" maxlength="64" placeholder="SHA-256 GGUF (64 znaki)" required></div>
+    <div class="formrow"><select class="field" id="permission-scope" required><option value="TEST_ONLY">TEST_ONLY</option><option value="EVALUATION">EVALUATION</option></select><input class="field" id="permission-reason" minlength="3" placeholder="Uzasadnienie żądania" required></div>
+    <label class="notice"><input type="checkbox" id="permission-confirm" required> Potwierdzam utworzenie żądania — to nie uruchamia modelu ani nie przyznaje zgody.</label>
+    <div class="formrow"><button type="submit">Złóż żądanie uprawnienia</button></div>
+   </form>
+   <div id="model-permissions-status" class="notice" role="status" aria-live="polite">Ładowanie rejestru…</div>
+   <div id="model-permissions-list" class="moves">Odczytuję uprawnienia…</div>
+  </section>
   <section id="hf-quarantine-dashboard" class="hf-dashboard" aria-live="polite">
    <div class="hf-dashboard__heading"><div><h4>Kolejka audytu i testów modeli</h4><p class="notice">Podgląd modeli w kwarantannie. Audyt metadanych nie uruchamia wag; test runtime pozostaje wyłączony do czasu wdrożenia bezpiecznego wykonawcy i jawnego zatwierdzenia.</p></div><button type="button" class="secondary" id="hf-dashboard-refresh">Odśwież</button></div>
    <div class="hf-dashboard__metrics">
@@ -241,6 +253,43 @@ async function post(path){const r=await fetch(path,{method:'POST'});return r.jso
 async function loadGames(){const g=await (await fetch('/api/games')).json();$('games').textContent=g.length?g.map(x=>{const label=x.adjudication_status==='adjudicated'?' · WYNIK ADJUDYKOWANY':x.adjudication_status==='unresolved'?' · FAILED / NIERozstrzygnięta':'';const reason=x.failure_reason?' · przyczyna: '+x.failure_reason:'';return `#${x.id} · ${x.white_model||x.white||'Białe'} vs ${x.black_model||x.black||'Czarne'} · ${x.started_at} · wynik ${x.result}${label}${reason} · ${x.move_count??x.moves} półruchów · avg ${x.avg_seconds}s · interwencje sędziego ${x.arbiter_interventions??0}`}).join('\\n'):'Brak zapisanych partii.'}
 $('step').onclick=async()=>{ $('step').disabled=true;try{const r=await post('/api/step');if(r.error)$('error').textContent=r.error}catch(e){$('error').textContent=String(e)}await refresh()};$('run').onclick=async()=>{await post('/api/run');await refresh()};$('stop').onclick=async()=>{await post('/api/stop');await refresh()};$('reset').onclick=async()=>{await post('/api/reset');await refresh()};
 async function refreshLive(){try{const r=await fetch('/api/live',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const s=await r.json();const hasPairing=Boolean(s.pairing_id&&s.white&&s.black);const terminalStage=['idle','completed','stopped','failed','error'].includes(s.stage);$('active-players').textContent=hasPairing?((terminalStage?'Ostatnia para: ':'')+s.white+' vs '+s.black):'Brak aktywnej partii';$('match-kind').textContent=hasPairing?((s.white===s.black?'Self-play — wyłączony z Elo':'Mecz dwóch różnych modeli')+(terminalStage?' · '+s.stage:'')):'—';const currentModel=arenaModels.find(m=>m.filename===s.model||m.name===s.model);$('generating-model').textContent=hasPairing&&!terminalStage&&s.model?(currentModel?currentModel.name:s.model):'—';if(s.pairing_id){tournamentBoardActive=true;draw(s.fen||START_FEN,Array.isArray(s.moves)?s.moves:[]);renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage(s.fen||START_FEN);$('white').textContent=(s.white||'Białe')+' · białe ('+formatMaterialScore(material.white)+')';$('black').textContent=(s.black||'Czarne')+' · czarne ('+formatMaterialScore(material.black)+')'}else if(['idle','starting','completed','stopped','failed','error'].includes(s.stage)){tournamentBoardActive=false} $('live-stage').textContent=(s.message||'Oczekiwanie na turniej')+' · '+(s.stage||'idle');$('live-model').textContent=s.model||((s.white&&s.black)?s.white+' vs '+s.black:'—');$('live-color').textContent=({white:'białe',black:'czarne'}[s.color]||'—')+(s.pairing_id?' · para #'+s.pairing_id:'')+(s.question_no?' · Passkey '+s.question_no+'/3':'');$('live-time').textContent=s.stage==='generating'&&s.generation_started_at?Math.max(0,(Date.now()/1000-s.generation_started_at)).toFixed(1)+' s':(s.elapsed_seconds!=null?s.elapsed_seconds+' s':'—');$('live-move').textContent=s.proposed_move||((s.last_move&&s.last_move.san)?s.last_move.san+' ('+s.last_move.uci+')':'—');$('live-fen').textContent=s.fen||'Brak aktywnej pozycji.';$('live-legal').textContent=Array.isArray(s.legal_moves)?s.legal_moves.join(', '):'—';$('live-response').textContent=s.response||'Brak odpowiedzi.';const moves=Array.isArray(s.moves)?s.moves:[];if(moves.length)$('live-response').textContent+='\n\nRuchy: '+moves.map(m=>m.ply+'. '+m.model+': '+m.san+' ['+m.seconds+' s]').join(' · ');$('live-events').textContent=(s.events||[]).map(e=>e.at+' · '+e.message+(e.model?' · '+e.model:'')+(e.response?' · '+e.response:'')).join('\n')||'Brak zdarzeń.';}catch(e){$('live-stage').textContent='Błąd odczytu statusu: '+e}}
+async function refreshModelPermissions(){
+ const status=$('model-permissions-status'),host=$('model-permissions-list');
+ try{
+  const response=await fetch('/api/model-permissions',{cache:'no-store'});
+  if(!response.ok)throw Error('HTTP '+response.status);
+  const rows=await response.json();host.textContent='';
+  status.textContent=rows.length+' żądań / decyzji w rejestrze';
+  if(!rows.length){host.textContent='Brak żądań. Nowe modele nie mają automatycznie przyznanych uprawnień.';return}
+  rows.forEach(item=>{
+   const card=document.createElement('div');card.className='hf-queue-item';
+   const title=document.createElement('strong');title.textContent='#'+item.id+' · model '+item.model_id+' · '+item.scope+' · '+item.status;card.appendChild(title);
+   const details=document.createElement('small');details.textContent=item.repo_id+' · revision '+item.revision+' · SHA-256 '+item.artifact_sha256+' · zgłosił: '+item.requested_by;card.appendChild(details);
+   const history=document.createElement('small');history.textContent='Historia: '+(item.history||[]).map(e=>e.event+' / '+e.actor+' / '+e.occurred_at+(e.reason?' / '+e.reason:'')).join(' → ');card.appendChild(history);
+   const actions=document.createElement('div');actions.className='formrow';
+   const addAction=(label,action)=>{
+    const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=label;
+    button.addEventListener('click',async()=>{
+     const reason=action==='approve'?'':window.prompt('Uzasadnienie decyzji (min. 3 znaki):','');
+     if(action!=='approve'&&(!reason||reason.trim().length<3))return;
+     if(!window.confirm('Potwierdź decyzję '+action+' dla żądania #'+item.id+'.'))return;
+     try{const res=await fetch('/api/model-permissions/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:item.id,action,confirm:true,reason})});const data=await res.json();if(!res.ok)throw Error(data.error||'Błąd decyzji');status.textContent='Zapisano decyzję dla żądania #'+item.id;await refreshModelPermissions()}catch(error){status.textContent='Nie udało się zapisać decyzji: '+error}
+    });actions.appendChild(button);
+   };
+   if(item.status==='pending'){addAction('Zatwierdź','approve');addAction('Odrzuć','reject')}
+   if(item.status==='approved')addAction('Wycofaj','revoke');
+   card.appendChild(actions);host.appendChild(card);
+  });
+ }catch(error){status.textContent='Nie udało się odczytać rejestru: '+error}
+}
+$('model-permissions-refresh').addEventListener('click',refreshModelPermissions);
+$('model-permission-request-form').addEventListener('submit',async event=>{
+ event.preventDefault();
+ const status=$('model-permissions-status');
+ const payload={model_id:Number($('permission-model-id').value),repo_id:$('permission-repo-id').value.trim(),revision:$('permission-revision').value.trim(),artifact_sha256:$('permission-artifact-sha').value.trim(),scope:$('permission-scope').value,reason:$('permission-reason').value.trim(),confirm:$('permission-confirm').checked};
+ try{const response=await fetch('/api/model-permissions/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||'Błąd żądania');status.textContent='Utworzono oczekujące żądanie #'+data.id+' — nie jest ono jeszcze zgodą.';$('model-permission-request-form').reset();await refreshModelPermissions()}catch(error){status.textContent='Nie udało się złożyć żądania: '+error}
+});
+refreshModelPermissions();
 refresh();loadLeague();refreshLive();setInterval(refresh,1200);setInterval(refreshLive,1000);setInterval(loadLeague,10000);
 function tableRows(target,rows,headers){const host=$(target);host.textContent='';if(!rows.length){host.textContent='Brak danych.';return}const t=document.createElement('table');t.className='league-table';const head=document.createElement('tr');headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;head.appendChild(th)});t.appendChild(head);rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(v=>{const td=document.createElement('td');td.textContent=String(v);tr.appendChild(td)});t.appendChild(tr)});host.appendChild(t)}
 let selectedTournamentId=null;
