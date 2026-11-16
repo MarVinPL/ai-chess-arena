@@ -6,8 +6,10 @@ It does not copy artifacts, build systemd units, or launch processes.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -18,6 +20,10 @@ import model_permissions
 
 _ARTIFACT_KEY = re.compile(r"^[^|\x00]{1,255}\|[0-9a-f]{40}\|[^/\\|\x00]{1,255}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PREFLIGHT_MAX_AGE_SECONDS = 15 * 60
+_MEMORY_MULTIPLIER = 1.5
+_MEMORY_RESERVE_BYTES = 1536 * 1024**2
+_DISK_RESERVE_BYTES = 512 * 1024**2
 
 
 class RuntimeAuthorityError(PermissionError):
@@ -32,6 +38,8 @@ class RuntimeJobAuthorization:
     revision: str
     artifact_key: str
     artifact_sha256: str
+    source_path: str
+    size_bytes: int
     permission_request_id: int
     batch_id: int
     timeout_seconds: int
@@ -54,15 +62,107 @@ class RuntimeJobAuthority:
     """Resolve start requests from trusted DB state; never trust IPC payload data."""
 
     def __init__(self, *, connect_readonly: Callable[[], sqlite3.Connection],
+                 allowed_artifacts: set[str] | frozenset[str],
+                 review_required_artifacts: set[str] | frozenset[str] = frozenset(),
                  execution_opt_in: Callable[[], bool] | None = None,
+                 resource_probe: Callable[[str], tuple[int, int]] | None = None,
                  clock: Callable[[], float] = time.time):
         if not callable(connect_readonly):
             raise TypeError("A read-only database connection factory is required.")
+        if not isinstance(allowed_artifacts, (set, frozenset)) or not allowed_artifacts:
+            raise TypeError("An explicit non-empty runtime artifact allowlist is required.")
+        if not isinstance(review_required_artifacts, (set, frozenset)):
+            raise TypeError("Review-required artifact policy must be a set.")
+        if not review_required_artifacts.issubset(allowed_artifacts):
+            raise ValueError("Review-required artifacts must also be runtime-allowlisted.")
+        self._allowed_artifacts = frozenset(allowed_artifacts)
+        self._review_required_artifacts = frozenset(review_required_artifacts)
         self._connect = connect_readonly
         self._execution_opt_in = execution_opt_in or (
             lambda: os.environ.get("ARENA_RUNTIME_EXECUTION_ENABLED") == "1"
         )
+        self._resource_probe = resource_probe or self._host_resource_probe
         self._clock = clock
+
+    @staticmethod
+    def _host_resource_probe(source_path: str) -> tuple[int, int]:
+        available = None
+        with open("/proc/meminfo", "r", encoding="ascii") as stream:
+            for line in stream:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+        if available is None:
+            raise RuntimeAuthorityError("Current available RAM cannot be verified.")
+        free_disk = shutil.disk_usage(source_path).free
+        return available, free_disk
+
+    def _validate_preflight(self, connection: sqlite3.Connection, *,
+                            artifact_key: str, repo_id: str, source_path: str,
+                            size_bytes: int, sha256: str, now_epoch: float,
+                            now: str) -> None:
+        row = connection.execute(
+            "SELECT repo_id,path,size_bytes,sha256,status,checked_at,estimated_ram_bytes,"
+            "available_ram_bytes FROM hf_runtime_preflight WHERE artifact_key=?",
+            (artifact_key,)
+        ).fetchone()
+        if (not row or row["repo_id"] != repo_id
+                or row["status"] != "ready_pending_approval"
+                or row["path"] != source_path or row["size_bytes"] != size_bytes
+                or row["sha256"] != sha256):
+            raise RuntimeAuthorityError("Current runtime preflight is missing, blocked or mismatched.")
+        fresh_after = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_epoch - _PREFLIGHT_MAX_AGE_SECONDS)
+        )
+        if (not isinstance(row["checked_at"], str)
+                or not fresh_after <= row["checked_at"] <= now):
+            raise RuntimeAuthorityError("Runtime preflight is stale or has an invalid timestamp.")
+        estimated = int(size_bytes * _MEMORY_MULTIPLIER) + _MEMORY_RESERVE_BYTES
+        if (type(row["estimated_ram_bytes"]) is not int
+                or row["estimated_ram_bytes"] != estimated
+                or type(row["available_ram_bytes"]) is not int
+                or row["available_ram_bytes"] < estimated):
+            raise RuntimeAuthorityError("Persisted RAM preflight does not satisfy the pinned artifact.")
+        try:
+            current_ram, current_disk = self._resource_probe(source_path)
+        except Exception as exc:
+            raise RuntimeAuthorityError("Current host resource preflight failed.") from exc
+        if (type(current_ram) is not int or type(current_disk) is not int
+                or current_ram < estimated or current_disk < _DISK_RESERVE_BYTES):
+            raise RuntimeAuthorityError("Current host RAM/disk reserve is insufficient.")
+
+    @staticmethod
+    def _validate_manual_review(connection: sqlite3.Connection, *,
+                                catalog_id: str, repo_id: str, revision: str) -> None:
+        row = connection.execute(
+            "SELECT review_json FROM hf_candidate_reviews WHERE catalog_id=? AND revision=?",
+            (catalog_id, revision)
+        ).fetchone()
+        if not row:
+            raise RuntimeAuthorityError("Required manual candidate review is missing.")
+        try:
+            review = json.loads(row["review_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeAuthorityError("Manual candidate review is malformed.") from exc
+        if not isinstance(review, dict):
+            raise RuntimeAuthorityError("Manual candidate review is malformed.")
+        license_status = review.get("license_status")
+        if not isinstance(license_status, str):
+            raise RuntimeAuthorityError("Manual license review is malformed.")
+        evidence = str(review.get("license_evidence") or "").lower()
+        license_id = str(review.get("license_id") or "").strip()
+        if not license_id or len(evidence.strip()) < 10:
+            raise RuntimeAuthorityError("Manual license review lacks its identifier or evidence.")
+        if license_status not in {"declared_permissive", "verified_permissive"}:
+            raise RuntimeAuthorityError("Manual license review is not permissive.")
+        if (license_status == "declared_permissive"
+                and not any(token in evidence for token in ("apache-2.0", "apache 2.0"))):
+            raise RuntimeAuthorityError("Declared permissive license lacks Apache-2.0 evidence.")
+        if (review.get("repo_id") != repo_id or review.get("revision") != revision
+                or review.get("revision_confirmed") is not True
+                or review.get("technical_readiness") != "ready"
+                or bool(review.get("technical_blockers"))):
+            raise RuntimeAuthorityError("Manual technical/revision review is not ready.")
 
     @staticmethod
     def _job_id(job_id: int) -> int:
@@ -130,6 +230,8 @@ class RuntimeJobAuthority:
                     or not isinstance(row["artifact_key"], str)
                     or not _ARTIFACT_KEY.fullmatch(row["artifact_key"])):
                 raise RuntimeAuthorityError("Pinned artifact identity is malformed.")
+            if row["artifact_key"] not in self._allowed_artifacts:
+                raise RuntimeAuthorityError("Artifact is not on the privileged runtime allowlist.")
             try:
                 catalog_id, key_revision, _filename = row["artifact_key"].split("|", 2)
                 if not catalog_id or key_revision != row["revision"]:
@@ -146,6 +248,28 @@ class RuntimeJobAuthority:
             except (TypeError, ValueError) as exc:
                 raise RuntimeAuthorityError("Pinned TEST_ONLY identity validation failed.") from exc
 
+            artifact = connection.execute(
+                "SELECT path,size_bytes,sha256 FROM hf_download_verified_artifacts "
+                "WHERE artifact_key=?", (row["artifact_key"],)
+            ).fetchone()
+            if (not artifact or not isinstance(artifact["path"], str)
+                    or not artifact["path"].startswith("/")
+                    or type(artifact["size_bytes"]) is not int or artifact["size_bytes"] < 1
+                    or artifact["sha256"] != row["artifact_sha256"]):
+                raise RuntimeAuthorityError("Verified quarantine registry does not match the pinned artifact.")
+
+            self._validate_preflight(
+                connection, artifact_key=row["artifact_key"], repo_id=row["repo_id"],
+                source_path=artifact["path"], size_bytes=artifact["size_bytes"],
+                sha256=artifact["sha256"],
+                now_epoch=now_epoch, now=now,
+            )
+            if row["artifact_key"] in self._review_required_artifacts:
+                self._validate_manual_review(
+                    connection, catalog_id=catalog_id, repo_id=row["repo_id"],
+                    revision=row["revision"],
+                )
+
             timeout = row["timeout_seconds"]
             if type(timeout) is not int or not 1 <= timeout <= 1800:
                 raise RuntimeAuthorityError("Runtime job timeout is outside policy.")
@@ -153,7 +277,8 @@ class RuntimeJobAuthority:
             return RuntimeJobAuthorization(
                 job_id=job_id, model_id=int(row["model_id"]), repo_id=row["repo_id"],
                 revision=row["revision"], artifact_key=row["artifact_key"],
-                artifact_sha256=row["artifact_sha256"],
+                artifact_sha256=row["artifact_sha256"], source_path=artifact["path"],
+                size_bytes=artifact["size_bytes"],
                 permission_request_id=int(row["permission_request_id"]),
                 batch_id=int(row["batch_id"]), timeout_seconds=timeout,
                 authorized_at=now,
