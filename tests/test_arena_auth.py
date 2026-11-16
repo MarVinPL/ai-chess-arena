@@ -59,6 +59,12 @@ class ArenaAuthTests(unittest.TestCase):
         self.assertFalse(arena_auth.login_allowed("test-client", now=1001))
         self.assertTrue(arena_auth.login_allowed("test-client", now=1000 + arena_auth.LOGIN_WINDOW_SECONDS + 1))
 
+    def test_client_key_uses_last_forwarded_address(self):
+        self.assertEqual(arena_auth.client_key("198.51.100.9, 203.0.113.8", "127.0.0.1"), "203.0.113.8")
+
+    def test_client_key_falls_back_to_peer_address(self):
+        self.assertEqual(arena_auth.client_key("", "127.0.0.1"), "127.0.0.1")
+
     def test_short_password_hash_is_rejected(self):
         with self.assertRaises(ValueError):
             arena_auth.hash_password("too-short")
