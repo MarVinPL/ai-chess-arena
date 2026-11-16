@@ -181,10 +181,9 @@ def request_permission(connection: sqlite3.Connection, *, model_id: int,
             "reason": reason.strip()}
 
 
-def decide_permission(connection: sqlite3.Connection, *, request_id: int,
+def _decide_permission_locked(connection: sqlite3.Connection, *, request_id: int,
                       action: str, confirm: bool, reason: str = "",
                       actor: str | None = None) -> dict:
-    ensure_schema(connection)
     actor = _validate_actor(actor)
     if confirm is not True:
         raise ValueError("Wymagane jawne potwierdzenie decyzji.")
@@ -244,6 +243,36 @@ def decide_permission(connection: sqlite3.Connection, *, request_id: int,
             "revision": row["revision"], "artifact_sha256": row["artifact_sha256"],
             "scope": row["scope"], "status": status, "decided_at": now,
             "reason": reason or row["reason"]}
+
+
+def decide_permission(connection: sqlite3.Connection, *, request_id: int,
+                      action: str, confirm: bool, reason: str = "",
+                      actor: str | None = None) -> dict:
+    """Apply one decision under a serialized SQLite writer transaction."""
+    ensure_schema(connection)
+    owns_transaction = not connection.in_transaction
+    if owns_transaction:
+        # Acquire the writer reservation before reading either dependent scope.
+        connection.execute("BEGIN IMMEDIATE")
+    else:
+        # A caller-owned transaction must acquire its write reservation before
+        # the dependency reads. A stale WAL snapshot fails closed in SQLite.
+        connection.execute(
+            "UPDATE model_permission_requests SET status=status WHERE id=?",
+            (request_id,),
+        )
+    try:
+        result = _decide_permission_locked(
+            connection, request_id=request_id, action=action, confirm=confirm,
+            reason=reason, actor=actor,
+        )
+        if owns_transaction:
+            connection.commit()
+        return result
+    except Exception:
+        if owns_transaction and connection.in_transaction:
+            connection.rollback()
+        raise
 
 
 def has_permission(connection: sqlite3.Connection, *, model_id: int,

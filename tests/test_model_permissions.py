@@ -1,6 +1,7 @@
 import hashlib
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from model_permissions import (
@@ -92,6 +93,7 @@ class ModelPermissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EVALUATION"):
             self.decide( request_id=test_req["id"], action="revoke",
                               confirm=True, reason="wycofanie")
+        self.assertFalse(self.db.in_transaction, "failed owned decision must release its transaction")
         self.decide( request_id=eval_req["id"], action="revoke",
                           confirm=True, reason="koniec ewaluacji")
         self.decide( request_id=test_req["id"], action="revoke",
@@ -179,6 +181,70 @@ class ModelPermissionTests(unittest.TestCase):
             ).fetchone()[0],
             "requested",
         )
+
+    def test_concurrent_evaluation_approval_and_test_only_revoke_preserve_dependency(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as db_file:
+            path = db_file.name
+            setup = sqlite3.connect(path, timeout=10)
+            setup.row_factory = sqlite3.Row
+            ensure_schema(setup)
+            test_req = request_permission(
+                setup, **self.ident, scope="TEST_ONLY", confirm=True,
+                reason="initial test grant", actor="setup-operator",
+            )
+            decide_permission(
+                setup, request_id=test_req["id"], action="approve", confirm=True,
+                actor="setup-operator",
+            )
+            eval_req = request_permission(
+                setup, **self.ident, scope="EVALUATION", confirm=True,
+                reason="evaluation request", actor="setup-operator",
+            )
+            setup.commit()
+            setup.close()
+
+            barrier = threading.Barrier(2)
+            outcomes = []
+            outcomes_lock = threading.Lock()
+
+            def run_decision(request_id, action, reason=""):
+                connection = sqlite3.connect(path, timeout=10)
+                connection.row_factory = sqlite3.Row
+                try:
+                    barrier.wait(timeout=5)
+                    result = decide_permission(
+                        connection, request_id=request_id, action=action,
+                        confirm=True, reason=reason, actor="race-operator",
+                    )
+                    outcome = (action, "success", result["status"])
+                    connection.commit()
+                except Exception as exc:  # one competing decision must fail closed
+                    outcome = (action, "rejected", type(exc).__name__)
+                    connection.rollback()
+                finally:
+                    connection.close()
+                with outcomes_lock:
+                    outcomes.append(outcome)
+
+            threads = [
+                threading.Thread(target=run_decision, args=(eval_req["id"], "approve")),
+                threading.Thread(target=run_decision, args=(test_req["id"], "revoke", "end test")),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(len(outcomes), 2)
+            self.assertEqual(sum(item[1] == "success" for item in outcomes), 1)
+
+            check = sqlite3.connect(path, timeout=10)
+            check.row_factory = sqlite3.Row
+            self.assertFalse(
+                has_permission(check, **self.ident, scope="EVALUATION")
+                and not has_permission(check, **self.ident, scope="TEST_ONLY")
+            )
+            check.close()
 
     def test_decision_is_compare_and_set_and_cannot_be_repeated(self):
         req = self.request()
