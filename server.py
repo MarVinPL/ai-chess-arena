@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import calendar, csv, hashlib, io, ipaddress, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
