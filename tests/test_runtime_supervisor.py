@@ -155,3 +155,27 @@ def test_sqlite_store_rejects_duplicate_or_unrelated_unit_identity(tmp_path):
         store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-31.service", "start_pending"))
     with pytest.raises(RuntimeSupervisorError):
         store.persist(RuntimeUnitRecord(99, "ai-chess-arena-runtime-99.service", "start_pending"))
+
+
+def test_supervisor_rejects_spec_with_weakened_network_or_identity_policy():
+    from dataclasses import replace
+    safe = spec()
+    weakened = replace(safe, properties=tuple(
+        (key, "no" if key == "PrivateNetwork" else value)
+        for key, value in safe.properties
+    ))
+    backend = FakeBackend()
+    supervisor, records, _ = harness(backend)
+    with pytest.raises(RuntimeSupervisorError):
+        supervisor.start(weakened, ("/usr/bin/true",))
+    assert records == {}
+    assert backend.started == []
+
+
+def test_stop_requires_a_persisted_lease():
+    backend = FakeBackend()
+    supervisor, _, _ = harness(backend)
+    record = RuntimeUnitRecord(7, "ai-chess-arena-runtime-7.service", "active")
+    with pytest.raises(RuntimeSupervisorError):
+        supervisor.stop(record)
+    assert backend.stopped == []

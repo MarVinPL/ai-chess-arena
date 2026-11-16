@@ -38,10 +38,26 @@ class RuntimeSupervisor:
 
     @staticmethod
     def _validate(spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> int:
+        if not isinstance(spec, RuntimeUnitSpec):
+            raise RuntimeSupervisorError("Wymagana jest specyfikacja RuntimeUnitSpec.")
         match = _UNIT_RE.fullmatch(spec.unit_name)
         if not match:
             raise RuntimeSupervisorError("Nazwa jednostki poza dozwolonym wzorcem.")
         job_id = int(match.group(1))
+        props = spec.as_dict()
+        required = {
+            "User": "arena-runtime", "Group": "arena-runtime",
+            "NoNewPrivileges": "yes", "CapabilityBoundingSet": "",
+            "AmbientCapabilities": "", "ProtectSystem": "strict",
+            "ProtectHome": "yes", "PrivateTmp": "yes",
+            "PrivateDevices": "yes", "PrivateNetwork": "yes",
+            "ProtectControlGroups": "yes", "RestrictNamespaces": "yes",
+            "RestrictAddressFamilies": "AF_UNIX", "KillMode": "control-group",
+            "Delegate": "no", "WorkingDirectory": f"/run/arena-runtime/job-{job_id}",
+            "ReadWritePaths": f"/run/arena-runtime/job-{job_id}",
+        }
+        if any(props.get(key) != value for key, value in required.items()):
+            raise RuntimeSupervisorError("Specyfikacja nie spełnia wymaganej polityki izolacji.")
         if not argv or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv):
             raise RuntimeSupervisorError("Polecenie runtime jest nieprawidłowe.")
         if not argv[0].startswith("/"):
@@ -62,6 +78,10 @@ class RuntimeSupervisor:
 
     def stop(self, record: RuntimeUnitRecord) -> None:
         self._validate_record(record)
+        persisted = tuple(self._load_recoverable())
+        if not any(item.job_id == record.job_id and item.unit_name == record.unit_name
+                   for item in persisted):
+            raise RuntimeSupervisorError("Odmowa zatrzymania jednostki bez aktywnej dzierżawy w bazie.")
         self._set_state(record.job_id, "stop_pending")
         self._backend.stop(record.unit_name)
         self._set_state(record.job_id, "stopped")
