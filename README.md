@@ -74,8 +74,8 @@ No tournament is started automatically when a model is added. Real inference and
 - New tournaments enroll every active, non-excluded registry row, including entries with no version or incomplete manifest; those rows remain visible with explicit readiness blockers. The exact repositories in manifest entries 9–10 are deliberately excluded and cannot enter a new tournament.
 - Round-robin scheduling uses the actual registry model IDs and never creates self-pairings. With `n` active entrants, the league schedule contains `n × (n − 1)` games.
 - The read-only `GET /api/tournaments/{id}/preflight` endpoint reports each entrant's manifest, license, local-cache and runtime state. Missing local GGUF files are informational, not a start blocker.
-- When a game actually needs a model, the runner downloads its target and optional draft into the private Arena cache only if the license is explicitly verified and the download URL is safe. Hugging Face downloads must use a full immutable commit revision. Size and SHA-256 are verified before the file is activated; failed downloads do not create results or remove entrants.
-- A missing/incomplete manifest, unapproved license, unavailable runtime, insufficient disk space, or integrity failure remains a visible blocker. No automatic download is performed for unverified licenses.
+- When a game needs a model, the runner may retrieve its target and optional draft into the private Arena cache only when that exact artifact has both a positive licence review and a separately recorded explicit download approval. Licence verification alone never authorizes or triggers retrieval. The VPS downloads directly from the upstream source using a full immutable commit revision; expected size and SHA-256 are verified on the VPS before activation. Failed downloads do not create results or remove entrants.
+- A missing/incomplete manifest, unapproved licence or artifact download, unavailable runtime, insufficient disk space, or integrity failure remains a visible blocker. No automatic download is performed merely because a model is catalogued, licensed, selected, or needed by a game.
 
 ### Versioned model admission register
 
