@@ -202,7 +202,17 @@ def db_init():
         ):
             if name not in cols:
                 c.execute(f'ALTER TABLE games ADD COLUMN {name} {declaration}')
+    hf_candidate_downloads.init_db(DB)
 
+
+def _hf_download_planner_loop():
+    while True:
+        try:
+            plan = hf_candidate_downloads.refresh_plan()
+            print(f"HF download planner refreshed: {plan['summary']}", flush=True)
+        except Exception as exc:
+            print(f"HF download planner refresh failed: {exc}", flush=True)
+        time.sleep(900)
 
 def _failure_pgn(white_name, black_name, move_records, result, termination):
     game = chess.pgn.Game()
@@ -1440,6 +1450,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/download-plan':
+            try: self.send_json(hf_candidate_downloads.plan_snapshot())
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/download-history':
+            try: self.send_json({'jobs': hf_candidate_downloads.history()})
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/download-events':
+            try:
+                from urllib.parse import urlparse, parse_qs
+                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
+                self.send_json({'events': hf_candidate_downloads.events(job_id)} if job_id else {'error': 'Brak job_id'}, 200 if job_id else 422)
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
         elif path == '/api/hf-candidates/download-files':
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -1631,14 +1653,22 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
                 if path == '/api/hf-candidates/download-cancel':
                     result = hf_candidate_downloads.cancel(payload.get('job_id'))
+                elif path == '/api/hf-candidates/download-resume':
+                    if payload.get('confirm_resume') is not True:
+                        raise ValueError('Wymagane jawne zatwierdzenie wznowienia pobierania.')
+                    result = hf_candidate_downloads.resume(payload.get('job_id'))
+                elif path == '/api/hf-candidates/download-plan/refresh':
+                    result = hf_candidate_downloads.refresh_plan()
                 elif path == '/api/hf-candidates/download-start':
-                    result = hf_candidate_downloads.start(payload.get('candidates'))
+                    if payload.get('confirm_download') is not True:
+                        raise ValueError('Wymagane jawne zatwierdzenie pobrania partii.')
+                    result = hf_candidate_downloads.start(payload.get('candidates'), source='manual')
                 elif path == '/api/hf-candidates/review':
                     with league.connect() as c:
                         result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
@@ -1768,7 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':
@@ -1792,6 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
     _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
     print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
