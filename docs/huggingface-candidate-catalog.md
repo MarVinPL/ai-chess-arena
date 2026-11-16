@@ -40,3 +40,9 @@ python -m pytest -q tests/test_huggingface_catalog_sync.py
 python -m pytest -q tests/test_existing_model_metadata_check.py
 python scripts/sync_huggingface_catalog.py
 ```
+
+## Panel-driven artifact quarantine downloads
+
+The candidate panel can enumerate GGUF files for the exact catalog-pinned revision using Hugging Face repository metadata (`blobs=true`). Only entries with a positive size and an LFS SHA-256 are selectable. The operator explicitly selects files and confirms the batch before the server starts a background download.
+
+Downloads are restricted to three files and 16 GiB per batch, require an additional 2 GiB free-space margin, and are written under `/var/lib/ai-chess-arena/hf-candidate-downloads/` with private permissions. The worker checks the pinned revision, expected size, and LFS SHA-256. Completed artifacts remain in quarantine and are not registered in the model database, copied to `managed-models`, executed, or admitted to tournaments. The in-memory job status is exposed to the authenticated panel while the server process remains running.
