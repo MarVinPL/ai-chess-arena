@@ -13,6 +13,7 @@ import hf_candidate_audit
 import hf_candidate_reviews
 import hf_candidate_downloads
 import hf_candidate_queue
+import hf_candidate_runtime
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1457,6 +1458,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/hf-candidates/hardware':
             try: self.send_json(hf_candidate_queue.hardware_snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
+        elif path == '/api/hf-candidates/runtime-preflight':
+            try: self.send_json(hf_candidate_runtime.snapshot())
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/download-plan':
             try: self.send_json(hf_candidate_downloads.plan_snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
@@ -1831,6 +1835,7 @@ if __name__ == '__main__':
     db_init()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
+    hf_candidate_runtime.start_background_planner()
     _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
     _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
     print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
