@@ -1,4 +1,5 @@
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,8 @@ import server
 
 class RuntimeExecutorTests(unittest.TestCase):
     def setUp(self):
+        self.old_runtime_opt_in = os.environ.get('ARENA_RUNTIME_EXECUTION_ENABLED')
+        os.environ['ARENA_RUNTIME_EXECUTION_ENABLED'] = '1'
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.db = self.root / 'arena.sqlite3'
@@ -60,12 +63,100 @@ class RuntimeExecutorTests(unittest.TestCase):
         for item in reversed(self.patches):
             item.stop()
         self.tmp.cleanup()
+        if self.old_runtime_opt_in is None:
+            os.environ.pop('ARENA_RUNTIME_EXECUTION_ENABLED', None)
+        else:
+            os.environ['ARENA_RUNTIME_EXECUTION_ENABLED'] = self.old_runtime_opt_in
 
     def enqueue(self):
         return executor.enqueue(model_id=self.model_id, repo_id='org/model',
             revision=self.revision, artifact_sha256=self.sha,
             artifact_key=self.artifact_key, permission_request_id=self.permission_id,
             actor='test-operator')
+
+    def approve_for_fake_execution(self, job_id):
+        batch = executor.create_batch(job_ids=[job_id], actor='test-operator')
+        executor.set_execution_enabled(enabled=True, confirm=True,
+            actor='test-operator', reason='Unit test fake runner only')
+        executor.approve_batch(batch_id=batch['batch_id'], confirm=True,
+            actor='test-operator', reason='Unit test fake runner only')
+        return batch['batch_id']
+
+    def test_batch_creation_does_not_enable_runtime_or_start_model(self):
+        queued = self.enqueue()
+        batch = executor.create_batch(job_ids=[queued['job_id']], actor='test-operator')
+        state = executor.snapshot()
+        self.assertEqual(batch['status'], 'pending_approval')
+        self.assertFalse(state['execution_enabled'])
+        self.assertFalse(state['runtime_started'])
+        self.assertEqual(state['jobs'][0]['batch_id'], batch['batch_id'])
+
+    def test_batch_cannot_be_approved_before_runtime_is_enabled(self):
+        queued = self.enqueue()
+        batch = executor.create_batch(job_ids=[queued['job_id']], actor='test-operator')
+        with self.assertRaisesRegex(PermissionError, 'niezależnie włączony'):
+            executor.approve_batch(batch_id=batch['batch_id'], confirm=True,
+                actor='test-operator', reason='Explicit approval test')
+        self.assertEqual(executor.snapshot()['batches'][0]['status'], 'pending_approval')
+
+    def test_batch_approval_is_required_before_fake_runner_can_start(self):
+        queued = self.enqueue()
+        batch = executor.create_batch(job_ids=[queued['job_id']], actor='test-operator')
+        executor.set_execution_enabled(enabled=True, confirm=True,
+            actor='test-operator', reason='Enable for test only')
+        invoked = []
+        with self.assertRaisesRegex(PermissionError, 'zatwierdzenia tej partii'):
+            executor.execute_job(queued['job_id'],
+                runner=lambda *_: invoked.append(True) or {'exit_code': 0},
+                lock_path=self.root / 'lock')
+        self.assertEqual(invoked, [])
+        self.assertEqual(executor.snapshot()['jobs'][0]['status'], 'failed')
+
+    def test_expired_batch_is_marked_expired_and_queued_jobs_cancelled(self):
+        queued = self.enqueue()
+        batch = executor.create_batch(job_ids=[queued['job_id']], actor='test-operator')
+        executor.set_execution_enabled(enabled=True, confirm=True,
+            actor='test-operator', reason='Enable for expiry test')
+        executor.approve_batch(batch_id=batch['batch_id'], confirm=True,
+            actor='test-operator', reason='Approval expiry test', approval_seconds=30)
+        with patch.object(executor, '_now', return_value='2999-01-01T00:00:00Z'):
+            state = executor.snapshot()
+        self.assertEqual(state['batches'][0]['status'], 'expired')
+        self.assertEqual(state['jobs'][0]['status'], 'cancelled')
+
+    def test_disabling_runtime_during_runner_signals_cancellation(self):
+        queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
+        def runner(payload, timeout, cancelled):
+            executor.set_execution_enabled(enabled=False, confirm=True,
+                actor='test-operator', reason='Emergency runtime disable')
+            self.assertTrue(cancelled())
+            return {'exit_code': 0}
+        result = executor.execute_job(queued['job_id'], runner=runner,
+            lock_path=self.root / 'lock')
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual(executor.snapshot()['batches'][0]['status'], 'revoked')
+
+    def test_disabling_runtime_revokes_batches_and_cancels_queued_jobs(self):
+        queued = self.enqueue()
+        batch = executor.create_batch(job_ids=[queued['job_id']], actor='test-operator')
+        executor.set_execution_enabled(enabled=True, confirm=True,
+            actor='test-operator', reason='Enable for test only')
+        executor.approve_batch(batch_id=batch['batch_id'], confirm=True,
+            actor='test-operator', reason='Approve for test only')
+        executor.set_execution_enabled(enabled=False, confirm=True,
+            actor='test-operator', reason='Disable after test')
+        state = executor.snapshot()
+        self.assertEqual(state['batches'][0]['status'], 'revoked')
+        self.assertEqual(state['jobs'][0]['status'], 'cancelled')
+        self.assertFalse(state['execution_enabled'])
+
+    def test_runtime_cannot_be_enabled_without_environment_opt_in(self):
+        with patch.dict(os.environ, {"ARENA_RUNTIME_EXECUTION_ENABLED": ""}):
+            with self.assertRaisesRegex(PermissionError, 'ARENA_RUNTIME_EXECUTION_ENABLED'):
+                executor.set_execution_enabled(enabled=True, confirm=True,
+                    actor='test-operator', reason='No environment opt-in')
+        self.assertFalse(executor.snapshot()['execution_enabled'])
 
     def test_enqueue_requires_active_exact_test_only_grant(self):
         queued = self.enqueue()
@@ -86,6 +177,7 @@ class RuntimeExecutorTests(unittest.TestCase):
 
     def test_revoked_permission_before_execution_marks_queued_job_failed(self):
         queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
         with league.connect() as connection:
             model_permissions.decide_permission(
                 connection, request_id=self.permission_id, action='revoke',
@@ -98,6 +190,31 @@ class RuntimeExecutorTests(unittest.TestCase):
         self.assertEqual(job['status'], 'failed')
         self.assertIn('wycofana', job['error'])
 
+    def test_recovery_marks_running_job_failed_and_only_terminates_verified_group(self):
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute("UPDATE runtime_test_jobs SET status='running',process_pid=4242,process_start_ticks=123 WHERE id=?",
+                               (queued['job_id'],))
+            connection.execute("UPDATE runtime_test_batches SET status='running' WHERE id=?", (batch_id,))
+        with patch.object(executor, '_terminate_verified_orphan', return_value=True) as terminate:
+            result = executor.recover_orphaned_jobs()
+        terminate.assert_called_once_with(4242, 123)
+        self.assertEqual(result['count'], 1)
+        state = executor.snapshot()
+        self.assertEqual(state['jobs'][0]['status'], 'failed')
+        self.assertEqual(state['batches'][0]['status'], 'failed')
+
+    def test_orphan_pid_identity_mismatch_is_never_signalled(self):
+        from runtime_executor import _terminate_verified_orphan
+        identity = {'start_ticks': 999, 'pgrp': 4242, 'session': 4242,
+                    'cmdline': '/home/debian/ai-agent/bin/llamafile',
+                    'exe': '/home/debian/ai-agent/bin/llamafile'}
+        with patch.object(executor, '_process_identity', return_value=identity), \
+             patch.object(executor.os, 'killpg') as killpg:
+            self.assertFalse(_terminate_verified_orphan(4242, 123))
+        killpg.assert_not_called()
+
     def test_no_default_runner_means_no_execution(self):
         queued = self.enqueue()
         with self.assertRaisesRegex(RuntimeError, 'Brak jawnie skonfigurowanego'):
@@ -106,15 +223,23 @@ class RuntimeExecutorTests(unittest.TestCase):
 
     def test_one_job_runs_with_explicit_runner_and_records_result(self):
         queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
         seen = {}
         def runner(payload, timeout, cancelled):
             seen.update(payload)
             self.assertEqual(timeout, executor.DEFAULT_TIMEOUT_SECONDS)
             self.assertFalse(cancelled())
             return {'exit_code': 0, 'summary': 'fake runner only'}
+        def runner(payload, timeout, cancelled):
+            seen.update(payload)
+            self.assertEqual(timeout, executor.DEFAULT_TIMEOUT_SECONDS)
+            self.assertFalse(cancelled())
+            payload['register_process'](4321, 4321, 987654)
+            return {'exit_code': 0, 'summary': 'fake runner only'}
         result = executor.execute_job(queued['job_id'], runner=runner, lock_path=self.root / 'lock')
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(seen['sha256'], self.sha)
+        self.assertEqual(executor.snapshot()['jobs'][0]['process_pid'], 4321)
         self.assertEqual(seen['path'], str(self.artifact))
         self.assertEqual(executor.snapshot()['jobs'][0]['status'], 'completed')
 
@@ -137,6 +262,7 @@ class RuntimeExecutorTests(unittest.TestCase):
 
     def test_permission_revoked_during_runner_marks_job_cancelled(self):
         queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
         def runner(payload, timeout, cancelled):
             with league.connect() as connection:
                 model_permissions.decide_permission(connection, request_id=self.permission_id,
@@ -146,9 +272,6 @@ class RuntimeExecutorTests(unittest.TestCase):
         result = executor.execute_job(queued['job_id'], runner=runner, lock_path=self.root / 'lock')
         self.assertEqual(result['status'], 'cancelled')
 
-
-if __name__ == '__main__':
-    unittest.main()
 
 
 class RuntimeExecutorMigrationTests(unittest.TestCase):
@@ -170,6 +293,9 @@ class RuntimeExecutorMigrationTests(unittest.TestCase):
             columns = {row[1] for row in connection.execute(
                 "PRAGMA table_info(runtime_test_jobs)")}
             self.assertIn("created_by", columns)
+            self.assertIn("batch_id", columns)
+            self.assertIn("process_pid", columns)
+            self.assertIn("process_start_ticks", columns)
             connection.close()
 
 
@@ -283,3 +409,234 @@ class RuntimeExecutorHttpTests(unittest.TestCase):
             payload={}, origin=self.origin)
         self.assertEqual(status, 422)
         self.assertTrue(body.get("error"))
+
+    def test_runtime_enable_requires_environment_opt_in(self):
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"ARENA_RUNTIME_EXECUTION_ENABLED": ""}):
+            status, body = self.request(
+                "/api/hf-candidates/runtime-enable", method="POST",
+                payload={"enabled": True, "confirm": True,
+                         "reason": "Explicit operator test"}, origin=self.origin)
+        self.assertEqual(status, 422)
+        self.assertIn("ARENA_RUNTIME_EXECUTION_ENABLED", body["error"])
+
+    def test_runtime_batch_create_requires_authenticated_session(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-batch-create", method="POST",
+            payload={"job_ids": [1]}, authenticated=False, origin=self.origin)
+        self.assertEqual(status, 401)
+        self.assertIn("Wymagane logowanie", body["error"])
+
+    def test_runtime_batch_create_validates_queued_jobs(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-batch-create", method="POST",
+            payload={"job_ids": [999]}, origin=self.origin)
+        self.assertEqual(status, 422)
+        self.assertTrue(body.get("error"))
+
+
+class RuntimeSubprocessRunnerTests(unittest.TestCase):
+    class Response:
+        def __init__(self, status=200, body=b'{}'):
+            self.status = status
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def read(self):
+            return self.body
+
+    class Process:
+        pid = 987654
+        def poll(self):
+            return None
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.quarantine = self.root / 'quarantine'
+        self.quarantine.mkdir()
+        self.artifact = self.quarantine / 'test.gguf.quarantine'
+        self.artifact.write_bytes(b'fake-gguf-runtime-runner-test')
+        self.sha = hashlib.sha256(self.artifact.read_bytes()).hexdigest()
+        self.patch_staging = patch.object(downloads, 'STAGING_DIR', self.quarantine)
+        self.patch_staging.start()
+
+    def tearDown(self):
+        self.patch_staging.stop()
+        self.tmp.cleanup()
+
+    def payload(self):
+        return {'path': str(self.artifact), 'sha256': self.sha,
+                'model_id': 1, 'repo_id': 'test/model', 'revision': 'a' * 40}
+
+    def test_rejects_artifact_outside_quarantine_before_process_start(self):
+        outside = self.root / 'outside.gguf'
+        outside.write_bytes(b'outside')
+        calls = []
+        runner = __import__('runtime_subprocess').LlamafileSmokeRunner(
+            popen=lambda *a, **k: calls.append((a, k)),
+            terminate=lambda *_: None, temp_root=self.root)
+        payload = self.payload()
+        payload['path'] = str(outside)
+        with self.assertRaisesRegex(PermissionError, 'wewnątrz kwarantanny'):
+            runner(payload, 30, lambda: False)
+        self.assertEqual(calls, [])
+
+    def test_rejects_hash_mismatch_before_process_start(self):
+        calls = []
+        runner = __import__('runtime_subprocess').LlamafileSmokeRunner(
+            popen=lambda *a, **k: calls.append((a, k)),
+            terminate=lambda *_: None, temp_root=self.root)
+        payload = self.payload()
+        payload['sha256'] = 'b' * 64
+        with self.assertRaisesRegex(PermissionError, 'SHA-256'):
+            runner(payload, 30, lambda: False)
+        self.assertEqual(calls, [])
+
+    def test_fake_process_smoke_test_is_supervised_and_output_is_cleaned(self):
+        import json
+        from runtime_subprocess import LlamafileSmokeRunner, WORKER
+        calls = []
+        process = self.Process()
+        def popen(command, **kwargs):
+            calls.append((command, kwargs))
+            return process
+        def urlopen(request, timeout):
+            if request.full_url.endswith('/health'):
+                return self.Response(200)
+            return self.Response(200, json.dumps({
+                'choices': [{'message': {'content': 'READY'}}]
+            }).encode())
+        runner = LlamafileSmokeRunner(
+            popen=popen, urlopen=urlopen, monotonic=__import__('time').monotonic,
+            sleep=lambda _: None, temp_root=self.root, terminate=lambda p: None, process_identity=lambda pid: (pid, pid, 123456))
+        result = runner(self.payload(), 30, lambda: False)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['response_excerpt'], 'READY')
+        command, kwargs = calls[0]
+        self.assertEqual(command[1], str(WORKER))
+        self.assertTrue(kwargs['start_new_session'])
+        self.assertEqual(kwargs['stdin'], __import__('subprocess').DEVNULL)
+        self.assertFalse(Path(kwargs['cwd']).exists())
+
+    def test_cancellation_during_startup_terminates_owned_process(self):
+        from runtime_subprocess import LlamafileSmokeRunner
+        process = self.Process()
+        terminated = []
+        def urlopen(_request, timeout):
+            raise OSError('not ready yet')
+        calls = {'count': 0}
+        def cancelled():
+            calls['count'] += 1
+            return calls['count'] >= 2
+        runner = LlamafileSmokeRunner(
+            popen=lambda *_a, **_k: process, urlopen=urlopen,
+            sleep=lambda _: None, temp_root=self.root,
+            terminate=lambda proc: terminated.append(proc.pid), process_identity=lambda pid: (pid, pid, 123456))
+        with self.assertRaisesRegex(InterruptedError, 'anulowano'):
+            runner(self.payload(), 30, cancelled)
+        self.assertEqual(terminated, [process.pid])
+
+
+class RuntimeProcessGroupTests(unittest.TestCase):
+    def test_term_then_kill_escalation_stops_only_owned_test_process_group(self):
+        import subprocess
+        import sys
+        from runtime_subprocess import _stop_process_group
+        process = subprocess.Popen(
+            [sys.executable, '-c',
+             'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            _stop_process_group(process, wait_seconds=0.2)
+            self.assertIsNotNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+
+
+class RuntimeSubprocessTimeoutTests(unittest.TestCase):
+    def test_startup_has_hard_wall_clock_timeout(self):
+        from runtime_subprocess import LlamafileSmokeRunner
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            quarantine = root / 'quarantine'
+            quarantine.mkdir()
+            model = quarantine / 'slow.gguf.quarantine'
+            model.write_bytes(b'fake-slow-model')
+            sha = hashlib.sha256(model.read_bytes()).hexdigest()
+            process = RuntimeSubprocessRunnerTests.Process()
+            clock = {'now': 0.0}
+            terminated = []
+            def monotonic():
+                return clock['now']
+            def sleep(seconds):
+                clock['now'] += 0.6
+            def urlopen(_request, timeout):
+                raise OSError('health not ready')
+            with patch.object(downloads, 'STAGING_DIR', quarantine):
+                runner = __import__('runtime_subprocess').LlamafileSmokeRunner(
+                    popen=lambda *_a, **_k: process, urlopen=urlopen,
+                    monotonic=monotonic, sleep=sleep, temp_root=root,
+                    terminate=lambda proc: terminated.append(proc.pid), process_identity=lambda pid: (pid, pid, 123456))
+                with self.assertRaisesRegex(TimeoutError, 'twardy timeout'):
+                    runner({'path': str(model), 'sha256': sha}, 1, lambda: False)
+            self.assertEqual(terminated, [process.pid])
+
+
+class RuntimeInferenceTimeoutTests(unittest.TestCase):
+    def test_inference_obeys_same_hard_deadline_and_cleans_temporary_output(self):
+        import json
+        import threading
+        from runtime_subprocess import LlamafileSmokeRunner
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            quarantine = root / 'quarantine'
+            quarantine.mkdir()
+            model = quarantine / 'slow-inference.gguf.quarantine'
+            model.write_bytes(b'fake-inference-model')
+            sha = hashlib.sha256(model.read_bytes()).hexdigest()
+            process = RuntimeSubprocessRunnerTests.Process()
+            clock = {'now': 0.0}
+            inference_started = threading.Event()
+            release_inference = threading.Event()
+            terminated = []
+            created_cwd = []
+            def monotonic():
+                return clock['now']
+            def sleep(seconds):
+                clock['now'] += 0.6
+            def popen(_command, **kwargs):
+                created_cwd.append(kwargs['cwd'])
+                return process
+            def urlopen(request, timeout):
+                if request.full_url.endswith('/health'):
+                    return RuntimeSubprocessRunnerTests.Response(200)
+                inference_started.set()
+                release_inference.wait(2)
+                return RuntimeSubprocessRunnerTests.Response(200, json.dumps({
+                    'choices': [{'message': {'content': 'READY'}}]
+                }).encode())
+            with patch.object(downloads, 'STAGING_DIR', quarantine):
+                runner = LlamafileSmokeRunner(
+                    popen=popen, urlopen=urlopen, monotonic=monotonic,
+                    sleep=sleep, temp_root=root,
+                    terminate=lambda proc: terminated.append(proc.pid), process_identity=lambda pid: (pid, pid, 123456))
+                try:
+                    with self.assertRaisesRegex(TimeoutError, 'timeout inferencji'):
+                        runner({'path': str(model), 'sha256': sha}, 1, lambda: False)
+                    self.assertTrue(inference_started.is_set())
+                finally:
+                    release_inference.set()
+            self.assertEqual(terminated, [process.pid])
+            self.assertTrue(created_cwd)
+            self.assertFalse(Path(created_cwd[0]).exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

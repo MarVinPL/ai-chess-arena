@@ -1676,7 +1676,7 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision','/api/hf-candidates/runtime-enqueue','/api/hf-candidates/runtime-cancel'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision','/api/hf-candidates/runtime-enqueue','/api/hf-candidates/runtime-cancel','/api/hf-candidates/runtime-enable','/api/hf-candidates/runtime-batch-create','/api/hf-candidates/runtime-batch-approve','/api/hf-candidates/runtime-batch-revoke'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1698,6 +1698,22 @@ class Handler(BaseHTTPRequestHandler):
                         actor=self.authenticated_user())
                 elif path == '/api/hf-candidates/runtime-cancel':
                     result = runtime_executor.cancel(payload.get('job_id'))
+                elif path == '/api/hf-candidates/runtime-enable':
+                    result = runtime_executor.set_execution_enabled(
+                        enabled=payload.get('enabled'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''))
+                elif path == '/api/hf-candidates/runtime-batch-create':
+                    result = runtime_executor.create_batch(
+                        job_ids=payload.get('job_ids'), actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-batch-approve':
+                    result = runtime_executor.approve_batch(
+                        batch_id=payload.get('batch_id'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''),
+                        approval_seconds=payload.get('approval_seconds', 600))
+                elif path == '/api/hf-candidates/runtime-batch-revoke':
+                    result = runtime_executor.revoke_batch(
+                        batch_id=payload.get('batch_id'), actor=self.authenticated_user(),
+                        reason=payload.get('reason', ''))
                 elif path == '/api/model-permissions/decision':
                     request_id = payload.get('request_id')
                     if isinstance(request_id, bool) or not isinstance(request_id, int):
@@ -1872,6 +1888,9 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    recovery = runtime_executor.recover_orphaned_jobs()
+    if recovery['count']:
+        print(f"Recovered {recovery['count']} orphaned runtime test job(s)", flush=True)
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()
