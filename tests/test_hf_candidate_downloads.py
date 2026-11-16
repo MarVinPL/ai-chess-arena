@@ -67,6 +67,18 @@ class CandidateDownloadTests(unittest.TestCase):
         self.assertEqual([x['name'] for x in result['files']],['model.gguf'])
         self.assertEqual(result['files'][0]['sha256'],SHA)
 
+    def test_current_reports_aggregate_progress_for_latest_job(self):
+        with downloads._lock:
+            downloads._jobs['old']={'id':'old','status':'completed','total_bytes':4,'results':[{'size_bytes':4}]}
+            downloads._jobs['new']={'id':'new','status':'downloading','total_bytes':20,'current_file_bytes':5,
+                                    'current_file_total_bytes':10,'results':[{'size_bytes':3}]}
+        snapshot=downloads.current()
+        self.assertEqual(snapshot['id'],'new')
+        self.assertEqual(snapshot['downloaded_bytes'],8)
+        self.assertEqual(snapshot['progress_percent'],40.0)
+        self.assertTrue(snapshot['active'])
+        self.assertEqual(downloads.get('new')['current_file_total_bytes'],10)
+
     def test_redirect_rejects_non_huggingface_hosts(self):
         handler=downloads._Redirects()
         with self.assertRaisesRegex(downloads.DownloadError,'przekierowanie'):
