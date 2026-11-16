@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ARTIFACT_BYTES = 16 * 1024**3
+_DISK_RESERVE_BYTES = 512 * 1024**2
 _CHUNK_BYTES = 1024 * 1024
 
 
@@ -124,6 +126,8 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
                 or stat.S_IMODE(root_stat.st_mode) != 0o710):
             raise ArtifactHandoffError("Handoff root ownership/mode does not match root:runtime 0710 policy.")
 
+        if shutil.disk_usage(handoff_root).free < expected_size + _DISK_RESERVE_BYTES:
+            raise ArtifactHandoffError("Handoff volume lacks the required free-space reserve.")
         source_fd = _open_source_beneath(source_root, source_path)
         source_stat = os.fstat(source_fd)
         if source_stat.st_size != expected_size:
@@ -208,4 +212,74 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
                 os.rmdir(job_name, dir_fd=root_fd)
             except OSError:
                 pass
+        os.close(root_fd)
+
+
+def remove_artifact_handoff(*, job_id: int, handoff_root: str | Path,
+                             runtime_gid: int, owner_uid: int | None = None) -> bool:
+    """Remove only the exact per-job snapshot after its systemd cgroup is empty.
+
+    This function never recurses. Unexpected files, ownership, modes or
+    symlinks cause a refusal instead of broad cleanup.
+    """
+    owner_uid = os.getuid() if owner_uid is None else owner_uid
+    if type(job_id) is not int or job_id < 1 or type(runtime_gid) is not int or runtime_gid < 0:
+        raise ArtifactHandoffError("Invalid handoff cleanup identity.")
+    if type(owner_uid) is not int or owner_uid < 0:
+        raise ArtifactHandoffError("Invalid handoff cleanup owner.")
+    handoff_root = Path(handoff_root)
+    if not handoff_root.is_absolute() or handoff_root.resolve(strict=True) != handoff_root:
+        raise ArtifactHandoffError("Handoff root must be an existing canonical directory.")
+
+    root_fd = os.open(handoff_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    job_fd = None
+    try:
+        root_stat = os.fstat(root_fd)
+        if (root_stat.st_uid != owner_uid or root_stat.st_gid != runtime_gid
+                or stat.S_IMODE(root_stat.st_mode) != 0o710):
+            raise ArtifactHandoffError("Handoff root ownership/mode does not match cleanup policy.")
+        job_name = f"job-{job_id}"
+        try:
+            job_fd = os.open(
+                job_name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            return False
+        job_stat = os.fstat(job_fd)
+        if (job_stat.st_uid != owner_uid or job_stat.st_gid != runtime_gid
+                or stat.S_IMODE(job_stat.st_mode) != 0o750):
+            raise ArtifactHandoffError("Per-job directory ownership/mode does not match cleanup policy.")
+        try:
+            file_fd = os.open(
+                "model.gguf", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=job_fd,
+            )
+        except FileNotFoundError:
+            file_fd = None
+        if file_fd is not None:
+            try:
+                file_stat = os.fstat(file_fd)
+                if (not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != owner_uid
+                        or file_stat.st_gid != runtime_gid
+                        or stat.S_IMODE(file_stat.st_mode) != 0o440):
+                    raise ArtifactHandoffError("Per-job artifact ownership/mode does not match cleanup policy.")
+            finally:
+                os.close(file_fd)
+            os.unlink("model.gguf", dir_fd=job_fd)
+        os.close(job_fd)
+        job_fd = None
+        try:
+            os.rmdir(job_name, dir_fd=root_fd)
+        except OSError as exc:
+            raise ArtifactHandoffError("Per-job directory contains unexpected files; refusing recursive cleanup.") from exc
+        os.fsync(root_fd)
+        return True
+    except ArtifactHandoffError:
+        raise
+    except OSError as exc:
+        raise ArtifactHandoffError("Secure artifact handoff cleanup failed.") from exc
+    finally:
+        if job_fd is not None:
+            os.close(job_fd)
         os.close(root_fd)

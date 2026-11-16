@@ -166,6 +166,18 @@ class SQLiteRuntimeUnitStore:
             if changed.rowcount != 1:
                 raise RuntimeSupervisorError("Brak zapisanej dzierżawy runtime dla zadania.")
 
+    def get(self, job_id: int) -> RuntimeUnitRecord | None:
+        import sqlite3
+
+        if type(job_id) is not int or job_id < 1:
+            raise RuntimeSupervisorError("Nieprawidłowy identyfikator zadania.")
+        with sqlite3.connect(self.database_path, timeout=5) as connection:
+            row = connection.execute(
+                "SELECT job_id,unit_name,state FROM runtime_unit_leases WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        return RuntimeUnitRecord(*row) if row else None
+
     def load_recoverable(self) -> tuple[RuntimeUnitRecord, ...]:
         import sqlite3
 

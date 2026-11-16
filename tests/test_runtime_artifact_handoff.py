@@ -138,3 +138,52 @@ def test_rejects_invalid_size_and_sha_before_creating_job_directory(tmp_path):
     with pytest.raises(ArtifactHandoffError):
         prepare(quarantine, source, handoff, sha="not-a-sha")
     assert list(handoff.iterdir()) == []
+
+
+def test_remove_handoff_is_idempotent_and_targets_only_exact_job(tmp_path):
+    from runtime_artifact_handoff import remove_artifact_handoff
+
+    quarantine, source_dir, handoff = setup_roots(tmp_path)
+    source = source_dir / "model.quarantine"
+    source.write_bytes(b"verified GGUF bytes")
+    prepare(quarantine, source, handoff)
+    assert remove_artifact_handoff(
+        job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+    ) is True
+    assert not (handoff / "job-17").exists()
+    assert remove_artifact_handoff(
+        job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+    ) is False
+
+
+def test_remove_handoff_refuses_recursive_cleanup_of_unexpected_files(tmp_path):
+    from runtime_artifact_handoff import remove_artifact_handoff
+
+    quarantine, source_dir, handoff = setup_roots(tmp_path)
+    source = source_dir / "model.quarantine"
+    source.write_bytes(b"verified GGUF bytes")
+    prepare(quarantine, source, handoff)
+    extra = handoff / "job-17" / "unexpected"
+    extra.write_text("do not recursively delete")
+    with pytest.raises(ArtifactHandoffError, match="unexpected files"):
+        remove_artifact_handoff(
+            job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+        )
+    assert extra.read_text() == "do not recursively delete"
+    assert (handoff / "job-17").exists()
+
+
+def test_prepare_requires_destination_disk_reserve(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import runtime_artifact_handoff as handoff_module
+
+    quarantine, source_dir, handoff = setup_roots(tmp_path)
+    source = source_dir / "model.quarantine"
+    source.write_bytes(b"verified GGUF bytes")
+    monkeypatch.setattr(
+        handoff_module.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(total=100, used=99, free=1),
+    )
+    with pytest.raises(ArtifactHandoffError, match="free-space reserve"):
+        prepare(quarantine, source, handoff)
+    assert not (handoff / "job-17").exists()
