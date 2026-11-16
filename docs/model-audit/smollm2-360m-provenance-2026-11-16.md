@@ -193,7 +193,7 @@ Poniższe ustalenia rozszerzają pierwotny przegląd. Ważne: rewizja aktualnej 
 
 **FineMath:** karta rozróżnia FineMath-3+ (34B tokenów) i FineMath-4+ (9.6B tokenów, podzbiór 3+). Wzmianka o FineMath w recipe 360M nie wskazuje jednoznacznie, który wariant był użyty. Nie wybierać wariantu w rejestrze bez dowodu.
 
-**InfiMM-WebMath:** odnalezione repozytorium `Infi-MM/InfiMM-WebMath-40B` ma własną deklarację ODC-By, ale nie potwierdzono, że jest to dokładny dataset/wariant wskazany w SmolLM2 recipe. FineMath zawiera także `InfiWebMath-3+`; nie utożsamiać nazw `InfiMM-WebMath` i `InfiWebMath` bez dowodu. Wartość licencji i rewizji dla źródła użytego w 360M pozostaje nieustalona.
+**InfiMM-WebMath:** identyfikacja źródła została doprecyzowana w sekcji 10.2: paper wskazuje InfiMM-WebMath-40B. Oryginalny zbiór deklaruje ODC-By; dokładny training-time snapshot, tekstowa ekstrakcja i ewentualny preprocessing użyty w 360M pozostają nieustalone. Nie utożsamiać oryginalnego InfiMM-WebMath-40B z pochodnymi `Infi-WebMath-3+` / `Infi-WebMath-4+` w FineMath.
 
 **Cosmopedia:** publiczne repozytorium `HuggingFaceTB/cosmopedia` to v0.1 z Apache-2.0. Karta wskazuje, że v0.2 znajduje się w oddzielnym `HuggingFaceTB/smollm-corpus`. Nie ma dowodu, którą wersję i które splity wybrano do 360M.
 
@@ -213,7 +213,7 @@ Poniższe ustalenia rozszerzają pierwotny przegląd. Ważne: rewizja aktualnej 
 | Dokładne snapshoty pretraining datasets | nieustalone |
 | Wariant FineMath | nieustalony |
 | Wariant Cosmopedia | nieustalony |
-| Dokładny InfiMM-WebMath | nieustalony; nie utożsamiać z InfiMM-WebMath-40B ani InfiWebMath |
+| Identyfikacja źródła InfiMM-WebMath | InfiMM-WebMath-40B identified; exact training-time snapshot/text extraction unresolved |
 | SFT: Smol-SmolTalk | źródło i publiczny commit ustalone; training-time revision i upstream lineage nieustalone |
 | DPO: UltraFeedback | publiczna karta/commity ustalone; training-time revision i upstream rights nieustalone |
 | Stack-Edu file-level licensing and SWHID list | nieustalone |
@@ -239,7 +239,7 @@ Poniższe ustalenia rozszerzają pierwotny przegląd. Ważne: rewizja aktualnej 
 
 ## 9. Końcowy wniosek po dodatkowej weryfikacji
 
-Kontrola publicznych źródeł została rozszerzona do kart, historii commitów, deklaracji licencji i polityk źródeł upstream. Nie udało się jednak odtworzyć dokładnego data bill of materials użytego w treningu 360M. W szczególności nie znamy wszystkich trening-time dataset revisions, proporcji i konfiguracji, wariantu FineMath/Cosmopedia, właściwej identyfikacji InfiMM-WebMath ani pełnego manifestu SWHID dla Stack-Edu.
+Kontrola publicznych źródeł została rozszerzona do kart, historii commitów, deklaracji licencji i polityk źródeł upstream. Nie udało się jednak odtworzyć dokładnego data bill of materials użytego w treningu 360M. W szczególności nie znamy wszystkich trening-time dataset revisions, proporcji i konfiguracji, wariantu FineMath/Cosmopedia, dokładnego training-time snapshotu/tekstowej ekstrakcji InfiMM-WebMath-40B ani pełnego manifestu SWHID dla Stack-Edu.
 
 W konsekwencji ten audyt **nie zamyka przeglądu licencji**. Zachować `review_required`; nie zmieniać manifestu, allowlisty, technicznej gotowości, zakresów admission ani stanu turniejów.
 
