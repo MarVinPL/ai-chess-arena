@@ -61,7 +61,8 @@ class CandidateDownloadTests(unittest.TestCase):
             {'rfilename':'unknown.gguf','size':4},
         ]}
         with patch.object(downloads.audit,'_candidate',return_value={'repo_id':'org/model','revision':REV}), \
-             patch.object(downloads.audit,'_request',return_value=json.dumps(info).encode()):
+             patch.object(downloads.audit,'_request',return_value=json.dumps(info).encode()), \
+             patch.object(downloads,'_free_bytes',return_value=10*1024**3):
             result=downloads.list_files('hf:org/model')
         self.assertEqual([x['name'] for x in result['files']],['model.gguf'])
         self.assertEqual(result['files'][0]['sha256'],SHA)

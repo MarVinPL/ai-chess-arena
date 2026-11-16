@@ -24,6 +24,12 @@ class DownloadError(ValueError): pass
 
 def _now(): return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
+def _free_bytes():
+    probe=STAGING_DIR
+    while not probe.exists() and probe!=probe.parent:
+        probe=probe.parent
+    return shutil.disk_usage(probe).free
+
 def list_files(catalog_id: str):
     item = audit._candidate(catalog_id)
     repo = item['repo_id']; revision = item.get('revision') or item.get('audited_revision')
@@ -41,7 +47,7 @@ def list_files(catalog_id: str):
         match=re.fullmatch(r'(?:sha256:)?([0-9a-fA-F]{64})',oid)
         if not match: continue
         files.append({'name':name,'size_bytes':size,'sha256':match.group(1).lower(),'revision':revision})
-    return {'catalog_id':catalog_id,'repo_id':repo,'revision':revision,'files':files,'free_bytes':shutil.disk_usage(STAGING_DIR.parent).free if STAGING_DIR.parent.exists() else shutil.disk_usage('/var/lib/ai-chess-arena').free}
+    return {'catalog_id':catalog_id,'repo_id':repo,'revision':revision,'files':files,'free_bytes':_free_bytes()}
 
 class _Redirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
