@@ -1,6 +1,6 @@
 """Small, dependency-free password login and signed-cookie sessions for the Arena web UI."""
 from __future__ import annotations
-import base64, getpass, hashlib, hmac, ipaddress, os, secrets, sys, threading, time
+import base64, getpass, hashlib, hmac, ipaddress, os, re, secrets, sys, threading, time
 from http.cookies import SimpleCookie
 
 COOKIE_NAME = "arena_session"
@@ -55,13 +55,23 @@ def verify_password(password):
     return hmac.compare_digest(actual, expected)
 
 def login_allowed(remote_key, now=None):
+    # Atomically reserve an attempt before password derivation to prevent
+    # concurrent requests from bypassing the per-client limit.
     now = time.monotonic() if now is None else now
     with _failures_lock:
         started, count = _failures.get(remote_key, (now, 0))
         if now - started >= LOGIN_WINDOW_SECONDS:
-            _failures.pop(remote_key, None)
-            return True
-        return count < LOGIN_MAX_FAILURES
+            started, count = now, 0
+        if count >= LOGIN_MAX_FAILURES:
+            return False
+        if remote_key not in _failures and len(_failures) >= 4096:
+            for key, (stamp, _) in list(_failures.items()):
+                if now - stamp >= LOGIN_WINDOW_SECONDS:
+                    _failures.pop(key, None)
+            while len(_failures) >= 4096:
+                _failures.pop(next(iter(_failures)))
+        _failures[remote_key] = (started, count + 1)
+        return True
 
 def record_failure(remote_key, now=None):
     now = time.monotonic() if now is None else now
@@ -97,7 +107,6 @@ def check_login(username, password, remote_key):
     if user_ok and password_ok:
         clear_failures(remote_key)
         return True, "ok"
-    record_failure(remote_key)
     return False, "invalid_credentials"
 
 def create_session_token(username, now=None):
@@ -141,10 +150,12 @@ def origin_allowed(origin):
 
 def generate_env_file(path):
     username = input("Login [arena]: ").strip() or "arena"
-    if not username or any(ch.isspace() for ch in username):
-        raise SystemExit("Login nie może być pusty ani zawierać białych znaków")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", username):
+        raise SystemExit("Login może zawierać tylko litery ASCII, cyfry, kropkę, podkreślenie i myślnik")
     password = getpass.getpass("Nowe hasło (minimum 16 znaków): ")
     confirmation = getpass.getpass("Powtórz hasło: ")
+    if len(password) > 1024:
+        raise SystemExit("Hasło jest zbyt długie (maksymalnie 1024 znaki)")
     if not hmac.compare_digest(password, confirmation):
         raise SystemExit("Hasła nie są identyczne")
     password_hash = hash_password(password)
