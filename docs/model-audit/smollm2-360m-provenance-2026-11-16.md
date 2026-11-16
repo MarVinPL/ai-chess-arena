@@ -166,3 +166,79 @@ Interpretacja: `source_listed` oznacza, że źródło wymienia dataset w opisie 
 - Nie dotykano `/home/debian/ai-agent/models`.
 - Nie użyto płatnych usług.
 - Ten raport nie jest zgodą na dalsze użycie modelu.
+
+
+## 8. Uzupełniająca weryfikacja źródeł — 2026-11-16
+
+Poniższe ustalenia rozszerzają pierwotny przegląd. Ważne: rewizja aktualnej karty/repozytorium nie jest automatycznie rewizją używaną podczas treningu modelu. Status `revision_observed` oznacza tylko publicznie widoczny commit źródła.
+
+### 8.1 Rewizje kart i repozytoriów
+
+| Źródło | Publicznie widoczna rewizja | Co potwierdza | Czego nie potwierdza |
+|---|---|---|---|
+| `HuggingFaceTB/smol-smoltalk` | karta `f73fe85`; upload danych `f80219b` | opis SFT i powiązanie z 360M-Instruct | snapshot użyty w finalnym treningu |
+| `HuggingFaceTB/dclm-edu` | karta `dbad8ad`; dane `c09e73a` | deklaracja CC-BY-4.0, użycie do SmolLM2-135M/360M | dokładny snapshot/proporcja i filtr treningowy |
+| `HuggingFaceTB/stack-edu` | README `eeec5ca`; dane są rozdzielone na katalogi językowe z własną historią | 125B-tokenowy korpus identyfikatorów SWHID pochodzący z The Stack v2 | dokładne pliki/SWHID i rewizja użyta w treningu |
+| `HuggingFaceTB/finemath` | karta `e92b25a`; dane `finemath-3plus` `a7dd0df` | konfiguracje FineMath-3+ i 4+, ODC-By 1.0 oraz Common Crawl terms | wybór wariantu w treningu 360M |
+| `HuggingFaceTB/cosmopedia` | karta `0ae6ec6`; katalog danych `70d58a8` | publiczna wersja v0.1, Apache-2.0 | wersja/splity użyte w treningu; v0.2 jest osobno w smollm-corpus |
+| `HuggingFaceH4/ultrafeedback_binarized` | karta `3949bf5`; dane `2a3fb93` | MIT tag, wyjaśnienie chosen/rejected i użycia DPO | użyty snapshot i pełne upstream rights dla wszystkich odpowiedzi |
+| `HuggingFaceFW/fineweb-edu` | wersje karty wymieniają v1.0–v1.4 i snapshoty Common Crawl | źródło klasyfikatora edukacyjności i wersjonowanie crawl | dokładna wersja klasyfikatora/snapshotów wykorzystana przy DCLM dla 360M |
+| `HuggingFaceFW/fineweb-edu-classifier` | README `284663c` | publiczna historia modelu klasyfikującego | rewizja modelu klasyfikatora użyta do przygotowania danych 360M |
+| `HuggingFaceTB/SmolLM2-360M-Instruct` | karta z rewizją bazową; plik LICENSE dodany w `cbcad7f` | deklaracja Apache-2.0 i istnienie pliku licencji | pełne dane treningowe |
+| `QuantFactory/SmolLM2-360M-Instruct-GGUF` | plik Q4_K_M uploadowany w commicie `25eef03` | pochodzenie konkretnego pliku z repozytorium GGUF; zgodność prefiksu z rewizją w manifeście | niezależne potwierdzenie SHA-256 w tej aktualizacji |
+
+### 8.2 Dodatkowe korekty i zastrzeżenia
+
+**DCLM-Edu:** oficjalna karta opisuje zbiór jako filtrowaną wersję DCLM z użyciem FineWeb-Edu educational classifier. Podaje, że zbiór był użyty do SmolLM2-135M i 360M, deklaruje CC-BY-4.0 oraz opisuje progi punktacji. Nie ustala jednak kompletnej konfiguracji ani dokładnego snapshotu użytego w finalnym treningu. Dodatkowa karta/historia zawiera też ablation 360M na 200B tokenów z DCLM, FineWeb-Edu i DCLM-Edu; nie należy mylić tej ablation z pełnym 4T-tokenowym treningiem.
+
+**FineMath:** karta rozróżnia FineMath-3+ (34B tokenów) i FineMath-4+ (9.6B tokenów, podzbiór 3+). Wzmianka o FineMath w recipe 360M nie wskazuje jednoznacznie, który wariant był użyty. Nie wybierać wariantu w rejestrze bez dowodu.
+
+**InfiMM-WebMath:** odnalezione repozytorium `Infi-MM/InfiMM-WebMath-40B` ma własną deklarację ODC-By, ale nie potwierdzono, że jest to dokładny dataset/wariant wskazany w SmolLM2 recipe. FineMath zawiera także `InfiWebMath-3+`; nie utożsamiać nazw `InfiMM-WebMath` i `InfiWebMath` bez dowodu. Wartość licencji i rewizji dla źródła użytego w 360M pozostaje nieustalona.
+
+**Cosmopedia:** publiczne repozytorium `HuggingFaceTB/cosmopedia` to v0.1 z Apache-2.0. Karta wskazuje, że v0.2 znajduje się w oddzielnym `HuggingFaceTB/smollm-corpus`. Nie ma dowodu, którą wersję i które splity wybrano do 360M.
+
+**UltraFeedback:** karta opisuje 64k promptów, po cztery odpowiedzi wygenerowane przez różne modele (otwarte i proprietary), ocenione przez GPT-4; binarizacja tworzy chosen/rejected. MIT tag repozytorium nie jest samodzielnym dowodem praw do każdego promptu i completion. Dokładny snapshot UltraFeedback użyty w DPO SmolLM2 pozostaje nieustalony.
+
+**FineWeb-Edu:** karta opisuje wersjonowanie v1.0–v1.4 i konkretne snapshoty Common Crawl. W małym model recipe źródło jest wskazane jako classifier do filtrowania DCLM. Nie dopisywać FineWeb-Edu jako bezpośredniego korpusu finalnego treningu 360M bez dodatkowego dowodu.
+
+**The Stack v2 / Stack-Edu:** BigCode opisuje usuwanie repozytoriów po opt-out i wymóg korzystania z najnowszej dozwolonej wersji. Stack-Edu zawiera SWHID, a nie kod. Software Heritage ma własną politykę usuwania originów/snapshotów; nie jest to dowód automatycznego, natychmiastowego usunięcia każdego pojedynczego obiektu z każdego pochodnego datasetu. Brak manifestu SWHID użytego w treningu uniemożliwia sprawdzenie, czy konkretny zestaw odpowiadał właściwej wersji The Stack v2 i czy późniejsze opt-outy zostały obsłużone.
+
+### 8.3 Stan zamknięcia braków
+
+| Obszar | Wynik po partiach kontrolnych |
+|---|---|
+| Identyfikacja publicznych kart i deklarowanych licencji | sprawdzona |
+| Publiczne rewizje części kart i danych | częściowo ustalone; nie są dowodem rewizji treningowej |
+| Pretraining recipe dla 360M | potwierdzone na poziomie publikacji / kart |
+| Dokładne snapshoty pretraining datasets | nieustalone |
+| Wariant FineMath | nieustalony |
+| Wariant Cosmopedia | nieustalony |
+| Dokładny InfiMM-WebMath | nieustalony; nie utożsamiać z InfiMM-WebMath-40B ani InfiWebMath |
+| SFT: Smol-SmolTalk | źródło i publiczny commit ustalone; training-time revision i upstream lineage nieustalone |
+| DPO: UltraFeedback | publiczna karta/commity ustalone; training-time revision i upstream rights nieustalone |
+| Stack-Edu file-level licensing and SWHID list | nieustalone |
+| Dokładne proporcje, filtry i token mix | nieustalone |
+| Ogólny status licencji | `review_required` |
+
+### 8.4 Źródła dodatkowej weryfikacji
+
+- Smol-SmolTalk card/history: https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk/commits/main
+- DCLM-Edu card/history: https://huggingface.co/datasets/HuggingFaceTB/dclm-edu/commits/main
+- Stack-Edu card/history: https://huggingface.co/datasets/HuggingFaceTB/stack-edu/commits/main
+- FineMath card/history: https://huggingface.co/datasets/HuggingFaceTB/finemath/commits/main
+- Cosmopedia card/history: https://huggingface.co/datasets/HuggingFaceTB/cosmopedia/commits/main
+- UltraFeedback card/history: https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized/commits/main
+- FineWeb-Edu card: https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu
+- FineWeb-Edu classifier history: https://huggingface.co/HuggingFaceFW/fineweb-edu-classifier/commits/main
+- SmolLM2 base model license/history: https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct
+- GGUF file history: https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/commits/79a458dacceaf3605eb8924d6d85bb6fa391a0ad
+- BigCode The Stack v2 terms: https://www.bigcode-project.org/docs/about/the-stack/
+- The Stack v2 dataset versions: https://huggingface.co/datasets/bigcode/the-stack-v2
+- Software Heritage content policy: https://www.softwareheritage.org/legal/content-policy/
+- Software Heritage removal algorithm: https://docs.softwareheritage.org/devel/swh-alter/removal-algorithm.html
+
+## 9. Końcowy wniosek po dodatkowej weryfikacji
+
+Kontrola publicznych źródeł została rozszerzona do kart, historii commitów, deklaracji licencji i polityk źródeł upstream. Nie udało się jednak odtworzyć dokładnego data bill of materials użytego w treningu 360M. W szczególności nie znamy wszystkich trening-time dataset revisions, proporcji i konfiguracji, wariantu FineMath/Cosmopedia, właściwej identyfikacji InfiMM-WebMath ani pełnego manifestu SWHID dla Stack-Edu.
+
+W konsekwencji ten audyt **nie zamyka przeglądu licencji**. Zachować `review_required`; nie zmieniać manifestu, allowlisty, technicznej gotowości, zakresów admission ani stanu turniejów.
