@@ -52,3 +52,40 @@ Rollback requires separate approval. Stop only ai-chess-arena.service, restore
 the application/database snapshots according to the deployment runbook, and
 verify the API and SQLite integrity before any tournament is started. Never
 stop or restart sentinelx-cloud-core.service as part of Arena rollback.
+
+## SQLite database path and rollback journal
+
+SQLite in the default `DELETE` journal mode creates its rollback journal beside
+the resolved database file. Granting `ReadWritePaths` only to a database file
+or to a symlink in the release worktree is insufficient when that symlink
+points into a different persistent directory. The service must have a
+`ReadWritePaths` entry covering the **resolved parent directory** of the
+database file. Prefer a dedicated data directory (for example,
+`/home/debian/ai-chess-arena-data`) that contains only the Arena database and
+its SQLite sidecar files. Do not grant write access to an old release worktree
+or to all of `/home/debian` merely to let SQLite create its journal. The
+`zz-arena-sqlite-storage.conf.example` file shows the narrow systemd drop-in
+entry; it is only a template and is not installed automatically.
+
+Before deployment, resolve the configured database path and compare its parent
+with the effective unit `ReadWritePaths` values. The helper below checks the
+symlink target rather than the symlink's location:
+
+```sh
+DB_PATH=/home/debian/ai-chess-arena-live-46713c0/arena.sqlite3
+mapfile -t RW_PATHS < <(systemctl show ai-chess-arena.service -p ReadWritePaths --value | tr ' ' '\n')
+ARGS=()
+for path in "${RW_PATHS[@]}"; do
+  [ -n "$path" ] && ARGS+=(--read-write-path "$path")
+done
+python3 deploy/systemd/check_sqlite_writable_path.py --database "$DB_PATH" "${ARGS[@]}"
+```
+
+A failing check means the database must be placed in a dedicated persistent
+data directory and that directory added to a reviewed drop-in before a
+database-writing feature is used. Moving the live database and changing its
+symlink require a separate, backed-up, approved maintenance operation. Do not
+weaken
+`ProtectHome=read-only`, `ProtectSystem=full`, or the model-directory isolation
+to work around this. Installing a drop-in, reloading systemd, and restarting
+the service remain separate, explicitly approved operational steps.
