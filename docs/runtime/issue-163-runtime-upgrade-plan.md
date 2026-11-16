@@ -36,10 +36,11 @@ Oficjalne llamafile v0.10.6 deklaruje aktualizację do llama.cpp b10441; nie osi
 
 - binarium planowane w `/opt/ai-chess-arena/runtimes/llama.cpp-b10830/bin/llama-server`;
 - API `http://127.0.0.1:8089` — osobny port, bez kolizji z aktywnym `8088`;
-- loopback-only, jeden slot (`-np 1`), brak Web UI, jeden plik GGUF;
+- loopback-only, jeden slot (`-np 1`), CPU-only (`-ngl 0`), tryb offline (`--offline`), brak Web UI i warmup, jeden plik GGUF;
+- flagi CLI zostały sprawdzone w README upstream przypiętym do commitu wprowadzającego `spark2_5`;
 - builder zwraca argv i **nie wykonuje** komendy, nie pobiera plików i nie autoryzuje runtime.
 
-Wymagany kontrakt HTTP do późniejszej weryfikacji na binarium testowym:
+Kontrakt HTTP zweryfikowany testami na syntetycznych payloadach (bez serwera i wag); testy nie dowodzą jeszcze zgodności konkretnego binarium:
 
 1. `GET /health` → HTTP 200 po gotowości;
 2. `POST /v1/chat/completions` → JSON `choices[0].message.content` i opcjonalne `usage.completion_tokens`;
@@ -59,7 +60,7 @@ Profil nie jest importowany przez `engine_runner.py`, `server.py` ani ścieżkę
 
 ## Testy i bramki
 
-W tym PR wolno uruchamiać tylko testy jednostkowe/mockowane oraz statyczne kontrole. Nie uruchamiać modelu, nie wykonywać inferencji, benchmarku ani turnieju. Nie pobierać/instalować binariów na VPS i nie kompilować na VPS.
+W tym PR wolno uruchamiać tylko testy jednostkowe/mockowane oraz statyczne kontrole. Testy sprawdzają argv, odpowiedź `GET /health`, minimalny kształt `POST /v1/chat/completions`, opcjonalne usage i odrzucanie błędnych statusów/JSON. Nie uruchamiać modelu, nie wykonywać inferencji, benchmarku ani turnieju. Nie pobierać/instalować binariów na VPS i nie kompilować na VPS.
 
 Przed osobnym testem runtime wymagane będą: zaakceptowany PR, przypięty build i checksumy, osobna ścieżka binarium, potwierdzone API/CLI na sztucznym modelu testowym lub fixture bez chronionych wag, audyt SBOM/licencji, snapshot zasobów i osobna jawna zgoda na test jednego modelu. Instalacja/aktywacja/deploy wymaga odrębnej zgody.
 
@@ -71,5 +72,5 @@ Nowy runtime ma pozostać w swoim własnym katalogu. Nie podmieniać istniejące
 
 - [llamafile v0.10.6 release](https://github.com/mozilla-ai/llamafile/releases) — update do llama.cpp b10441.
 - [llama.cpp commit wprowadzający Spark2.5](https://github.com/ggml-org/llama.cpp/commit/3ad1ba7336986d98592d3e28cafd1a406715351f).
-- [llama.cpp server README](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) — CLI i endpointy serwera; przed buildem sprawdzić README z przypiętego commitu, nie z ruchomego master.
+- [llama.cpp server README at the Spark2.5 support commit](https://github.com/ggml-org/llama.cpp/blob/3ad1ba7336986d98592d3e28cafd1a406715351f/tools/server/README.md) — potwierdza `-m`, `--host`, `--port`, `-t`, `-c`, `-np`, `-ngl`, `--offline`, `--no-webui`, `--no-warmup`, `/health` i `/v1/chat/completions`.
 - [Upstream Spark2.5 support discussion](https://github.com/ollama/ollama/issues/18195) — raport potwierdzający testy z oficjalnym buildem b10830.
