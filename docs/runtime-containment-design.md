@@ -37,3 +37,26 @@ The host is small (2 vCPU / approximately 3.7 GiB RAM). A per-job `MemoryMax` an
 ## Current blocker summary
 
 The existing adapter's process group and PID/start-time checks improve lifecycle ownership but do not provide a security sandbox. The runtime process is not yet wired to a worker. Do not mark Issue #157 complete or merge/deploy the executor until this containment boundary, recovery tests, and review are complete.
+
+## Implemented supervisor orchestration prototype (2026-11-17)
+
+The runtime_supervisor module now contains an injected-backend supervisor and a
+SQLite unit-lease store. The lease store records the deterministic per-job unit
+name in a transaction only after the corresponding queue row is already
+running. The supervisor calls the durable persist callback before invoking the
+backend start operation. If the start call fails ambiguously, the lease remains
+recoverable as start_uncertain. Recovery reads only persisted incomplete
+leases and asks the backend to stop each exact validated unit name; it never
+enumerates processes or issues broad process-kill commands.
+
+This remains an orchestration prototype, not an active supervisor:
+- no backend implementation invokes systemd-run or D-Bus;
+- no API/worker path constructs or calls this supervisor;
+- the SQLite lease table is created only when the store is explicitly
+  instantiated, and has not been added to the production database;
+- no systemd unit, account, ACL, cgroup, network or production setting changed;
+- backend stop() must still stop the exact unit and verify its cgroup is empty.
+
+Tests use a fake backend and temporary SQLite databases, including persistence
+failure, ambiguous start, exact-unit recovery, invalid unit names and
+non-running queue rows. They do not start a systemd unit or a model process.
