@@ -110,3 +110,18 @@ The current branch now adds a deny-by-default gate before reading the request bo
 - Unit tests cover spoofed headers, caller-supplied actor data, malformed identities, missing actor rejection, and HTTP 403 before request-body reads.
 
 **Important limitation:** there is not yet an authentication middleware that sets `_arena_verified_actor`. Therefore these four API mutation routes are intentionally unavailable until a separately reviewed application login/session or trusted local IPC identity mechanism is implemented. The gate is a protective deny-by-default control, not a completed authentication system.
+
+
+## HTTP and panel integration (Issue #136)
+
+The authenticated panel exposes:
+
+- `GET /api/model-permissions`: returns requests and their append-only event history.
+- `POST /api/model-permissions/request`: creates a pending request. Required fields are `model_id`, `repo_id`, full `revision`, `artifact_sha256`, `scope`, `reason`, and `confirm: true`.
+- `POST /api/model-permissions/decision`: applies `approve`, `reject`, or `revoke` to a request ID with `confirm: true`; reject/revoke require a reason.
+
+Both POST routes pass the authenticated `arena_auth` session username as the actor. The existing handler rejects unauthenticated requests and disallowed Origin values before route dispatch. There is no caller-supplied actor field.
+
+The database enforces at most one pending request per exact model/repository/revision/artifact/scope identity with a partial unique index. Decision updates use a status compare-and-set. SQLite triggers reject UPDATE and DELETE against the event table. Older tables are migrated to add the artifact digest before the unique index is created.
+
+The panel displays requests and event history. It does not start downloads, runtime jobs, inference, or tournament admission. `TOURNAMENT` is not grantable through this registry.
