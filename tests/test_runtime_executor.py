@@ -84,6 +84,20 @@ class RuntimeExecutorTests(unittest.TestCase):
                 artifact_key=self.artifact_key, permission_request_id=self.permission_id,
                 actor='test-operator')
 
+    def test_revoked_permission_before_execution_marks_queued_job_failed(self):
+        queued = self.enqueue()
+        with league.connect() as connection:
+            model_permissions.decide_permission(
+                connection, request_id=self.permission_id, action='revoke',
+                confirm=True, reason='Revoked before execution', actor='test-operator')
+        with self.assertRaisesRegex(PermissionError, 'wycofana lub jest nieaktywna'):
+            executor.execute_job(
+                queued['job_id'], runner=lambda *_: {'exit_code': 0},
+                lock_path=self.root / 'lock')
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'failed')
+        self.assertIn('wycofana', job['error'])
+
     def test_no_default_runner_means_no_execution(self):
         queued = self.enqueue()
         with self.assertRaisesRegex(RuntimeError, 'Brak jawnie skonfigurowanego'):

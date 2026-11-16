@@ -201,7 +201,9 @@ def execute_job(job_id: int, *, runner: Callable[[dict, int, Callable[[], bool]]
             return {'job_id': job_id, 'status': 'cancelled', 'error': str(exc)}
         except Exception as exc:
             with league.connect() as connection:
-                connection.execute("UPDATE runtime_test_jobs SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'",
+                # Fail a queued job too when its pre-execution permission or
+                # quarantine checks fail; otherwise it would remain queued forever.
+                connection.execute("UPDATE runtime_test_jobs SET status='failed',finished_at=?,error=? WHERE id=? AND status IN ('queued','running')",
                                    (_now(), str(exc)[:2000], job_id))
             raise
         finally:
