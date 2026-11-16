@@ -9,6 +9,7 @@ import hf_candidate_runtime as preflight
 import league
 import model_permissions
 import runtime_executor as executor
+import server
 
 
 class RuntimeExecutorTests(unittest.TestCase):
@@ -134,3 +135,137 @@ class RuntimeExecutorTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RuntimeExecutorMigrationTests(unittest.TestCase):
+    def test_existing_queue_schema_gains_created_by_column(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "legacy.sqlite3"
+            connection = __import__("sqlite3").connect(db_path)
+            connection.execute("""CREATE TABLE runtime_test_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id INTEGER NOT NULL, repo_id TEXT NOT NULL,
+                revision TEXT NOT NULL, artifact_key TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL, permission_request_id INTEGER NOT NULL,
+                status TEXT NOT NULL, timeout_seconds INTEGER NOT NULL,
+                queued_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT, error TEXT
+            )""")
+            executor._init(connection)
+            columns = {row[1] for row in connection.execute(
+                "PRAGMA table_info(runtime_test_jobs)")}
+            self.assertIn("created_by", columns)
+            connection.close()
+
+
+class RuntimeExecutorHttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import json
+        import os
+        import threading
+        from http.server import ThreadingHTTPServer
+        cls.json = json
+        cls.old_env = {key: os.environ.get(key) for key in (
+            "ARENA_AUTH_USERNAME", "ARENA_AUTH_PASSWORD_HASH",
+            "ARENA_AUTH_SESSION_SECRET", "ARENA_AUTH_ORIGIN")}
+        os.environ.update({
+            "ARENA_AUTH_USERNAME": "arena",
+            "ARENA_AUTH_PASSWORD_HASH": server.arena_auth.hash_password(
+                "runtime-http-test-password-long-enough"),
+            "ARENA_AUTH_SESSION_SECRET": server.arena_auth._b64e(
+                b"runtime-http-test-session-secret-123456789"),
+            "ARENA_AUTH_ORIGIN": "https://arena.148-113-182-137.sslip.io",
+        })
+        cls.origin = os.environ["ARENA_AUTH_ORIGIN"]
+        cls.http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.thread = threading.Thread(target=cls.http.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.http.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.http.shutdown()
+        cls.http.server_close()
+        cls.thread.join(timeout=2)
+        import os
+        for key, value in cls.old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def setUp(self):
+        import sqlite3
+        import tempfile
+        from unittest.mock import patch
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "http.sqlite3"
+        def connect():
+            connection = sqlite3.connect(self.db_path, timeout=10)
+            connection.row_factory = sqlite3.Row
+            return connection
+        self.connect_patch = patch.object(server.league, "connect", side_effect=connect)
+        self.connect_patch.start()
+        token = server.arena_auth.create_session_token("arena")
+        self.cookie = f"{server.arena_auth.COOKIE_NAME}={token}"
+
+    def tearDown(self):
+        self.connect_patch.stop()
+        self.tempdir.cleanup()
+
+    def request(self, path, method="GET", payload=None, authenticated=True,
+                origin=None):
+        import urllib.error
+        import urllib.request
+        headers = {}
+        body = None
+        if payload is not None:
+            body = self.json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        if authenticated:
+            headers["Cookie"] = self.cookie
+        if origin is not None:
+            headers["Origin"] = origin
+        request = urllib.request.Request(
+            self.base + path, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.status, self.json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, self.json.loads(error.read())
+
+    def test_runtime_jobs_get_requires_authenticated_session(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-jobs", authenticated=False)
+        self.assertEqual(status, 401)
+        self.assertIn("Wymagane logowanie", body["error"])
+
+    def test_runtime_jobs_get_returns_queue_without_starting_runtime(self):
+        status, body = self.request("/api/hf-candidates/runtime-jobs")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["jobs"], [])
+        self.assertFalse(body["auto_start"])
+        self.assertFalse(body["runtime_started"])
+
+    def test_runtime_enqueue_rejects_untrusted_origin(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-enqueue", method="POST",
+            payload={}, origin="https://attacker.example")
+        self.assertEqual(status, 403)
+        self.assertIn("spoza dozwolonej domeny", body["error"])
+
+    def test_runtime_enqueue_requires_authenticated_session(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-enqueue", method="POST",
+            payload={}, authenticated=False, origin=self.origin)
+        self.assertEqual(status, 401)
+        self.assertIn("Wymagane logowanie", body["error"])
+
+    def test_runtime_enqueue_rejects_missing_exact_permission_fields(self):
+        status, body = self.request(
+            "/api/hf-candidates/runtime-enqueue", method="POST",
+            payload={}, origin=self.origin)
+        self.assertEqual(status, 422)
+        self.assertTrue(body.get("error"))
