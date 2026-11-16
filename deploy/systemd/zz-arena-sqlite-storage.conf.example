@@ -1,0 +1,5 @@
+# Install only after the Arena database has been moved to this dedicated path.
+# The directory must contain only Arena's persistent SQLite database and its
+# SQLite sidecar files (rollback journal / WAL / SHM).
+[Service]
+ReadWritePaths=/home/debian/ai-chess-arena-data
