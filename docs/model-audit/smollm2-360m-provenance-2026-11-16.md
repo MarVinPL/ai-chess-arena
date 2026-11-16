@@ -345,3 +345,100 @@ Korekta względem wcześniejszych wersji:
 - Pretraining config wskazuje zagregowany `smollm2-corpus`, więc nie daje per-component dataset bill of materials.
 
 Status modelu pozostaje `review_required`. Nie zmieniać manifestu, allowlisty, admission, technical readiness, produkcji ani turniejów na podstawie tej dokumentacji.
+
+
+## 12. Dalsza kontrola: Stack-Edu lineage oraz historyczne recipe SFT/DPO — 2026-11-16
+
+### 12.1 Stack-Edu — zakres pól i ograniczenie identyfikowalności
+
+Publiczna karta `HuggingFaceTB/stack-edu` opisuje dataset jako 125B-tokenowy zbiór edukacyjnego kodu z The Stack v2. Repozytorium Stack-Edu przechowuje identyfikatory SWHID, a nie treść kodu; zawiera też pola:
+- `blob_id` (SWHID pliku),
+- `language`,
+- `repo_name`,
+- `path`,
+- `detected_licenses`,
+- `license_type`,
+- `score` / `int_score`,
+- `length_bytes` i `src_encoding`.
+
+Karta wyjaśnia, że treść plików pobiera się z Software Heritage S3. Licensing section dodana w publicznej historii repozytorium 20 marca 2025 r. stwierdza, że zbiór zawiera kod z repozytoriów o różnych licencjach, a użycie całości lub części musi przestrzegać oryginalnych licencji, w tym atrybucji; provenance ma to ułatwiać.
+
+Istotne porównanie schematów:
+- Stack-Edu publicznie prezentuje SWHID/blob i część metadanych licencyjnych, ale nie pokazuje w swoim schemacie pól `snapshot_id`, `revision_id`, `branch_name`, `visit_date` i `revision_date`.
+- The Stack v2 ma te pola w swoim pełniejszym schemacie.
+- Zatem z pojedynczego rekordu Stack-Edu nie da się bez dodatkowego join/manifestu odtworzyć jednoznacznie snapshotu i rewizji repozytorium źródłowego. `blob_id` identyfikuje treść, nie pełny kontekst repozytorium i moment pobrania.
+- `detected_licenses` jest metadanymi automatycznej detekcji (ScanCode w The Stack v2), a nie gwarancją kompletności lub poprawności prawnej. `license_type` jest klasyfikacją uproszczoną (np. permissive/no_license), a nie decyzją prawną dla każdego pliku.
+
+### 12.2 Chronologia publikacji Stack-Edu — nie utożsamiać z trening-time snapshotem
+
+Publiczna historia repozytorium pokazuje:
+- 19 marca 2025: commit `b5648b91956d46c72dcfd85209b1714c48fa8312` dodał główną kartę Stack-Edu;
+- 20 marca 2025: commit `fdb670bb704c445d32a9d1a3684a15a758b9f913` dodał sekcję Licensing Information;
+- publiczny opis wskazuje na 125B-tokenowy dataset edukacyjnego kodu.
+
+Paper SmolLM2 został opublikowany w lutym 2025 r. Ta chronologia oznacza, że obecnej publicznej karty i jej rewizji nie można traktować jako dowodu snapshotu użytego w treningu. Dataset mógł istnieć wcześniej wewnętrznie lub jako StarCoder2Data, ale dostępne publiczne commity same w sobie nie wykazują, jaki dokładnie zbiór i rewizję wykorzystano w 360M.
+
+Wniosek: wcześniejsze sformułowanie, że Stack-Edu publicznie ma historię commitów, jest poprawne, ale nie wolno sugerować, że wskazany commit jest training-time revision. Status pozostaje `training_snapshot_unverified`.
+
+### 12.3 Historyczne SFT recipe — commit pierwotnego pipeline
+
+Git commit `ae3f44fc7d8003d706752ca06f689574dffa3b76` w `huggingface/alignment-handbook` z 21 listopada 2024 r. dodał pipeline SmolLM2. Pliki w tym konkretnym commicie pokazują:
+- SFT config `recipes/smollm2/sft/config_smol.yaml`;
+- model `HuggingFaceTB/SmolLM2-360M` (komentarz mówi, że ten sam skrypt służy też dla 135M);
+- tokenizer `HuggingFaceTB/SmolLM2-360M-Instruct`;
+- `dataset_mixer: HuggingFaceTB/smol-smoltalk: 1.0`;
+- splity `train` i `test`;
+- 2 epoki, max sequence length 8192;
+- brak `dataset_revision` lub innego immutable pin dla datasetu.
+
+README recipe w tym samym repozytorium mówi wprost, że dla 135M i 360M używa się Smol-SmolTalk do SFT. Jest to silny dowód publicznego recipe przypisanego do wariantów 135M/360M, ale nie dowód, że historyczny run użył dokładnie tego commita repozytorium ani konkretnego snapshotu datasetu.
+
+### 12.4 Historyczne DPO recipe — commit pierwotnego pipeline
+
+Ten sam commit `ae3f44fc7d8003d706752ca06f689574dffa3b76` zawiera:
+- DPO config `recipes/smollm2/dpo/config_smol.yaml`;
+- model wejściowy `loubnabnl/smollm2-360M-sft` (komentarz wskazuje także użycie dla 135M);
+- `dataset_mixer: HuggingFaceH4/ultrafeedback_binarized: 1.0`;
+- splity `train_prefs` i `test_prefs`;
+- 2 epoki, beta 0.5, max length 1024 i max prompt length 512;
+- brak `dataset_revision` lub immutable pin.
+
+README wskazuje wprost, że dla 135M i 360M UltraFeedback jest używany do DPO. To potwierdza publiczne recipe i konfigurację źródłową, nie exact historical data snapshot. Aktualne recipe zmieniło składnię konfiguracji (dataset mixture), ale nadal nie zawiera dataset revision. Nie traktować aktualnej gałęzi `main` jako dowodu snapshotu z 2024 r.
+
+### 12.5 Wniosek po kolejnej partii
+
+| Luka | Nowy dowód | Status |
+|---|---|---|
+| Czy Stack-Edu zawiera identyfikatory SWHID? | tak, `blob_id` / SWHID | confirmed |
+| Czy Stack-Edu ma per-row licencyjne pola? | tak, `detected_licenses`, `license_type` | confirmed |
+| Czy Stack-Edu ma pełny snapshot/revision lineage w swoim schemacie? | nie; brak `snapshot_id` / `revision_id` w publicznym schemacie | confirmed_missing |
+| Czy publiczna karta Stack-Edu jest training-time snapshotem 360M? | nie można tego wykazać; karta/licensing info opublikowane w marcu 2025 | unresolved |
+| Czy historyczne SFT recipe wskazuje dataset i split? | smol-smoltalk, train/test, mixer 1.0 | confirmed_recipe |
+| Czy historyczne DPO recipe wskazuje dataset i split? | ultrafeedback_binarized, train_prefs/test_prefs, mixer 1.0 | confirmed_recipe |
+| Czy historyczne SFT/DPO recipe pinują dataset commit? | nie | confirmed_missing |
+| Czy te recipe dowodzą dokładnego run-time dataset snapshotu? | nie | unresolved |
+
+### 12.6 Źródła
+
+- Stack-Edu card/schema: https://huggingface.co/datasets/HuggingFaceTB/stack-edu
+- Stack-Edu initial public card commit (19 Mar 2025): https://huggingface.co/datasets/HuggingFaceTB/stack-edu/commit/b5648b91956d46c72dcfd85209b1714c48fa8312
+- Stack-Edu licensing addition (20 Mar 2025): https://huggingface.co/datasets/HuggingFaceTB/stack-edu/commit/fdb670bb704c445d32a9d1a3684a15a758b9f913
+- The Stack v2 full schema: https://huggingface.co/datasets/bigcode/the-stack-v2
+- Dataset Viewer API documentation: https://huggingface.co/docs/dataset-viewer/en/quick_start
+- Alignment Handbook initial SmolLM2 pipeline commit (21 Nov 2024): https://github.com/huggingface/alignment-handbook/commit/ae3f44fc7d8003d706752ca06f689574dffa3b76
+- Historical SFT config at that commit: https://raw.githubusercontent.com/huggingface/alignment-handbook/ae3f44fc7d8003d706752ca06f689574dffa3b76/recipes/smollm2/sft/config_smol.yaml
+- Historical DPO config at that commit: https://raw.githubusercontent.com/huggingface/alignment-handbook/ae3f44fc7d8003d706752ca06f689574dffa3b76/recipes/smollm2/dpo/config_smol.yaml
+- Alignment Handbook README at initial recipe commit: https://raw.githubusercontent.com/huggingface/alignment-handbook/ae3f44fc7d8003d706752ca06f689574dffa3b76/recipes/smollm2/README.md
+- Current SFT config: https://github.com/huggingface/alignment-handbook/blob/main/recipes/smollm2/sft/config_smol.yaml
+- Current DPO config: https://github.com/huggingface/alignment-handbook/blob/main/recipes/smollm2/dpo/config_smol.yaml
+
+## 13. Updated fail-closed decision
+
+The audit now distinguishes:
+1. dataset identity and public recipe (confirmed);
+2. public repository/card revisions (observed);
+3. exact training-time immutable dataset revisions and full source-file lineage (not established).
+
+The Stack-Edu schema supplies useful per-file SWHID and license-detection metadata, but does not on its own supply complete source snapshot lineage. The historical SFT/DPO recipe commit confirms the dataset names, mixture weights, and splits but has no dataset commit pins.
+
+No new evidence justifies changing `review_required`. Do not change manifest, allowlist, license verification, technical readiness, admission scope, production, database, roster, or tournament state.
