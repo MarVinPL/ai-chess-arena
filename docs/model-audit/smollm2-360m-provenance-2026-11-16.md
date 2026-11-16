@@ -242,3 +242,106 @@ Poniższe ustalenia rozszerzają pierwotny przegląd. Ważne: rewizja aktualnej 
 Kontrola publicznych źródeł została rozszerzona do kart, historii commitów, deklaracji licencji i polityk źródeł upstream. Nie udało się jednak odtworzyć dokładnego data bill of materials użytego w treningu 360M. W szczególności nie znamy wszystkich trening-time dataset revisions, proporcji i konfiguracji, wariantu FineMath/Cosmopedia, właściwej identyfikacji InfiMM-WebMath ani pełnego manifestu SWHID dla Stack-Edu.
 
 W konsekwencji ten audyt **nie zamyka przeglądu licencji**. Zachować `review_required`; nie zmieniać manifestu, allowlisty, technicznej gotowości, zakresów admission ani stanu turniejów.
+
+
+## 10. Weryfikacja konfiguracji treningowych i doprecyzowanie wniosków — 2026-11-16
+
+### 10.1 Pretraining: oficjalny checkpoint 360M
+
+Odczytano publiczny plik `HuggingFaceTB/SmolLM2-nanotron-ckpt/360M/final/config.yaml`:
+- repozytorium checkpointów: `HuggingFaceTB/SmolLM2-nanotron-ckpt`;
+- commit pliku widoczny na stronie HF: `1dfdc90` (verified);
+- `dataset_folder: datasets/smollm2-corpus`;
+- `dataset_weights: [1.0]`;
+- tokenizer: `HuggingFaceTB/cosmo2-tokenizer`, bez przypiętej rewizji;
+- długość sekwencji: 2048;
+- `train_steps: 2600000`;
+- `learning_rate: 0.003`, WSD/linear decay w końcowej części;
+- folder checkpointu to `360M/final`, a parametry modelu (hidden size 960, 32 warstwy, 15 heads) są zgodne z małym wariantem.
+- Uwaga: pole `run` w tym configu ma wartość `smollm2-1700M`, mimo ścieżki `360M/final` i małej konfiguracji modelu. To wygląda na niespójny opis run metadata; nie należy na tej podstawie zmieniać identyfikacji modelu. Warto zachować jako anomalię pochodzenia configu.
+
+Konfiguracja potwierdza, że właściwy run wskazuje na jeden zagregowany katalog `smollm2-corpus`, nie na listę publicznych datasetów z osobnymi wagami. Nie zawiera manifestu komponentów, snapshotów, wewnętrznych proporcji ani hashy tokenizowanych shardów. Nie można zatem odtworzyć dokładnego BOM pretrainingu z samego checkpoint config.
+
+### 10.2 Identyfikacja InfiMM-WebMath — korekta poprzedniego raportu
+
+Publikacja SmolLM2 w sekcji 3.3.1 cytuje pracę InfiMM-WebMath-40B, a sekcja 6 wymienia InfiMM-WebMath w pojedynczym etapie treningu 135M/360M. Oryginalna praca InfiMM opisuje 40B tekstowych tokenów, 24 mln stron i 85 mln URL-i obrazów; oficjalna karta wskazuje repozytorium `Infi-MM/InfiMM-WebMath-40B` i deklarację ODC-By.
+
+Wniosek poprawiony:
+- rodzina/źródło InfiMM-WebMath jest zidentyfikowana jako InfiMM-WebMath-40B;
+- trening małego modelu jest tekstowym LM, więc nie należy zakładać użycia obrazów tylko dlatego, że oryginalny dataset jest multimodalny;
+- nie potwierdzono, czy wykorzystano surowy komponent tekstowy 40B, czy konkretny przefiltrowany/wyekstrahowany snapshot;
+- nie wolno utożsamiać oryginalnego InfiMM-WebMath-40B z pochodnym `Infi-WebMath-3+` / `Infi-WebMath-4+` w repozytorium FineMath. Paper wymienia InfiMM-WebMath obok FineMath, a nie zamiast niego.
+
+### 10.3 FineMath i Cosmopedia — status wariantów
+
+- FineMath: sekcja 6 wymienia tylko nazwę FineMath; nie wskazuje 3+ ani 4+. Repozytorium treningowe zawiera tokenizację obu wariantów i eksperymenty/ablacje 3+/4+, lecz nie znaleziono configu właściwego runu 360M, który rozstrzygałby wybór. Status: `variant_unverified`.
+- Cosmopedia: sekcja 6 wymienia tylko nazwę Cosmopedia. Publiczna karta `HuggingFaceTB/cosmopedia` opisuje v0.1, a `HuggingFaceTB/smollm-corpus` zawiera Cosmopedia v2. Config 360M wskazuje tylko zagregowany `smollm2-corpus`; nie ma mapowania do wersji ani splitów. Status: `variant_unverified`.
+- Nie przenosić `Cosmopedia v2` z wieloetapowego recipe 1.7B do 360M. Dla 360M paper potwierdza single-stage mix, ale nie określa wersji Cosmopedia.
+
+### 10.4 SFT — oficjalna konfiguracja dla 360M/135M
+
+Repozytorium Hugging Face Alignment Handbook zawiera `recipes/smollm2/sft/config_smol.yaml`:
+- model: `HuggingFaceTB/SmolLM2-360M` (ta sama konfiguracja jest używana również dla 135M);
+- `dataset_name: HuggingFaceTB/smol-smoltalk`;
+- split train/test;
+- `num_train_epochs: 2`;
+- `max_seq_length: 8192`;
+- `dataset_num_proc: 24`;
+- `model_revision: main`;
+- brak `dataset_revision` — rewizja datasetu nie jest immutable-pinned.
+
+To mocniej potwierdza dokładną nazwę datasetu i ustawienia publicznego recipe SFT. Nie dowodzi jednak, że aktualna gałąź `main` jest dokładnie snapshotem z historycznego uruchomienia. Nie znaleziono publicznego training-run manifestu z immutable dataset SHA.
+
+### 10.5 DPO — oficjalna konfiguracja dla 360M/135M
+
+Repozytorium Alignment Handbook zawiera `recipes/smollm2/dpo/config_smol.yaml`:
+- model wejściowy: `loubnabnl/smollm2-360M-sft`;
+- dataset: `HuggingFaceH4/ultrafeedback_binarized`;
+- config: `default`;
+- train split: `train_prefs`;
+- test split: `test_prefs`;
+- kolumny: `chosen`, `rejected`;
+- `num_train_epochs: 2`;
+- brak `dataset_revision` — nie ma immutable pin dla snapshotu UltraFeedback.
+
+Wynik: recipe DPO potwierdza dokładny identyfikator datasetu i splitów, ale nie dokładny commit danych użyty w historycznym runie. Deklaracja MIT na karcie datasetu nie jest równoznaczna z pełnym upstream rights clearance.
+
+### 10.6 Wynik zamknięcia kolejnych luk
+
+| Pytanie | Ustalenie | Status |
+|---|---|---|
+| Jaki dataset path wskazuje checkpoint 360M? | `datasets/smollm2-corpus` (waga 1.0) | confirmed |
+| Czy checkpoint config rozbija pretraining na publiczne datasety? | nie | confirmed_missing |
+| Czy źródło InfiMM jest zidentyfikowane? | InfiMM-WebMath-40B | identified |
+| Czy znany jest exact InfiMM training snapshot/text extraction? | nie | unresolved |
+| Czy znany jest FineMath 3+ vs 4+? | nie | unresolved |
+| Czy znana jest Cosmopedia v0.1 vs v0.2? | nie | unresolved |
+| Czy znamy SFT dataset ID i config? | smol-smoltalk; config_smol.yaml | confirmed |
+| Czy znamy immutable SFT dataset revision? | nie; config wskazuje model main, nie dataset commit | unresolved |
+| Czy znamy DPO dataset ID/config/splits? | ultrafeedback_binarized/default/train_prefs/test_prefs | confirmed |
+| Czy znamy immutable DPO dataset revision? | nie | unresolved |
+| Czy znamy pełne source-lineage komponentów SFT/DPO? | nie | unresolved |
+
+### 10.7 Źródła
+
+- SmolLM2 paper §3.3.1, §3.3.2 i §6: https://arxiv.org/abs/2502.02737
+- Official 360M checkpoint config: https://huggingface.co/HuggingFaceTB/SmolLM2-nanotron-ckpt/blob/main/360M/final/config.yaml
+- Checkpoint repository: https://huggingface.co/HuggingFaceTB/SmolLM2-nanotron-ckpt
+- InfiMM-WebMath-40B paper: https://arxiv.org/abs/2409.12568
+- InfiMM-WebMath-40B dataset: https://huggingface.co/datasets/Infi-MM/InfiMM-WebMath-40B
+- FineMath card/configs: https://huggingface.co/datasets/HuggingFaceTB/finemath
+- Cosmopedia v0.1: https://huggingface.co/datasets/HuggingFaceTB/cosmopedia
+- SmolLM-Corpus / Cosmopedia v2: https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus
+- Alignment Handbook SFT config: https://github.com/huggingface/alignment-handbook/blob/main/recipes/smollm2/sft/config_smol.yaml
+- Alignment Handbook DPO config: https://github.com/huggingface/alignment-handbook/blob/main/recipes/smollm2/dpo/config_smol.yaml
+- Alignment Handbook recipe README: https://github.com/huggingface/alignment-handbook/blob/main/recipes/smollm2/README.md
+
+## 11. Zaktualizowany wniosek
+
+Korekta względem wcześniejszych wersji:
+- InfiMM-WebMath nie jest już oznaczone jako niezidentyfikowane: paper wskazuje InfiMM-WebMath-40B; nierozstrzygnięte pozostają exact snapshot i tekstowa postać użyta w treningu.
+- FineMath i Cosmopedia są potwierdzone na poziomie nazwy, ale warianty nie są potwierdzone.
+- SFT i DPO mają publiczne recipe z dokładnymi identyfikatorami datasetów, splitami i parametrami, ale bez immutable dataset revisions.
+- Pretraining config wskazuje zagregowany `smollm2-corpus`, więc nie daje per-component dataset bill of materials.
+
+Status modelu pozostaje `review_required`. Nie zmieniać manifestu, allowlisty, admission, technical readiness, produkcji ani turniejów na podstawie tej dokumentacji.
