@@ -205,6 +205,15 @@ def db_init():
     hf_candidate_downloads.init_db(DB)
 
 
+def _hf_download_planner_loop():
+    while True:
+        try:
+            plan = hf_candidate_downloads.refresh_plan()
+            print(f"HF download planner refreshed: {plan['summary']}", flush=True)
+        except Exception as exc:
+            print(f"HF download planner refresh failed: {exc}", flush=True)
+        time.sleep(900)
+
 def _failure_pgn(white_name, black_name, move_records, result, termination):
     game = chess.pgn.Game()
     game.headers['Event'] = 'Local AI Chess Arena'
@@ -1813,7 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
-    threading.Thread(target=hf_candidate_downloads.refresh_plan, daemon=True, name='hf-download-planner').start()
+    threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
     _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
     print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
