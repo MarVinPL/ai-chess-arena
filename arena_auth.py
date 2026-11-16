@@ -1,6 +1,6 @@
 """Small, dependency-free password login and signed-cookie sessions for the Arena web UI."""
 from __future__ import annotations
-import base64, getpass, hashlib, hmac, os, secrets, sys, threading, time
+import base64, getpass, hashlib, hmac, ipaddress, os, secrets, sys, threading, time
 from http.cookies import SimpleCookie
 
 COOKIE_NAME = "arena_session"
@@ -74,6 +74,18 @@ def record_failure(remote_key, now=None):
 def clear_failures(remote_key):
     with _failures_lock:
         _failures.pop(remote_key, None)
+
+def client_key(forwarded_for, peer_address):
+    # The backend binds to loopback and is reachable publicly only through Caddy.
+    # Caddy appends the actual client address to X-Forwarded-For; trust its last value.
+    candidate = str(forwarded_for or "").split(",")[-1].strip()
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        try:
+            return str(ipaddress.ip_address(str(peer_address)))
+        except ValueError:
+            return "unknown"
 
 def check_login(username, password, remote_key):
     if not is_configured():
