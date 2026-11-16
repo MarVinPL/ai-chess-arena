@@ -1,0 +1,160 @@
+"""Narrow AF_UNIX API-to-supervisor protocol for runtime job control.
+
+The unprivileged API may identify a job, but cannot supply argv, paths,
+systemd properties, environment variables, or unit names. The privileged
+supervisor must resolve the job from its trusted store and revalidate all
+permissions/artifact pins before acting. No socket is created at import time.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import socketserver
+import struct
+from pathlib import Path
+from typing import Callable
+
+MAX_REQUEST_BYTES = 4096
+MAX_RESPONSE_BYTES = 4096
+_ALLOWED_ACTIONS = {"start", "stop", "status"}
+
+
+class SupervisorIPCError(RuntimeError):
+    pass
+
+
+def _peer_credentials(conn: socket.socket) -> tuple[int, int, int]:
+    if not hasattr(socket, "SO_PEERCRED"):
+        raise SupervisorIPCError("SO_PEERCRED niedostępne; IPC odmawia pracy.")
+    raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    return struct.unpack("3i", raw)
+
+
+def _validate_request(raw: bytes) -> dict:
+    if not raw or len(raw) > MAX_REQUEST_BYTES or not raw.endswith(b"\n"):
+        raise SupervisorIPCError("Nieprawidłowy rozmiar lub framing żądania.")
+    def reject_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise SupervisorIPCError("Powtórzone pole JSON.")
+            result[key] = value
+        return result
+
+    try:
+        request = json.loads(raw[:-1], object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SupervisorIPCError("Niepoprawny JSON żądania.") from exc
+    if not isinstance(request, dict) or set(request) != {"action", "job_id"}:
+        raise SupervisorIPCError("Żądanie zawiera niedozwolone pola.")
+    if not isinstance(request["action"], str) or request["action"] not in _ALLOWED_ACTIONS:
+        raise SupervisorIPCError("Akcja poza allowlist.")
+    if type(request["job_id"]) is not int or request["job_id"] <= 0:
+        raise SupervisorIPCError("Nieprawidłowy identyfikator zadania.")
+    return request
+
+
+class _Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        server = self.server
+        try:
+            _pid, uid, _gid = _peer_credentials(self.connection)
+            if uid != server.allowed_uid:
+                raise SupervisorIPCError("Peer UID poza allowlist.")
+            self.connection.settimeout(server.timeout_seconds)
+            raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
+            request = _validate_request(raw)
+            handler = server.handlers[request["action"]]
+            if not callable(handler):
+                raise SupervisorIPCError("Akcja nie jest skonfigurowana.")
+            result = handler(request["job_id"])
+            response = {"ok": True, "result": result}
+        except Exception as exc:
+            # Do not leak exception text, paths, DB data or command output.
+            response = {"ok": False, "error": type(exc).__name__}
+        encoded = json.dumps(response, separators=(",", ":")).encode() + b"\n"
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            encoded = b'{"ok":false,"error":"response_too_large"}\n'
+        try:
+            self.wfile.write(encoded)
+        except OSError:
+            pass
+
+
+class RuntimeSupervisorIPCServer:
+    def __init__(self, socket_path: str | Path, *, allowed_uid: int,
+                 start: Callable[[int], object], stop: Callable[[int], object],
+                 status: Callable[[int], object], timeout_seconds: float = 3.0,
+                 socket_mode: int = 0o660):
+        self.socket_path = Path(socket_path)
+        self.allowed_uid = int(allowed_uid)
+        self.handlers = {"start": start, "stop": stop, "status": status}
+        self.timeout_seconds = float(timeout_seconds)
+        self.socket_mode = int(socket_mode)
+        if self.allowed_uid < 0 or self.timeout_seconds <= 0:
+            raise SupervisorIPCError("Nieprawidłowa konfiguracja IPC.")
+        if self.socket_mode not in {0o600, 0o660}:
+            raise SupervisorIPCError("Tryb socketu poza dozwoloną listą.")
+        if not all(callable(fn) for fn in self.handlers.values()):
+            raise SupervisorIPCError("Wszystkie handlery muszą być jawnie skonfigurowane.")
+        self._server = None
+
+    def serve_forever(self):
+        if self.socket_path.exists() or self.socket_path.is_symlink():
+            raise SupervisorIPCError("Socket path już istnieje; odmowa nadpisania.")
+        if not self.socket_path.parent.is_dir():
+            raise SupervisorIPCError("Katalog socketu musi być wcześniej przygotowany przez administratora.")
+
+        class Server(socketserver.UnixStreamServer):
+            allow_reuse_address = False
+
+        self._server = Server(str(self.socket_path), _Handler)
+        self._server.allowed_uid = self.allowed_uid
+        self._server.handlers = self.handlers
+        self._server.timeout_seconds = self.timeout_seconds
+        try:
+            os.chmod(self.socket_path, self.socket_mode)
+            self._server.serve_forever(poll_interval=0.1)
+        finally:
+            self._server.server_close()
+            try:
+                self.socket_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def shutdown(self):
+        if self._server is not None:
+            self._server.shutdown()
+
+
+def supervisor_request(socket_path: str | Path, action: str, job_id: int,
+                       *, timeout_seconds: float = 3.0) -> object:
+    if action not in _ALLOWED_ACTIONS or type(job_id) is not int or job_id <= 0:
+        raise SupervisorIPCError("Nieprawidłowe żądanie supervisor IPC.")
+    if timeout_seconds <= 0:
+        raise SupervisorIPCError("Timeout musi być dodatni.")
+    payload = json.dumps({"action": action, "job_id": job_id},
+                         separators=(",", ":")).encode() + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout_seconds)
+        try:
+            client.connect(str(socket_path))
+            client.sendall(payload)
+            stream = client.makefile("rb")
+            try:
+                line = stream.readline(MAX_RESPONSE_BYTES + 1)
+            finally:
+                stream.close()
+        except OSError as exc:
+            raise SupervisorIPCError("Nie można połączyć się z supervisorem.") from exc
+    if not line or len(line) > MAX_RESPONSE_BYTES or not line.endswith(b"\n"):
+        raise SupervisorIPCError("Supervisor zwrócił nieprawidłową odpowiedź.")
+    try:
+        response = json.loads(line[:-1])
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SupervisorIPCError("Supervisor zwrócił niepoprawny JSON.") from exc
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        error = response.get("error", "unknown") if isinstance(response, dict) else "unknown"
+        raise SupervisorIPCError(f"Supervisor odrzucił żądanie: {error}")
+    return response.get("result")
