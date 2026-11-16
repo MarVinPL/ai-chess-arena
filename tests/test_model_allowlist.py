@@ -148,16 +148,21 @@ class ModelAllowlistTests(unittest.TestCase):
         self.assertTrue(tournament_admission_blockers(
             candidate, **{**args, 'tournament_format': 'AI_ENGINE'}))
 
-    def test_missing_and_permanently_excluded_models_fail_closed(self):
-        args = dict(repo_id='repo/model', revision='a' * 40,
-                    license_name='Apache-2.0', license_verified=True,
-                    tournament_format='PURE_AI')
-        self.assertTrue(tournament_admission_blockers(None, model_id=11, **args))
-        for model_id in (9, 10):
-            self.assertTrue(tournament_admission_blockers(
-                {'model_id': model_id, 'status': 'eligible',
-                 'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready'},
-                model_id=model_id, **args))
+    def test_exact_repository_exclusion_is_independent_of_manifest_id(self):
+        args = dict(revision='a' * 40, license_name='Apache-2.0',
+                    license_verified=True, tournament_format='PURE_AI')
+        self.assertTrue(tournament_admission_blockers(None, model_id=11,
+            repo_id='repo/model', **args))
+        eligible = {'model_id': 9, 'status': 'eligible',
+                    'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready',
+                    'technical_blockers': [], 'repo_id': 'repo/model',
+                    'revision': 'a' * 40, 'license_requirements': {'manifest_license': 'Apache-2.0'}}
+        self.assertEqual(tournament_admission_blockers(eligible, model_id=9,
+            repo_id='repo/model', **args), [])
+        for repo in ('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
+                     'mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF'):
+            self.assertTrue(tournament_admission_blockers(eligible, model_id=123,
+                repo_id=repo, **args))
 
     def test_sync_check_detects_stale_and_dirty_consumer_without_mutating(self):
         commit = 'a' * 40

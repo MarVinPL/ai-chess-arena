@@ -90,28 +90,23 @@ class ModelManifestTests(unittest.TestCase):
 
         validate_manifest(payload)
 
-    def test_exclusion_policy_cannot_be_applied_to_other_manifest_entries(self):
-        payload = load_manifest()
-        broken = json.loads(json.dumps(payload))
-        model = next(m for m in broken["models"] if m["model_id"] == 8)
-        model["arena_admission"] = {
-            "status": "excluded", "issue": 71, "download_allowed": False,
-            "runtime_allowed": False, "allowlist_allowed": False,
-            "tournament_allowed": False, "reason": "wrong target"
-        }
-        with self.assertRaises(ManifestError):
-            validate_manifest(broken)
-
-    def test_models_9_and_10_are_explicitly_excluded_and_fail_closed(self):
+    def test_non_admitted_manifest_entries_use_generic_fail_closed_permissions(self):
         payload = load_manifest()
         for model_id in (9, 10):
             item = next(m for m in payload["models"] if m["model_id"] == model_id)
             self.assertEqual(item["license_review_status"], "review_required")
-            self.assertEqual(item["arena_admission"]["status"], "excluded")
-            self.assertFalse(item["arena_admission"]["download_allowed"])
-            self.assertFalse(item["arena_admission"]["runtime_allowed"])
-            self.assertFalse(item["arena_admission"]["allowlist_allowed"])
-            self.assertFalse(item["arena_admission"]["tournament_allowed"])
+            self.assertEqual(item["arena_admission"]["status"], "not_admitted")
+            for field in ("download_allowed", "runtime_allowed", "allowlist_allowed", "tournament_allowed"):
+                self.assertIs(item["arena_admission"][field], False)
+
+        # The validator applies the same rule to any manifest ID, not a special
+        # hard-coded exception for IDs 9 and 10.
+        generic = json.loads(json.dumps(payload))
+        generic_item = next(m for m in generic["models"] if m["model_id"] == 9)
+        generic_item["model_id"] = 11
+        generic_item["arena_admission"]["issue"] = 999
+        validate_manifest(generic)
+
         for field, value in (("download_allowed", True), ("runtime_allowed", True),
                              ("allowlist_allowed", True), ("tournament_allowed", True),
                              ("status", "approved")):
@@ -119,6 +114,16 @@ class ModelManifestTests(unittest.TestCase):
             next(m for m in broken["models"] if m["model_id"] == 9)["arena_admission"][field] = value
             with self.subTest(field=field), self.assertRaises(ManifestError):
                 validate_manifest(broken)
+
+    def test_admission_metadata_is_not_reserved_for_specific_model_ids(self):
+        payload = load_manifest()
+        item = next(m for m in payload["models"] if m["model_id"] == 8)
+        item["arena_admission"] = {
+            "status": "not_admitted", "download_allowed": False,
+            "runtime_allowed": False, "allowlist_allowed": False,
+            "tournament_allowed": False, "reason": "Independent review pending.",
+        }
+        validate_manifest(payload)
 
     def test_draft_head_cannot_be_used_as_the_target_model(self):
         payload = load_manifest()

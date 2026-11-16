@@ -10,6 +10,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 from model_manifest import validate_manifest
+from model_exclusions import is_excluded_model_identity
 
 ALLOWLIST_PATH = Path(__file__).resolve().parent / 'manifests' / 'model-allowlist.json'
 MANIFEST_PATH = Path(__file__).resolve().parent / 'manifests' / 'huggingface-models.json'
@@ -114,9 +115,8 @@ def validate_allowlist(payload: dict, manifest: dict | None = None) -> None:
                 raise AllowlistError(f'Licencja allowlisty nie zgadza się z manifestem dla model_id={model_id}')
             if license_info.get('manifest_audit_status') != source.get('license_review_status'):
                 raise AllowlistError(f'Status audytu allowlisty nie zgadza się z manifestem dla model_id={model_id}')
-            admission = source.get('arena_admission') or {}
-            if admission.get('status') == 'excluded' and status != 'blocked':
-                raise AllowlistError(f'Wykluczony model {model_id} musi mieć status blocked')
+            if is_excluded_model_identity(source=f'https://huggingface.co/{repo}', metadata={'repo_id': repo}) and status != 'blocked':
+                raise AllowlistError(f'Wykluczone repozytorium {repo} musi mieć status blocked')
             if status == 'eligible' and source.get('license_review_status') != 'verified_permissive':
                 raise AllowlistError(f'Model {model_id} nie ma audytu verified_permissive')
             if status == 'restricted' and source.get('license_review_status') != 'verified_restricted':
@@ -164,8 +164,8 @@ def tournament_admission_blockers(entry: dict | None, *, model_id: int,
                                   tournament_format: str) -> list[str]:
     """Fail-closed admission gate for one exact model version and tournament scope."""
     reasons = []
-    if model_id in {9, 10}:
-        return ['model jest trwale wyłączony z AI Chess Arena (Issue #71)']
+    if is_excluded_model_identity(source=f'https://huggingface.co/{repo_id}' if isinstance(repo_id, str) else '', metadata={'repo_id': repo_id}):
+        return ['repozytorium modelu jest wyłączone z AI Chess Arena na podstawie reguły bezpieczeństwa']
     if not isinstance(entry, dict):
         return ['brak decyzji modelu w allowliście']
     if entry.get('model_id') != model_id:
