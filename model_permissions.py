@@ -49,9 +49,6 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_model_permission_requests_model
             ON model_permission_requests(model_id, id);
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_model_permission_pending_identity
-            ON model_permission_requests(model_id,repo_id,revision,artifact_sha256,scope)
-            WHERE status='pending';
         CREATE TABLE IF NOT EXISTS model_permission_events (
             id INTEGER PRIMARY KEY,
             request_id INTEGER NOT NULL,
@@ -80,6 +77,12 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
                            "artifact_sha256", "TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(connection, "model_permission_events",
                            "artifact_sha256", "TEXT NOT NULL DEFAULT ''")
+    # Create this only after migrating older tables that predate artifact_sha256.
+    connection.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_model_permission_pending_identity
+        ON model_permission_requests(model_id,repo_id,revision,artifact_sha256,scope)
+        WHERE status='pending'
+    """)
 
 
 def _now() -> str:
