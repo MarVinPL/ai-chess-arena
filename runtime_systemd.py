@@ -56,6 +56,7 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         raise RuntimeUnitPolicyError("Artefakt musi pochodzić z katalogu przekazania przypisanego do tego zadania.")
     if output != f"/run/arena-runtime/job-{job_id}":
         raise RuntimeUnitPolicyError("Katalog zapisu musi być prywatnym katalogiem /run dla tego zadania.")
+    runtime_root = "/usr/local/lib/ai-chess-arena-runtime"
     if artifact == output or artifact.startswith(output.rstrip("/") + "/"):
         raise RuntimeUnitPolicyError("Artefakt nie może znajdować się wewnątrz katalogu zapisu runtime.")
 
@@ -97,6 +98,7 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("RestrictNamespaces", "yes"),
         ("SystemCallArchitectures", "native"),
         ("RestrictAddressFamilies", "AF_UNIX"),
+        ("WorkingDirectory", output),
         ("KillMode", "control-group"),
         ("Delegate", "no"),
         ("MemoryMax", str(memory_max_bytes)),
@@ -106,9 +108,9 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("LimitNOFILE", "64"),
         ("RuntimeMaxSec", str(runtime_seconds)),
         ("UMask", "0077"),
-        ("ReadOnlyPaths", artifact),
+        ("ReadOnlyPaths", f"{artifact} {runtime_root}"),
         ("ReadWritePaths", output),
-        ("InaccessiblePaths", "/home /root /etc /var/lib/ai-chess-arena"),
+        ("InaccessiblePaths", "/home /root /etc/ai-chess-arena /etc/ssh /etc/ssl/private /run/systemd /run/dbus /run/credentials /var/lib/ai-chess-arena"),
     )
     return RuntimeUnitSpec(
         unit_name=f"{_UNIT_PREFIX}{job_id}.service",

@@ -45,9 +45,14 @@ def test_policy_requires_separate_unprivileged_identity_and_strict_isolation():
 
 def test_policy_mounts_only_one_read_only_artifact_and_private_output():
     props = build().as_dict()
-    assert props["ReadOnlyPaths"] == "/var/lib/arena-handoff/job-42/model.gguf"
+    assert props["ReadOnlyPaths"] == (
+        "/var/lib/arena-handoff/job-42/model.gguf /usr/local/lib/ai-chess-arena-runtime"
+    )
     assert props["ReadWritePaths"] == "/run/arena-runtime/job-42"
+    assert props["WorkingDirectory"] == "/run/arena-runtime/job-42"
     assert "/var/lib/ai-chess-arena" in props["InaccessiblePaths"]
+    assert "/etc/ai-chess-arena" in props["InaccessiblePaths"]
+    assert "/home" in props["InaccessiblePaths"]
 
 
 @pytest.mark.parametrize("field,value", [
