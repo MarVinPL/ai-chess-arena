@@ -43,7 +43,8 @@ The default backend listens on `127.0.0.1:8090`. Keep it bound to loopback; use 
 - Live diagnostics are persisted as JSON Lines in `logs/model-responses.jsonl` (model outputs) and `logs/recent-events.jsonl` (status/event history). The `/api/live` response restores the latest entries after a backend restart; the logs are local runtime data, excluded from Git, and compacted when they exceed 1 MiB.
 - The shared `/home/debian/ai-agent/models` directory is outside the Arena's ownership boundary. Never scan, modify, delete, or use it as a fallback model directory.
 - Cleanup may target only Arena-owned files explicitly marked `managed_copy=1`; it must verify that a file is not in use before removal.
-- Model downloads require a pinned source, expected size, SHA-256, and explicit licence verification. Adding a model to the catalogue does not automatically download or run it.
+- Model artifacts are downloaded by the VPS directly from the upstream source after a separate explicit approval; they are not downloaded through a developer workstation and are never stored in Git. The VPS must use the reviewed immutable revision, verify expected size and SHA-256 before activation, and store files only in the Arena-owned `managed-models/` directory. `/home/debian/ai-agent/models` is outside the Arena boundary and must never be used as a source, destination, or fallback.
+- A positive licence review is necessary for the download workflow but does not trigger a download. Each selected model/artifact requires separate approval; failed or incomplete source, revision, licence, size, or checksum verification must fail closed. Adding a model to the catalogue does not automatically download or run it.
 - The runner handles one model process at a time. Tournament games have no hard response-time limit; inference time is recorded in results.
 
 ## Llamafile watchdog
