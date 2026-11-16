@@ -110,7 +110,10 @@ button.stop{background:#744b4b;border-color:#986363}
  .tournament-card__actions button{flex:1 1 100%}
 }
 
+
+.hf-shortcut{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-8px 0 18px;padding:10px 13px;border:1px solid #28645f;border-radius:11px;background:#102b2c;color:#d8f4ef;font-size:13px}.hf-shortcut a{color:#8ce5d9;font-weight:700;text-decoration:none}.hf-dashboard{margin:12px 0 18px;padding:14px;border:1px solid #38605e;border-radius:13px;background:linear-gradient(145deg,#122a30,#101f29)}.hf-dashboard__heading{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.hf-dashboard__heading h4{margin:0}.hf-dashboard__metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}.hf-dashboard__metrics .metric{padding:10px}.hf-dashboard__metrics .metric strong{font-size:18px}.hf-dashboard__columns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.hf-dashboard__box{min-width:0;padding:10px;border:1px solid #2b4852;border-radius:9px;background:#0d1b24}.hf-dashboard__box h5{margin:0 0 6px}.hf-dashboard h5{margin:12px 0 6px}.hf-queue-item{padding:9px 10px;border-top:1px solid #29414b;overflow-wrap:anywhere}.hf-queue-item strong{display:block;color:#e8f1f0}.hf-queue-item small{display:block;color:#9eb4b6;margin-top:4px}.hf-status-blocked{color:#ffd0a1}.hf-status-done{color:#9ce3c4}@media(max-width:650px){.hf-dashboard__metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.hf-dashboard__columns{grid-template-columns:1fr}.hf-dashboard{padding:11px}}
 </style></head><body><div class="wrap"><div class="top"><div><h1>♟ Local AI Chess Arena</h1><div class="sub">Lokalne modele GGUF • tryb Pure AI • bez płatnych API</div></div><div style="display:flex;align-items:center;gap:8px"><div id="online" class="pill">Sprawdzanie modelu…</div><button id="logout" type="button" class="secondary">Wyloguj</button></div></div>
+<div id="hf-quarantine-shortcut" class="hf-shortcut" aria-live="polite"><span><strong>Modele HF</strong> · <span id="hf-shortcut-count">Odczytuję…</span></span><a href="#hf-quarantine-dashboard">Otwórz kolejkę audytu i testów ↓</a></div>
 <div class="layout"><section class="panel"><div class="board-topline"><span class="board-kicker">Chess Arena Pro</span><span class="board-live">Local match</span></div><div id="tournament-roster-counters" class="tournament-roster-counters" aria-live="polite">Brak aktywnego turnieju</div><div class="player-strip"><span id="white" class="player-badge player-badge--white">Model lokalny · białe</span><span id="black" class="player-badge player-badge--black">Model lokalny · czarne</span></div><div class="piece-count-strip" aria-label="Pozostałe bierki i materiał"><div class="piece-count" aria-live="polite"><strong>Białe · pozostałe bierki</strong><span id="white-piece-types" class="piece-count__types">♕1 · ♖2 · ♗2 · ♘2 · ♙8 · ♔✓</span><span id="white-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div><div class="piece-count piece-count--black" aria-live="polite"><strong>Czarne · pozostałe bierki</strong><span id="black-piece-types" class="piece-count__types">♛1 · ♜2 · ♝2 · ♞2 · ♟8 · ♚✓</span><span id="black-piece-summary" class="piece-count__summary">16 bierek · materiał 39</span></div></div><div id="board" class="board" role="img" aria-label="Szachownica z aktualną pozycją"></div><div class="controls"><button id="step">Następny ruch</button><button id="run">Autoplay</button><button id="stop" class="stop">Stop</button><button id="reset" class="secondary">Nowa partia</button></div><div id="status" class="status">Gotowy.</div></section>
 <aside class="panel"><h3 style="margin:0 0 12px">Statystyki partii</h3><div class="metrics"><div class="metric"><small>Ruchy</small><strong id="count">0</strong></div><div class="metric"><small>Średni czas ruchu</small><strong id="avg">—</strong></div><div class="metric"><small>Niepoprawne próby</small><strong id="illegal">0</strong></div><div class="metric"><small>Dostępna pamięć</small><strong id="ram">—</strong></div></div><h3 style="margin:20px 0 8px">Zapis ruchów</h3><div id="moves" class="moves">Brak ruchów.</div><div class="model-status" aria-live="polite">
 <h3 style="margin:16px 0 8px">Status modeli</h3>
@@ -169,6 +172,22 @@ button.stop{background:#744b4b;border-color:#986363}
   <p class="notice">Akceptacja przenosi wyłącznie propozycję do etapu PR. Nie dopuszcza modelu i nie zmienia allowlisty ani gotowości technicznej.</p>
   <div class="formrow"><button type="button" class="secondary" id="model-review-refresh">Odśwież kolejkę</button><span id="model-review-queue-status" class="notice" role="status" aria-live="polite">Ładowanie kolejki…</span></div>
   <div id="model-review-queue" class="moves">Ładowanie zgłoszeń…</div>
+  <section id="hf-quarantine-dashboard" class="hf-dashboard" aria-live="polite">
+   <div class="hf-dashboard__heading"><div><h4>Kolejka audytu i testów modeli</h4><p class="notice">Podgląd modeli w kwarantannie. Audyt metadanych nie uruchamia wag; test runtime pozostaje wyłączony do czasu wdrożenia bezpiecznego wykonawcy i jawnego zatwierdzenia.</p></div><button type="button" class="secondary" id="hf-dashboard-refresh">Odśwież</button></div>
+   <div class="hf-dashboard__metrics">
+    <div class="metric"><small>W katalogu HF</small><strong id="hf-dash-candidates">—</strong></div>
+    <div class="metric"><small>Audyt metadanych</small><strong id="hf-dash-audited">—</strong></div>
+    <div class="metric"><small>Zweryfikowane w kwarantannie</small><strong id="hf-dash-quarantined">—</strong></div>
+    <div class="metric"><small>Testy runtime aktywne</small><strong id="hf-dash-running">0</strong></div>
+   </div>
+   <div class="hf-dashboard__columns">
+    <div class="hf-dashboard__box"><h5>Aktualne zadanie</h5><div id="hf-dash-current" class="notice">Brak aktywnego audytu lub testu runtime.</div><div id="hf-dash-progress" class="notice">Postęp testu runtime: niedostępny — wykonawca nie jest jeszcze wdrożony.</div></div>
+    <div class="hf-dashboard__box"><h5>Blokady sprzętowe</h5><div id="hf-dash-hardware" class="notice">Preflight RAM / VRAM / swap / dysku nie jest jeszcze podłączony do kolejki runtime. Żaden model nie zostanie uruchomiony z tego widoku.</div></div>
+   </div>
+   <h5>Kolejka kandydatów</h5><div id="hf-dash-queue" class="moves">Odczytuję katalog…</div>
+   <h5>Historia audytów i wyniki</h5><div id="hf-dash-history" class="moves">Odczytuję historię…</div>
+   <p class="notice">Zasada wykonania po wdrożeniu runtime: maksymalnie jeden model naraz; przed uruchomieniem kontrola zasobów; model, który się nie mieści, otrzymuje blokadę i jest pomijany. Kwarantanna nie jest automatycznie udostępniana silnikowi.</p>
+  </section>
   <h4>Wstępny audyt kandydatów Hugging Face</h4>
   <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
   <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
@@ -617,6 +636,28 @@ setInterval(refreshHfDownloadStatus,2500);
 setInterval(loadHfDownloadHistory,15000);setInterval(loadHfDownloadPlan,15000);
 refreshHfDownloadStatus();loadHfDownloadPlan();loadHfDownloadHistory();
 loadHfCandidates();
+
+async function refreshHfQuarantineDashboard(){
+ const set=(id,value)=>{const el=$(id);if(el)el.textContent=value;};
+ const queue=$('hf-dash-queue'),history=$('hf-dash-history');
+ try{
+  const [cr,hr,pr]=await Promise.all([fetch('/api/hf-candidates',{cache:'no-store'}),fetch('/api/hf-candidates/download-history',{cache:'no-store'}),fetch('/api/hf-candidates/download-plan',{cache:'no-store'})]);
+  const candidates=await cr.json(),historyData=await hr.json(),plan=await pr.json();
+  if(!cr.ok)throw Error(candidates.error||cr.status);if(!hr.ok)throw Error(historyData.error||hr.status);if(!pr.ok)throw Error(plan.error||pr.status);
+  const rows=Array.isArray(candidates)?candidates:[],audited=rows.filter(x=>x.last_audit).length;
+  const jobs=Array.isArray(historyData.jobs)?historyData.jobs:[];
+  const verified=new Set();jobs.forEach(job=>(job.results||[]).forEach(result=>{if(result.status==='verified_quarantined')verified.add((result.repo_id||'')+'/'+(result.name||''));}));
+  (plan.items||[]).forEach(item=>{if(item.status==='verified_quarantined')verified.add((item.repo_id||'')+'/'+(item.filename||''));});
+  set('hf-dash-candidates',String(rows.length));set('hf-dash-audited',String(audited));set('hf-dash-quarantined',String(verified.size));set('hf-dash-running','0');
+  set('hf-shortcut-count',rows.length+' kandydatów · '+audited+' audytów · '+verified.size+' plików zweryfikowanych · 0 testów runtime');
+  set('hf-dash-current','Brak aktywnego audytu lub testu runtime. Audyty są obecnie uruchamiane ręcznie z listy kandydatów.');
+  set('hf-dash-progress','Postęp testu runtime: 0% · testy runtime nie są jeszcze podłączone.');
+  if(queue){queue.replaceChildren();const pending=rows.filter(x=>!x.last_audit);const ordered=[...pending,...rows.filter(x=>x.last_audit)];if(!ordered.length)queue.textContent='Brak kandydatów w katalogu.';ordered.slice(0,40).forEach(item=>{const row=document.createElement('div');row.className='hf-queue-item';const title=document.createElement('strong');title.textContent=(item.last_audit?'Audyt wykonany':'Oczekuje na audyt')+' · '+(item.display_name||item.repo_id);row.appendChild(title);const meta=document.createElement('small');meta.textContent=(item.repo_id||'')+' · rewizja '+String(item.revision||'').slice(0,12)+' · '+(item.technical_readiness||'gotowość techniczna nieoceniona')+' · runtime: nieuruchomiony';row.appendChild(meta);queue.appendChild(row);});}
+  if(history){history.replaceChildren();const audits=rows.filter(x=>x.last_audit).map(x=>({kind:'Audyt metadanych',name:x.repo_id,at:x.last_audit.audited_at||'data nieznana',result:x.last_audit.status||x.last_audit.summary||'raport zapisany'}));const downloads=jobs.map(x=>({kind:'Pobieranie',name:(x.tasks||[]).map(t=>(t.repo_id||'')+'/'+(t.file?.name||t.name||'plik')).join(', '),at:x.created_at||'',result:(x.status||'')+' · '+(x.completed_files||0)+'/'+(x.total_files||0)+' plików'}));const items=[...audits,...downloads].sort((a,b)=>String(b.at).localeCompare(String(a.at)));if(!items.length)history.textContent='Brak zapisanych audytów i pobrań.';items.slice(0,30).forEach(item=>{const row=document.createElement('div');row.className='hf-queue-item';const title=document.createElement('strong');title.textContent=item.kind+' · '+item.name;row.appendChild(title);const meta=document.createElement('small');meta.textContent=item.at+' · '+item.result;row.appendChild(meta);history.appendChild(row);});}
+ }catch(error){set('hf-shortcut-count','Nie udało się odczytać stanu');if(queue)queue.textContent='Nie udało się odczytać kolejki: '+error;if(history)history.textContent='Nie udało się odczytać historii: '+error;}
+}
+$('hf-dashboard-refresh')?.addEventListener('click',refreshHfQuarantineDashboard);
+setInterval(refreshHfQuarantineDashboard,15000);refreshHfQuarantineDashboard();
 
 function renderModelAdmission(items){
  const host=$('model-admission-list');host.textContent='';
