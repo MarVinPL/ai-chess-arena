@@ -24,6 +24,17 @@ MAX_WIRE_RESPONSE_BYTES = ((MAX_RESPONSE_BYTES + 2) // 3) * 4 + 4096
 ALLOWED = {("GET", "/health"), ("POST", "/v1/chat/completions")}
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # The bridge must never turn a loopback request into an arbitrary URL.
+        return None
+
+
+def _loopback_only_urlopen(request, *, timeout):
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    return opener.open(request, timeout=timeout)
+
+
 class BridgeError(RuntimeError):
     pass
 
@@ -37,11 +48,18 @@ def _peer_uid(conn: socket.socket) -> int:
 
 
 class _Handler(socketserver.StreamRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(self.server.client_timeout_seconds)
+
     def handle(self):
         bridge = self.server
         if _peer_uid(self.connection) != bridge.allowed_uid:
             return
-        line = self.rfile.readline(MAX_WIRE_REQUEST_BYTES + 1)
+        try:
+            line = self.rfile.readline(MAX_WIRE_REQUEST_BYTES + 1)
+        except TimeoutError:
+            return
         if not line or len(line) > MAX_WIRE_REQUEST_BYTES:
             return
         try:
@@ -78,7 +96,8 @@ class UnixRuntimeBridge:
     def __init__(self, socket_path: str | Path, *, loopback_port: int,
                  allowed_uid: int, runtime_uid: int | None = None,
                  api_gid: int | None = None,
-                 urlopen=urllib.request.urlopen, timeout_seconds: float = 2.0):
+                 urlopen=_loopback_only_urlopen, timeout_seconds: float = 2.0,
+                 client_timeout_seconds: float = 3.0):
         self.socket_path = Path(socket_path)
         self.loopback_port = int(loopback_port)
         self.allowed_uid = int(allowed_uid)
@@ -86,11 +105,12 @@ class UnixRuntimeBridge:
         self.api_gid = os.getgid() if api_gid is None else int(api_gid)
         self.urlopen = urlopen
         self.timeout_seconds = float(timeout_seconds)
+        self.client_timeout_seconds = float(client_timeout_seconds)
         if not 1 <= self.loopback_port <= 65535:
             raise BridgeError("Nieprawidłowy port loopback.")
         if min(self.allowed_uid, self.runtime_uid, self.api_gid) < 0:
             raise BridgeError("Nieprawidłowa tożsamość procesu.")
-        if self.timeout_seconds <= 0:
+        if self.timeout_seconds <= 0 or self.client_timeout_seconds <= 0:
             raise BridgeError("Timeout mostu musi być dodatni.")
         self._server = None
 
@@ -110,6 +130,7 @@ class UnixRuntimeBridge:
         self._server.loopback_port = self.loopback_port
         self._server.urlopen = self.urlopen
         self._server.timeout_seconds = self.timeout_seconds
+        self._server.client_timeout_seconds = self.client_timeout_seconds
         try:
             os.chmod(self.socket_path, 0o660)
             try:

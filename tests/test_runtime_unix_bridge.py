@@ -124,3 +124,65 @@ def test_bridge_rejects_invalid_transport_configuration(tmp_path, kwargs):
     config.update(kwargs)
     with pytest.raises(BridgeError):
         UnixRuntimeBridge(tmp_path / "control.sock", **config)
+
+
+def test_default_upstream_client_does_not_follow_redirects(tmp_path):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from runtime_unix_bridge import _loopback_only_urlopen
+
+    hits = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            if self.path == "/health":
+                self.send_response(302)
+                self.send_header("Location", "http://127.0.0.1:1/should-not-follow")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"unexpected")
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/health")
+    try:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            _loopback_only_urlopen(request, timeout=1)
+        assert error.value.code == 302
+        assert hits == ["/health"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+
+def test_idle_peer_times_out_without_blocking_next_request(tmp_path):
+    os.chmod(tmp_path, 0o2710)
+    bridge = UnixRuntimeBridge(
+        tmp_path / "control.sock", loopback_port=19090,
+        allowed_uid=os.getuid(), client_timeout_seconds=0.1,
+        urlopen=lambda req, timeout: FakeResponse(200, b'{"ok":true}'),
+    )
+    thread = threading.Thread(target=bridge.serve_forever, daemon=True)
+    thread.start()
+    path = tmp_path / "control.sock"
+    deadline = time.monotonic() + 2
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    try:
+        idle = __import__("socket").socket(__import__("socket").AF_UNIX)
+        idle.connect(str(path))
+        time.sleep(0.2)
+        idle.close()
+        status, body = unix_request(path, "GET", "/health")
+        assert status == 200
+        assert body == b'{"ok":true}'
+    finally:
+        stop_bridge(bridge, thread)

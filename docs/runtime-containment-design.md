@@ -141,3 +141,22 @@ visibility, PrivateNetwork behavior, or the final production service's
 supplementary-group configuration. The temporary fixture is removed after
 the test. No persistent account, group, ACL, directory, socket, unit, or
 production setting was changed.
+
+### Bridge redirect hardening (2026-11-17)
+
+The bridge's default upstream opener now refuses HTTP redirects. This prevents
+a loopback health/inference response from changing the destination URL and
+turning the narrowly scoped transport into an arbitrary URL fetcher. Redirect
+responses are surfaced as HTTP errors; they are not followed. A local HTTP
+test verifies that a 302 response is returned without requesting its Location.
+The injected opener remains available for deterministic tests.
+
+### Bridge request timeout and redirect controls (2026-11-17)
+
+The runtime-side bridge now uses a no-redirect urllib opener by default and
+applies a bounded timeout to each accepted AF_UNIX connection. An idle
+connected peer therefore cannot hold the single-threaded bridge indefinitely;
+a regression test leaves one peer idle, waits for its timeout, then confirms a
+subsequent health request is still served. The default upstream redirect test
+also confirms that a loopback response cannot redirect the bridge to another
+URL. Both controls are covered by local tests.
