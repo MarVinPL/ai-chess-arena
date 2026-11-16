@@ -1,4 +1,5 @@
 import csv
+import os
 import io
 import sqlite3
 import tempfile
@@ -15,6 +16,25 @@ import server
 class ArenaSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.old_auth_env = {key: os.environ.get(key) for key in (
+            'ARENA_AUTH_USERNAME', 'ARENA_AUTH_PASSWORD_HASH',
+            'ARENA_AUTH_SESSION_SECRET', 'ARENA_AUTH_ORIGIN')}
+        os.environ.update({
+            'ARENA_AUTH_USERNAME': 'arena',
+            'ARENA_AUTH_PASSWORD_HASH': server.arena_auth.hash_password('test-only-password-for-arena'),
+            'ARENA_AUTH_SESSION_SECRET': server.arena_auth._b64e(b'test-only-session-secret-value-123456789'),
+            'ARENA_AUTH_ORIGIN': 'https://arena.148-113-182-137.sslip.io',
+        })
+        cls.test_session_token = server.arena_auth.create_session_token('arena')
+        class AuthenticatedTestHeaders(urllib.request.BaseHandler):
+            def http_request(self, request):
+                request.add_unredirected_header('Cookie', f"arena_session={cls.test_session_token}")
+                if request.get_method().upper() == 'POST':
+                    request.add_unredirected_header('Origin', os.environ['ARENA_AUTH_ORIGIN'])
+                return request
+            https_request = http_request
+        cls.old_url_opener = urllib.request._opener
+        urllib.request.install_opener(urllib.request.build_opener(AuthenticatedTestHeaders()))
         cls.tempdir = tempfile.TemporaryDirectory()
         server.DB = Path(cls.tempdir.name) / 'test.sqlite3'
         server.LOG_DIR = Path(cls.tempdir.name) / 'logs'
@@ -41,6 +61,12 @@ class ArenaSmokeTests(unittest.TestCase):
         cls.thread.join(timeout=2)
         server.league.DB = cls.old_league_db
         cls.tempdir.cleanup()
+        urllib.request._opener = cls.old_url_opener
+        for key, value in cls.old_auth_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     def test_lazy_runtime_preflight_checks_executable_not_running_health(self):
         original_binary = server.engine_runner.LLAMAFILE
