@@ -15,6 +15,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from runtime_socket_handoff import SocketHandoffError, verify_handoff
+
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 ALLOWED = {("GET", "/health"), ("POST", "/v1/chat/completions")}
@@ -72,20 +74,27 @@ class _Handler(socketserver.StreamRequestHandler):
 
 class UnixRuntimeBridge:
     def __init__(self, socket_path: str | Path, *, loopback_port: int,
-                 allowed_uid: int, urlopen=urllib.request.urlopen,
-                 timeout_seconds: float = 2.0):
+                 allowed_uid: int, runtime_uid: int | None = None,
+                 api_gid: int | None = None,
+                 urlopen=urllib.request.urlopen, timeout_seconds: float = 2.0):
         self.socket_path = Path(socket_path)
         self.loopback_port = int(loopback_port)
         self.allowed_uid = int(allowed_uid)
+        self.runtime_uid = os.getuid() if runtime_uid is None else int(runtime_uid)
+        self.api_gid = os.getgid() if api_gid is None else int(api_gid)
         self.urlopen = urlopen
         self.timeout_seconds = float(timeout_seconds)
         self._server = None
 
     def serve_forever(self):
-        if not self.socket_path.parent.is_dir():
-            raise BridgeError("Katalog gniazda musi być wcześniej przygotowany przez supervisor.")
-        if self.socket_path.exists():
-            raise BridgeError("Ścieżka gniazda już istnieje; odmowa nadpisania.")
+        try:
+            verify_handoff(
+                self.socket_path.parent, self.socket_path,
+                runtime_uid=self.runtime_uid, api_gid=self.api_gid,
+                require_socket=False,
+            )
+        except SocketHandoffError as exc:
+            raise BridgeError(str(exc)) from exc
         class Server(socketserver.UnixStreamServer):
             allow_reuse_address = False
         self._server = Server(str(self.socket_path), _Handler)
@@ -95,6 +104,13 @@ class UnixRuntimeBridge:
         self._server.timeout_seconds = self.timeout_seconds
         try:
             os.chmod(self.socket_path, 0o660)
+            try:
+                verify_handoff(
+                    self.socket_path.parent, self.socket_path,
+                    runtime_uid=self.runtime_uid, api_gid=self.api_gid,
+                )
+            except SocketHandoffError as exc:
+                raise BridgeError(str(exc)) from exc
             self._server.serve_forever(poll_interval=0.1)
         finally:
             self._server.server_close()

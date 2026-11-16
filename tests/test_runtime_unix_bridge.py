@@ -19,7 +19,8 @@ class FakeResponse:
 
 
 def start_bridge(tmp_path, urlopen=None, allowed_uid=None):
-    path = tmp_path / "runtime.sock"
+    os.chmod(tmp_path, 0o2710)
+    path = tmp_path / "control.sock"
     bridge = UnixRuntimeBridge(
         path, loopback_port=19090, allowed_uid=allowed_uid if allowed_uid is not None else os.getuid(),
         urlopen=urlopen or (lambda req, timeout: FakeResponse(200, b'{"ok":true}')),
@@ -78,7 +79,8 @@ def test_unix_client_rejects_non_allowlisted_paths(tmp_path, method, path):
 
 
 def test_bridge_refuses_existing_socket_path(tmp_path):
-    path = tmp_path / "already.sock"
+    os.chmod(tmp_path, 0o2710)
+    path = tmp_path / "control.sock"
     path.touch()
     bridge = UnixRuntimeBridge(path, loopback_port=19090, allowed_uid=os.getuid())
     with pytest.raises(BridgeError):

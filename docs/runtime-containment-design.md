@@ -96,3 +96,28 @@ Required directory handoff before this can be wired:
 This remains a transport prototype. It is not connected to
 `runtime_subprocess.py`, the API, or any real systemd unit; no account, ACL,
 socket, service, network, or production configuration was changed.
+
+## Filesystem handoff contract prototype (2026-11-17)
+
+`runtime_socket_handoff.py` now defines and verifies the per-job socket DAC
+contract without changing host state:
+- directory: `/run/arena-runtime/job-<id>`, owner `arena-runtime`, group equal
+  to the API service's primary group, mode `02710`;
+- socket: `control.sock`, owner `arena-runtime`, inherited API group, mode
+  `0660`;
+- API group receives directory traversal and socket connect permission, but
+  no directory write permission, so it cannot replace or unlink the socket;
+- runtime owns the directory and socket and can clean up its own endpoint.
+
+The bridge now refuses to start unless the directory owner/group/mode match
+that contract, then verifies the created socket's owner/group/mode before
+serving. Verification uses `lstat` and rejects symlinks and regular files.
+The setgid-directory group-inheritance behavior is covered with a real local
+AF_UNIX socket in tests.
+
+These tests run as the current account and validate the filesystem contract
+and inherited group behavior only. They do not impersonate a separate
+`arena-runtime` UID or prove cross-UID access controls. The production
+directory, runtime account, API group membership, and namespace mount handoff
+remain unprovisioned and unchanged. A privileged disposable integration test
+under the actual service identities is still required before wiring.
