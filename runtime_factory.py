@@ -17,9 +17,15 @@ def create_runtime(
     popen=None,
     urlopen=None,
 ):
-    """Construct a runtime from explicit configuration; default to llamafile."""
+    """Construct a runtime; missing or unknown selectors preserve llamafile."""
     env = os.environ if environ is None else environ
     selected = env.get("ARENA_RUNTIME", "llamafile").strip().lower()
+
+    # Keep the established runtime for absent, blank, or unrecognized values.
+    # This is configuration defaulting only: failures after explicitly selecting
+    # llama-server must propagate and must never switch runtimes automatically.
+    if selected not in {"llamafile", "llama-server"}:
+        selected = "llamafile"
 
     if selected == "llamafile":
         from engine_runner import LlamafileRuntime
@@ -27,10 +33,9 @@ def create_runtime(
         kwargs = {"on_status": on_status}
         if popen is not None:
             kwargs["popen"] = popen
+        if urlopen is not None:
+            kwargs["urlopen"] = urlopen
         return LlamafileRuntime(**kwargs)
-
-    if selected != "llama-server":
-        raise ValueError(f"Nieznany ARENA_RUNTIME: {selected!r}")
 
     if env.get("ARENA_UPSTREAM_RUNTIME_ENABLED") != "1":
         raise ValueError(
