@@ -10,6 +10,7 @@ import model_allowlist
 import model_admission
 import model_review_submissions
 import hf_candidate_audit
+import hf_candidate_reviews
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1427,6 +1428,17 @@ class Handler(BaseHTTPRequestHandler):
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)
+        elif path == '/api/hf-candidates/review':
+            try:
+                from urllib.parse import urlparse, parse_qs
+                params = parse_qs(urlparse(raw_path).query)
+                catalog_id = params.get('catalog_id', [''])[0]
+                revision = params.get('revision', [''])[0]
+                with league.connect() as c:
+                    review = hf_candidate_reviews.get(c, catalog_id, revision)
+                self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 422)
         elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -1446,11 +1458,15 @@ class Handler(BaseHTTPRequestHandler):
                 items = hf_candidate_audit.load_catalog()
                 with league.connect() as c:
                     reports = hf_candidate_audit.list_reports(c)
+                    reviews = hf_candidate_reviews.list_reviews(c)
                 report_map = {(x['catalog_id'], x['revision']): x for x in reports}
+                review_map = {(x['catalog_id'], x['revision']): x for x in reviews}
                 result = []
                 for item in items:
                     row = {key: item.get(key) for key in ('catalog_id','arena_model_id','display_name','repo_id','revision','audited_revision','declared_license_tag','gated','source_status','metadata_status','license_review_status','technical_readiness','admission_status')}
-                    row['last_audit'] = report_map.get((item.get('catalog_id'), item.get('revision') or item.get('audited_revision')))
+                    key = (item.get('catalog_id'), item.get('revision') or item.get('audited_revision'))
+                    row['last_audit'] = report_map.get(key)
+                    row['last_review'] = review_map.get(key)
                     result.append(row)
                 self.send_json(result)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -1599,11 +1615,14 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if path == '/api/hf-candidates/audit':
+                if path == '/api/hf-candidates/review':
+                    with league.connect() as c:
+                        result = hf_candidate_reviews.save(c, payload, actor='arena')
+                elif path == '/api/hf-candidates/audit':
                     if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
                         raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
                     try:
@@ -1729,7 +1748,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':

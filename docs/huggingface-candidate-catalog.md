@@ -18,6 +18,14 @@ The free GitHub Actions workflow `.github/workflows/huggingface-candidate-catalo
 - API errors, rate limits, malformed responses, or invalid manifests abort the update without replacing the last valid catalog.
 - The workflow does not approve licenses, technical readiness, or tournament admission, and does not alter the admission allowlist.
 
+## Manual review in the Arena panel
+
+- Each candidate with a saved pre-audit can be opened in the panel's manual verification form, including candidates that do not yet have an Arena `model_id`.
+- The form records a license assessment and its evidence, exact pinned-revision confirmation, technical readiness and test evidence, unresolved blockers, reviewer notes, and an append-only history per candidate revision.
+- Review records are informational workflow evidence only. Saving a review does not approve a license, create a registry entry, change the tournament allowlist, admit a model, download weights, or run inference.
+- A changed pinned revision has a separate review record and must be reviewed again. A positive technical assessment requires evidence and explicit SHA confirmation.
+- The review API is available only to an authenticated panel session and enforces the same Origin check as other write endpoints.
+
 ## Safety boundaries
 
 - Metadata only: no model weights, tokenizer files, datasets, or model binaries are downloaded; no inference is run.
