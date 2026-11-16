@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, ipaddress, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -1569,7 +1569,11 @@ class Handler(BaseHTTPRequestHandler):
                 password = payload.get('password', '')
                 if not isinstance(username, str) or not isinstance(password, str):
                     raise ValueError('Nieprawidłowe dane logowania')
-                ok, reason = arena_auth.check_login(username, password, self.client_address[0])
+                if len(username) > 128 or len(password) > 1024:
+                    raise ValueError('Dane logowania przekraczają dozwoloną długość')
+                remote_key = arena_auth.client_key(
+                    self.headers.get('X-Forwarded-For'), self.client_address[0])
+                ok, reason = arena_auth.check_login(username, password, remote_key)
                 if not ok:
                     if reason == 'rate_limited':
                         self.send_json({'error': 'Zbyt wiele prób logowania. Spróbuj ponownie za 10 minut.'}, 429)
