@@ -49,6 +49,9 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_model_permission_requests_model
             ON model_permission_requests(model_id, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_model_permission_pending_identity
+            ON model_permission_requests(model_id,repo_id,revision,artifact_sha256,scope)
+            WHERE status='pending';
         CREATE TABLE IF NOT EXISTS model_permission_events (
             id INTEGER PRIMARY KEY,
             request_id INTEGER NOT NULL,
@@ -65,6 +68,12 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_model_permission_events_model
             ON model_permission_events(model_id, id);
+        CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_update
+            BEFORE UPDATE ON model_permission_events
+            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END;
+        CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_delete
+            BEFORE DELETE ON model_permission_events
+            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END;
     """)
     # Older, not-yet-deployed development DBs fail closed with an empty hash.
     _add_column_if_missing(connection, "model_permission_requests",
@@ -144,12 +153,18 @@ def request_permission(connection: sqlite3.Connection, *, model_id: int,
     data = snapshot if isinstance(snapshot, dict) else {}
     data = {**data, "artifact_sha256": artifact_sha256}
     snapshot_json = json.dumps(data, ensure_ascii=False, sort_keys=True)
-    cursor = connection.execute("""
-        INSERT INTO model_permission_requests
-        (model_id,repo_id,revision,artifact_sha256,scope,status,requested_by,requested_at,reason,snapshot_json)
-        VALUES(?,?,?,?,?,?,?,?,?,?)
-    """, (model_id, repo_id, revision, artifact_sha256, scope, "pending",
-          actor, now, reason.strip(), snapshot_json))
+    try:
+        cursor = connection.execute("""
+            INSERT INTO model_permission_requests
+            (model_id,repo_id,revision,artifact_sha256,scope,status,requested_by,requested_at,reason,snapshot_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+        """, (model_id, repo_id, revision, artifact_sha256, scope, "pending",
+              actor, now, reason.strip(), snapshot_json))
+    except sqlite3.IntegrityError as exc:
+        # The partial unique index closes the race between concurrent requests.
+        if "UNIQUE constraint failed" in str(exc):
+            raise ValueError("Istnieje już oczekujące żądanie dla tej rewizji, artefaktu i zakresu.") from exc
+        raise
     request_id = cursor.lastrowid
     connection.execute("""
         INSERT INTO model_permission_events
@@ -207,10 +222,14 @@ def decide_permission(connection: sqlite3.Connection, *, request_id: int,
         raise ValueError("Podaj uzasadnienie (co najmniej 3 znaki).")
     now = _now()
     reason = reason.strip()
-    connection.execute("""
+    # Compare-and-set makes a decision single-winner when two operators race.
+    updated = connection.execute("""
         UPDATE model_permission_requests
-        SET status=?,decided_by=?,decided_at=?,reason=? WHERE id=?
-    """, (status, actor, now, reason or row["reason"], request_id))
+        SET status=?,decided_by=?,decided_at=?,reason=?
+        WHERE id=? AND status=?
+    """, (status, actor, now, reason or row["reason"], request_id, row["status"]))
+    if updated.rowcount != 1:
+        raise ValueError("Żądanie zmieniło status równolegle; odśwież listę przed kolejną decyzją.")
     connection.execute("""
         INSERT INTO model_permission_events
         (request_id,model_id,repo_id,revision,artifact_sha256,scope,event,actor,occurred_at,reason,snapshot_json)
