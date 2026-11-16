@@ -41,6 +41,25 @@ class RuntimePreflightTests(unittest.TestCase):
         for item in reversed(self.patches):item.stop()
         self.tmp.cleanup()
 
+    def test_sha256_is_rechecked_against_exact_quarantine_file(self):
+        artifact = {'path': str(self.artifact), 'size_bytes': self.artifact.stat().st_size, 'sha256': self.digest}
+        result = runtime.verify_artifact_sha256_for_runtime(artifact)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['sha256'], self.digest)
+        self.artifact.write_bytes(b'changed')
+        result = runtime.verify_artifact_sha256_for_runtime(artifact)
+        self.assertFalse(result['ok'])
+        self.assertIn('nie powiodła', result['reason'])
+
+    def test_sha256_runtime_gate_rejects_path_outside_quarantine(self):
+        outside = self.root / 'outside.gguf'
+        outside.write_bytes(b'fake')
+        result = runtime.verify_artifact_sha256_for_runtime({
+            'path': str(outside), 'size_bytes': outside.stat().st_size,
+            'sha256': hashlib.sha256(outside.read_bytes()).hexdigest()})
+        self.assertFalse(result['ok'])
+        self.assertIn('poza kwarantanną', result['reason'])
+
     def test_verified_allowlisted_artifact_is_ready_but_never_started(self):
         result=runtime.refresh_preflight()
         item=next(x for x in result['items'] if x['catalog_id']=='hf:org/model')

@@ -52,6 +52,22 @@ class AuditQueueTests(unittest.TestCase):
         self.assertFalse(result['runtime_tests_enabled'])
         self.assertEqual(result['runtime_active'], 0)
 
+    def test_worker_loop_logs_unexpected_errors(self):
+        with patch.object(queue, '_run_one', side_effect=RuntimeError('worker failure')), \
+             patch.object(queue.time, 'sleep', side_effect=KeyboardInterrupt), \
+             self.assertLogs(queue._LOG, level='ERROR') as captured:
+            with self.assertRaises(KeyboardInterrupt):
+                queue._worker_loop()
+        self.assertIn('worker failure', '\n'.join(captured.output))
+
+    def test_scheduler_loop_logs_refresh_errors(self):
+        with patch.object(queue, 'refresh_queue', side_effect=RuntimeError('scheduler failure')), \
+             patch.object(queue.time, 'sleep', side_effect=KeyboardInterrupt), \
+             self.assertLogs(queue._LOG, level='ERROR') as captured:
+            with self.assertRaises(KeyboardInterrupt):
+                queue._scheduler_loop()
+        self.assertIn('scheduler failure', '\n'.join(captured.output))
+
     def test_one_worker_processes_only_one_queue_item_per_call(self):
         self.catalog.append({
             'catalog_id': 'hf:org/model2', 'repo_id': 'org/model2',

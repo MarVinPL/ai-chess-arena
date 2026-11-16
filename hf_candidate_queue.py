@@ -1,6 +1,6 @@
 """Persistent, sequential metadata-only Hugging Face candidate audit queue."""
 from __future__ import annotations
-import json, shutil, threading, time
+import json, logging, shutil, threading, time
 from pathlib import Path
 import league
 import hf_candidate_audit
@@ -8,6 +8,7 @@ import hf_candidate_downloads
 
 LOCK = threading.RLock()
 WORKER_LOCK = threading.Lock()
+_LOG = logging.getLogger(__name__)
 _STARTED = False
 REFRESH_SECONDS = 15 * 60
 POLL_SECONDS = 2
@@ -127,13 +128,16 @@ def _worker_loop():
         try:
             if not _run_one(): time.sleep(POLL_SECONDS)
         except Exception:
+            _LOG.exception('Nieobsłużony błąd pętli worker kolejki audytów HF')
             time.sleep(POLL_SECONDS)
 
 
 def _scheduler_loop():
     while True:
-        try: refresh_queue()
-        except Exception: pass
+        try:
+            refresh_queue()
+        except Exception:
+            _LOG.exception('Nieobsłużony błąd planera kolejki audytów HF')
         time.sleep(REFRESH_SECONDS)
 
 

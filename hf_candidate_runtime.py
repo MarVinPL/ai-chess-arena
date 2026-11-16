@@ -74,6 +74,35 @@ def _review_blockers(connection, catalog_id, revision):
     return blockers
 
 
+
+def verify_artifact_sha256_for_runtime(artifact):
+    """Re-hash the exact quarantined artifact immediately before any future runtime handoff."""
+    import hashlib
+    path = Path(artifact.get('path') or '')
+    staging = hf_candidate_downloads.STAGING_DIR.resolve()
+    try:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(staging):
+            return {'ok': False, 'reason': 'Ścieżka artefaktu znajduje się poza kwarantanną.'}
+        if not resolved.is_file():
+            return {'ok': False, 'reason': 'Artefakt nie jest zwykłym plikiem.'}
+        expected_size = int(artifact.get('size_bytes') or 0)
+        expected_sha = str(artifact.get('sha256') or '').lower()
+        if expected_size < 1 or len(expected_sha) != 64:
+            return {'ok': False, 'reason': 'Brak prawidłowego rozmiaru lub SHA-256 w rekordzie.'}
+        digest = hashlib.sha256()
+        size = 0
+        with resolved.open('rb') as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                size += len(block)
+                digest.update(block)
+        actual = digest.hexdigest()
+        if size != expected_size or actual != expected_sha:
+            return {'ok': False, 'reason': 'Kontrola SHA-256/rozmiaru przed runtime nie powiodła się.', 'actual_sha256': actual, 'actual_size_bytes': size}
+        return {'ok': True, 'sha256': actual, 'size_bytes': size, 'path': str(resolved)}
+    except (OSError, ValueError) as exc:
+        return {'ok': False, 'reason': f'Nie można ponownie zweryfikować artefaktu: {exc}'}
+
 def refresh_preflight():
     hardware=hf_candidate_queue.hardware_snapshot()
     available=_memory_available()
@@ -114,7 +143,7 @@ def refresh_preflight():
         status='skipped_blocked' if blockers else 'ready_pending_approval'
         discovered.append({'artifact_key':key,'catalog_id':catalog_id,'repo_id':repo_id,'revision':revision,
             'filename':filename,'path':str(path),'size_bytes':item['size_bytes'],'sha256':item['sha256'],
-            'status':status,'reason':' '.join(blockers) if blockers else 'Preflight zasobów i metadanych OK. SHA-256 musi być ponownie sprawdzony bezpośrednio przed ewentualnym uruchomieniem. Test runtime wymaga osobnego jawnego zatwierdzenia.',
+            'status':status,'reason':' '.join(blockers) if blockers else 'Preflight zasobów i metadanych OK. Gotowość techniczna jest ręczną deklaracją opartą na zapisanych dowodach, a nie automatycznym testem modelu. Przed każdym przyszłym przekazaniem do runtime wymagane jest ponowne SHA-256; test wymaga osobnego jawnego zatwierdzenia.',
             'estimated_ram_bytes':estimated,'available_ram_bytes':available,'checked_at':_now()})
     discovered_keys={item['artifact_key'] for item in discovered}
     for catalog_id, revision, filename in sorted(RUNTIME_CANDIDATES):
