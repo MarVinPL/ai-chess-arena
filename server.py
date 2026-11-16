@@ -1631,10 +1631,12 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
+                if path == '/api/hf-candidates/download-cancel':
+                    result = hf_candidate_downloads.cancel(payload.get('job_id'))
                 if path == '/api/hf-candidates/download-start':
                     result = hf_candidate_downloads.start(payload.get('catalog_id'), payload.get('files'))
                 if path == '/api/hf-candidates/review':
@@ -1766,7 +1768,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':

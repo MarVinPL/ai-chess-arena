@@ -18,6 +18,7 @@ CHUNK = 1024 * 1024
 _jobs: dict[str, dict] = {}
 _lock = threading.RLock()
 _active = False
+_cancel_events: dict[str, threading.Event] = {}
 
 class DownloadError(ValueError): pass
 
@@ -49,7 +50,7 @@ class _Redirects(HTTPRedirectHandler):
         if p.scheme!='https' or not allowed or p.username or p.password: raise DownloadError('Niebezpieczne przekierowanie pobierania zablokowane.')
         return super().redirect_request(req,fp,code,msg,headers,newurl)
 
-def _download(job, repo, revision, file):
+def _download(job, repo, revision, file, cancel_event):
     name=file['name']; size=file['size_bytes']; expected=file['sha256']
     target_dir=STAGING_DIR / job['id']; target_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
     target=target_dir / (name.replace('/','__') + '.quarantine')
@@ -65,6 +66,7 @@ def _download(job, repo, revision, file):
             final=urlparse(response.geturl()); host=(final.hostname or '').lower()
             if final.scheme!='https' or not (host=='huggingface.co' or host.endswith('.huggingface.co') or host.endswith('.xethub.hf.co') or host.endswith('.hf.co')): raise DownloadError('Końcowy host pobierania nie jest dozwolony.')
             while True:
+                if cancel_event.is_set(): raise DownloadError('Pobieranie anulowane przez operatora.')
                 block=response.read(CHUNK)
                 if not block: break
                 received+=len(block)
@@ -89,13 +91,15 @@ def _worker(job_id, repo, revision, files):
         for index,file in enumerate(files):
             with _lock:
                 job.update(status='downloading',current_file=file['name'],current_file_bytes=0,completed_files=index,updated_at=_now())
-            result=_download(job,repo,revision,file)
+            result=_download(job,repo,revision,file,_cancel_events[job_id])
             with _lock: job['results'].append(result); job['completed_files']=index+1
         with _lock: job.update(status='completed',message='Wszystkie pliki pobrano i zweryfikowano w kwarantannie; nie są dostępne dla silnika.',updated_at=_now())
     except Exception as exc:
-        with _lock: job.update(status='failed',message=str(exc),updated_at=_now())
+        with _lock: job.update(status='cancelled' if _cancel_events[job_id].is_set() else 'failed',message=str(exc),updated_at=_now())
     finally:
-        with _lock: _active=False
+        with _lock:
+            _active=False
+            _cancel_events.pop(job_id,None)
 
 def start(catalog_id: str, selections: list):
     global _active
@@ -117,6 +121,7 @@ def start(catalog_id: str, selections: list):
         job_id=uuid.uuid4().hex
         job={'id':job_id,'catalog_id':catalog_id,'repo_id':inventory['repo_id'],'revision':inventory['revision'],'status':'queued','total_bytes':total,'completed_files':0,'current_file':None,'current_file_bytes':0,'results':[],'created_at':_now(),'updated_at':_now(),'message':'Oczekiwanie na pobieranie.'}
         _jobs[job_id]=job
+        _cancel_events[job_id]=threading.Event()
         thread=threading.Thread(target=_worker,args=(job_id,inventory['repo_id'],inventory['revision'],files),daemon=True)
         thread.start()
         return dict(job)
@@ -125,3 +130,12 @@ def get(job_id):
     with _lock:
         job=_jobs.get(job_id)
         return dict(job) if job else None
+
+
+def cancel(job_id):
+    with _lock:
+        job=_jobs.get(job_id); event=_cancel_events.get(job_id)
+        if not job: raise DownloadError('Nie znaleziono zadania.')
+        if job.get('status') not in {'queued','downloading'} or event is None: raise DownloadError('Tego zadania nie można już anulować.')
+        event.set(); job['message']='Przyjęto żądanie anulowania.'; job['updated_at']=_now()
+        return dict(job)
