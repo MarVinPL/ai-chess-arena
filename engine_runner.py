@@ -41,7 +41,7 @@ class LlamafileRuntime:
     def __init__(self, binary: Path = LLAMAFILE, api_base: str = API_BASE,
                  threads: int = 2, context: int = 2048, startup_timeout: float = 90,
                  popen: Callable = subprocess.Popen, on_status: Callable | None = None,
-                 monitor_interval: float = 30, urlopen: Callable = urllib.request.urlopen):
+                 monitor_interval: float = 30, urlopen: Callable | None = None):
         self.binary = Path(binary)
         self.api_base = api_base.rstrip('/')
         self.threads = max(1, int(threads))
@@ -76,7 +76,7 @@ class LlamafileRuntime:
     def _healthy(self) -> bool:
         try:
             req = urllib.request.Request(self.api_base + '/health')
-            with self._urlopen(req, timeout=1.5) as response:
+            with (self._urlopen or urllib.request.urlopen)(req, timeout=1.5) as response:
                 return response.status == 200
         except Exception:
             return False
