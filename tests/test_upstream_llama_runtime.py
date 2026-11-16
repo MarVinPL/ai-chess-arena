@@ -2,12 +2,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-
-import chess
 from unittest.mock import Mock
 
-from runtime_factory import create_runtime
+import chess
+
 from engine_runner import RunnerError
+from runtime_factory import create_runtime
 from runtime_upgrade_plan import RuntimeContractError, UpstreamLlamaServerProfile
 from upstream_llama_runtime import UpstreamLlamaServerRuntime
 
@@ -54,10 +54,14 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
-        self.binary = root / "llama-server"
+        self.runtime_root = root / "runtimes"
+        self.runtime_root.mkdir()
+        self.binary = self.runtime_root / "llama-server"
         self.binary.write_text("# test fixture; never executed", encoding="utf-8")
         self.binary.chmod(0o755)
-        self.model = root / "fixture.gguf"
+        self.model_root = root / "managed-models"
+        self.model_root.mkdir()
+        self.model = self.model_root / "fixture.gguf"
         self.model.write_bytes(b"synthetic test fixture, not a model")
 
     def tearDown(self):
@@ -72,6 +76,8 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
             profile=UpstreamLlamaServerProfile(binary=self.binary),
             monitor_interval=3600,
             urlopen=kwargs.pop("urlopen", self.healthy_open),
+            runtime_root=self.runtime_root,
+            model_root=self.model_root,
             **kwargs,
         )
 
@@ -154,6 +160,70 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
         finally:
             runtime.shutdown()
 
+    def test_model_path_must_be_inside_managed_model_store(self):
+        outside = Path(self.temp.name) / "outside.gguf"
+        outside.write_bytes(b"synthetic fixture")
+        popen = Mock()
+        runtime = self.make_runtime(popen=popen)
+        try:
+            from engine_runner import RunnerError
+            with self.assertRaisesRegex(RunnerError, "arena-managed model store"):
+                runtime.ensure_loaded(outside)
+            popen.assert_not_called()
+        finally:
+            runtime.shutdown()
+
+    def test_binary_path_must_be_inside_dedicated_runtime_root(self):
+        outside = Path(self.temp.name) / "outside" / "llama-server"
+        with self.assertRaisesRegex(ValueError, "dedicated runtime directory"):
+            UpstreamLlamaServerRuntime(
+                profile=UpstreamLlamaServerProfile(binary=outside),
+                runtime_root=self.runtime_root,
+                model_root=self.model_root,
+                monitor_interval=3600,
+            )
+
+    def test_stop_kills_only_owned_child_after_terminate_timeout(self):
+        from subprocess import TimeoutExpired
+        process = FakeProcess()
+        wait_calls = {"count": 0}
+        def wait(timeout=None):
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                raise TimeoutExpired("llama-server", timeout)
+            return process.returncode
+        process.wait = wait
+        runtime = self.make_runtime(popen=Mock(return_value=process))
+        try:
+            runtime._process = process
+            runtime._desired_model_path = self.model
+            runtime.stop()
+            self.assertTrue(process.terminated)
+            self.assertTrue(process.killed)
+            self.assertIsNone(runtime._process)
+            self.assertIsNone(runtime._desired_model_path)
+        finally:
+            runtime.shutdown()
+
+    def test_inherited_generate_uses_validated_transport_and_runtime_metadata(self):
+        import chess
+        from engine_runner import RunnerError
+        runtime = self.make_runtime()
+        runtime.ensure_loaded = lambda *_args, **_kwargs: None
+        payloads = [
+            {"choices": [{"message": {"content": "e2e4"}, "finish_reason": "stop"}]},
+            {"choices": []},
+        ]
+        runtime._http_open = lambda *_args, **_kwargs: FakeResponse(payloads.pop(0))
+        try:
+            move, metadata = runtime.generate(self.model, chess.Board())
+            self.assertEqual(move.uci(), "e2e4")
+            self.assertEqual(metadata["runtime"], UpstreamLlamaServerRuntime.RUNTIME_NAME)
+            with self.assertRaises(RuntimeContractError):
+                runtime.generate(self.model, chess.Board())
+        finally:
+            runtime.shutdown()
+
     def test_intentional_stop_does_not_leave_watchdog_restart_intent(self):
         popen = Mock(side_effect=lambda *a, **k: FakeProcess(*a, **k))
         runtime = self.make_runtime(popen=popen)
@@ -166,29 +236,7 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
         finally:
             runtime.shutdown()
 
-    def test_generate_uses_validated_http_transport_and_reports_upstream_runtime(self):
-        processes = []
-        def fake_popen(*args, **kwargs):
-            process = FakeProcess(*args, **kwargs)
-            processes.append(process)
-            return process
-        def fake_open(request, timeout=None):
-            if request.full_url.endswith("/health"):
-                return FakeResponse({"status": "ok"})
-            return FakeResponse({
-                "choices": [{"message": {"content": "e2e4"}, "finish_reason": "stop"}],
-                "usage": {"completion_tokens": 1},
-            })
-        runtime = self.make_runtime(popen=fake_popen, urlopen=fake_open)
-        try:
-            move, metadata = runtime.generate(self.model, chess.Board())
-            self.assertEqual(move.uci(), "e2e4")
-            self.assertEqual(metadata["runtime"], "llama.cpp-upstream")
-            self.assertEqual(len(processes), 1)
-        finally:
-            runtime.shutdown()
-
-    def test_watchdog_restarts_only_the_owned_child_while_model_is_desired(self):
+    def test_watchdog_restarts_only_owned_child_while_model_is_desired(self):
         processes = []
         def fake_popen(*args, **kwargs):
             process = FakeProcess(*args, **kwargs)
@@ -228,9 +276,11 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
                 "ARENA_RUNTIME": "llama-server",
                 "ARENA_UPSTREAM_RUNTIME_ENABLED": "1",
                 "ARENA_UPSTREAM_LLAMA_SERVER_BIN": str(self.binary),
+                "ARENA_UPSTREAM_RUNTIME_ROOT": str(self.runtime_root),
             },
             popen=lambda *_a, **_k: FakeProcess(),
             urlopen=self.healthy_open,
+            model_root=self.model_root,
         )
         try:
             self.assertIsInstance(runtime, UpstreamLlamaServerRuntime)

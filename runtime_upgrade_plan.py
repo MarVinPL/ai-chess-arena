@@ -66,10 +66,10 @@ class UpstreamLlamaServerProfile:
     parallel: int = 1
 
     def validate(self) -> None:
-        if self.host not in {"127.0.0.1", "::1", "localhost"}:
-            raise ValueError("Candidate runtime must bind to loopback only")
-        if not 1 <= int(self.port) <= 65535:
-            raise ValueError("Invalid candidate runtime port")
+        if self.host != "127.0.0.1":
+            raise ValueError("Candidate runtime must bind only to 127.0.0.1")
+        if int(self.port) != 8089:
+            raise ValueError("Candidate runtime must use isolated port 8089")
         if int(self.threads) < 1 or int(self.context) < 512 or int(self.parallel) != 1:
             raise ValueError("Invalid candidate runtime resource limits")
 
