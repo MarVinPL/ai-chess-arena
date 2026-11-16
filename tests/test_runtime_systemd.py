@@ -38,7 +38,7 @@ def test_policy_requires_separate_unprivileged_identity_and_strict_isolation():
     assert props["ProtectSystem"] == "strict"
     assert props["ProtectHome"] == "yes"
     assert props["PrivateNetwork"] == "yes"
-    assert props["RestrictAddressFamilies"] == "AF_UNIX"
+    assert props["RestrictAddressFamilies"] == "AF_UNIX AF_INET"
     assert props["KillMode"] == "control-group"
     assert props["Delegate"] == "no"
 
@@ -75,6 +75,6 @@ def test_invalid_or_unsafe_unit_parameters_fail_closed(field, value):
 def test_runtime_policy_does_not_expose_host_tcp_network():
     props = build().as_dict()
     assert props["PrivateNetwork"] == "yes"
-    assert props["RestrictAddressFamilies"] == "AF_UNIX"
-    # The current adapter speaks HTTP over loopback TCP. This profile therefore
-    # cannot be wired until a separately tested Unix-socket control bridge exists.
+    assert props["RestrictAddressFamilies"] == "AF_UNIX AF_INET"
+    # IPv4 is permitted only within the PrivateNetwork namespace; the host/API
+    # control channel is AF_UNIX and is separately peer-credential checked.

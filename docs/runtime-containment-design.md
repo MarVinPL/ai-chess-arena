@@ -60,3 +60,39 @@ This remains an orchestration prototype, not an active supervisor:
 Tests use a fake backend and temporary SQLite databases, including persistence
 failure, ambiguous start, exact-unit recovery, invalid unit names and
 non-running queue rows. They do not start a systemd unit or a model process.
+
+## AF_UNIX control bridge prototype (2026-11-17)
+
+A prototype now exists in `runtime_unix_bridge.py`. It exposes only two
+operations over a Unix-domain socket: `GET /health` and
+`POST /v1/chat/completions`. The runtime-side bridge forwards those requests
+to `127.0.0.1:<reserved-port>` and rejects other methods/paths, oversized
+messages, and peers whose Linux `SO_PEERCRED` UID is not the configured API
+UID. The host-side client connects only to the configured AF_UNIX path. Tests
+exercise allowlisting, peer-UID rejection, HTTP errors, and loopback forwarding.
+
+The systemd socket-family policy is now `AF_UNIX AF_INET`, not AF_UNIX alone.
+This is intentional: the worker and llamafile need IPv4 loopback *inside* the
+`PrivateNetwork=yes` namespace, while AF_UNIX carries the host/API control
+channel. This is not a claim of verified no-egress: the private namespace
+boundary and effective systemd properties still require integration testing.
+
+Required directory handoff before this can be wired:
+- A privileged supervisor must create each per-job runtime directory before
+  starting the unit, with a narrow setgid directory policy so the runtime UID
+  can create its socket and the API UID can traverse/connect without write
+  access. One candidate is owner `arena-runtime`, group `debian`, mode
+  `2710`; the socket is mode `0660`. This exact ownership/mode must be
+  verified against the real service identities and systemd sandbox before use.
+- The API must not be able to replace/unlink the socket or write in the
+  runtime directory. The runtime must not be able to write to API files,
+  DB, quarantine, or any other job directory.
+- The supervisor must verify peer credentials and unit/cgroup identity, clean
+  the socket path only after the exact unit is stopped, and reject stale paths.
+- The socket must be mounted/shared into the runtime's mount namespace at the
+  same path. Integration tests must prove this behavior with a disposable
+  transient unit before any execution wiring.
+
+This remains a transport prototype. It is not connected to
+`runtime_subprocess.py`, the API, or any real systemd unit; no account, ACL,
+socket, service, network, or production configuration was changed.

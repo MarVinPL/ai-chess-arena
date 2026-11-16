@@ -52,7 +52,7 @@ class RuntimeSupervisor:
             "ProtectHome": "yes", "PrivateTmp": "yes",
             "PrivateDevices": "yes", "PrivateNetwork": "yes",
             "ProtectControlGroups": "yes", "RestrictNamespaces": "yes",
-            "RestrictAddressFamilies": "AF_UNIX", "KillMode": "control-group",
+            "RestrictAddressFamilies": "AF_UNIX AF_INET", "KillMode": "control-group",
             "Delegate": "no", "WorkingDirectory": f"/run/arena-runtime/job-{job_id}",
             "ReadWritePaths": f"/run/arena-runtime/job-{job_id}",
         }
