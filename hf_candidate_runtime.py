@@ -61,8 +61,10 @@ def _review_blockers(connection, catalog_id, revision):
         return ['Brak ręcznego przeglądu licencji i gotowości dla przypiętej rewizji.']
     review = review_record.get('review') or {}
     blockers = []
-    if review.get('license_status') != 'verified_permissive':
-        blockers.append('Licencja nie ma ręcznego statusu verified_permissive.')
+    if review.get('license_status') not in {'declared_permissive', 'verified_permissive'}:
+        blockers.append('Brak pozytywnej oceny licencji (declared_permissive lub verified_permissive).')
+    if review.get('license_status') == 'declared_permissive' and not any(token in (review.get('license_evidence') or '').lower() for token in ('apache-2.0', 'apache 2.0')):
+        blockers.append('Status declared_permissive wymaga jawnego wskazania deklaracji Apache-2.0 w dowodach.')
     if review.get('revision_confirmed') is not True:
         blockers.append('Przypięta rewizja nie została ręcznie potwierdzona.')
     if review.get('technical_readiness') != 'ready':

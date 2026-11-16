@@ -97,6 +97,37 @@ class RuntimePreflightTests(unittest.TestCase):
         self.assertEqual(item['status'],'skipped_blocked')
         self.assertIn('Gotowość techniczna',item['reason'])
 
+    def test_declared_apache_license_is_accepted_without_claiming_independent_verification(self):
+        candidate=('hf:org/model','a'*40,'model.gguf')
+        with league.connect() as c:
+            reviews.save(c,{'catalog_id':candidate[0],'revision':candidate[1],
+                'license_id':'apache-2.0','license_status':'declared_permissive',
+                'license_evidence':'Repozytorium i README deklarują Apache-2.0 dla przypiętej rewizji.',
+                'revision_confirmed':True,'revision_notes':'SHA rewizji porównany z API.',
+                'technical_readiness':'ready','technical_evidence':'Test techniczny i kontrola artefaktu zakończone.',
+                'technical_blockers':''})
+        with patch.object(runtime,'RUNTIME_CANDIDATES',{candidate}):
+            result=runtime.refresh_preflight()
+        item=next(x for x in result['items'] if x['artifact_key']=='|'.join(candidate))
+        self.assertEqual(item['status'],'ready_pending_approval')
+        self.assertFalse(result['policy']['auto_start'])
+        self.assertFalse(result['policy']['runtime_enabled'])
+
+    def test_declared_permissive_requires_explicit_apache_evidence(self):
+        candidate=('hf:org/model','a'*40,'model.gguf')
+        with league.connect() as c:
+            reviews.save(c,{'catalog_id':candidate[0],'revision':candidate[1],
+                'license_id':'apache-2.0','license_status':'declared_permissive',
+                'license_evidence':'Deklaracja repozytorium bez identyfikacji Apache.',
+                'revision_confirmed':True,'revision_notes':'SHA rewizji porównany z API.',
+                'technical_readiness':'ready','technical_evidence':'Test techniczny zakończony.',
+                'technical_blockers':''})
+        with patch.object(runtime,'RUNTIME_CANDIDATES',{candidate}):
+            result=runtime.refresh_preflight()
+        item=next(x for x in result['items'] if x['artifact_key']=='|'.join(candidate))
+        self.assertEqual(item['status'],'skipped_blocked')
+        self.assertIn('jawnego wskazania deklaracji Apache-2.0',item['reason'])
+
     def test_runtime_candidate_can_only_pass_after_manual_review_and_verified_artifact(self):
         candidate=('hf:org/model','a'*40,'model.gguf')
         with league.connect() as c:

@@ -6,7 +6,7 @@ change an allowlist, download weights, or execute model code.
 import json
 import time
 
-LICENSE_STATES = {'pending', 'verified_permissive', 'verified_restricted', 'not_compatible'}
+LICENSE_STATES = {'pending', 'declared_permissive', 'verified_permissive', 'verified_restricted', 'not_compatible'}
 TECHNICAL_STATES = {'not_evaluated', 'ready', 'blocked'}
 
 
