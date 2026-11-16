@@ -53,6 +53,15 @@ class ArenaAuthTests(unittest.TestCase):
         self.assertTrue(arena_auth.origin_allowed("https://arena.148-113-182-137.sslip.io"))
         self.assertFalse(arena_auth.origin_allowed("https://attacker.example"))
 
+    def test_fifth_bad_attempt_is_allowed_but_sixth_is_rate_limited(self):
+        for _ in range(arena_auth.LOGIN_MAX_FAILURES):
+            ok, reason = arena_auth.check_login(self.username, "incorrect-password", "limited-client")
+            self.assertFalse(ok)
+            self.assertEqual(reason, "invalid_credentials")
+        ok, reason = arena_auth.check_login(self.username, "incorrect-password", "limited-client")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "rate_limited")
+
     def test_rate_limit_resets_after_window(self):
         for _ in range(arena_auth.LOGIN_MAX_FAILURES):
             arena_auth.record_failure("test-client", now=1000)
