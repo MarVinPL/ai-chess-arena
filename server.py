@@ -15,6 +15,7 @@ import engine_runner
 import adjudication
 import passkey_test
 import tournament_checkpoint
+import arena_auth
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1278,13 +1279,47 @@ def fetch_hf_license_evidence(source):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
-    def send_json(self, obj, code=200):
+    def send_json(self, obj, code=200, extra_headers=()):
         body = json.dumps(obj, ensure_ascii=False).encode()
-        self.send_response(code); self.send_header('Content-Type','application/json; charset=utf-8')
-        self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+        self.send_response(code)
+        self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Content-Length',str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        for name, value in extra_headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+    def send_html_file(self, filename, code=200):
+        body = (ROOT / filename).read_bytes()
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
+    def authenticated_user(self):
+        return arena_auth.session_user(self.headers.get('Cookie'))
     def do_GET(self):
         raw_path = self.path
         path = _route_path(raw_path)
+        user = self.authenticated_user()
+        if path == '/api/auth/status':
+            self.send_json({'authenticated': bool(user), 'username': user})
+            return
+        if path == '/login':
+            if user:
+                self.send_response(303); self.send_header('Location', '/'); self.end_headers()
+            else:
+                self.send_html_file('login.html')
+            return
+        if path == '/' and not user:
+            self.send_html_file('login.html')
+            return
+        if not user:
+            self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1513,12 +1548,51 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.csv"')
             self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
         elif path == '/':
-            data = (ROOT/'index.html').read_bytes(); self.send_response(200)
-            self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+            self.send_html_file('index.html')
         else: self.send_error(404)
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+        if path == '/api/auth/login':
+            if not arena_auth.is_configured():
+                self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
+                return
+            if not arena_auth.origin_allowed(self.headers.get('Origin')):
+                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if length < 1 or length > 4096:
+                    raise ValueError('Nieprawidłowy rozmiar żądania logowania')
+                payload = json.loads(self.rfile.read(length))
+                username = payload.get('username', '')
+                password = payload.get('password', '')
+                if not isinstance(username, str) or not isinstance(password, str):
+                    raise ValueError('Nieprawidłowe dane logowania')
+                ok, reason = arena_auth.check_login(username, password, self.client_address[0])
+                if not ok:
+                    if reason == 'rate_limited':
+                        self.send_json({'error': 'Zbyt wiele prób logowania. Spróbuj ponownie za 10 minut.'}, 429)
+                    else:
+                        self.send_json({'error': 'Nieprawidłowy login lub hasło.'}, 401)
+                    return
+                token = arena_auth.create_session_token(username)
+                self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.session_cookie(token))])
+            except (ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 400)
+            return
+        if path == '/api/auth/logout':
+            if not arena_auth.origin_allowed(self.headers.get('Origin')):
+                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
+                return
+            self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.expired_cookie())])
+            return
+        if not self.authenticated_user():
+            self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
+            return
+        if not arena_auth.origin_allowed(self.headers.get('Origin')):
+            self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
+            return
         if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
