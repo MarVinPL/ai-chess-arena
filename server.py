@@ -1621,7 +1621,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length) or b'{}')
                 if path == '/api/hf-candidates/review':
                     with league.connect() as c:
-                        result = hf_candidate_reviews.save(c, payload, actor='arena')
+                        result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
                 elif path == '/api/hf-candidates/audit':
                     if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
                         raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
