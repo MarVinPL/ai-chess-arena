@@ -10,12 +10,21 @@ from pathlib import Path
 import league
 import hf_candidate_downloads
 import hf_candidate_queue
+import hf_candidate_reviews
 
 # Conservative CPU-memory estimate: mapped weights + runtime overhead/context.
 MEMORY_MULTIPLIER = 1.5
 MEMORY_RESERVE_BYTES = 1536 * 1024**2
 DISK_RESERVE_BYTES = 512 * 1024**2
 REFRESH_SECONDS = 15 * 60
+
+# Separate from the download allowlist. This adds a candidate to the runtime
+# review/preflight workflow only; it does not authorize downloading or execution.
+RUNTIME_CANDIDATES = {
+    ('hf:360ZhiNao/Light-R1-14B-DS-GGUF',
+     '0d4531e58894e0019d4a9a6aa775eb32098213cb',
+     'Light-R1-14B-Q4_0.gguf'),
+}
 
 
 def _now(): return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -46,6 +55,23 @@ def _verified_artifacts():
     return [dict(row) for row in rows]
 
 
+def _review_blockers(connection, catalog_id, revision):
+    review_record = hf_candidate_reviews.get(connection, catalog_id, revision)
+    if not review_record:
+        return ['Brak ręcznego przeglądu licencji i gotowości dla przypiętej rewizji.']
+    review = review_record.get('review') or {}
+    blockers = []
+    if review.get('license_status') != 'verified_permissive':
+        blockers.append('Licencja nie ma ręcznego statusu verified_permissive.')
+    if review.get('revision_confirmed') is not True:
+        blockers.append('Przypięta rewizja nie została ręcznie potwierdzona.')
+    if review.get('technical_readiness') != 'ready':
+        blockers.append('Gotowość techniczna nie ma ręcznego statusu ready.')
+    if review.get('technical_blockers'):
+        blockers.append('Przegląd techniczny zawiera nierozwiązane blokady.')
+    return blockers
+
+
 def refresh_preflight():
     hardware=hf_candidate_queue.hardware_snapshot()
     available=_memory_available()
@@ -61,8 +87,11 @@ def refresh_preflight():
         expected_key=(catalog_id,revision,filename)
         estimated=int(item['size_bytes']*MEMORY_MULTIPLIER)+MEMORY_RESERVE_BYTES
         blockers=[]
-        if expected_key not in approved:
-            blockers.append('Artefakt nie znajduje się na jawnej allowliście runtime.')
+        if expected_key not in approved and expected_key not in RUNTIME_CANDIDATES:
+            blockers.append('Artefakt nie znajduje się na jawnej allowliście runtime ani liście kandydatów do przeglądu.')
+        if expected_key in RUNTIME_CANDIDATES:
+            with league.connect() as review_connection:
+                blockers.extend(_review_blockers(review_connection, catalog_id, revision))
         try:
             if not path.resolve().is_relative_to(hf_candidate_downloads.STAGING_DIR.resolve()): blockers.append('Ścieżka artefaktu znajduje się poza katalogiem kwarantanny.')
         except (OSError, ValueError): blockers.append('Nie można potwierdzić bezpiecznej ścieżki kwarantanny.')
@@ -85,6 +114,19 @@ def refresh_preflight():
             'filename':filename,'path':str(path),'size_bytes':item['size_bytes'],'sha256':item['sha256'],
             'status':status,'reason':' '.join(blockers) if blockers else 'Preflight zasobów i metadanych OK. SHA-256 musi być ponownie sprawdzony bezpośrednio przed ewentualnym uruchomieniem. Test runtime wymaga osobnego jawnego zatwierdzenia.',
             'estimated_ram_bytes':estimated,'available_ram_bytes':available,'checked_at':_now()})
+    discovered_keys={item['artifact_key'] for item in discovered}
+    for catalog_id, revision, filename in sorted(RUNTIME_CANDIDATES):
+        key='|'.join((catalog_id, revision, filename))
+        if key in discovered_keys:
+            continue
+        repo_item=next((x for x in hf_candidate_downloads.audit.load_catalog() if x['catalog_id']==catalog_id),None)
+        blockers=['Brak rekordu artefaktu zweryfikowanego w kwarantannie; plik nie jest dostępny dla preflight.']
+        with league.connect() as review_connection:
+            blockers.extend(_review_blockers(review_connection, catalog_id, revision))
+        discovered.append({'artifact_key':key,'catalog_id':catalog_id,'repo_id':repo_item.get('repo_id','') if repo_item else '',
+            'revision':revision,'filename':filename,'path':'','size_bytes':0,'sha256':'','status':'skipped_blocked',
+            'reason':' '.join(blockers),'estimated_ram_bytes':None,'available_ram_bytes':available,'checked_at':_now()})
+
     with league.connect() as c:
         _init(c)
         current_keys={item['artifact_key'] for item in discovered}
