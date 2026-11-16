@@ -25,7 +25,7 @@ class FakeRunner:
     def __call__(self, argv, timeout):
         self.calls.append((argv, timeout))
         if argv[0].endswith("systemctl") and "show" in argv:
-            output = "" if "--value" in argv and self.show.startswith("ControlGroup=") else self.show
+            output = self.show.split("=", 1)[1] if "--value" in argv and self.show.startswith("ControlGroup=") else self.show
             return SimpleNamespace(returncode=0, stdout=output, stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -72,3 +72,30 @@ def test_stop_refuses_non_deterministic_or_unrelated_unit_name():
     with pytest.raises(SystemdBackendError):
         backend.stop("sshd.service")
     assert fake.calls == []
+
+
+def test_stop_refuses_to_mark_unit_stopped_when_cgroup_still_has_processes(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("1234\n", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="nadal zawiera procesy"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_refuses_cgroup_path_outside_system_slice(tmp_path):
+    fake = FakeRunner("ControlGroup=/user.slice/user-1000.slice/example.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="ścieżka cgroup"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_systemd_command_failure_is_not_treated_as_success():
+    class FailedRunner:
+        def __call__(self, argv, timeout):
+            return SimpleNamespace(returncode=1, stdout="", stderr="access denied")
+
+    backend = SystemdTransientBackend(command_runner=FailedRunner())
+    with pytest.raises(SystemdBackendError, match="zakończyło się błędem"):
+        backend.stop("ai-chess-arena-runtime-9.service")
