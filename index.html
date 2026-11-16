@@ -175,6 +175,10 @@ button.stop{background:#744b4b;border-color:#986363}
   <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
   <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
   <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
+  <section class="panel history" id="hf-download-status" aria-live="polite" style="margin-top:12px">
+   <h4 style="margin:0 0 8px">Pobieranie modeli — bieżący status</h4>
+   <div id="hf-download-status-body" class="notice" role="status">Sprawdzam stan pobierania…</div>
+  </section>
   <section id="hf-download-workspace" class="moves" aria-live="polite" style="margin-top:10px"></section>
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
@@ -551,12 +555,42 @@ async function openHfDownloadPicker(item){
   renderHfDownloadSelection(host);
  }catch(e){host.textContent='Nie udało się pobrać listy plików: '+e;}
 }
-async function watchHfDownloadJob(id,host){
- const status=document.createElement('p');status.className='notice';status.textContent='Zadanie uruchomione…';host.appendChild(status);
- const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='Anuluj pobieranie';cancel.onclick=async()=>{cancel.disabled=true;try{const r=await fetch('/api/hf-candidates/download-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);status.textContent='Wysłano żądanie anulowania…';}catch(e){status.textContent='Nie udało się anulować: '+e;cancel.disabled=false;}};host.appendChild(cancel);
- const refresh=async()=>{try{const r=await fetch('/api/hf-candidates/download-jobs?job_id='+encodeURIComponent(id),{cache:'no-store'});const j=await r.json();if(!r.ok)throw Error(j.error||r.status);status.textContent='Status: '+j.status+' · plik: '+(j.current_file||'—')+' · pobrano: '+(j.current_file_bytes/1024**2).toFixed(1)+' MiB · '+j.message;if(j.status==='completed'||j.status==='failed'||j.status==='cancelled'){cancel.disabled=true;const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify(j.results,null,2);host.appendChild(pre);return true;}return false;}catch(e){status.textContent='Błąd odczytu zadania: '+e;return true;}};
- if(!await refresh()){const timer=setInterval(async()=>{if(await refresh())clearInterval(timer);},2500);}
+function formatDownloadBytes(value){
+ const bytes=Number(value)||0;
+ if(bytes>=1024**3)return (bytes/1024**3).toFixed(2)+' GiB';
+ if(bytes>=1024**2)return (bytes/1024**2).toFixed(1)+' MiB';
+ return bytes.toLocaleString('pl-PL')+' B';
 }
+async function refreshHfDownloadStatus(){
+ const host=$('hf-download-status-body');if(!host)return;
+ try{
+  const r=await fetch('/api/hf-candidates/download-jobs',{cache:'no-store'});const j=await r.json();
+  if(r.status===404){host.textContent='Brak bieżącej lub ostatniej partii pobierania.';return;}
+  if(!r.ok)throw Error(j.error||r.status);
+  host.replaceChildren();
+  const labels={queued:'W kolejce',downloading:'Pobieranie',completed:'Zakończono · pliki zweryfikowane',failed:'Błąd pobierania',cancelled:'Anulowano'};
+  const heading=document.createElement('strong');heading.textContent=(labels[j.status]||j.status)+' · '+(j.completed_files||0)+'/'+(j.total_files||0)+' plików';host.appendChild(heading);
+  const downloaded=Number(j.downloaded_bytes)||0,total=Number(j.total_bytes)||0,percent=Number(j.progress_percent)||0;
+  const progress=document.createElement('progress');progress.max=100;progress.value=percent;progress.style.cssText='display:block;width:100%;height:18px;margin:10px 0;accent-color:#35d2c0';progress.setAttribute('aria-label','Postęp pobierania '+percent+' procent');host.appendChild(progress);
+  const summary=document.createElement('p');summary.className='notice';summary.textContent=formatDownloadBytes(downloaded)+' / '+formatDownloadBytes(total)+' · '+percent.toFixed(1)+'%';host.appendChild(summary);
+  const current=document.createElement('p');current.className='notice';current.textContent='Aktualny plik: '+(j.current_file||'—');
+  if(j.status==='downloading')current.textContent+=' · '+formatDownloadBytes(j.current_file_bytes)+' / '+formatDownloadBytes(j.current_file_total_bytes);
+  host.appendChild(current);
+  const message=document.createElement('p');message.className='notice';message.textContent=j.message||'';host.appendChild(message);
+  if(Array.isArray(j.results)&&j.results.length){
+   const list=document.createElement('ul');j.results.forEach(item=>{const li=document.createElement('li');li.textContent=(item.status==='verified_quarantined'?'SHA-256 OK · ':'')+item.name+' · '+formatDownloadBytes(item.size_bytes);list.appendChild(li)});host.appendChild(list);
+  }
+  if(j.active){
+   const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='Anuluj pobieranie';cancel.onclick=async()=>{cancel.disabled=true;try{const cr=await fetch('/api/hf-candidates/download-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:j.id})});const cd=await cr.json();if(!cr.ok)throw Error(cd.error||cr.status);message.textContent='Wysłano żądanie anulowania…';}catch(e){message.textContent='Nie udało się anulować: '+e;cancel.disabled=false;}};host.appendChild(cancel);
+  }
+ }catch(e){host.textContent='Nie udało się odczytać stanu pobierania: '+e;}
+}
+function watchHfDownloadJob(id,host){
+ const status=$('hf-download-status');if(status)status.scrollIntoView({behavior:'smooth',block:'center'});
+ refreshHfDownloadStatus();
+}
+setInterval(refreshHfDownloadStatus,2500);
+refreshHfDownloadStatus();
 loadHfCandidates();
 
 function renderModelAdmission(items){

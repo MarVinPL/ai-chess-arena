@@ -1451,7 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from urllib.parse import urlparse, parse_qs
                 job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
-                job = hf_candidate_downloads.get(job_id)
+                job = hf_candidate_downloads.get(job_id) if job_id else hf_candidate_downloads.current()
                 self.send_json(job if job else {'error': 'Nie znaleziono zadania.'}, 200 if job else 404)
             except (OSError, ValueError) as exc:
                 self.send_json({'error': str(exc)}, 422)

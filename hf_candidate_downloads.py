@@ -98,7 +98,7 @@ def _worker(job_id, tasks):
         for index,task in enumerate(tasks):
             file=task['file']; repo=task['repo_id']; revision=task['revision']
             with _lock:
-                job.update(status='downloading',current_file=repo+'/'+file['name'],current_file_bytes=0,completed_files=index,updated_at=_now())
+                job.update(status='downloading',current_file=repo+'/'+file['name'],current_file_bytes=0,current_file_total_bytes=file['size_bytes'],completed_files=index,updated_at=_now())
             result=_download(job,repo,revision,file,_cancel_events[job_id])
             result.update({'catalog_id':task['catalog_id'],'repo_id':repo,'revision':revision})
             with _lock: job['results'].append(result); job['completed_files']=index+1
@@ -142,17 +142,35 @@ def start(candidates: list):
         catalog_map={}
         for task in tasks:
             catalog_map.setdefault(task['catalog_id'], {'catalog_id':task['catalog_id'],'repo_id':task['repo_id'],'revision':task['revision']})
-        job={'id':job_id,'catalogs':list(catalog_map.values()),'status':'queued','total_bytes':total,'total_files':len(tasks),'completed_files':0,'current_file':None,'current_file_bytes':0,'results':[],'created_at':_now(),'updated_at':_now(),'message':'Oczekiwanie na pobieranie.'}
+        job={'id':job_id,'catalogs':list(catalog_map.values()),'status':'queued','total_bytes':total,'total_files':len(tasks),'completed_files':0,'current_file':None,'current_file_bytes':0,'current_file_total_bytes':0,'results':[],'created_at':_now(),'updated_at':_now(),'message':'Oczekiwanie na pobieranie.'}
         _jobs[job_id]=job
         _cancel_events[job_id]=threading.Event()
         thread=threading.Thread(target=_worker,args=(job_id,tasks),daemon=True)
         thread.start()
         return dict(job)
 
+def _snapshot(job):
+    snapshot=dict(job)
+    completed_bytes=sum(int(item.get('size_bytes') or 0) for item in snapshot.get('results', []))
+    current_bytes=int(snapshot.get('current_file_bytes') or 0) if snapshot.get('status') == 'downloading' else 0
+    snapshot['downloaded_bytes']=completed_bytes+current_bytes
+    total_bytes=int(snapshot.get('total_bytes') or 0)
+    snapshot['progress_percent']=round(min(100.0, snapshot['downloaded_bytes'] * 100.0 / total_bytes), 1) if total_bytes else 0.0
+    snapshot['active']=snapshot.get('status') in {'queued','downloading'}
+    return snapshot
+
+
 def get(job_id):
     with _lock:
         job=_jobs.get(job_id)
-        return dict(job) if job else None
+        return _snapshot(job) if job else None
+
+
+def current():
+    with _lock:
+        if not _jobs:
+            return None
+        return _snapshot(next(reversed(_jobs.values())))
 
 
 def cancel(job_id):
