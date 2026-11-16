@@ -93,7 +93,7 @@ class ModelPermissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EVALUATION"):
             self.decide( request_id=test_req["id"], action="revoke",
                               confirm=True, reason="wycofanie")
-        self.assertFalse(self.db.in_transaction, "failed owned decision must release its transaction")
+        self.assertTrue(self.db.in_transaction, "failed decision must preserve the caller-owned transaction")
         self.decide( request_id=eval_req["id"], action="revoke",
                           confirm=True, reason="koniec ewaluacji")
         self.decide( request_id=test_req["id"], action="revoke",
@@ -181,6 +181,40 @@ class ModelPermissionTests(unittest.TestCase):
             ).fetchone()[0],
             "requested",
         )
+
+    def test_failed_owned_decision_rolls_back_its_transaction(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3") as db_file:
+            setup = sqlite3.connect(db_file.name, timeout=10)
+            setup.row_factory = sqlite3.Row
+            ensure_schema(setup)
+            test_req = request_permission(
+                setup, **self.ident, scope="TEST_ONLY", confirm=True,
+                reason="initial test grant", actor="setup-operator",
+            )
+            decide_permission(
+                setup, request_id=test_req["id"], action="approve", confirm=True,
+                actor="setup-operator",
+            )
+            eval_req = request_permission(
+                setup, **self.ident, scope="EVALUATION", confirm=True,
+                reason="evaluation request", actor="setup-operator",
+            )
+            decide_permission(
+                setup, request_id=eval_req["id"], action="approve", confirm=True,
+                actor="setup-operator",
+            )
+            setup.commit()
+            setup.close()
+
+            connection = sqlite3.connect(db_file.name, timeout=10)
+            connection.row_factory = sqlite3.Row
+            with self.assertRaisesRegex(ValueError, "EVALUATION"):
+                decide_permission(
+                    connection, request_id=test_req["id"], action="revoke",
+                    confirm=True, reason="end test", actor="test-operator",
+                )
+            self.assertFalse(connection.in_transaction)
+            connection.close()
 
     def test_concurrent_evaluation_approval_and_test_only_revoke_preserve_dependency(self):
         with tempfile.NamedTemporaryFile(suffix=".sqlite3") as db_file:

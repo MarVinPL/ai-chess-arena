@@ -31,8 +31,11 @@ def _add_column_if_missing(connection: sqlite3.Connection, table: str,
 
 
 def ensure_schema(connection: sqlite3.Connection) -> None:
-    connection.executescript("""
-        CREATE TABLE IF NOT EXISTS model_permission_requests (
+    # Use individual execute calls: executescript() implicitly commits an
+    # already-open transaction in sqlite3, which would break caller-owned
+    # transactions and split the permission decision from its surrounding work.
+    statements = (
+        """CREATE TABLE IF NOT EXISTS model_permission_requests (
             id INTEGER PRIMARY KEY,
             model_id INTEGER NOT NULL,
             repo_id TEXT NOT NULL,
@@ -46,10 +49,10 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             decided_at TEXT,
             reason TEXT NOT NULL DEFAULT '',
             snapshot_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_model_permission_requests_model
-            ON model_permission_requests(model_id, id);
-        CREATE TABLE IF NOT EXISTS model_permission_events (
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_model_permission_requests_model
+            ON model_permission_requests(model_id, id)""",
+        """CREATE TABLE IF NOT EXISTS model_permission_events (
             id INTEGER PRIMARY KEY,
             request_id INTEGER NOT NULL,
             model_id INTEGER NOT NULL,
@@ -62,16 +65,18 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             occurred_at TEXT NOT NULL,
             reason TEXT NOT NULL DEFAULT '',
             snapshot_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_model_permission_events_model
-            ON model_permission_events(model_id, id);
-        CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_update
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_model_permission_events_model
+            ON model_permission_events(model_id, id)""",
+        """CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_update
             BEFORE UPDATE ON model_permission_events
-            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END;
-        CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_delete
+            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS trg_model_permission_events_no_delete
             BEFORE DELETE ON model_permission_events
-            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END;
-    """)
+            BEGIN SELECT RAISE(ABORT, 'model permission history is append-only'); END""",
+    )
+    for statement in statements:
+        connection.execute(statement)
     # Older, not-yet-deployed development DBs fail closed with an empty hash.
     _add_column_if_missing(connection, "model_permission_requests",
                            "artifact_sha256", "TEXT NOT NULL DEFAULT ''")
