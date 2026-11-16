@@ -32,7 +32,7 @@ def _password_hash_parts():
         if algorithm != "pbkdf2_sha256" or iterations < 300_000 or len(salt_bytes) < 16 or len(digest_bytes) != 32:
             return None
         return iterations, salt_bytes, digest_bytes
-    except (ValueError, TypeError):
+    except Exception:
         return None
 
 def _session_secret():
@@ -51,7 +51,10 @@ def verify_password(password):
     if not parts or not isinstance(password, str):
         return False
     iterations, salt, expected = parts
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    try:
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    except UnicodeError:
+        return False
     return hmac.compare_digest(actual, expected)
 
 def login_allowed(remote_key, now=None):
@@ -102,7 +105,8 @@ def check_login(username, password, remote_key):
         return False, "not_configured"
     if not login_allowed(remote_key):
         return False, "rate_limited"
-    user_ok = hmac.compare_digest(str(username), os.environ["ARENA_AUTH_USERNAME"])
+    user_ok = hmac.compare_digest(
+        str(username).encode("utf-8"), os.environ["ARENA_AUTH_USERNAME"].encode("utf-8"))
     password_ok = verify_password(password)
     if user_ok and password_ok:
         clear_failures(remote_key)
@@ -135,7 +139,7 @@ def session_user(cookie_header, now=None):
         message = f"{username}:{issued}:{nonce}".encode("utf-8")
         expected = _b64e(hmac.new(_session_secret(), message, hashlib.sha256).digest())
         return username if hmac.compare_digest(signature, expected) else None
-    except (KeyError, ValueError, TypeError):
+    except Exception:
         return None
 
 def session_cookie(token):
@@ -146,7 +150,12 @@ def expired_cookie():
 
 def origin_allowed(origin):
     expected = os.environ.get("ARENA_AUTH_ORIGIN", "")
-    return bool(expected and origin and hmac.compare_digest(origin.rstrip("/"), expected.rstrip("/")))
+    if not expected or not origin:
+        return False
+    try:
+        return hmac.compare_digest(origin.rstrip("/").encode("utf-8"), expected.rstrip("/").encode("utf-8"))
+    except UnicodeError:
+        return False
 
 def generate_env_file(path):
     username = input("Login [arena]: ").strip() or "arena"
