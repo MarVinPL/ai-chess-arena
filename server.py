@@ -1565,6 +1565,8 @@ class Handler(BaseHTTPRequestHandler):
                 if length < 1 or length > 4096:
                     raise ValueError('Nieprawidłowy rozmiar żądania logowania')
                 payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Nieprawidłowe dane logowania')
                 username = payload.get('username', '')
                 password = payload.get('password', '')
                 if not isinstance(username, str) or not isinstance(password, str):
