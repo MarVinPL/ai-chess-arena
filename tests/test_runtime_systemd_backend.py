@@ -47,14 +47,14 @@ def test_start_fails_closed_when_effective_properties_do_not_match():
     fake = FakeRunner("User=debian\nGroup=debian\n")
     backend = SystemdTransientBackend(command_runner=fake)
     with pytest.raises(SystemdBackendError, match="właściwości"):
-        backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker",))
+        backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
 
 
 def test_start_rejects_worker_outside_root_owned_bundle_before_command():
     fake = FakeRunner()
     backend = SystemdTransientBackend(command_runner=fake)
-    with pytest.raises(SystemdBackendError, match="root-owned"):
-        backend.start(make_spec(), ("/home/debian/worker",))
+    with pytest.raises(SystemdBackendError, match="przypisanemu zadaniu"):
+        backend.start(make_spec(), ("/home/debian/worker", "--job", "9"))
     assert fake.calls == []
 
 
@@ -99,3 +99,25 @@ def test_systemd_command_failure_is_not_treated_as_success():
     backend = SystemdTransientBackend(command_runner=FailedRunner())
     with pytest.raises(SystemdBackendError, match="zakończyło się błędem"):
         backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_start_rejects_spec_with_weakened_network_or_filesystem_policy():
+    from dataclasses import replace
+
+    spec = make_spec()
+    props = list(spec.properties)
+    props = [(key, "no" if key == "PrivateNetwork" else value) for key, value in props]
+    weakened = replace(spec, properties=tuple(props))
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="kompletnej polityki"):
+        backend.start(weakened, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+    assert fake.calls == []
+
+
+def test_start_rejects_worker_arguments_not_bound_to_job_id():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="przypisanemu zadaniu"):
+        backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "10"))
+    assert fake.calls == []

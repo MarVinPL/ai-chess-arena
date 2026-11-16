@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from runtime_supervisor import RuntimeSupervisorError, _UNIT_RE
-from runtime_systemd import RuntimeUnitSpec
+from runtime_systemd import RuntimeUnitSpec, build_runtime_unit_spec
 
 
 class SystemdBackendError(RuntimeSupervisorError):
@@ -62,28 +62,35 @@ class SystemdTransientBackend:
         if not match:
             raise SystemdBackendError("Odmowa: nazwa jednostki poza ścisłym wzorcem.")
         job_id = int(match.group(1))
-        if not argv or any(not isinstance(x, str) or not x or "\x00" in x for x in argv):
+        if not isinstance(argv, (tuple, list)) or len(argv) != 3 or any(
+            not isinstance(x, str) or not x or "\\x00" in x for x in argv
+        ):
             raise SystemdBackendError("Odmowa: nieprawidłowe argv runtime.")
-        if not argv[0].startswith("/usr/local/lib/ai-chess-arena-runtime/"):
-            raise SystemdBackendError("Odmowa: worker musi pochodzić z root-owned runtime bundle.")
+        expected_worker = "/usr/local/lib/ai-chess-arena-runtime/runtime_worker"
+        if tuple(argv) != (expected_worker, "--job", str(job_id)):
+            raise SystemdBackendError("Odmowa: polecenie workera nie odpowiada przypisanemu zadaniu.")
+
         props = spec.as_dict()
-        if any("\n" in value or "\r" in value or "\x00" in value for value in props.values()):
-            raise SystemdBackendError("Odmowa: znak sterujący w parametrach jednostki.")
-        for key in ("ReadOnlyPaths", "ReadWritePaths", "InaccessiblePaths", "WorkingDirectory"):
-            tokens = props.get(key, "").split()
-            if not tokens or any(not token.startswith("/") or ".." in Path(token).parts for token in tokens):
-                raise SystemdBackendError("Odmowa: nieprawidłowa ścieżka w parametrach systemd.")
-        required = {
-            "User": "arena-runtime", "Group": "arena-runtime",
-            "NoNewPrivileges": "yes", "CapabilityBoundingSet": "",
-            "AmbientCapabilities": "", "ProtectSystem": "strict",
-            "ProtectHome": "yes", "PrivateNetwork": "yes",
-            "KillMode": "control-group", "Delegate": "no",
-            "WorkingDirectory": f"/run/arena-runtime/job-{job_id}",
-            "ReadWritePaths": f"/run/arena-runtime/job-{job_id}",
-        }
-        if any(props.get(k) != v for k, v in required.items()):
-            raise SystemdBackendError("Odmowa: osłabiona polityka izolacji jednostki.")
+        # Rebuild the entire policy from validated primitive values. This prevents
+        # callers from weakening a security property while retaining a valid unit name.
+        try:
+            read_only = props["ReadOnlyPaths"].split()
+            quota = props["CPUQuota"]
+            if not quota.endswith("%") or not quota[:-1].isdigit():
+                raise ValueError("invalid CPU quota")
+            expected_spec = build_runtime_unit_spec(
+                job_id=job_id,
+                runtime_user=props["User"], runtime_group=props["Group"],
+                artifact_path=read_only[0], output_dir=props["ReadWritePaths"],
+                memory_max_bytes=int(props["MemoryMax"]),
+                memory_swap_max_bytes=int(props["MemorySwapMax"]),
+                cpu_quota_percent=int(quota[:-1]), tasks_max=int(props["TasksMax"]),
+                runtime_seconds=int(props["RuntimeMaxSec"]),
+            )
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise SystemdBackendError("Odmowa: niekompletna lub nieprawidłowa specyfikacja jednostki.") from exc
+        if spec != expected_spec or len(read_only) != 2 or read_only[1] != "/usr/local/lib/ai-chess-arena-runtime":
+            raise SystemdBackendError("Odmowa: specyfikacja odbiega od kompletnej polityki izolacji.")
         return job_id
 
     def _show(self, unit_name: str) -> dict[str, str]:
