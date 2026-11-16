@@ -70,3 +70,13 @@ def test_verify_rejects_regular_file_at_socket_path(tmp_path):
     with pytest.raises(SocketHandoffError):
         verify_handoff(directory, path,
                        runtime_uid=os.getuid(), api_gid=os.getgid())
+
+
+def test_verify_rejects_symlink_in_ancestor_component(tmp_path):
+    target = make_directory(tmp_path)
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(SocketHandoffError):
+        verify_handoff(alias / target.name, alias / target.name / "control.sock",
+                       runtime_uid=os.getuid(), api_gid=os.getgid(),
+                       require_socket=False)

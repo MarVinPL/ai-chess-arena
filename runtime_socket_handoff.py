@@ -48,6 +48,18 @@ def verify_handoff(directory: str | Path, socket_path: str | Path, *,
     socket_path = Path(socket_path)
     if socket_path.parent != directory or socket_path.name != "control.sock":
         raise SocketHandoffError("Ścieżka gniazda nie odpowiada katalogowi zadania.")
+    if not directory.is_absolute():
+        raise SocketHandoffError("Katalog handoff musi mieć ścieżkę bezwzględną.")
+    # Reject symlinks in every path component, not only the final directory.
+    current = Path(directory.anchor)
+    for component in directory.parts[1:]:
+        current = current / component
+        try:
+            component_stat = current.lstat()
+        except FileNotFoundError as exc:
+            raise SocketHandoffError("Brak elementu ścieżki handoff.") from exc
+        if stat.S_ISLNK(component_stat.st_mode):
+            raise SocketHandoffError("Ścieżka handoff zawiera dowiązanie symboliczne.")
     try:
         dst = directory.lstat()
     except FileNotFoundError as exc:

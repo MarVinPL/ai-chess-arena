@@ -113,3 +113,14 @@ def test_bridge_handles_upstream_http_error(tmp_path):
         assert body == b""
     finally:
         stop_bridge(bridge, thread)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"loopback_port": 0}, {"loopback_port": 65536},
+    {"allowed_uid": -1}, {"timeout_seconds": 0},
+])
+def test_bridge_rejects_invalid_transport_configuration(tmp_path, kwargs):
+    config = {"loopback_port": 19090, "allowed_uid": os.getuid()}
+    config.update(kwargs)
+    with pytest.raises(BridgeError):
+        UnixRuntimeBridge(tmp_path / "control.sock", **config)

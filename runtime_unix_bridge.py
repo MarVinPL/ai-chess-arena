@@ -19,6 +19,8 @@ from runtime_socket_handoff import SocketHandoffError, verify_handoff
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_WIRE_REQUEST_BYTES = ((MAX_REQUEST_BYTES + 2) // 3) * 4 + 4096
+MAX_WIRE_RESPONSE_BYTES = ((MAX_RESPONSE_BYTES + 2) // 3) * 4 + 4096
 ALLOWED = {("GET", "/health"), ("POST", "/v1/chat/completions")}
 
 
@@ -39,8 +41,8 @@ class _Handler(socketserver.StreamRequestHandler):
         bridge = self.server
         if _peer_uid(self.connection) != bridge.allowed_uid:
             return
-        line = self.rfile.readline(MAX_REQUEST_BYTES + 1)
-        if not line or len(line) > MAX_REQUEST_BYTES:
+        line = self.rfile.readline(MAX_WIRE_REQUEST_BYTES + 1)
+        if not line or len(line) > MAX_WIRE_REQUEST_BYTES:
             return
         try:
             request = json.loads(line)
@@ -84,6 +86,12 @@ class UnixRuntimeBridge:
         self.api_gid = os.getgid() if api_gid is None else int(api_gid)
         self.urlopen = urlopen
         self.timeout_seconds = float(timeout_seconds)
+        if not 1 <= self.loopback_port <= 65535:
+            raise BridgeError("Nieprawidłowy port loopback.")
+        if min(self.allowed_uid, self.runtime_uid, self.api_gid) < 0:
+            raise BridgeError("Nieprawidłowa tożsamość procesu.")
+        if self.timeout_seconds <= 0:
+            raise BridgeError("Timeout mostu musi być dodatni.")
         self._server = None
 
     def serve_forever(self):
@@ -140,7 +148,7 @@ def unix_request(socket_path: str | Path, method: str, path: str, body: bytes = 
         client.sendall(payload)
         stream = client.makefile("rb")
         try:
-            line = stream.readline(MAX_RESPONSE_BYTES * 2 + 1024)
+            line = stream.readline(MAX_WIRE_RESPONSE_BYTES + 1)
         except OSError as exc:
             raise BridgeError("Most odrzucił połączenie.") from exc
     if not line:
