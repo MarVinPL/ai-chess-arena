@@ -119,5 +119,49 @@ class ModelPermissionTests(unittest.TestCase):
             request_permission(self.db, **{**self.ident, "revision": "latest"},
                                scope="TEST_ONLY", confirm=True, reason="kontrola", actor="test-operator")
 
+    def test_pending_request_is_unique_for_exact_identity(self):
+        self.request()
+        with self.assertRaisesRegex(ValueError, "oczekujące żądanie"):
+            self.request()
+
+    def test_audit_events_are_append_only_at_database_level(self):
+        req = self.request()
+        event_id = self.db.execute(
+            "SELECT id FROM model_permission_events ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+            self.db.execute(
+                "UPDATE model_permission_events SET reason='tampered' WHERE id=?",
+                (event_id,),
+            )
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "append-only"):
+            self.db.execute(
+                "DELETE FROM model_permission_events WHERE id=?",
+                (event_id,),
+            )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT event FROM model_permission_events WHERE id=?", (event_id,)
+            ).fetchone()[0],
+            "requested",
+        )
+
+    def test_decision_is_compare_and_set_and_cannot_be_repeated(self):
+        req = self.request()
+        approved = self.approve(req)
+        self.assertEqual(approved["status"], "approved")
+        with self.assertRaisesRegex(ValueError, "wyłącznie oczekujące"):
+            self.decide(
+                request_id=req["id"], action="reject", confirm=True,
+                reason="zmiana decyzji",
+            )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) FROM model_permission_events WHERE request_id=?",
+                (req["id"],),
+            ).fetchone()[0],
+            2,
+        )
+
 if __name__ == "__main__":
     unittest.main()
