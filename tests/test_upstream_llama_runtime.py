@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,7 +73,12 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
         )
 
     def test_starts_only_owned_process_with_isolated_safe_argv(self):
-        popen = Mock(side_effect=lambda *a, **k: FakeProcess(*a, **k))
+        processes = []
+        def fake_popen(*args, **kwargs):
+            process = FakeProcess(*args, **kwargs)
+            processes.append(process)
+            return process
+        popen = Mock(side_effect=fake_popen)
         runtime = self.make_runtime(popen=popen)
         try:
             runtime.ensure_loaded(self.model)
@@ -91,7 +95,7 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
             self.assertTrue(options["start_new_session"])
             self.assertEqual(runtime.loaded_model, str(self.model))
             runtime.stop()
-            self.assertTrue(popen.return_value.terminated)
+            self.assertTrue(processes[0].terminated)
         finally:
             runtime.shutdown()
 
