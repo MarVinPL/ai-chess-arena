@@ -16,6 +16,7 @@ import hf_candidate_queue
 import hf_candidate_runtime
 from model_exclusions import is_excluded_model_identity
 import engine_runner
+import runtime_factory
 import adjudication
 import passkey_test
 import tournament_checkpoint
@@ -801,7 +802,7 @@ def tournament_loop(tournament_id):
                 fields.setdefault('black', runtime_context['black'])
             set_live(stage, message, **fields)
 
-        tournament_runtime = engine_runner.LlamafileRuntime(on_status=publish_runtime_status)
+        tournament_runtime = runtime_factory.create_runtime(on_status=publish_runtime_status)
 
         # Reuse completed answers for this competitor across tournaments. Once its
         # three knowledge answers are known, run at most one random health check per tournament.
