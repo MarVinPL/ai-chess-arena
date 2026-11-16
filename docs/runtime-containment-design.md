@@ -121,3 +121,23 @@ and inherited group behavior only. They do not impersonate a separate
 directory, runtime account, API group membership, and namespace mount handoff
 remain unprovisioned and unchanged. A privileged disposable integration test
 under the actual service identities is still required before wiring.
+
+### Cross-UID socket DAC integration evidence (2026-11-17)
+
+An opt-in privileged test, tests/test_runtime_socket_handoff_privileged.py,
+was added. It uses only a unique /tmp fixture and the existing numeric
+nobody identity (UID/GID 65534) as a stand-in for the future runtime
+identity; it does not create or modify passwd/group entries. The fixture
+directory is owned by UID 65534 and API primary GID 1000 with mode 02710.
+A runtime process creates the AF_UNIX socket, which inherits GID 1000 and is
+chmod'd 0660. A separate process running as the actual current debian
+numeric UID/GID 1000 connects and exchanges a probe successfully, then
+confirms it cannot unlink the socket or create a replacement in the
+directory. The opt-in test passed (1 passed).
+
+This proves the DAC pattern under two distinct UIDs on this host, but it does
+not prove the future arena-runtime account, systemd mount-namespace
+visibility, PrivateNetwork behavior, or the final production service's
+supplementary-group configuration. The temporary fixture is removed after
+the test. No persistent account, group, ACL, directory, socket, unit, or
+production setting was changed.
