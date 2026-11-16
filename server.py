@@ -22,6 +22,7 @@ import passkey_test
 import tournament_checkpoint
 import arena_auth
 import model_permissions
+import runtime_executor
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1469,6 +1470,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/hf-candidates/runtime-preflight':
             try: self.send_json(hf_candidate_runtime.snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
+        elif path == '/api/hf-candidates/runtime-jobs':
+            try: self.send_json(runtime_executor.snapshot())
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/download-plan':
             try: self.send_json(hf_candidate_downloads.plan_snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
@@ -1672,7 +1676,7 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision','/api/hf-candidates/runtime-enqueue','/api/hf-candidates/runtime-cancel'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1684,6 +1688,16 @@ class Handler(BaseHTTPRequestHandler):
                             scope=payload.get('scope'), confirm=payload.get('confirm') is True,
                             reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
                             actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-enqueue':
+                    result = runtime_executor.enqueue(
+                        model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
+                        revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
+                        artifact_key=payload.get('artifact_key'),
+                        permission_request_id=payload.get('permission_request_id'),
+                        timeout_seconds=payload.get('timeout_seconds', runtime_executor.DEFAULT_TIMEOUT_SECONDS),
+                        actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-cancel':
+                    result = runtime_executor.cancel(payload.get('job_id'))
                 elif path == '/api/model-permissions/decision':
                     request_id = payload.get('request_id')
                     if isinstance(request_id, bool) or not isinstance(request_id, int):
