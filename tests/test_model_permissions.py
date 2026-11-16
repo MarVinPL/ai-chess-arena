@@ -81,6 +81,35 @@ class ModelPermissionTests(unittest.TestCase):
                           confirm=True, reason="brak dodatkowej potrzeby")
         self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
 
+    def test_revoking_newer_grant_preserves_older_approved_grant(self):
+        first = self.request()
+        self.approve(first)
+        second = self.request()
+        self.approve(second)
+
+        self.decide(request_id=second["id"], action="revoke", confirm=True,
+                    reason="wycofanie nowszej zgody")
+        self.assertEqual(
+            self.db.execute("SELECT status FROM model_permission_requests WHERE id=?",
+                            (first["id"],)).fetchone()[0],
+            "approved",
+        )
+        self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
+
+        self.decide(request_id=first["id"], action="revoke", confirm=True,
+                    reason="wycofanie ostatniej zgody")
+        self.assertFalse(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
+
+    def test_repo_id_is_trimmed_before_storage_and_permission_lookup(self):
+        request = request_permission(
+            self.db, **{**self.ident, "repo_id": "  org/model  "},
+            scope="TEST_ONLY", confirm=True, reason="kontrolowany test",
+            actor="test-operator",
+        )
+        self.assertEqual(request["repo_id"], "org/model")
+        self.approve(request)
+        self.assertTrue(has_permission(self.db, **self.ident, scope="TEST_ONLY"))
+
     def test_tournament_is_never_granted_by_operational_permission_registry(self):
         with self.assertRaisesRegex(ValueError, "allowlist"):
             self.request("TOURNAMENT")

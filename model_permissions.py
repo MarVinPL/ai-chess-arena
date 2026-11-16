@@ -95,26 +95,33 @@ def _now() -> str:
 
 
 def _validate_identity(model_id: int, repo_id: str, revision: str,
-                       artifact_sha256: str) -> None:
+                       artifact_sha256: str) -> str:
     if isinstance(model_id, bool) or not isinstance(model_id, int) or model_id < 1:
         raise ValueError("Nieprawidłowy model_id.")
-    if not isinstance(repo_id, str) or not repo_id.strip() or len(repo_id) > 255:
+    if not isinstance(repo_id, str):
+        raise ValueError("Nieprawidłowe repo_id.")
+    repo_id = repo_id.strip()
+    if not repo_id or len(repo_id) > 255:
         raise ValueError("Nieprawidłowe repo_id.")
     if not isinstance(revision, str) or not _REVISION.fullmatch(revision):
         raise ValueError("Wymagana jest pełna, przypięta rewizja SHA.")
     if not isinstance(artifact_sha256, str) or not _ARTIFACT_SHA256.fullmatch(artifact_sha256):
         raise ValueError("Wymagany jest pełny SHA-256 konkretnego artefaktu GGUF.")
+    return repo_id
 
 
 def _active_scope(connection: sqlite3.Connection, model_id: int,
                   repo_id: str, revision: str, artifact_sha256: str,
                   scope: str) -> bool:
+    # Each approval is an independent grant. Revoking one request must not
+    # silently revoke an older approved request for the same pinned artifact.
+    # A scope is active while at least one of its requests remains approved.
     row = connection.execute("""
-        SELECT status FROM model_permission_requests
+        SELECT 1 FROM model_permission_requests
         WHERE model_id=? AND repo_id=? AND revision=? AND artifact_sha256=? AND scope=?
-          AND status IN ('approved','revoked') ORDER BY id DESC LIMIT 1
+          AND status='approved' LIMIT 1
     """, (model_id, repo_id, revision, artifact_sha256, scope)).fetchone()
-    return bool(row and row["status"] == "approved")
+    return row is not None
 
 
 def list_permissions(connection: sqlite3.Connection) -> list[dict]:
@@ -138,7 +145,7 @@ def request_permission(connection: sqlite3.Connection, *, model_id: int,
                        snapshot: dict | None = None, actor: str | None = None) -> dict:
     ensure_schema(connection)
     actor = _validate_actor(actor)
-    _validate_identity(model_id, repo_id, revision, artifact_sha256)
+    repo_id = _validate_identity(model_id, repo_id, revision, artifact_sha256)
     if confirm is not True:
         raise ValueError("Wymagane jawne potwierdzenie żądania.")
     if scope not in SCOPES:
@@ -284,7 +291,7 @@ def has_permission(connection: sqlite3.Connection, *, model_id: int,
                    repo_id: str, revision: str, artifact_sha256: str,
                    scope: str) -> bool:
     """Read-only exact model/repository/revision/artifact/scope check."""
-    _validate_identity(model_id, repo_id, revision, artifact_sha256)
+    repo_id = _validate_identity(model_id, repo_id, revision, artifact_sha256)
     if scope not in {"TEST_ONLY", "EVALUATION"}:
         return False
     if scope == "EVALUATION" and not _active_scope(
