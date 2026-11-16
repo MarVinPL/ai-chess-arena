@@ -2,9 +2,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+
+import chess
 from unittest.mock import Mock
 
 from runtime_factory import create_runtime
+from engine_runner import RunnerError
 from runtime_upgrade_plan import RuntimeContractError, UpstreamLlamaServerProfile
 from upstream_llama_runtime import UpstreamLlamaServerRuntime
 
@@ -103,9 +106,9 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
         popen = Mock()
         runtime = self.make_runtime(popen=popen)
         try:
-            with self.assertRaises(Exception):
+            with self.assertRaises(RunnerError):
                 runtime.ensure_loaded(self.model.with_name("missing.gguf"))
-            with self.assertRaises(Exception):
+            with self.assertRaises(RunnerError):
                 runtime.ensure_loaded(self.model.with_suffix(".bin"))
             popen.assert_not_called()
         finally:
@@ -160,6 +163,45 @@ class UpstreamRuntimeAdapterTests(unittest.TestCase):
             runtime._monitor_once()
             self.assertEqual(popen.call_count, 1)
             self.assertIsNone(runtime._desired_model_path)
+        finally:
+            runtime.shutdown()
+
+    def test_generate_uses_validated_http_transport_and_reports_upstream_runtime(self):
+        processes = []
+        def fake_popen(*args, **kwargs):
+            process = FakeProcess(*args, **kwargs)
+            processes.append(process)
+            return process
+        def fake_open(request, timeout=None):
+            if request.full_url.endswith("/health"):
+                return FakeResponse({"status": "ok"})
+            return FakeResponse({
+                "choices": [{"message": {"content": "e2e4"}, "finish_reason": "stop"}],
+                "usage": {"completion_tokens": 1},
+            })
+        runtime = self.make_runtime(popen=fake_popen, urlopen=fake_open)
+        try:
+            move, metadata = runtime.generate(self.model, chess.Board())
+            self.assertEqual(move.uci(), "e2e4")
+            self.assertEqual(metadata["runtime"], "llama.cpp-upstream")
+            self.assertEqual(len(processes), 1)
+        finally:
+            runtime.shutdown()
+
+    def test_watchdog_restarts_only_the_owned_child_while_model_is_desired(self):
+        processes = []
+        def fake_popen(*args, **kwargs):
+            process = FakeProcess(*args, **kwargs)
+            processes.append(process)
+            return process
+        runtime = self.make_runtime(popen=fake_popen)
+        try:
+            runtime.ensure_loaded(self.model)
+            processes[0].returncode = 1
+            runtime._monitor_once()
+            self.assertEqual(len(processes), 2)
+            self.assertEqual(runtime.loaded_model, str(self.model))
+            runtime.stop()
         finally:
             runtime.shutdown()
 
