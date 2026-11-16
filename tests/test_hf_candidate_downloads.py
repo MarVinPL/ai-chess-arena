@@ -1,5 +1,6 @@
 import hashlib
 import json
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +110,24 @@ class CandidateDownloadTests(unittest.TestCase):
         self.assertEqual(restored['tasks'][0]['file']['name'],'model.Q4_K_M.gguf')
         self.assertEqual(downloads.events(job['id'])[0]['event'],'interrupted')
 
+    def test_transient_network_failure_with_partial_file_is_marked_interrupted(self):
+        job_id = 'network-retry'
+        job = {'id': job_id, 'status': 'downloading', 'created_at': downloads._now(),
+               'updated_at': downloads._now(), 'results': [], 'tasks': [{'catalog_id':'hf:org/model','repo_id':'org/model','revision':REV,'file':{'name':'model.Q4_K_M.gguf','size_bytes':4,'sha256':SHA}}]}
+        downloads._jobs[job_id] = job
+        staging = Path(self.tempdir.name) / 'quarantine'
+        partial = staging / job_id / 'partial.quarantine.part'
+        partial.parent.mkdir(parents=True, exist_ok=True)
+        partial.write_bytes(b'part')
+        downloads._cancel_events[job_id] = __import__('threading').Event()
+        with patch.object(downloads, 'STAGING_DIR', staging), \
+             patch.object(downloads, '_find_existing_verified', return_value=None), \
+             patch.object(downloads, '_download', side_effect=downloads.URLError('network down')):
+            downloads._worker(job_id, job['tasks'])
+        self.assertEqual(job['status'], 'interrupted')
+        self.assertTrue(partial.is_file())
+        self.assertTrue(downloads.events(job_id)[0]['details']['retryable_transport_error'])
+
     def test_interrupted_job_can_resume_with_same_id_and_allowlisted_revision(self):
         with self.allow_test_files(('hf:org/model','model.Q4_K_M.gguf')), patch.object(downloads,'list_files',return_value=self.inventory), patch.object(downloads.threading,'Thread',DummyThread):
             job=downloads.start([self.group()])
@@ -133,6 +152,63 @@ class CandidateDownloadTests(unittest.TestCase):
         self.assertFalse(plan['settings']['auto_download_enabled'])
         self.assertTrue(plan['settings']['manual_confirmation_required'])
         self.assertEqual(downloads._jobs, {})
+
+    def test_download_resumes_with_http_206_content_range(self):
+        staging = Path(self.tempdir.name) / 'quarantine'
+        job_id = 'range-206'
+        repo = 'org/model'
+        repo_tag = hashlib.sha256(repo.encode()).hexdigest()[:10]
+        part = staging / job_id / (repo_tag + '__model.gguf.quarantine.part')
+        part.parent.mkdir(parents=True)
+        part.write_bytes(b'gg')
+        class Response:
+            status = 206
+            headers = {'Content-Range': 'bytes 2-3/4'}
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def geturl(self): return 'https://huggingface.co/org/model/resolve/' + REV + '/model.gguf'
+            def read(self, size=-1):
+                if not hasattr(self, 'sent'):
+                    self.sent = True
+                    return b'uf'
+                return b''
+        class Opener:
+            def open(self, *args, **kwargs): return Response()
+        with patch.object(downloads, 'STAGING_DIR', staging), \
+             patch.object(downloads, 'MIN_FREE_BYTES', 0), \
+             patch.object(downloads, 'build_opener', return_value=Opener()):
+            result = downloads._download({'id':job_id}, repo, REV,
+                {'name':'model.gguf','size_bytes':4,'sha256':SHA}, __import__('threading').Event())
+        self.assertEqual(result['status'], 'verified_quarantined')
+        self.assertEqual(Path(result['path']).read_bytes(), b'gguf')
+
+    def test_download_restarts_from_zero_when_server_ignores_range_with_http_200(self):
+        staging = Path(self.tempdir.name) / 'quarantine'
+        job_id = 'range-200'
+        repo = 'org/model'
+        repo_tag = hashlib.sha256(repo.encode()).hexdigest()[:10]
+        part = staging / job_id / (repo_tag + '__model.gguf.quarantine.part')
+        part.parent.mkdir(parents=True)
+        part.write_bytes(b'bad')
+        class Response:
+            status = 200
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def geturl(self): return 'https://huggingface.co/org/model/resolve/' + REV + '/model.gguf'
+            def read(self, size=-1):
+                if not hasattr(self, 'sent'):
+                    self.sent = True
+                    return b'gguf'
+                return b''
+        class Opener:
+            def open(self, *args, **kwargs): return Response()
+        with patch.object(downloads, 'STAGING_DIR', staging), \
+             patch.object(downloads, 'MIN_FREE_BYTES', 0), \
+             patch.object(downloads, 'build_opener', return_value=Opener()):
+            result = downloads._download({'id':job_id}, repo, REV,
+                {'name':'model.gguf','size_bytes':4,'sha256':SHA}, __import__('threading').Event())
+        self.assertEqual(Path(result['path']).read_bytes(), b'gguf')
 
     def test_redirect_rejects_non_huggingface_hosts(self):
         handler=downloads._Redirects()

@@ -3,9 +3,10 @@
 Downloaded artifacts are never registered, activated, or placed in managed-models.
 """
 from __future__ import annotations
-import hashlib, json, os, re, shutil, sqlite3, threading, time, uuid
+import hashlib, json, os, re, shutil, sqlite3, threading, time, uuid, http.client
 from pathlib import Path
 from urllib.parse import quote, urlparse
+from urllib.error import URLError, HTTPError
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 import hf_candidate_audit as audit
@@ -154,7 +155,8 @@ def _download(job, repo, revision, file, cancel_event):
     with build_opener(_Redirects()).open(Request(url,headers=headers),timeout=60) as response:
         final=urlparse(response.geturl());host=(final.hostname or '').lower()
         if final.scheme!='https' or not (host=='huggingface.co' or host.endswith('.huggingface.co') or host.endswith('.xethub.hf.co') or host.endswith('.hf.co')): raise DownloadError('Końcowy host pobierania nie jest dozwolony.')
-        status=getattr(response,'status',response.getcode())
+        status=getattr(response,'status',None)
+        if status is None: status=response.getcode()
         if offset and status==206:
             if not response.headers.get('Content-Range','').startswith(f'bytes {offset}-'): raise DownloadError('Serwer zwrócił niezgodny zakres wznowienia.')
             mode='ab'
@@ -210,7 +212,19 @@ def _worker(job_id,tasks):
             _set_queue_status(task,'verified_quarantined','SHA-256 zgodny; plik pozostaje w kwarantannie.')
         with _lock: job.update(status='completed',message='Wszystkie pliki pobrano i zweryfikowano w kwarantannie; nie są dostępne dla silnika.',updated_at=_now());_persist(job,'completed')
     except Exception as exc:
-        with _lock: job.update(status='cancelled' if _cancel_events.get(job_id,threading.Event()).is_set() else 'failed',message=str(exc),updated_at=_now());_persist(job,job['status'],{'message':str(exc)})
+        retryable = isinstance(exc, (TimeoutError, ConnectionError, http.client.IncompleteRead)) or (isinstance(exc, URLError) and not isinstance(exc, HTTPError))
+        # Keep a partial transfer resumable only for transient transport failures.
+        # Integrity, policy, disk-space and cancellation failures remain terminal.
+        has_partial = any((STAGING_DIR / job_id).glob('*.part')) if (STAGING_DIR / job_id).exists() else False
+        with _lock:
+            if _cancel_events.get(job_id,threading.Event()).is_set():
+                status = 'cancelled'
+            elif retryable and has_partial:
+                status = 'interrupted'
+            else:
+                status = 'failed'
+            job.update(status=status,message=str(exc),updated_at=_now())
+            _persist(job,status,{'message':str(exc),'retryable_transport_error':retryable,'partial_file_preserved':has_partial})
     finally:
         with _lock: _active=False;_cancel_events.pop(job_id,None)
 
@@ -295,7 +309,7 @@ def resume(job_id):
     if job is None:
         with _db() as c: row=c.execute('SELECT payload_json FROM hf_download_jobs WHERE id=?',(job_id,)).fetchone()
         if row: job=json.loads(row['payload_json']);_jobs[job_id]=job
-    if not job or job.get('status')!='interrupted': raise DownloadError('Nie znaleziono przerwanego zadania do wznowienia.')
+    if not job or job.get('status') != 'interrupted': raise DownloadError('Nie znaleziono zadania z zachowanym transferem do wznowienia.')
     with _lock:
         if _active: raise DownloadError('Inna partia pobierania już trwa.')
         for task in job.get('tasks',[]):
