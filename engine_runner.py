@@ -278,7 +278,7 @@ class LlamafileRuntime:
             payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
-            with self._urlopen(request, timeout=None) as response:
+            with (self._urlopen or urllib.request.urlopen)(request, timeout=None) as response:
                 raw_response = response.read()
             # A stop requested during inference invalidates this in-flight answer.
             # Never let it become a committed chess move; resume from the last checkpoint.
