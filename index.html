@@ -175,6 +175,7 @@ button.stop{background:#744b4b;border-color:#986363}
   <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
   <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
   <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
+  <section id="hf-download-workspace" class="moves" aria-live="polite" style="margin-top:10px"></section>
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
   <div class="formrow"><input class="field" id="model-source" placeholder="Źródło (opcjonalnie)"><input class="field" id="model-license" placeholder="Licencja (wymagana do użycia)"></div>
@@ -458,6 +459,7 @@ function renderHfCandidates(){
   const card=document.createElement('div');card.style.cssText='padding:9px;margin:7px 0;border:1px solid #34445c;border-radius:8px';
   const title=document.createElement('strong');title.textContent=item.display_name+' · '+item.repo_id;card.appendChild(title);
   const meta=document.createElement('div');meta.style.cssText='font-size:12px;color:#aebbd0';meta.textContent='Licencja deklarowana: '+(item.declared_license_tag||'brak')+' · rewizja: '+String(item.revision||item.audited_revision||'brak').slice(0,12)+' · status: '+(item.source_status||'—')+' · '+(item.last_audit?'audyt: '+item.last_audit.audited_at:'bez audytu');card.appendChild(meta);
+  const downloadButton=document.createElement('button');downloadButton.type='button';downloadButton.className='secondary';downloadButton.textContent='Pliki GGUF · pobierz i zweryfikuj';downloadButton.style.marginTop='7px';downloadButton.onclick=()=>openHfDownloadPicker(item);card.appendChild(downloadButton);
   if(item.last_audit){const show=document.createElement('button');show.type='button';show.className='secondary';show.textContent='Pokaż zapisany audyt';show.style.marginTop='7px';show.onclick=async()=>{try{const url='/api/hf-candidates/audit?catalog_id='+encodeURIComponent(item.catalog_id)+'&revision='+encodeURIComponent(item.last_audit.revision);const r=await fetch(url,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);renderHfAuditReport(d);}catch(e){$('hf-candidate-audit-result').textContent='Nie udało się odczytać raportu: '+e;}};card.appendChild(show);}
   if(item.last_review){const reviewMeta=document.createElement('div');reviewMeta.style.cssText='font-size:12px;color:#aebbd0;margin-top:4px';reviewMeta.textContent='Ręczny przegląd zapisany: '+item.last_review.reviewed_at+' · status: w toku (bez dopuszczenia)';card.appendChild(reviewMeta);}
   if(item.last_audit){const reviewButton=document.createElement('button');reviewButton.type='button';reviewButton.className='secondary';reviewButton.textContent='Otwórz weryfikację w panelu';reviewButton.style.marginTop='7px';reviewButton.onclick=async()=>{try{const url='/api/hf-candidates/audit?catalog_id='+encodeURIComponent(item.catalog_id)+'&revision='+encodeURIComponent(item.last_audit.revision);const r=await fetch(url,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);renderHfAuditReport(d);}catch(e){$('hf-candidate-audit-result').textContent='Nie udało się otworzyć weryfikacji: '+e;}};card.appendChild(reviewButton);}
@@ -526,6 +528,23 @@ async function loadHfCandidates(){
 }
 $('hf-candidate-query')?.addEventListener('input',renderHfCandidates);
 $('hf-candidate-refresh')?.addEventListener('click',loadHfCandidates);
+async function openHfDownloadPicker(item){
+ const host=$('hf-download-workspace');host.replaceChildren();host.textContent='Pobieram indeks plików GGUF dla przypiętej rewizji…';
+ try{
+  const r=await fetch('/api/hf-candidates/download-files?catalog_id='+encodeURIComponent(item.catalog_id),{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
+  host.replaceChildren();const title=document.createElement('strong');title.textContent='Pobieranie do kwarantanny · '+d.repo_id;host.appendChild(title);
+  const info=document.createElement('p');info.className='notice';info.textContent='Rewizja '+d.revision+' · wolne miejsce: '+(d.free_bytes/1024**3).toFixed(1)+' GiB. Maks. 3 pliki / 16 GiB na partię. Pliki pozostaną poza managed-models i nie będą uruchamiane.';host.appendChild(info);
+  if(!d.files.length){const empty=document.createElement('p');empty.textContent='Nie znaleziono plików GGUF z wiarygodnym rozmiarem i SHA-256 LFS.';host.appendChild(empty);return;}
+  const selected=[];d.files.forEach(file=>{const label=document.createElement('label');label.style.cssText='display:block;padding:8px;border-top:1px solid #34445c';const check=document.createElement('input');check.type='checkbox';check.value=file.name;check.dataset.sha256=file.sha256;check.dataset.revision=file.revision;check.addEventListener('change',()=>{if(check.checked){if(selected.length>=3){check.checked=false;return;}selected.push(check);}else{const i=selected.indexOf(check);if(i>=0)selected.splice(i,1);}});label.append(check,document.createTextNode(' '+file.name+' · '+(file.size_bytes/1024**3).toFixed(2)+' GiB · SHA-256 '+file.sha256.slice(0,12)+'…'));host.appendChild(label);});
+  const consent=document.createElement('label');consent.style.cssText='display:block;margin:10px 0';const confirm=document.createElement('input');confirm.type='checkbox';consent.append(confirm,document.createTextNode(' Potwierdzam pobranie zaznaczonych plików na VPS do kwarantanny.'));host.appendChild(consent);
+  const start=document.createElement('button');start.type='button';start.textContent='Pobierz i zweryfikuj zaznaczone';start.disabled=true;confirm.addEventListener('change',()=>start.disabled=!confirm.checked);start.addEventListener('click',async()=>{if(!confirm.checked||!selected.length)return;start.disabled=true;const files=selected.map(x=>({name:x.value,sha256:x.dataset.sha256,revision:x.dataset.revision}));try{const res=await fetch('/api/hf-candidates/download-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({catalog_id:item.catalog_id,files})});const job=await res.json();if(!res.ok)throw Error(job.error||res.status);watchHfDownloadJob(job.id,host);}catch(e){start.disabled=false;info.textContent='Nie rozpoczęto pobierania: '+e;}});host.appendChild(start);
+ }catch(e){host.textContent='Nie udało się pobrać listy plików: '+e;}
+}
+async function watchHfDownloadJob(id,host){
+ const status=document.createElement('p');status.className='notice';status.textContent='Zadanie uruchomione…';host.appendChild(status);
+ const refresh=async()=>{try{const r=await fetch('/api/hf-candidates/download-jobs?job_id='+encodeURIComponent(id),{cache:'no-store'});const j=await r.json();if(!r.ok)throw Error(j.error||r.status);status.textContent='Status: '+j.status+' · plik: '+(j.current_file||'—')+' · pobrano: '+(j.current_file_bytes/1024**2).toFixed(1)+' MiB · '+j.message;if(j.status==='completed'||j.status==='failed'){const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify(j.results,null,2);host.appendChild(pre);return true;}return false;}catch(e){status.textContent='Błąd odczytu zadania: '+e;return true;}};
+ if(!await refresh()){const timer=setInterval(async()=>{if(await refresh())clearInterval(timer);},2500);}
+}
 loadHfCandidates();
 
 function renderModelAdmission(items){

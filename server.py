@@ -11,6 +11,7 @@ import model_admission
 import model_review_submissions
 import hf_candidate_audit
 import hf_candidate_reviews
+import hf_candidate_downloads
 from model_exclusions import is_excluded_model_identity
 import engine_runner
 import adjudication
@@ -1439,6 +1440,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/download-files':
+            try:
+                from urllib.parse import urlparse, parse_qs
+                catalog_id = parse_qs(urlparse(raw_path).query).get('catalog_id', [''])[0]
+                self.send_json(hf_candidate_downloads.list_files(catalog_id))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/download-jobs':
+            try:
+                from urllib.parse import urlparse, parse_qs
+                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
+                job = hf_candidate_downloads.get(job_id)
+                self.send_json(job if job else {'error': 'Nie znaleziono zadania.'}, 200 if job else 404)
+            except (OSError, ValueError) as exc:
+                self.send_json({'error': str(exc)}, 422)
         elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -1615,10 +1631,12 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
+                if path == '/api/hf-candidates/download-start':
+                    result = hf_candidate_downloads.start(payload.get('catalog_id'), payload.get('files'))
                 if path == '/api/hf-candidates/review':
                     with league.connect() as c:
                         result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
@@ -1748,7 +1766,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/hf-candidates/download-start','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':
