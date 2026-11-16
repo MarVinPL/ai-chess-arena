@@ -33,6 +33,14 @@ class ArenaAuthTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "invalid_credentials")
 
+    def test_non_ascii_username_is_rejected_without_server_error(self):
+        ok, reason = arena_auth.check_login("żółw", self.password, "unicode-client")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "invalid_credentials")
+
+    def test_malformed_cookie_is_rejected_without_server_error(self):
+        self.assertIsNone(arena_auth.session_user("arena_session=%%%not-a-cookie%%%"))
+
     def test_session_signature_tampering_is_rejected(self):
         token = arena_auth.create_session_token(self.username, now=1_800_000_000)
         cookie = f"{arena_auth.COOKIE_NAME}={token[:-1]}x"
