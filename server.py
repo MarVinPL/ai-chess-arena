@@ -1637,9 +1637,9 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length) or b'{}')
                 if path == '/api/hf-candidates/download-cancel':
                     result = hf_candidate_downloads.cancel(payload.get('job_id'))
-                if path == '/api/hf-candidates/download-start':
-                    result = hf_candidate_downloads.start(payload.get('catalog_id'), payload.get('files'))
-                if path == '/api/hf-candidates/review':
+                elif path == '/api/hf-candidates/download-start':
+                    result = hf_candidate_downloads.start(payload.get('candidates'))
+                elif path == '/api/hf-candidates/review':
                     with league.connect() as c:
                         result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
                 elif path == '/api/hf-candidates/audit':
