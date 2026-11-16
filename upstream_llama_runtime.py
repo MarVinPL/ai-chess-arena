@@ -48,7 +48,9 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
         profile: UpstreamLlamaServerProfile | None = None,
         startup_timeout: float = 90,
         popen: Callable = subprocess.Popen,
-        urlopen: Callable = urllib.request.urlopen,
+        urlopen: Callable | None = None,
+        runtime_root: Path = Path("/opt/ai-chess-arena/runtimes"),
+        model_root: Path | None = None,
         on_status: Callable | None = None,
         monitor_interval: float = 30,
         sleep: Callable = time.sleep,
@@ -59,6 +61,14 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
         if self.profile.host != "127.0.0.1" or self.profile.port != 8089:
             raise ValueError("Upstream runtime must use 127.0.0.1:8089")
         self._http_open = urlopen
+        self.runtime_root = Path(runtime_root).resolve(strict=False)
+        if model_root is None:
+            from model_store import MANAGED_DIR
+            model_root = MANAGED_DIR
+        self.model_root = Path(model_root).resolve(strict=False)
+        binary = Path(self.profile.binary).resolve(strict=False)
+        if not binary.is_relative_to(self.runtime_root):
+            raise ValueError("Upstream llama-server binary must stay inside the dedicated runtime directory")
         self._sleep = sleep
         self._monotonic = monotonic
         super().__init__(
@@ -77,7 +87,7 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
 
     def _validated_urlopen(self, request, timeout=None):
         url = request.full_url if hasattr(request, "full_url") else str(request)
-        response = self._http_open(request, timeout=timeout)
+        response = (self._http_open or urllib.request.urlopen)(request, timeout=timeout)
         status = getattr(response, "status", getattr(response, "code", 200))
         try:
             body = response.read()
@@ -86,16 +96,15 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
             elif url.endswith("/health"):
                 validate_health_response(status, json.loads(body.decode("utf-8")))
             return _ReplayResponse(status, body)
-        except Exception:
+        finally:
             close = getattr(response, "close", None)
             if close:
                 close()
-            raise
 
     def _healthy(self) -> bool:
         request = urllib.request.Request(self.api_base + "/health")
         try:
-            with self._http_open(request, timeout=1.5) as response:
+            with (self._http_open or urllib.request.urlopen)(request, timeout=1.5) as response:
                 validate_health_response(
                     response.status, json.loads(response.read().decode("utf-8"))
                 )
@@ -112,9 +121,16 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
             raise RunnerError(f"Nie znaleziono pliku GGUF: {model_path}") from exc
         if not model.is_file() or model.suffix.lower() != ".gguf":
             raise RunnerError(f"Nieprawidłowy plik modelu GGUF: {model}")
-        binary = self.profile.binary
+        if not model.is_relative_to(self.model_root):
+            raise RunnerError("Model upstream musi pochodzić wyłącznie z arena-managed model store")
+        try:
+            binary = Path(self.profile.binary).resolve(strict=True)
+        except OSError as exc:
+            raise RunnerError(f"Nie znaleziono binarium llama-server: {self.profile.binary}") from exc
         if not binary.is_file() or not binary.stat().st_mode & 0o111:
             raise RunnerError(f"Brak wykonywalnego llama-server: {binary}")
+        if not binary.is_relative_to(self.runtime_root):
+            raise RunnerError("Binarium upstream znajduje się poza dedykowanym katalogiem runtime")
 
         with self._lock:
             if self.loaded_model == str(model) and self._healthy():
