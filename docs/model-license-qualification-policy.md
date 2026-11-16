@@ -65,6 +65,21 @@ Do block or leave unresolved when:
 
 Do not treat this policy as a blanket permission for any particular model. Existing allowlist decisions remain unchanged until separately reviewed and approved.
 
-## 6. Operational boundaries for this policy change
+## 6. VPS-hosted model artifact retrieval
 
-This document does not authorize model downloads, inference, roster changes, database writes, tournament changes, VPS deployment, or service restarts. Any such action requires its own approved workflow and evidence.
+When a model download is separately approved, the VPS is the download host: it retrieves the selected artifact directly from the upstream source. Model weights are not routed through a developer workstation and are not committed to Git.
+
+The VPS-side retrieval workflow must:
+
+- use the exact repository and immutable revision covered by the licence review;
+- identify the exact artifact/variant and record its expected size and SHA-256 before activation;
+- verify the downloaded file's size and SHA-256 on the VPS before making it available to the Arena runtime;
+- store the file only in the Arena-owned `managed-models/` area, with ownership and permissions limited to the Arena workflow;
+- never read from, copy to, modify, or use `/home/debian/ai-agent/models` as a source or fallback;
+- record the source, revision, artifact identity, verification result, and destination in the Arena's audit metadata.
+
+A positive licence review does not trigger a download. Each actual download requires a separate explicit approval for the selected model and artifact. The VPS workflow must fail closed if the pinned revision, artifact identity, expected size, checksum, licence status, or required terms cannot be verified. Downloading does not itself authorize inference or tournament admission.
+
+## 7. Operational boundaries for this policy change
+
+This document does not authorize model downloads, inference, roster changes, database writes, tournament changes, VPS deployment, or service restarts. Any such action requires its own approved workflow and evidence. The VPS-hosted retrieval design above describes where an approved download is performed; it is not permission to execute one as part of this documentation change.
