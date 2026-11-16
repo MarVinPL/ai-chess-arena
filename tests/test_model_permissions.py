@@ -119,6 +119,40 @@ class ModelPermissionTests(unittest.TestCase):
             request_permission(self.db, **{**self.ident, "revision": "latest"},
                                scope="TEST_ONLY", confirm=True, reason="kontrola", actor="test-operator")
 
+    def test_legacy_schema_is_migrated_before_pending_unique_index(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        try:
+            db.executescript("""
+                CREATE TABLE model_permission_requests (
+                    id INTEGER PRIMARY KEY, model_id INTEGER NOT NULL, repo_id TEXT NOT NULL,
+                    revision TEXT NOT NULL, scope TEXT NOT NULL, status TEXT NOT NULL,
+                    requested_by TEXT NOT NULL, requested_at TEXT NOT NULL, decided_by TEXT,
+                    decided_at TEXT, reason TEXT NOT NULL DEFAULT '', snapshot_json TEXT NOT NULL
+                );
+                CREATE TABLE model_permission_events (
+                    id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, model_id INTEGER NOT NULL,
+                    repo_id TEXT NOT NULL, revision TEXT NOT NULL, scope TEXT NOT NULL,
+                    event TEXT NOT NULL, actor TEXT NOT NULL, occurred_at TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '', snapshot_json TEXT NOT NULL
+                );
+            """)
+            ensure_schema(db)
+            request_columns = {row[1] for row in db.execute(
+                "PRAGMA table_info(model_permission_requests)"
+            )}
+            event_columns = {row[1] for row in db.execute(
+                "PRAGMA table_info(model_permission_events)"
+            )}
+            self.assertIn("artifact_sha256", request_columns)
+            self.assertIn("artifact_sha256", event_columns)
+            indexes = {row[1] for row in db.execute(
+                "PRAGMA index_list(model_permission_requests)"
+            )}
+            self.assertIn("uq_model_permission_pending_identity", indexes)
+        finally:
+            db.close()
+
     def test_pending_request_is_unique_for_exact_identity(self):
         self.request()
         with self.assertRaisesRegex(ValueError, "oczekujące żądanie"):
