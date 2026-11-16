@@ -103,6 +103,63 @@ def verify_artifact_sha256_for_runtime(artifact):
     except (OSError, ValueError) as exc:
         return {'ok': False, 'reason': f'Nie można ponownie zweryfikować artefaktu: {exc}'}
 
+def authorize_runtime_handoff(artifact_key, *, explicit_approval=False):
+    """Fail-closed validation immediately before a future runtime handoff.
+
+    This function never starts a process or inference. A future runtime executor
+    must call it with an explicit approval flag and use only the returned path.
+    The artifact is looked up again in the verified-quarantine registry and
+    SHA-256 is recomputed after a fresh hardware/preflight check.
+    """
+    if explicit_approval is not True:
+        return {'ok': False, 'reason': 'Brak osobnego, jawnego zatwierdzenia testu runtime.'}
+    if not isinstance(artifact_key, str) or artifact_key.count('|') != 2:
+        return {'ok': False, 'reason': 'Nieprawidłowy klucz artefaktu.'}
+    try:
+        catalog_id, revision, filename = artifact_key.split('|', 2)
+    except ValueError:
+        return {'ok': False, 'reason': 'Nieprawidłowy klucz artefaktu.'}
+    expected_key = (catalog_id, revision, filename)
+    if expected_key not in hf_candidate_downloads.APPROVED_ARTIFACTS and expected_key not in RUNTIME_CANDIDATES:
+        return {'ok': False, 'reason': 'Artefakt nie ma jawnego uprawnienia do ścieżki runtime.'}
+
+    # Require a canonical registry record before consulting the cached dashboard state.
+    with hf_candidate_downloads._db() as connection:
+        row = connection.execute(
+            'SELECT artifact_key,path,size_bytes,sha256 FROM hf_download_verified_artifacts WHERE artifact_key=?',
+            (artifact_key,),
+        ).fetchone()
+    if not row:
+        return {'ok': False, 'reason': 'Artefakt nie figuruje już w rejestrze zweryfikowanej kwarantanny.'}
+
+    # Refresh RAM/disk/provenance gates; this is metadata-only and never starts inference.
+    current = refresh_preflight()
+    item = next((entry for entry in current['items'] if entry['artifact_key'] == artifact_key), None)
+    if not item or item['status'] != 'ready_pending_approval':
+        return {'ok': False, 'reason': (item or {}).get('reason') or 'Brak gotowego rekordu preflight.'}
+
+    # Re-read the canonical row after preflight, then hash the exact current file.
+    with hf_candidate_downloads._db() as connection:
+        row = connection.execute(
+            'SELECT artifact_key,path,size_bytes,sha256 FROM hf_download_verified_artifacts WHERE artifact_key=?',
+            (artifact_key,),
+        ).fetchone()
+    if not row:
+        return {'ok': False, 'reason': 'Artefakt nie figuruje już w rejestrze zweryfikowanej kwarantanny.'}
+    verified = verify_artifact_sha256_for_runtime(dict(row))
+    if not verified.get('ok'):
+        return verified
+    return {
+        'ok': True,
+        'artifact_key': artifact_key,
+        'path': verified['path'],
+        'sha256': verified['sha256'],
+        'size_bytes': verified['size_bytes'],
+        'requires_separate_runtime_executor': True,
+        'runtime_started': False,
+    }
+
+
 def refresh_preflight():
     hardware=hf_candidate_queue.hardware_snapshot()
     available=_memory_available()

@@ -5,7 +5,8 @@ on:
     branches: [main]
   push:
     branches:
-      - "feat/issue-107-per-ply-fen-checkpoints"
+      - "feat/**"
+      - "fix/**"
   workflow_dispatch:
 
 permissions:

@@ -60,6 +60,41 @@ class RuntimePreflightTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertIn('poza kwarantanną', result['reason'])
 
+    def test_runtime_handoff_gate_requires_explicit_approval(self):
+        key='hf:org/model|'+'a'*40+'|model.gguf'
+        result=runtime.authorize_runtime_handoff(key)
+        self.assertFalse(result['ok'])
+        self.assertIn('jawnego zatwierdzenia',result['reason'])
+
+    def test_runtime_handoff_gate_rehashes_registry_artifact_and_does_not_start_runtime(self):
+        key='hf:org/model|'+'a'*40+'|model.gguf'
+        result=runtime.authorize_runtime_handoff(key,explicit_approval=True)
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['sha256'],self.digest)
+        self.assertEqual(result['path'],str(self.artifact.resolve()))
+        self.assertFalse(result['runtime_started'])
+        self.assertTrue(result['requires_separate_runtime_executor'])
+        original_stat=self.artifact.stat()
+        self.artifact.write_bytes(b'X'*original_stat.st_size)
+        import os
+        os.utime(self.artifact,ns=(original_stat.st_atime_ns,original_stat.st_mtime_ns))
+        rejected=runtime.authorize_runtime_handoff(key,explicit_approval=True)
+        self.assertFalse(rejected['ok'])
+        self.assertIn('nie powiodła',rejected['reason'])
+
+    def test_runtime_handoff_gate_rejects_unregistered_artifact(self):
+        key='hf:org/model|'+'a'*40+'|model.gguf'
+        with downloads._db() as c:
+            c.execute('DELETE FROM hf_download_verified_artifacts WHERE artifact_key=?',(key,))
+        result=runtime.authorize_runtime_handoff(key,explicit_approval=True)
+        self.assertFalse(result['ok'])
+        self.assertIn('nie figuruje już w rejestrze',result['reason'])
+
+    def test_runtime_handoff_gate_rejects_unapproved_artifact_key(self):
+        result=runtime.authorize_runtime_handoff('hf:org/other|'+'b'*40+'|other.gguf',explicit_approval=True)
+        self.assertFalse(result['ok'])
+        self.assertIn('jawnego uprawnienia',result['reason'])
+
     def test_verified_allowlisted_artifact_is_ready_but_never_started(self):
         result=runtime.refresh_preflight()
         item=next(x for x in result['items'] if x['catalog_id']=='hf:org/model')
