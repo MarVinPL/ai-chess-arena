@@ -10,6 +10,7 @@ import hf_candidate_runtime as preflight
 import league
 import model_permissions
 import runtime_executor as executor
+from runtime_api_worker import RuntimeApiWorker
 import server
 
 
@@ -81,6 +82,36 @@ class RuntimeExecutorTests(unittest.TestCase):
         executor.approve_batch(batch_id=batch['batch_id'], confirm=True,
             actor='test-operator', reason='Unit test fake runner only')
         return batch['batch_id']
+
+    def test_production_api_dispatcher_executes_only_approved_test_job(self):
+        queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
+
+        class ProductionProfile:
+            production_requested = True
+            execution_enabled = True
+
+        runner_calls = []
+        worker = RuntimeApiWorker(
+            deployment=ProductionProfile(),
+            runner=lambda payload, timeout, cancelled: runner_calls.append(
+                (payload['id'], timeout, callable(cancelled))
+            ) or {'ok': True, 'runtime': 'fake-test-runner'},
+        )
+        result = worker.run_once()
+        self.assertEqual(result, {
+            'status': 'dispatched', 'job_id': queued['job_id'],
+            'result_status': 'completed',
+        })
+        self.assertEqual(runner_calls, [(queued['job_id'], executor.DEFAULT_TIMEOUT_SECONDS, True)])
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'completed')
+        with league.connect() as connection:
+            persisted = connection.execute(
+                'SELECT result_json FROM runtime_test_jobs WHERE id=?',
+                (queued['job_id'],),
+            ).fetchone()
+        self.assertIsNotNone(persisted['result_json'])
 
     def test_batch_creation_does_not_enable_runtime_or_start_model(self):
         queued = self.enqueue()

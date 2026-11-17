@@ -297,8 +297,9 @@ and handoff intact for recovery; start_pending and stop-transition leases are
 left to their in-flight operation/recovery path. The watchdog does not perform
 artifact hashing or resource preflight on every poll. The focused watchdog,
 authority and immutable-bundle suite passed (50 tests); the API worker/startup/client/executor
-focused suite passed (68 tests); the full suite passed (689 passed, 1 skipped,
-43 subtests).
+focused suite passed (68 tests); an end-to-end API-dispatcher-to-executor fake-runner test confirms an approved
+job reaches durable `completed` with `result_json`; the full suite passed
+(690 passed, 1 skipped, 43 subtests).
 
 The API-side production dispatcher is now wired in code after supervisor
 lease recovery completes. It is constructed only for the validated production
