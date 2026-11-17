@@ -133,7 +133,7 @@ def build_service(environ: dict[str, str] | None = None):
             item.strip() for item in env.get("ARENA_RUNTIME_REVIEW_REQUIRED_ARTIFACTS", "").split(",") if item.strip()
         ),
     )
-    leases = SQLiteRuntimeUnitStore(database)
+    leases = SQLiteRuntimeUnitStore(database, initialize_schema=False)
     supervisor = RuntimeSupervisor(
         backend=SystemdTransientBackend(), persist=leases.persist,
         set_state=leases.set_state, load_recoverable=leases.load_recoverable,

@@ -199,3 +199,36 @@ def test_sqlite_store_refuses_cancelled_running_job(tmp_path):
     store = SQLiteRuntimeUnitStore(db)
     with pytest.raises(RuntimeSupervisorError, match="nieanulowanego"):
         store.persist(RuntimeUnitRecord(51, "ai-chess-arena-runtime-51.service", "start_pending"))
+
+
+def test_production_lease_store_requires_preprovisioned_schema_without_migrating(tmp_path):
+    import sqlite3
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    database = tmp_path / "arena.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY)")
+    with pytest.raises(RuntimeSupervisorError, match="schema is incomplete"):
+        SQLiteRuntimeUnitStore(database, initialize_schema=False)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_unit_leases'"
+        ).fetchone() is None
+
+
+def test_production_lease_store_opens_existing_schema_read_write_without_create(tmp_path):
+    import sqlite3
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    database = tmp_path / "arena.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE runtime_unit_leases(job_id INTEGER PRIMARY KEY, unit_name TEXT NOT NULL UNIQUE, state TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    store = SQLiteRuntimeUnitStore(database, initialize_schema=False)
+    assert store.load_recoverable() == ()
+
+
+def test_production_lease_store_refuses_missing_database(tmp_path):
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    with pytest.raises(RuntimeSupervisorError, match="schema is unavailable"):
+        SQLiteRuntimeUnitStore(tmp_path / "missing.sqlite3", initialize_schema=False)

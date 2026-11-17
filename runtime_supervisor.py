@@ -140,20 +140,38 @@ class RuntimeSupervisor:
 class SQLiteRuntimeUnitStore:
     """Durable lease store backed by the Arena SQLite database."""
 
-    def __init__(self, database_path):
+    def __init__(self, database_path, *, initialize_schema: bool = True):
         from pathlib import Path
         import sqlite3
 
         self.database_path = str(Path(database_path))
-        with sqlite3.connect(self.database_path) as connection:
-            connection.execute("""
-                CREATE TABLE IF NOT EXISTS runtime_unit_leases (
-                    job_id INTEGER PRIMARY KEY,
-                    unit_name TEXT NOT NULL UNIQUE,
-                    state TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        self._database_uri = Path(self.database_path).resolve().as_uri() + "?mode=rw"
+        if initialize_schema:
+            with sqlite3.connect(self.database_path) as connection:
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS runtime_unit_leases (
+                        job_id INTEGER PRIMARY KEY,
+                        unit_name TEXT NOT NULL UNIQUE,
+                        state TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+        else:
+            # The privileged daemon must never create/migrate application DB
+            # schema at startup. mode=rw also refuses to create a missing DB.
+            try:
+                with sqlite3.connect(self._database_uri, uri=True) as connection:
+                    columns = {row[1] for row in connection.execute(
+                        "PRAGMA table_info(runtime_unit_leases)"
+                    )}
+            except sqlite3.Error as exc:
+                raise RuntimeSupervisorError(
+                    "Pre-provisioned runtime lease schema is unavailable."
+                ) from exc
+            if not {"job_id", "unit_name", "state", "updated_at"}.issubset(columns):
+                raise RuntimeSupervisorError(
+                    "Pre-provisioned runtime lease schema is incomplete."
                 )
-            """)
 
     def persist(self, record: RuntimeUnitRecord) -> None:
         import sqlite3

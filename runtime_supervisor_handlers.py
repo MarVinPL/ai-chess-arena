@@ -267,6 +267,21 @@ class RuntimeSupervisorHandlers:
             )
         return {**result, "cleaned_handoffs": sorted(cleaned)}
 
+    def recover_for_ipc(self) -> dict:
+        """Return bounded recovery evidence suitable for the fixed IPC frame."""
+        result = self.recover()
+        stopped = result.get("count")
+        cleaned = result.get("cleaned_handoffs")
+        if (type(stopped) is not int or stopped < 0
+                or not isinstance(cleaned, list)
+                or any(type(job_id) is not int or job_id < 1 for job_id in cleaned)):
+            raise RuntimeSupervisorHandlerError("Recovery returned invalid evidence.")
+        return {
+            "count": stopped,
+            "cleaned_handoffs_count": len(cleaned),
+            "complete": True,
+        }
+
     def make_ipc_server(self, socket_path: str | Path, *, allowed_uid: int,
                         socket_mode: int = 0o660,
                         socket_gid: int | None = None) -> RuntimeSupervisorIPCServer:
@@ -275,6 +290,6 @@ class RuntimeSupervisorHandlers:
         return RuntimeSupervisorIPCServer(
             socket_path, allowed_uid=allowed_uid,
             start=self.start, stop=self.stop, status=self.status,
-            recover=self.recover, socket_mode=socket_mode,
+            recover=self.recover_for_ipc, socket_mode=socket_mode,
             socket_gid=socket_gid,
         )

@@ -302,6 +302,8 @@ def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path)
         assert supervisor_request(socket_path, "status", 7)["lease_state"] == "active"
         stopped = supervisor_request(socket_path, "stop", 7)
         assert stopped["lease_state"] == "stopped"
+        recovery = supervisor_request(socket_path, "recover")
+        assert recovery == {"count": 0, "cleaned_handoffs_count": 0, "complete": True}
         assert backend.stopped == ["ai-chess-arena-runtime-7.service"]
     finally:
         server.shutdown()
