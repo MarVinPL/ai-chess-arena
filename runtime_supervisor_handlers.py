@@ -268,11 +268,13 @@ class RuntimeSupervisorHandlers:
         return {**result, "cleaned_handoffs": sorted(cleaned)}
 
     def make_ipc_server(self, socket_path: str | Path, *, allowed_uid: int,
-                        socket_mode: int = 0o660) -> RuntimeSupervisorIPCServer:
+                        socket_mode: int = 0o660,
+                        socket_gid: int | None = None) -> RuntimeSupervisorIPCServer:
         if type(allowed_uid) is not int or allowed_uid != self._api_uid:
             raise RuntimeSupervisorHandlerError("IPC peer UID must match the configured API identity.")
         return RuntimeSupervisorIPCServer(
             socket_path, allowed_uid=allowed_uid,
             start=self.start, stop=self.stop, status=self.status,
             recover=self.recover, socket_mode=socket_mode,
+            socket_gid=socket_gid,
         )

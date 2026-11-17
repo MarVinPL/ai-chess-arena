@@ -104,7 +104,7 @@ class RuntimeSupervisorIPCServer:
                  status: Callable[[int], object], recover: Callable[[], object] | None = None,
                  timeout_seconds: float = 3.0,
                  response_timeout_seconds: float = 1800.0,
-                 socket_mode: int = 0o660):
+                 socket_mode: int = 0o660, socket_gid: int | None = None):
         self.socket_path = Path(socket_path)
         self.allowed_uid = int(allowed_uid)
         self.handlers = {"start": start, "stop": stop, "status": status}
@@ -115,7 +115,9 @@ class RuntimeSupervisorIPCServer:
         self.timeout_seconds = float(timeout_seconds)
         self.response_timeout_seconds = float(response_timeout_seconds)
         self.socket_mode = int(socket_mode)
-        if (self.allowed_uid < 0 or self.timeout_seconds <= 0
+        self.socket_gid = None if socket_gid is None else int(socket_gid)
+        if (self.allowed_uid < 0 or (self.socket_gid is not None and self.socket_gid < 0)
+                or self.timeout_seconds <= 0
                 or self.response_timeout_seconds <= 0):
             raise SupervisorIPCError("Nieprawidłowa konfiguracja IPC.")
         if self.socket_mode not in {0o600, 0o660}:
@@ -147,7 +149,9 @@ class RuntimeSupervisorIPCServer:
         self._server.response_timeout_seconds = self.response_timeout_seconds
         try:
             self._server.server_bind()
-            os.chmod(self.socket_path, self.socket_mode)
+            if self.socket_gid is not None:
+                os.chown(self.socket_path, -1, self.socket_gid, follow_symlinks=False)
+            os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
             self._server.server_activate()
             self.ready.set()
             self._server.serve_forever(poll_interval=0.1)

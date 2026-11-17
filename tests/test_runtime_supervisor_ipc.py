@@ -62,11 +62,14 @@ def test_round_trip_calls_only_injected_job_handlers(tmp_path):
         stop=lambda job_id: calls.append(("stop", job_id)) or {"stopped": True},
         status=lambda job_id: calls.append(("status", job_id)) or {"state": "idle"},
         recover=lambda: calls.append(("recover", None)) or {"count": 2},
+        socket_gid=os.getgid(),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         assert server.ready.wait(timeout=2), "supervisor IPC did not become ready"
+        assert path.stat().st_gid == os.getgid()
+        assert (path.stat().st_mode & 0o777) == 0o660
         assert supervisor_request(path, "start", 13) == {"accepted": True}
         assert supervisor_request(path, "status", 13) == {"state": "idle"}
         assert supervisor_request(path, "recover") == {"count": 2}
