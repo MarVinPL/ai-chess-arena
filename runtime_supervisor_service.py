@@ -25,6 +25,45 @@ from runtime_systemd_backend import SystemdTransientBackend
 class SupervisorServiceConfigError(RuntimeError):
     pass
 
+SUPERVISOR_BUNDLE_PATH = Path("/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz")
+
+
+def _verify_supervisor_bundle(path: Path, expected_sha256: str, *,
+                              running_path: str | Path | None = None,
+                              expected_path: Path = SUPERVISOR_BUNDLE_PATH) -> None:
+    try:
+        canonical = path.resolve(strict=True)
+    except OSError as exc:
+        raise SupervisorServiceConfigError("Supervisor bundle path is unavailable.") from exc
+    if path != expected_path or not path.is_absolute() or canonical != path:
+        raise SupervisorServiceConfigError("Supervisor bundle path is not canonical.")
+    if (len(expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_sha256)):
+        raise SupervisorServiceConfigError("Supervisor bundle SHA-256 pin is malformed.")
+    try:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != 0 or info.st_gid != 0
+                or stat.S_IMODE(info.st_mode) & 0o022):
+            raise SupervisorServiceConfigError(
+                "Supervisor bundle must be root-owned and not group/world writable."
+            )
+        invoked = Path(sys.argv[0] if running_path is None else running_path)
+        if invoked.resolve(strict=True) != path:
+            raise SupervisorServiceConfigError(
+                "Supervisor must be launched from the pinned immutable bundle."
+            )
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except SupervisorServiceConfigError:
+        raise
+    except OSError as exc:
+        raise SupervisorServiceConfigError("Pinned supervisor bundle is unavailable.") from exc
+    if digest.hexdigest() != expected_sha256:
+        raise SupervisorServiceConfigError("Supervisor bundle SHA-256 mismatch.")
+
 
 def _required(env: dict[str, str], key: str) -> str:
     value = env.get(key, "").strip()
@@ -94,6 +133,17 @@ def build_service(environ: dict[str, str] | None = None):
         raise SupervisorServiceConfigError("Production acknowledgement is missing.")
     if env.get("ARENA_RUNTIME_BACKEND") != "systemd" or env.get("ARENA_RUNTIME_EXECUTION_ENABLED") != "1":
         raise SupervisorServiceConfigError("Systemd backend and explicit execution opt-in are required.")
+    if not (sys.flags.isolated and sys.flags.no_site):
+        raise SupervisorServiceConfigError(
+            "Supervisor daemon must run with Python isolated/no-site mode (-I -S)."
+        )
+
+    bundle = _absolute(env, "ARENA_RUNTIME_SUPERVISOR_BUNDLE")
+    if bundle != SUPERVISOR_BUNDLE_PATH:
+        raise SupervisorServiceConfigError("Non-canonical supervisor bundle path is refused.")
+    _verify_supervisor_bundle(
+        bundle, _required(env, "ARENA_RUNTIME_SUPERVISOR_BUNDLE_SHA256")
+    )
 
     database = _absolute(env, "ARENA_RUNTIME_DATABASE")
     socket_path = _absolute(env, "ARENA_RUNTIME_SUPERVISOR_SOCKET")

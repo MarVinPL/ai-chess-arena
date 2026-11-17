@@ -40,3 +40,21 @@ def test_service_refuses_non_root_before_reading_configuration(monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     with pytest.raises(SupervisorServiceConfigError, match="must run as root"):
         build_service({})
+
+
+
+def test_service_refuses_noncanonical_supervisor_bundle_before_host_access(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys, "flags", SimpleNamespace(isolated=True, no_site=True))
+    env = {
+        "ARENA_RUNTIME_DEPLOYMENT": "production",
+        "ARENA_RUNTIME_PRODUCTION_ACK": "I_UNDERSTAND_RUNTIME_EXECUTION",
+        "ARENA_RUNTIME_BACKEND": "systemd",
+        "ARENA_RUNTIME_EXECUTION_ENABLED": "1",
+        "ARENA_RUNTIME_SUPERVISOR_BUNDLE": "/tmp/untrusted-supervisor.pyz",
+        "ARENA_RUNTIME_SUPERVISOR_BUNDLE_SHA256": "a" * 64,
+    }
+    with pytest.raises(SupervisorServiceConfigError, match="Non-canonical supervisor bundle"):
+        build_service(env)

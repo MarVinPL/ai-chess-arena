@@ -3,10 +3,30 @@
 `runtime_supervisor_service.py` is the root-owned daemon entry point. Importing
 it has no host side effects. `build_service()` validates the complete explicit
 production configuration, verifies pre-provisioned roots and the root-owned
-pinned worker, constructs the read-only job authority, API lease-broker client,
-exact-unit systemd backend and SO_PEERCRED-gated AF_UNIX listener.
+pinned worker and immutable root-owned supervisor zipapp, constructs the
+read-only job authority, API lease-broker client, exact-unit systemd backend
+and SO_PEERCRED-gated AF_UNIX listener. Direct execution from the writable
+application checkout is refused.
 
 ## Required configuration
+
+Build the supervisor package from the reviewed source tree with:
+
+```sh
+python3 tools/build_runtime_supervisor_bundle.py --output /tmp/runtime_supervisor.pyz
+sha256sum /tmp/runtime_supervisor.pyz
+```
+
+The builder includes only the explicit supervisor dependency closure and emits
+a deterministic zipapp. Installation is a separate privileged operation: place
+it at `/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz`, make it
+`root:root` and non-group/world-writable, then set the exact reviewed SHA-256
+in the root-owned environment file. Launch it only with `/usr/bin/python3 -I -S`
+(isolated mode with site initialization disabled); the bootstrap refuses
+non-isolated execution, verifies
+ownership, mode, canonical path and digest before importing service modules,
+and disables bytecode writes. `build_service()` rechecks the same pin. This
+repository change does not install the bundle.
 
 Start from `runtime-supervisor.env.example`. The API and supervisor must point
 to the exact same canonical Arena SQLite database for the supervisor's
@@ -43,8 +63,9 @@ socket ownership and restart ordering. This change deliberately does **not**
 add or install an enableable `.service` unit. A broad writable
 `/home/debian/ai-chess-arena` allowance remains prohibited.
 
-Before production: validate the implemented database access boundary and the
-actual systemd sandbox/mount behavior in a disposable VM, provision roots and
+Before production: validate the immutable bundle installation and the
+implemented database access boundary, plus actual systemd sandbox/mount
+behavior in a disposable VM; then provision roots and
 identities under separate authorization, install the pinned worker bundle,
 then run independent security review. No production action is performed by
 this module.
