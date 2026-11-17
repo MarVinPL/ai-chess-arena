@@ -180,18 +180,27 @@ class RuntimeLeaseBrokerServer:
         self._server.allowed_uid = self.allowed_uid
         self._server.dispatch = self.dispatch
         self._server.request_timeout_seconds = self.request_timeout_seconds
+        bound_socket_identity = None
         try:
             self._server.server_bind()
+            bound_info = self.socket_path.lstat()
+            if not stat.S_ISSOCK(bound_info.st_mode):
+                raise RuntimeLeaseBrokerError("Bound broker path is not a socket.")
+            bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
             os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
             self._server.server_activate()
             self._server.serve_forever(poll_interval=0.05)
         finally:
             self.ready.clear()
             self._server.server_close()
-            try:
-                self.socket_path.unlink()
-            except FileNotFoundError:
-                pass
+            if bound_socket_identity is not None:
+                try:
+                    current = self.socket_path.lstat()
+                    if (stat.S_ISSOCK(current.st_mode)
+                            and (current.st_dev, current.st_ino) == bound_socket_identity):
+                        self.socket_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     def shutdown(self):
         if self._server is not None and self.ready.is_set():

@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import sqlite3
 import threading
@@ -210,3 +211,18 @@ def test_cancel_transaction_winning_persist_race_prevents_lease_creation(tmp_pat
         assert persist_future.result(timeout=5) == "RuntimeSupervisorError"
 
     assert store.get(1) is None
+
+
+def test_broker_does_not_unlink_path_it_did_not_bind(tmp_path, monkeypatch):
+    import socketserver
+    path = tmp_path / "lease-broker.sock"
+    server = RuntimeLeaseBrokerServer(path, store=_store(tmp_path), allowed_uid=os.getuid())
+
+    def raced_bind(instance):
+        Path(instance.server_address).write_text("foreign path", encoding="utf-8")
+        raise OSError("simulated bind race")
+
+    monkeypatch.setattr(socketserver.ThreadingUnixStreamServer, "server_bind", raced_bind)
+    with pytest.raises(OSError, match="bind race"):
+        server.serve_forever()
+    assert path.read_text(encoding="utf-8") == "foreign path"
