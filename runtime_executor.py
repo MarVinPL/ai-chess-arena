@@ -222,6 +222,8 @@ def revoke_batch(*, batch_id: int, actor: str, reason: str) -> dict:
         raise ValueError('Podaj uzasadnienie wycofania partii.')
     with league.connect() as connection:
         _init(connection)
+        connection.commit()
+        connection.execute('BEGIN IMMEDIATE')
         batch = connection.execute('SELECT status FROM runtime_test_batches WHERE id=?', (batch_id,)).fetchone()
         if not batch or batch['status'] not in {'pending_approval','approved','running'}:
             raise ValueError('Nie można wycofać tej partii.')
@@ -419,16 +421,33 @@ def cancel(job_id: int) -> dict:
         raise ValueError('Nieprawidłowy identyfikator zadania.')
     with league.connect() as connection:
         _init(connection)
+        connection.commit()
+        # Serialize the status read with claim/start and terminal result commit.
+        connection.execute('BEGIN IMMEDIATE')
         row = connection.execute('SELECT status FROM runtime_test_jobs WHERE id=?', (job_id,)).fetchone()
         if not row:
             raise ValueError('Nie znaleziono zadania.')
         if row['status'] == 'queued':
-            connection.execute("UPDATE runtime_test_jobs SET status='cancelled',finished_at=? WHERE id=? AND status='queued'", (_now(), job_id))
-            return {'job_id': job_id, 'status': 'cancelled'}
-        if row['status'] == 'running':
-            connection.execute('UPDATE runtime_test_jobs SET cancel_requested=1 WHERE id=? AND status=\'running\'', (job_id,))
+            changed = connection.execute(
+                "UPDATE runtime_test_jobs SET status='cancelled',finished_at=? WHERE id=? AND status='queued'",
+                (_now(), job_id),
+            )
+            if changed.rowcount == 1:
+                return {'job_id': job_id, 'status': 'cancelled'}
+        elif row['status'] == 'running':
+            changed = connection.execute(
+                "UPDATE runtime_test_jobs SET cancel_requested=1 WHERE id=? AND status='running'",
+                (job_id,),
+            )
+            if changed.rowcount == 1:
+                return {'job_id': job_id, 'status': 'cancel_requested'}
+        current = connection.execute(
+            'SELECT status,cancel_requested FROM runtime_test_jobs WHERE id=?', (job_id,)
+        ).fetchone()
+        if current['status'] == 'running' and current['cancel_requested']:
             return {'job_id': job_id, 'status': 'cancel_requested'}
-        return {'job_id': job_id, 'status': row['status']}
+        return {'job_id': job_id, 'status': current['status']}
+
 
 
 def execute_job(job_id: int, *, runner: Callable[[dict, int, Callable[[], bool]], dict] | None = None,

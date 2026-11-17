@@ -357,11 +357,89 @@ class RuntimeExecutorTests(unittest.TestCase):
         self.assertEqual(actions, [('start', queued['job_id']), ('stop', queued['job_id'])])
         self.assertEqual(executor.snapshot()['batches'][0]['status'], 'revoked')
 
+    def test_cancel_serializes_with_a_completion_that_commits_first(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute("UPDATE runtime_test_jobs SET status='running' WHERE id=?",
+                               (queued['job_id'],))
+            connection.execute("UPDATE runtime_test_batches SET status='running' WHERE id=?",
+                               (batch_id,))
+        locked = threading.Event()
+        release = threading.Event()
+        def complete_first():
+            with league.connect() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                locked.set()
+                self.assertTrue(release.wait(3))
+                connection.execute("UPDATE runtime_test_jobs SET status='completed' WHERE id=?",
+                                   (queued['job_id'],))
+                connection.execute("UPDATE runtime_test_batches SET status='completed' WHERE id=?",
+                                   (batch_id,))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            completion = pool.submit(complete_first)
+            self.assertTrue(locked.wait(2))
+            cancellation = pool.submit(executor.cancel, queued['job_id'])
+            release.set()
+            completion.result(timeout=4)
+            self.assertEqual(cancellation.result(timeout=4)['status'], 'completed')
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'completed')
+
+    def test_batch_revoke_serializes_with_completion_that_commits_first(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute("UPDATE runtime_test_jobs SET status='running' WHERE id=?",
+                               (queued['job_id'],))
+            connection.execute("UPDATE runtime_test_batches SET status='running' WHERE id=?",
+                               (batch_id,))
+        locked = threading.Event()
+        release = threading.Event()
+        def complete_first():
+            with league.connect() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                locked.set()
+                self.assertTrue(release.wait(3))
+                connection.execute("UPDATE runtime_test_jobs SET status='completed' WHERE id=?",
+                                   (queued['job_id'],))
+                connection.execute("UPDATE runtime_test_batches SET status='completed' WHERE id=?",
+                                   (batch_id,))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            completion = pool.submit(complete_first)
+            self.assertTrue(locked.wait(2))
+            revocation = pool.submit(
+                executor.revoke_batch, batch_id=batch_id, actor='test-operator',
+                reason='Race with completed batch')
+            release.set()
+            completion.result(timeout=4)
+            with self.assertRaisesRegex(ValueError, 'Nie można wycofać'):
+                revocation.result(timeout=4)
+        state = executor.snapshot()
+        self.assertEqual(state['jobs'][0]['status'], 'completed')
+        self.assertEqual(state['batches'][0]['status'], 'completed')
+
     def test_cancel_queued_job_without_starting_runtime(self):
         queued = self.enqueue()
         result = executor.cancel(queued['job_id'])
         self.assertEqual(result['status'], 'cancelled')
         self.assertEqual(executor.snapshot()['jobs'][0]['status'], 'cancelled')
+
+    def test_cancel_reports_completed_when_terminal_commit_already_won(self):
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute(
+                "UPDATE runtime_test_jobs SET status='completed',finished_at=? WHERE id=?",
+                (executor._now(), queued['job_id']),
+            )
+        result = executor.cancel(queued['job_id'])
+        self.assertEqual(result, {'job_id': queued['job_id'], 'status': 'completed'})
+        self.assertEqual(executor.snapshot()['jobs'][0]['status'], 'completed')
 
     def test_global_lock_rejects_parallel_execution(self):
         queued = self.enqueue()
