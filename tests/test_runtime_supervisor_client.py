@@ -93,6 +93,26 @@ def test_runner_uses_only_job_id_and_supervisor_managed_bridge():
     assert all(call[0] == BRIDGE for call in bridge.calls)
 
 
+def test_supervisor_handoff_time_does_not_consume_runtime_deadline():
+    clock = [100.0]
+    base = FakeSupervisor()
+    def slow_supervisor(socket_path, action, job_id, *, timeout_seconds):
+        result = base(socket_path, action, job_id, timeout_seconds=timeout_seconds)
+        if action == "start":
+            clock[0] += 120.0
+        return result
+
+    runner = RuntimeSupervisorClientRunner(
+        supervisor_socket=SOCKET, supervisor_call=slow_supervisor,
+        bridge_call=FakeBridge(), monotonic=lambda: clock[0],
+        sleep=lambda _seconds: None,
+    )
+    result = runner(payload(), 10, lambda: False)
+    assert result["ok"] is True
+    assert result["startup_seconds"] == 0.0
+    assert base.lease_state == "stopped"
+
+
 def test_cancellation_during_health_stops_exact_unit():
     runner, supervisor, bridge = make_runner(bridge=FakeBridge(health_status=503))
     calls = 0

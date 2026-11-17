@@ -105,10 +105,9 @@ class RuntimeSupervisorClientRunner:
         if not isinstance(expected_sha, str) or not _SHA256.fullmatch(expected_sha):
             raise ValueError("Pinned artifact SHA-256 is invalid.")
 
-        started = self._monotonic()
-        deadline = started + timeout_seconds
         try:
-            # Artifact handoff can take longer than the model smoke timeout.
+            # Artifact handoff and supervisor authorization happen before the
+            # systemd unit starts; they must not consume the model runtime budget.
             start_result = self._supervisor_call(
                 self._supervisor_socket, "start", job_id, timeout_seconds=1800.0
             )
@@ -134,6 +133,10 @@ class RuntimeSupervisorClientRunner:
                 ) from cleanup_error
             raise RuntimeSupervisorClientError("Supervisor did not confirm the expected start request.")
 
+        # The runtime deadline starts only after the supervisor confirms the
+        # systemd start request. The unit itself enforces the same wall-clock cap.
+        started = self._monotonic()
+        deadline = started + timeout_seconds
         bridge_socket = self._bridge_socket_template.format(job_id=job_id)
         ready_at = None
         try:
