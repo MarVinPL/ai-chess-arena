@@ -190,31 +190,51 @@ class SQLiteRuntimeUnitStore:
                     "Dzierżawa wymaga nieanulowanego zadania w stanie running."
                 )
             existing = connection.execute(
-                "SELECT unit_name FROM runtime_unit_leases WHERE job_id=?", (record.job_id,)
+                "SELECT unit_name,state FROM runtime_unit_leases WHERE job_id=?", (record.job_id,)
             ).fetchone()
             if existing:
+                # A retry after an ambiguous broker response is safe only while
+                # the original start is still pending and the exact identity matches.
+                if existing[0] == record.unit_name and existing[1] == "start_pending":
+                    return
                 raise RuntimeSupervisorError("Dla tego zadania istnieje już dzierżawa runtime.")
             connection.execute(
                 "INSERT INTO runtime_unit_leases(job_id,unit_name,state) VALUES(?,?,?)",
                 (record.job_id, record.unit_name, record.state),
             )
 
-    def set_state(self, job_id: int, state: str) -> None:
+    def set_state(self, job_id: int, state: str, unit_name: str | None = None) -> None:
         import sqlite3
 
-        allowed = {
-            "start_pending", "start_uncertain", "active", "stop_pending",
-            "recovery_stop_pending", "stopped",
+        transitions = {
+            "start_pending": {"start_uncertain", "active", "stopped", "recovery_stop_pending"},
+            "start_uncertain": {"stop_pending", "recovery_stop_pending", "stopped"},
+            "active": {"stop_pending", "recovery_stop_pending"},
+            "stop_pending": {"recovery_stop_pending", "stopped"},
+            "recovery_stop_pending": {"stopped"},
+            "stopped": set(),
         }
-        if state not in allowed:
+        if (type(job_id) is not int or job_id < 1
+                or not isinstance(state, str) or state not in transitions):
             raise RuntimeSupervisorError("Nieznany stan dzierżawy runtime.")
         with sqlite3.connect(self.database_path, timeout=5) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT unit_name,state FROM runtime_unit_leases WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None or (unit_name is not None and row[0] != unit_name):
+                raise RuntimeSupervisorError("Brak zgodnej dzierżawy runtime dla zadania.")
+            if row[1] == state:
+                return
+            if state not in transitions.get(row[1], set()):
+                raise RuntimeSupervisorError("Niedozwolone przejście stanu dzierżawy runtime.")
             changed = connection.execute(
-                "UPDATE runtime_unit_leases SET state=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
-                (state, job_id),
+                "UPDATE runtime_unit_leases SET state=?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE job_id=? AND unit_name=? AND state=?",
+                (state, job_id, row[0], row[1]),
             )
             if changed.rowcount != 1:
-                raise RuntimeSupervisorError("Brak zapisanej dzierżawy runtime dla zadania.")
+                raise RuntimeSupervisorError("Konflikt aktualizacji dzierżawy runtime.")
 
     def get(self, job_id: int) -> RuntimeUnitRecord | None:
         import sqlite3

@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 
 from runtime_artifact_handoff import ArtifactHandoffError
-from runtime_supervisor import RuntimeSupervisor, SQLiteRuntimeUnitStore
+from runtime_supervisor import RuntimeSupervisor
+from runtime_lease_broker import RuntimeLeaseBrokerClient
 from runtime_supervisor_authority import RuntimeJobAuthority, readonly_sqlite_factory
 from runtime_supervisor_handlers import RuntimeSupervisorHandlers
 from runtime_supervisor_ipc import SupervisorIPCError
@@ -96,12 +97,15 @@ def build_service(environ: dict[str, str] | None = None):
 
     database = _absolute(env, "ARENA_RUNTIME_DATABASE")
     socket_path = _absolute(env, "ARENA_RUNTIME_SUPERVISOR_SOCKET")
+    lease_broker_socket = _absolute(env, "ARENA_RUNTIME_LEASE_BROKER_SOCKET")
     quarantine = _absolute(env, "ARENA_RUNTIME_QUARANTINE_ROOT")
     handoff = _absolute(env, "ARENA_RUNTIME_ARTIFACT_ROOT")
     output = _absolute(env, "ARENA_RUNTIME_OUTPUT_ROOT")
     worker = _absolute(env, "ARENA_RUNTIME_WORKER_PATH")
     if socket_path.parent != Path("/run/ai-chess-arena-runtime"):
         raise SupervisorServiceConfigError("Supervisor socket must use the dedicated /run directory.")
+    if lease_broker_socket != Path("/run/ai-chess-arena-api/lease-broker.sock"):
+        raise SupervisorServiceConfigError("Lease broker must use the dedicated API runtime socket.")
     if handoff != Path("/var/lib/arena-handoff") or output != Path("/run/arena-runtime"):
         raise SupervisorServiceConfigError("Non-canonical production handoff/output roots are refused.")
     if worker != Path("/usr/local/lib/ai-chess-arena-runtime/runtime_worker"):
@@ -124,8 +128,8 @@ def build_service(environ: dict[str, str] | None = None):
     if not allowlist or len(allowlist) != len(raw_allowlist.split(",")):
         raise SupervisorServiceConfigError("Artifact allowlist must contain unique, non-empty exact keys.")
 
-    # The authority is read-only; the durable lease store shares the canonical
-    # Arena DB so lease persistence can atomically check the API's running claim.
+    # Authorization reads remain read-only. All lease writes are delegated
+    # to the API-owned broker; the privileged daemon never opens SQLite rw.
     authority = RuntimeJobAuthority(
         connect_readonly=readonly_sqlite_factory(database),
         allowed_artifacts=allowlist,
@@ -133,7 +137,7 @@ def build_service(environ: dict[str, str] | None = None):
             item.strip() for item in env.get("ARENA_RUNTIME_REVIEW_REQUIRED_ARTIFACTS", "").split(",") if item.strip()
         ),
     )
-    leases = SQLiteRuntimeUnitStore(database, initialize_schema=False)
+    leases = RuntimeLeaseBrokerClient(lease_broker_socket)
     supervisor = RuntimeSupervisor(
         backend=SystemdTransientBackend(), persist=leases.persist,
         set_state=leases.set_state, load_recoverable=leases.load_recoverable,

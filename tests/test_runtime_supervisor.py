@@ -138,6 +138,7 @@ def test_sqlite_store_commits_unit_identity_and_recovers_only_incomplete_leases(
     assert store.load_recoverable() == (
         RuntimeUnitRecord(21, "ai-chess-arena-runtime-21.service", "active"),
     )
+    store.set_state(21, "stop_pending")
     store.set_state(21, "stopped")
     assert store.load_recoverable() == ()
     with pytest.raises(RuntimeSupervisorError):
@@ -154,8 +155,10 @@ def test_sqlite_store_rejects_duplicate_or_unrelated_unit_identity(tmp_path):
         connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(31,'running')")
     store = SQLiteRuntimeUnitStore(db)
     store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-31.service", "start_pending"))
+    # An identical retry is safe while the lease remains start_pending.
+    store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-31.service", "start_pending"))
     with pytest.raises(RuntimeSupervisorError):
-        store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-31.service", "start_pending"))
+        store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-32.service", "start_pending"))
     with pytest.raises(RuntimeSupervisorError):
         store.persist(RuntimeUnitRecord(99, "ai-chess-arena-runtime-99.service", "start_pending"))
 
@@ -232,3 +235,41 @@ def test_production_lease_store_refuses_missing_database(tmp_path):
 
     with pytest.raises(RuntimeSupervisorError, match="schema is unavailable"):
         SQLiteRuntimeUnitStore(tmp_path / "missing.sqlite3", initialize_schema=False)
+
+
+def test_sqlite_lease_persist_is_idempotent_only_for_same_pending_unit(tmp_path):
+    import sqlite3
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    db = tmp_path / "arena.sqlite3"
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0)")
+        connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(71,'running')")
+    store = SQLiteRuntimeUnitStore(db)
+    record = RuntimeUnitRecord(71, "ai-chess-arena-runtime-71.service", "start_pending")
+    store.persist(record)
+    store.persist(record)
+    assert store.get(71) == record
+    with pytest.raises(RuntimeSupervisorError):
+        store.persist(RuntimeUnitRecord(71, "ai-chess-arena-runtime-72.service", "start_pending"))
+    store.set_state(71, "active")
+    with pytest.raises(RuntimeSupervisorError):
+        store.persist(record)
+
+
+def test_sqlite_lease_state_update_checks_exact_unit_and_transition(tmp_path):
+    import sqlite3
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    db = tmp_path / "arena.sqlite3"
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0)")
+        connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(81,'running')")
+    store = SQLiteRuntimeUnitStore(db)
+    store.persist(RuntimeUnitRecord(81, "ai-chess-arena-runtime-81.service", "start_pending"))
+    with pytest.raises(RuntimeSupervisorError):
+        store.set_state(81, "active", "ai-chess-arena-runtime-82.service")
+    store.set_state(81, "active", "ai-chess-arena-runtime-81.service")
+    with pytest.raises(RuntimeSupervisorError):
+        store.set_state(81, "start_pending", "ai-chess-arena-runtime-81.service")
+    assert store.get(81).state == "active"

@@ -10,6 +10,8 @@ Type=simple
 User=debian
 Group=debian
 WorkingDirectory=/home/debian/ai-chess-arena
+RuntimeDirectory=ai-chess-arena-api
+RuntimeDirectoryMode=0750
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/ai-chess-arena/auth.env

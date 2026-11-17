@@ -8,21 +8,23 @@ Architecture decision record / implementation gate. This document does not enabl
 
 Do not give the privileged supervisor write access to the Arena application database or its containing directory. Keep the canonical SQLite database owned and writable by the unprivileged API process.
 
-The preferred design is a narrow, API-owned AF_UNIX lease broker. The supervisor remains the authority for systemd unit creation, stop, cgroup verification and handoff cleanup. The API remains the authority for durable application state and all SQLite writes.
+Implement a narrow, API-owned AF_UNIX lease broker. The supervisor remains the authority for systemd unit creation, stop, cgroup verification and handoff cleanup. The API remains the authority for durable application state and all SQLite writes.
+
+The first implementation is in `runtime_lease_broker.py`: fixed JSON actions, duplicate-key rejection, `SO_PEERCRED` root-UID allowlist, bounded frames/timeouts, exact deterministic unit names, idempotent pending-lease persistence, compare-and-set state updates, and fail-closed bounded recovery (maximum 256 records; no truncation). The API starts the broker before requesting supervisor recovery. The privileged service uses `RuntimeLeaseBrokerClient` and no longer opens the lease store read/write.
 
 A separate root-owned lease database is not selected as the first option: it would split the job claim/cancellation state from the unit lease and introduce cross-database crash windows that would need a second reconciliation protocol.
 
 ## Broker contract
 
-The API broker must expose only these fixed operations; clients supply no SQL, paths, unit names, state transitions outside the enumerated set, or arbitrary payloads:
+The API broker exposes only these fixed operations; clients supply no SQL, paths, arbitrary unit names, state transitions outside the enumerated set, or arbitrary payloads:
 
-- `persist_start(job_id, unit_name)`: one `BEGIN IMMEDIATE` transaction verifies the job exists, is `running`, has `cancel_requested=0`, and has no existing lease; it validates the deterministic unit name for that exact job and inserts `start_pending`.
+- `persist(job_id, unit_name)`: one `BEGIN IMMEDIATE` transaction verifies the job exists, is `running`, has `cancel_requested=0`, and has no existing lease; it validates the deterministic unit name for that exact job and inserts `start_pending`.
 - `set_state(job_id, unit_name, state)`: compare-and-set the exact existing lease and allow only the supervisor state machine's enumerated transitions.
 - `get(job_id)`: return the minimal lease record for that job.
 - `load_recoverable()`: return bounded, ordered records in recoverable states. The broker must support pagination or a bounded response strategy; it must never silently truncate recovery work.
 - No generic database, schema, migration, or delete operation is permitted.
 
-The broker validates every field, rejects duplicate JSON keys and oversized frames, applies bounded read/write timeouts, authenticates the peer with `SO_PEERCRED`, and returns generic errors without leaking DB content or paths. It must serialize conflicting lease operations through SQLite transactions and enforce idempotency for retries after ambiguous IPC failures.
+The broker validates every field, rejects duplicate JSON keys and oversized frames, applies bounded read/write timeouts, authenticates the peer with `SO_PEERCRED` (root UID only), and returns generic errors without leaking DB content or paths. It serializes conflicting lease operations through SQLite transactions and supports idempotent retries of the same `start_pending` lease. Recovery is bounded at 256 records and rejects larger sets instead of truncating them. State changes compare job ID, exact deterministic unit name and prior state.
 
 The supervisor keeps its existing read-only authorization connection for job, grant, batch, preflight and settings checks. It no longer opens the application database in read/write mode. Lease reads and writes go through the broker so there is one durable source of truth. Any filesystem access needed for SQLite read-only WAL operation must be separately measured and granted read-only; the supervisor must not be able to create, replace, truncate or chmod the database or its sidecars. The disposable-VM test must cover both rollback-journal and WAL modes, including a live writer.
 
@@ -64,6 +66,8 @@ The systemd dependency graph and readiness contract must guarantee that the API 
 
 ## Current implementation state
 
-The current `SQLiteRuntimeUnitStore` still writes the canonical Arena DB. Its schema initialization is now non-mutating when used by the privileged service, but that does not solve the write-permission boundary. The supervisor service must remain non-deployable until this ADR is implemented and the disposable-VM validation passes.
+The API process now initializes and owns `runtime_unit_leases`; the privileged supervisor uses the broker client and retains only its read-only authorization connection. The API broker socket is fixed at `/run/ai-chess-arena-api/lease-broker.sock`, mode `0600`, and accepts only root peers. The API service must provision its own `RuntimeDirectory=ai-chess-arena-api` with mode `0750` (or a private `0700` directory) before launch; the broker verifies that the parent is a real directory owned by the API UID and is not group/world writable. The supervisor's existing `/run/ai-chess-arena-runtime` directory remains separate.
+
+This implementation is not yet cleared for deployment. The disposable-VM test must prove that the real API service can create its broker socket, the root supervisor can connect, unprivileged peers are rejected, the supervisor cannot write the database or SQLite sidecars, and read-only authorization works in both rollback-journal and WAL modes. It must also exercise cancellation-vs-persist races and supervisor/API restart ordering.
 
 No host service, account, group, directory, socket, ACL, cgroup, firewall rule, model process or production configuration is changed by this design.

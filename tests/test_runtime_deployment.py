@@ -36,6 +36,7 @@ def test_production_requires_systemd_and_explicit_execution_opt_in():
         "ARENA_RUNTIME_PRODUCTION_ACK": "I_UNDERSTAND_RUNTIME_EXECUTION",
         "ARENA_RUNTIME_BACKEND": "systemd",
         "ARENA_RUNTIME_SUPERVISOR_SOCKET": "/run/ai-chess-arena-runtime/supervisor.sock",
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET": "/run/ai-chess-arena-api/lease-broker.sock",
     }
     with pytest.raises(RuntimeDeploymentConfigError, match="EXECUTION_ENABLED"):
         resolve_runtime_deployment(base)
@@ -48,8 +49,10 @@ def test_production_resolves_to_one_canonical_contract():
         "ARENA_RUNTIME_BACKEND": "systemd",
         "ARENA_RUNTIME_EXECUTION_ENABLED": "1",
         "ARENA_RUNTIME_SUPERVISOR_SOCKET": "/run/ai-chess-arena-runtime/supervisor.sock",
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET": "/run/ai-chess-arena-api/lease-broker.sock",
     })
     assert config.environment == "production"
+    assert config.lease_broker_socket == "/run/ai-chess-arena-api/lease-broker.sock"
     assert config.backend == "systemd"
     assert config.execution_enabled is True
     assert config.artifact_root == "/var/lib/arena-handoff"
@@ -71,6 +74,7 @@ def test_production_rejects_noncanonical_paths(key, value):
         "ARENA_RUNTIME_BACKEND": "systemd",
         "ARENA_RUNTIME_EXECUTION_ENABLED": "1",
         "ARENA_RUNTIME_SUPERVISOR_SOCKET": "/run/ai-chess-arena-runtime/supervisor.sock",
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET": "/run/ai-chess-arena-api/lease-broker.sock",
     }
     env[key] = value
     with pytest.raises(RuntimeDeploymentConfigError):
@@ -80,3 +84,16 @@ def test_production_rejects_noncanonical_paths(key, value):
 def test_unknown_mode_fails_closed():
     with pytest.raises(RuntimeDeploymentConfigError, match="dozwolone"):
         resolve_runtime_deployment({"ARENA_RUNTIME_DEPLOYMENT": "prod"})
+
+
+def test_production_requires_canonical_lease_broker_socket():
+    env = {
+        "ARENA_RUNTIME_DEPLOYMENT": "production",
+        "ARENA_RUNTIME_PRODUCTION_ACK": "I_UNDERSTAND_RUNTIME_EXECUTION",
+        "ARENA_RUNTIME_BACKEND": "systemd",
+        "ARENA_RUNTIME_EXECUTION_ENABLED": "1",
+        "ARENA_RUNTIME_SUPERVISOR_SOCKET": "/run/ai-chess-arena-runtime/supervisor.sock",
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET": "/tmp/lease.sock",
+    }
+    with pytest.raises(RuntimeDeploymentConfigError, match="Broker dzierżaw"):
+        resolve_runtime_deployment(env)

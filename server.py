@@ -26,6 +26,8 @@ import runtime_executor
 from runtime_deployment import resolve_runtime_deployment
 from runtime_startup import recover_runtime_on_startup
 from runtime_supervisor_ipc import supervisor_request
+from runtime_supervisor import SQLiteRuntimeUnitStore
+from runtime_lease_broker import RuntimeLeaseBrokerServer
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1892,26 +1894,50 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     db_init()
     deployment = resolve_runtime_deployment()
-    recovery = recover_runtime_on_startup(
-        deployment=deployment,
-        # The privileged supervisor owns exact-unit recovery and handoff
-        # cleanup. If its socket/service is unavailable, production startup
-        # aborts before executor reconciliation.
-        supervisor_recover=(
-            lambda: supervisor_request(
-                deployment.supervisor_socket, "recover", None,
-                timeout_seconds=1800.0,
-            )
-        ),
-        executor_recover=runtime_executor.recover_orphaned_jobs,
-    )
-    executor_recovery = recovery['executor']
-    if executor_recovery['count']:
-        print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
-    threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
-    hf_candidate_queue.start_background_workers()
-    hf_candidate_runtime.start_background_planner()
-    _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
-    _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
-    print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    lease_broker = None
+    lease_broker_thread = None
+    if deployment.production_requested:
+        # The API process owns SQLite schema and writes. The root supervisor
+        # can reach only this fixed, peer-credential-gated lease protocol.
+        lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True)
+        lease_broker = RuntimeLeaseBrokerServer(
+            deployment.lease_broker_socket, store=lease_store,
+            allowed_uid=0, socket_mode=0o600,
+        )
+        lease_broker_thread = threading.Thread(
+            target=lease_broker.serve_forever,
+            daemon=True,
+            name='runtime-lease-broker',
+        )
+        lease_broker_thread.start()
+        if not lease_broker.ready.wait(timeout=5):
+            raise RuntimeError('Runtime lease broker did not become ready.')
+
+    try:
+        recovery = recover_runtime_on_startup(
+            deployment=deployment,
+            # The privileged supervisor owns exact-unit recovery and handoff
+            # cleanup. It calls back into the already-ready API lease broker.
+            supervisor_recover=(
+                lambda: supervisor_request(
+                    deployment.supervisor_socket, "recover", None,
+                    timeout_seconds=1800.0,
+                )
+            ),
+            executor_recover=runtime_executor.recover_orphaned_jobs,
+        )
+        executor_recovery = recovery['executor']
+        if executor_recovery['count']:
+            print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
+        threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
+        hf_candidate_queue.start_background_workers()
+        hf_candidate_runtime.start_background_planner()
+        _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+        _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
+        print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
+        ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    finally:
+        if lease_broker is not None:
+            lease_broker.shutdown()
+        if lease_broker_thread is not None:
+            lease_broker_thread.join(timeout=5)

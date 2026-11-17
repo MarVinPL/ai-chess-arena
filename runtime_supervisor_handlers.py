@@ -13,7 +13,7 @@ from runtime_artifact_handoff import (
     prepare_artifact_handoff,
     remove_artifact_handoff,
 )
-from runtime_supervisor import RuntimeSupervisor, SQLiteRuntimeUnitStore
+from runtime_supervisor import RuntimeSupervisor
 from runtime_supervisor_authority import RuntimeJobAuthorization
 from runtime_supervisor_ipc import RuntimeSupervisorIPCServer
 from runtime_systemd import build_runtime_unit_spec
@@ -41,7 +41,7 @@ class RuntimeSupervisorHandlers:
     """Compose authority, immutable handoff, durable lease and exact-unit backend."""
 
     def __init__(self, *, authority, supervisor: RuntimeSupervisor,
-                 lease_store: SQLiteRuntimeUnitStore, quarantine_root: str | Path,
+                 lease_store, quarantine_root: str | Path,
                  handoff_root: str | Path, output_root: str | Path,
                  runtime_uid: int, runtime_gid: int, api_uid: int, api_gid: int,
                  supervisor_uid: int, supervisor_gid: int,

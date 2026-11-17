@@ -7,6 +7,11 @@ Arena API. It is intentionally separate from sentinelx-cloud-core.service.
 
 - Runs as debian:debian from /home/debian/ai-chess-arena.
 - Starts the repository virtualenv Python and server.py.
+- Provisions the API-owned `/run/ai-chess-arena-api` runtime directory with
+  mode `0750`; the runtime lease broker socket is created there with mode
+  `0600` and is accessible only to the API identity and privileged root
+  supervisor. This directory is lifecycle-managed by systemd and is not
+  created by repository code.
 - The current application binds the API to 127.0.0.1:8090.
 - ProtectHome=read-only keeps /home read-only by default. BindPaths exposes
   only /home/debian/ai-chess-arena as a writable bind mount, allowing SQLite,

@@ -25,6 +25,7 @@ class RuntimeDeploymentConfig:
     output_root: str
     worker_bundle: str
     supervisor_socket: str | None
+    lease_broker_socket: str | None
 
     @property
     def production_requested(self) -> bool:
@@ -75,6 +76,7 @@ def resolve_runtime_deployment(environ: Mapping[str, str] | None = None) -> Runt
             output_root=output_root,
             worker_bundle=worker_bundle,
             supervisor_socket=None,
+            lease_broker_socket=None,
         )
 
     if env.get("ARENA_RUNTIME_PRODUCTION_ACK") != "I_UNDERSTAND_RUNTIME_EXECUTION":
@@ -88,8 +90,14 @@ def resolve_runtime_deployment(environ: Mapping[str, str] | None = None) -> Runt
         env.get("ARENA_RUNTIME_SUPERVISOR_SOCKET", ""),
         "ARENA_RUNTIME_SUPERVISOR_SOCKET",
     )
+    lease_broker_socket = _absolute_path(
+        env.get("ARENA_RUNTIME_LEASE_BROKER_SOCKET", ""),
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET",
+    )
     if not socket_path.startswith("/run/"):
         raise RuntimeDeploymentConfigError("Socket supervisora musi znajdować się pod /run/.")
+    if lease_broker_socket != "/run/ai-chess-arena-api/lease-broker.sock":
+        raise RuntimeDeploymentConfigError("Broker dzierżaw wymaga dedykowanego socketu API pod /run/ai-chess-arena-api/.")
     if artifact_root != "/var/lib/arena-handoff":
         raise RuntimeDeploymentConfigError("Produkcja wymaga dedykowanego root artefaktów /var/lib/arena-handoff.")
     if output_root != "/run/arena-runtime":
@@ -105,4 +113,5 @@ def resolve_runtime_deployment(environ: Mapping[str, str] | None = None) -> Runt
         output_root=output_root,
         worker_bundle=worker_bundle,
         supervisor_socket=socket_path,
+        lease_broker_socket=lease_broker_socket,
     )
