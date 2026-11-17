@@ -18,6 +18,10 @@ from runtime_supervisor_authority import RuntimeJobAuthorization
 from runtime_supervisor_ipc import RuntimeSupervisorIPCServer
 from runtime_systemd import build_runtime_unit_spec
 from runtime_resource_policy import model_memory_limit_bytes
+from runtime_socket_handoff import (
+    SocketHandoffSpec, create_handoff as create_socket_handoff,
+    cleanup_handoff as cleanup_socket_handoff,
+)
 
 _JOB_DIR_RE = re.compile(r"^job-([1-9][0-9]*)$")
 
@@ -38,8 +42,9 @@ class RuntimeSupervisorHandlers:
 
     def __init__(self, *, authority, supervisor: RuntimeSupervisor,
                  lease_store: SQLiteRuntimeUnitStore, quarantine_root: str | Path,
-                 handoff_root: str | Path, runtime_gid: int,
-                 supervisor_uid: int,
+                 handoff_root: str | Path, output_root: str | Path,
+                 runtime_uid: int, runtime_gid: int, api_uid: int, api_gid: int,
+                 supervisor_uid: int, supervisor_gid: int,
                  spec_builder: Callable | None = None):
         if not callable(getattr(authority, "resolve_start", None)):
             raise TypeError("Trusted job authority is required.")
@@ -52,31 +57,72 @@ class RuntimeSupervisorHandlers:
         self._leases = lease_store
         self._quarantine_root = Path(quarantine_root)
         self._handoff_root = Path(handoff_root)
+        self._output_root = Path(output_root)
+        self._runtime_uid = runtime_uid
         self._runtime_gid = runtime_gid
+        self._api_uid = api_uid
+        self._api_gid = api_gid
         self._supervisor_uid = supervisor_uid
+        self._supervisor_gid = supervisor_gid
+        self._test_spec_builder = spec_builder is not None
         self._spec_builder = spec_builder or self._build_spec
         if not callable(self._spec_builder):
             raise TypeError("A trusted runtime spec builder is required.")
-        if type(runtime_gid) is not int or runtime_gid < 0:
-            raise ValueError("Invalid runtime GID.")
-        if type(supervisor_uid) is not int or supervisor_uid < 0:
-            raise ValueError("Invalid supervisor UID.")
+        for label, value in (
+            ("runtime UID", runtime_uid), ("runtime GID", runtime_gid),
+            ("API UID", api_uid), ("API GID", api_gid),
+            ("supervisor UID", supervisor_uid), ("supervisor GID", supervisor_gid),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"Invalid {label}.")
+        if runtime_uid == 0 or runtime_gid == 0 or api_uid == 0 or api_gid == 0:
+            raise ValueError("Runtime/API identities must be unprivileged.")
+        if ((runtime_uid == api_uid or runtime_gid == api_gid)
+                and not self._test_spec_builder):
+            raise ValueError("Runtime/API identities must be distinct.")
 
-    def _remove_handoff(self, job_id: int) -> bool:
-        return remove_artifact_handoff(
-            job_id=job_id, handoff_root=self._handoff_root,
-            runtime_gid=self._runtime_gid, owner_uid=self._supervisor_uid,
+    def _socket_spec(self, job_id: int) -> SocketHandoffSpec:
+        return SocketHandoffSpec(
+            job_id=job_id, runtime_uid=self._runtime_uid,
+            api_gid=self._api_gid, output_root=self._output_root,
         )
 
-    @staticmethod
-    def _build_spec(authorization: RuntimeJobAuthorization, handoff):
+    def _remove_artifact_handoff(self, job_id: int) -> bool:
+        return remove_artifact_handoff(
+            job_id=job_id, handoff_root=self._handoff_root,
+            runtime_uid=self._runtime_uid, supervisor_gid=self._supervisor_gid,
+            supervisor_uid=self._supervisor_uid,
+        )
+
+    def _remove_socket_handoff(self, job_id: int) -> bool:
+        return cleanup_socket_handoff(
+            self._socket_spec(job_id), supervisor_uid=self._supervisor_uid,
+            supervisor_gid=self._supervisor_gid,
+        )
+
+    def _remove_job_handoffs(self, job_id: int) -> None:
+        self._remove_socket_handoff(job_id)
+        self._remove_artifact_handoff(job_id)
+
+    def _create_socket_handoff(self, job_id: int) -> SocketHandoffSpec:
+        spec = self._socket_spec(job_id)
+        create_socket_handoff(
+            spec, supervisor_uid=self._supervisor_uid,
+            supervisor_gid=self._supervisor_gid,
+        )
+        return spec
+
+    def _build_spec(self, authorization: RuntimeJobAuthorization, handoff,
+                    socket_handoff: SocketHandoffSpec):
         # Host reserve is enforced separately by RuntimeJobAuthority; do not
         # assign that reserve to the runtime cgroup.
         memory_max = model_memory_limit_bytes(authorization.size_bytes)
         return build_runtime_unit_spec(
             job_id=authorization.job_id, runtime_user="arena-runtime",
             runtime_group="arena-runtime", artifact_path=handoff.path,
-            output_dir=f"/run/arena-runtime/job-{authorization.job_id}",
+            artifact_mount_path=str(socket_handoff.directory / "model.gguf"),
+            output_dir=str(socket_handoff.directory),
+            api_uid=self._api_uid, api_gid=self._api_gid,
             memory_max_bytes=memory_max, memory_swap_max_bytes=0,
             cpu_quota_percent=100, tasks_max=8,
             runtime_seconds=authorization.timeout_seconds,
@@ -89,6 +135,7 @@ class RuntimeSupervisorHandlers:
             raise RuntimeSupervisorHandlerError("A durable runtime lease already exists for this job.")
 
         handoff = None
+        socket_handoff = None
         try:
             authorization = self._authority.resolve_start(job_id)
             if not isinstance(authorization, RuntimeJobAuthorization):
@@ -102,8 +149,10 @@ class RuntimeSupervisorHandlers:
                 expected_sha256=authorization.artifact_sha256,
                 expected_size=authorization.size_bytes,
                 handoff_root=self._handoff_root,
-                runtime_gid=self._runtime_gid, owner_uid=self._supervisor_uid,
+                runtime_uid=self._runtime_uid, supervisor_gid=self._supervisor_gid,
+                supervisor_uid=self._supervisor_uid,
             )
+            socket_handoff = self._create_socket_handoff(job_id)
 
             # Re-read all grants, batch state, preflight and host reserves after
             # copying. No unit may start on the strength of a stale first read.
@@ -112,7 +161,7 @@ class RuntimeSupervisorHandlers:
                     != _authorization_identity(confirmed)):
                 raise RuntimeSupervisorHandlerError("Job authorization changed during artifact handoff.")
 
-            spec = self._spec_builder(authorization, handoff)
+            spec = self._spec_builder(authorization, handoff, socket_handoff)
             argv = (
                 "/usr/local/lib/ai-chess-arena-runtime/runtime_worker",
                 "--job", str(job_id),
@@ -146,7 +195,7 @@ class RuntimeSupervisorHandlers:
                     lease is None or getattr(lease, "state", None) == "stopped"
             ):
                 try:
-                    self._remove_handoff(job_id)
+                    self._remove_job_handoffs(job_id)
                 except Exception as cleanup_exc:
                     raise RuntimeSupervisorHandlerError(
                         "Start failed and the unleased handoff could not be safely removed."
@@ -169,7 +218,7 @@ class RuntimeSupervisorHandlers:
             raise RuntimeSupervisorHandlerError("Lease state is not eligible for safe stop.")
         # RuntimeSupervisor.stop returns only after the backend confirms the
         # exact unit cgroup is empty. A stopped lease is also safe to retry.
-        self._remove_handoff(job_id)
+        self._remove_job_handoffs(job_id)
         return {"job_id": job_id, "unit_name": record.unit_name, "lease_state": "stopped"}
 
     def status(self, job_id: int) -> dict:
@@ -189,31 +238,39 @@ class RuntimeSupervisorHandlers:
         result = self._supervisor.recover()
         cleaned = []
         failures = []
-        try:
-            entries = tuple(self._handoff_root.iterdir())
-        except OSError as exc:
-            raise RuntimeSupervisorHandlerError("Cannot inspect the pre-provisioned handoff root.") from exc
-        for entry in entries:
-            match = _JOB_DIR_RE.fullmatch(entry.name)
-            if not match:
-                continue
-            job_id = int(match.group(1))
-            record = self._leases.get(job_id)
-            if record is not None and record.state != "stopped":
-                continue
+        for root, cleanup in (
+            (self._handoff_root, self._remove_artifact_handoff),
+            (self._output_root, self._remove_socket_handoff),
+        ):
             try:
-                if self._remove_handoff(job_id):
-                    cleaned.append(job_id)
-            except ArtifactHandoffError:
-                failures.append(job_id)
+                entries = tuple(root.iterdir())
+            except OSError as exc:
+                raise RuntimeSupervisorHandlerError(
+                    "Cannot inspect a pre-provisioned runtime handoff root."
+                ) from exc
+            for entry in entries:
+                match = _JOB_DIR_RE.fullmatch(entry.name)
+                if not match:
+                    continue
+                job_id = int(match.group(1))
+                record = self._leases.get(job_id)
+                if record is not None and record.state != "stopped":
+                    continue
+                try:
+                    if cleanup(job_id) and job_id not in cleaned:
+                        cleaned.append(job_id)
+                except Exception:
+                    failures.append(job_id)
         if failures:
             raise RuntimeSupervisorHandlerError(
-                f"Safe handoff cleanup failed for job IDs: {','.join(map(str, failures))}"
+                f"Safe handoff cleanup failed for job IDs: {','.join(map(str, sorted(set(failures))))}"
             )
-        return {**result, "cleaned_handoffs": cleaned}
+        return {**result, "cleaned_handoffs": sorted(cleaned)}
 
     def make_ipc_server(self, socket_path: str | Path, *, allowed_uid: int,
                         socket_mode: int = 0o660) -> RuntimeSupervisorIPCServer:
+        if type(allowed_uid) is not int or allowed_uid != self._api_uid:
+            raise RuntimeSupervisorHandlerError("IPC peer UID must match the configured API identity.")
         return RuntimeSupervisorIPCServer(
             socket_path, allowed_uid=allowed_uid,
             start=self.start, stop=self.stop, status=self.status,

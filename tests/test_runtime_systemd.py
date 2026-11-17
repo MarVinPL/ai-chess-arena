@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from runtime_systemd import RuntimeUnitPolicyError, build_runtime_unit_spec
@@ -9,7 +11,9 @@ def build(**overrides):
         "runtime_user": "arena-runtime",
         "runtime_group": "arena-runtime",
         "artifact_path": "/var/lib/arena-handoff/job-42/model.gguf",
+        "artifact_mount_path": "/run/arena-runtime/job-42/model.gguf",
         "output_dir": "/run/arena-runtime/job-42",
+        "api_uid": os.getuid(), "api_gid": os.getgid(),
         "memory_max_bytes": 1024 * 1024 * 1024,
         "memory_swap_max_bytes": 0,
         "cpu_quota_percent": 100,
@@ -21,6 +25,8 @@ def build(**overrides):
         values["artifact_path"] = f"/var/lib/arena-handoff/job-{values['job_id']}/model.gguf"
     if "output_dir" not in overrides:
         values["output_dir"] = f"/run/arena-runtime/job-{values['job_id']}"
+    if "artifact_mount_path" not in overrides:
+        values["artifact_mount_path"] = f"/run/arena-runtime/job-{values['job_id']}/model.gguf"
     return build_runtime_unit_spec(**values)
 
 
@@ -45,9 +51,11 @@ def test_policy_requires_separate_unprivileged_identity_and_strict_isolation():
 
 def test_policy_mounts_only_one_read_only_artifact_and_private_output():
     props = build().as_dict()
-    assert props["ReadOnlyPaths"] == (
-        "/var/lib/arena-handoff/job-42/model.gguf /usr/local/lib/ai-chess-arena-runtime"
+    assert props["ReadOnlyPaths"] == "/usr/local/lib/ai-chess-arena-runtime"
+    assert props["BindReadOnlyPaths"] == (
+        "/var/lib/arena-handoff/job-42/model.gguf:/run/arena-runtime/job-42/model.gguf"
     )
+    assert "/var/lib/arena-handoff" in props["InaccessiblePaths"].split()
     assert props["ReadWritePaths"] == "/run/arena-runtime/job-42"
     assert props["WorkingDirectory"] == "/run/arena-runtime/job-42"
     assert "/var/lib/ai-chess-arena" in props["InaccessiblePaths"]

@@ -13,14 +13,18 @@ For a single positive job ID, the handler:
    DB enablement, the API's running claim, cancellation, batch expiry, exact
    TEST_ONLY grant, explicit privileged artifact allowlist, verified registry,
    fresh preflight, current RAM/disk reserves and required manual review.
-3. Copies the exact source into the pre-provisioned handoff root and verifies
-   copied byte count and SHA-256.
-4. Resolves the job a second time after the copy and requires the same pinned
+3. Copies the exact source into the pre-provisioned supervisor-only handoff
+   root and verifies copied byte count and SHA-256. The runtime cannot traverse
+   this host-side root.
+4. Creates the pre-provisioned per-job /run output directory and its
+   root-owned, mode-000 model mount placeholder. The systemd spec bind-mounts
+   only the exact artifact into this directory and hides the host handoff root.
+5. Resolves the job a second time after the copy and requires the same pinned
    job/grant/batch/artifact identity.
-5. Builds the fixed worker argv and per-job systemd spec from trusted code and
+6. Builds the fixed worker argv and per-job systemd spec from trusted code and
    the authorization record.
-6. Persists the exact deterministic unit lease before calling the backend.
-7. The supervisor checks cancel_requested atomically with lease persistence,
+7. Persists the exact deterministic unit lease before calling the backend.
+8. The supervisor checks cancel_requested atomically with lease persistence,
    then runs a final authority callback after persistence and immediately
    before the backend call. If this final check fails, the lease is marked
    stopped without invoking the backend. The API-side client polls cancellation
@@ -34,8 +38,8 @@ artifact is retained for exact-unit recovery.
 ## Stop, status and recovery
 
 - stop() loads the persisted lease and stops only that exact validated unit.
-  Artifact cleanup happens only after the backend confirms the unit cgroup is
-  empty. Cleanup is non-recursive and checks exact owner/group/modes.
+  Artifact and output-directory cleanup happen only after the backend confirms
+  the unit cgroup is empty. Cleanup is non-recursive and checks exact owner/group/modes.
 - status() reports the durable lease state only. It does not claim that the
   systemd unit is live or expose an inferred ActiveState.
 - recover() first asks RuntimeSupervisor to stop all persisted recoverable
@@ -53,8 +57,10 @@ a lease lifecycle state, not proof of a live model process.
 
 The default spec builder uses:
 - runtime identity arena-runtime:arena-runtime;
-- the exact per-job artifact under /var/lib/arena-handoff;
-- output directory /run/arena-runtime/job-<id>;
+- the exact host-side per-job artifact, bind-mounted read-only as
+  /run/arena-runtime/job-<id>/model.gguf while /var/lib/arena-handoff is hidden;
+- output directory /run/arena-runtime/job-<id>, with a pre-created root-owned
+  mode-000 model mount placeholder and the API/runtime socket handoff;
 - MemoryMax equal to the model-memory estimate; the separate 1.5 GiB host
   reserve is excluded from the runtime cgroup and must remain available outside it;
 - MemorySwapMax=0, CPUQuota=100%, TasksMax=8;
@@ -62,9 +68,10 @@ The default spec builder uses:
 - the existing strict filesystem, namespace, network and cgroup policy.
 
 A spec-builder injection exists for deterministic unit tests only. Production
-must use the default builder and the canonical handoff root. The handler does
-not provision the root, runtime account/group, output directories, socket,
-systemd unit, cgroup, mount, or network configuration.
+must use the default builder and the canonical handoff root. The handler does not provision the handoff/output roots, runtime account or
+group, systemd unit, cgroup, mount namespace or network configuration. It
+creates only the per-job artifact and output children beneath pre-provisioned
+roots, and removes them only after verified cgroup teardown.
 
 ## Validation boundary
 
@@ -80,5 +87,7 @@ systemd accepting the start request; the API client stops immediately after
 the start response if cancellation is pending, while a continuous
 supervisor-side revocation watcher remains an integration requirement. No real
 systemd command, model worker, download, inference, tournament or production
-configuration was exercised. The current worker bundle/argv contract and
-actual systemd property normalization remain open blockers.
+configuration was exercised. The source worker entrypoint now matches the
+fixed --job ID argv contract, but it has not been installed into the root-owned
+bundle. Actual systemd property normalization and mount-namespace behavior
+remain open blockers.

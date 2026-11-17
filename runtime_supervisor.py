@@ -54,10 +54,27 @@ class RuntimeSupervisor:
             "ProtectControlGroups": "yes", "RestrictNamespaces": "yes",
             "RestrictAddressFamilies": "AF_UNIX AF_INET", "KillMode": "control-group",
             "Delegate": "no", "WorkingDirectory": f"/run/arena-runtime/job-{job_id}",
+            "ReadOnlyPaths": "/usr/local/lib/ai-chess-arena-runtime",
+            "BindReadOnlyPaths": (
+                f"/var/lib/arena-handoff/job-{job_id}/model.gguf:"
+                f"/run/arena-runtime/job-{job_id}/model.gguf"
+            ),
             "ReadWritePaths": f"/run/arena-runtime/job-{job_id}",
         }
         if any(props.get(key) != value for key, value in required.items()):
             raise RuntimeSupervisorError("Specyfikacja nie spełnia wymaganej polityki izolacji.")
+        if "/var/lib/arena-handoff" not in props.get("InaccessiblePaths", "").split():
+            raise RuntimeSupervisorError("Katalog źródłowy artefaktów musi być ukryty przed runtime.")
+        environment = props.get("Environment", "").split()
+        if (len(environment) != 2
+                or not environment[0].startswith("ARENA_API_UID=")
+                or not environment[1].startswith("ARENA_API_GID=")):
+            raise RuntimeSupervisorError("Środowisko runtime może zawierać wyłącznie UID/GID API.")
+        try:
+            if int(environment[0].split("=", 1)[1]) < 1 or int(environment[1].split("=", 1)[1]) < 1:
+                raise ValueError
+        except ValueError as exc:
+            raise RuntimeSupervisorError("Nieprawidłowe identyfikatory API w środowisku runtime.") from exc
         if not argv or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv):
             raise RuntimeSupervisorError("Polecenie runtime jest nieprawidłowe.")
         if not argv[0].startswith("/"):

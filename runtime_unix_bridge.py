@@ -101,7 +101,8 @@ class UnixRuntimeBridge:
                  api_gid: int | None = None,
                  urlopen=_loopback_only_urlopen, timeout_seconds: float = 1800.0,
                  client_timeout_seconds: float = 3.0,
-                 response_timeout_seconds: float = 1800.0):
+                 response_timeout_seconds: float = 1800.0,
+                 cleanup_socket: bool = True):
         self.socket_path = Path(socket_path)
         self.loopback_port = int(loopback_port)
         self.allowed_uid = int(allowed_uid)
@@ -111,6 +112,9 @@ class UnixRuntimeBridge:
         self.timeout_seconds = float(timeout_seconds)
         self.client_timeout_seconds = float(client_timeout_seconds)
         self.response_timeout_seconds = float(response_timeout_seconds)
+        if type(cleanup_socket) is not bool:
+            raise BridgeError("Invalid socket cleanup policy.")
+        self.cleanup_socket = cleanup_socket
         if not 1 <= self.loopback_port <= 65535:
             raise BridgeError("Nieprawidłowy port loopback.")
         if min(self.allowed_uid, self.runtime_uid, self.api_gid) < 0:
@@ -150,10 +154,11 @@ class UnixRuntimeBridge:
             self._server.serve_forever(poll_interval=0.1)
         finally:
             self._server.server_close()
-            try:
-                self.socket_path.unlink()
-            except FileNotFoundError:
-                pass
+            if self.cleanup_socket:
+                try:
+                    self.socket_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     def shutdown(self):
         if self._server is not None:

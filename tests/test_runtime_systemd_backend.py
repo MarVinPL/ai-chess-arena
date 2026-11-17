@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +12,9 @@ def make_spec():
     return build_runtime_unit_spec(
         job_id=9, runtime_user="arena-runtime", runtime_group="arena-runtime",
         artifact_path="/var/lib/arena-handoff/job-9/model.gguf",
-        output_dir="/run/arena-runtime/job-9", memory_max_bytes=1024**3,
+        artifact_mount_path="/run/arena-runtime/job-9/model.gguf",
+        output_dir="/run/arena-runtime/job-9",
+        api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
         memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
         runtime_seconds=300,
     )

@@ -1,3 +1,4 @@
+import os
 import pytest
 
 from runtime_supervisor import RuntimeSupervisor, RuntimeSupervisorError, RuntimeUnitRecord
@@ -23,7 +24,9 @@ def spec(job_id=7):
     return build_runtime_unit_spec(
         job_id=job_id, runtime_user="arena-runtime", runtime_group="arena-runtime",
         artifact_path=f"/var/lib/arena-handoff/job-{job_id}/model.gguf",
+        artifact_mount_path=f"/run/arena-runtime/job-{job_id}/model.gguf",
         output_dir=f"/run/arena-runtime/job-{job_id}",
+        api_uid=os.getuid(), api_gid=os.getgid(),
         memory_max_bytes=1024**3, memory_swap_max_bytes=0,
         cpu_quota_percent=100, tasks_max=8, runtime_seconds=300,
     )
@@ -60,17 +63,17 @@ def test_unit_identity_is_durably_persisted_before_backend_start():
         set_state=lambda job_id, state: order.append(("state", state)),
         load_recoverable=lambda: (),
     )
-    name = supervisor.start(spec(), ("/usr/local/lib/ai-chess-arena-runtime/worker", "--job", "7"))
+    name = supervisor.start(spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "7"))
     assert name == "ai-chess-arena-runtime-7.service"
     assert order[0] == ("persist", name)
-    assert backend.started == [(name, ("/usr/local/lib/ai-chess-arena-runtime/worker", "--job", "7"))]
+    assert backend.started == [(name, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "7"))]
 
 
 def test_persistence_failure_never_calls_backend():
     backend = FakeBackend()
     supervisor, _, _ = harness(backend, fail_persist=True)
     with pytest.raises(OSError):
-        supervisor.start(spec(), ("/usr/bin/true",))
+        supervisor.start(spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "7"))
     assert backend.started == []
 
 
@@ -78,7 +81,7 @@ def test_ambiguous_start_is_marked_recoverable_and_recovery_stops_exact_unit():
     backend = FakeBackend(fail_start=True)
     supervisor, records, _ = harness(backend)
     with pytest.raises(OSError):
-        supervisor.start(spec(11), ("/usr/bin/true",))
+        supervisor.start(spec(11), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "11"))
     assert records[11].unit_name == "ai-chess-arena-runtime-11.service"
     assert records[11].state == "start_uncertain"
     backend.fail_start = False

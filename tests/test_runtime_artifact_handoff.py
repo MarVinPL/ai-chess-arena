@@ -16,8 +16,8 @@ def setup_roots(tmp_path):
     source_dir = quarantine / "download-17"
     source_dir.mkdir(mode=0o700)
     handoff = tmp_path / "handoff"
-    handoff.mkdir(mode=0o710)
-    os.chmod(handoff, 0o710)
+    handoff.mkdir(mode=0o711)
+    os.chmod(handoff, 0o711)
     os.chown(handoff, os.getuid(), os.getgid())
     return quarantine, source_dir, handoff
 
@@ -29,7 +29,8 @@ def prepare(quarantine, source, handoff, *, job_id=17, content=b"verified GGUF b
     return prepare_artifact_handoff(
         job_id=job_id, source_root=quarantine, source_path=str(source),
         expected_sha256=digest, expected_size=expected_size,
-        handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid(),
+        handoff_root=handoff, runtime_uid=os.getuid(),
+        supervisor_gid=os.getgid(), supervisor_uid=os.getuid(),
     )
 
 
@@ -47,9 +48,9 @@ def test_copies_exact_pinned_bytes_to_runtime_group_readable_snapshot(tmp_path):
     assert result.size_bytes == len(content)
     assert target.stat().st_uid == os.getuid()
     assert target.stat().st_gid == os.getgid()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o440
-    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o750
-    assert stat.S_IMODE(handoff.stat().st_mode) == 0o710
+    assert stat.S_IMODE(target.stat().st_mode) == 0o400
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(handoff.stat().st_mode) == 0o711
 
 
 def test_hash_mismatch_fails_and_removes_partial_job_directory(tmp_path):
@@ -81,7 +82,8 @@ def test_rejects_source_path_outside_quarantine(tmp_path, bad_path):
         prepare_artifact_handoff(
             job_id=17, source_root=quarantine, source_path=bad_path,
             expected_sha256="a" * 64, expected_size=1,
-            handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid(),
+            handoff_root=handoff, runtime_uid=os.getuid(),
+        supervisor_gid=os.getgid(), supervisor_uid=os.getuid(),
         )
 
 
@@ -148,11 +150,13 @@ def test_remove_handoff_is_idempotent_and_targets_only_exact_job(tmp_path):
     source.write_bytes(b"verified GGUF bytes")
     prepare(quarantine, source, handoff)
     assert remove_artifact_handoff(
-        job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+        job_id=17, handoff_root=handoff, runtime_uid=os.getuid(),
+            supervisor_gid=os.getgid(), supervisor_uid=os.getuid()
     ) is True
     assert not (handoff / "job-17").exists()
     assert remove_artifact_handoff(
-        job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+        job_id=17, handoff_root=handoff, runtime_uid=os.getuid(),
+            supervisor_gid=os.getgid(), supervisor_uid=os.getuid()
     ) is False
 
 
@@ -167,7 +171,8 @@ def test_remove_handoff_refuses_recursive_cleanup_of_unexpected_files(tmp_path):
     extra.write_text("do not recursively delete")
     with pytest.raises(ArtifactHandoffError, match="unexpected files"):
         remove_artifact_handoff(
-            job_id=17, handoff_root=handoff, runtime_gid=os.getgid(), owner_uid=os.getuid()
+            job_id=17, handoff_root=handoff, runtime_uid=os.getuid(),
+            supervisor_gid=os.getgid(), supervisor_uid=os.getuid()
         )
     assert extra.read_text() == "do not recursively delete"
     assert (handoff / "job-17").exists()

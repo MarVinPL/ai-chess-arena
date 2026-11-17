@@ -39,7 +39,9 @@ def _absolute_path(value: str, field: str) -> str:
 
 def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
                             runtime_group: str, artifact_path: str,
-                            output_dir: str, memory_max_bytes: int,
+                            artifact_mount_path: str, output_dir: str,
+                            api_uid: int, api_gid: int,
+                            memory_max_bytes: int,
                             memory_swap_max_bytes: int, cpu_quota_percent: int,
                             tasks_max: int, runtime_seconds: int) -> RuntimeUnitSpec:
     """Build a fail-closed policy spec; it does not execute or validate host state."""
@@ -56,9 +58,15 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         raise RuntimeUnitPolicyError("Artefakt musi pochodzić z katalogu przekazania przypisanego do tego zadania.")
     if output != f"/run/arena-runtime/job-{job_id}":
         raise RuntimeUnitPolicyError("Katalog zapisu musi być prywatnym katalogiem /run dla tego zadania.")
+    if (type(api_uid) is not int or api_uid < 1
+            or type(api_gid) is not int or api_gid < 1):
+        raise RuntimeUnitPolicyError("Wymagane są nieuprzywilejowane identyfikatory API.")
     runtime_root = "/usr/local/lib/ai-chess-arena-runtime"
+    mount_path = _absolute_path(artifact_mount_path, "artifact_mount_path")
+    if mount_path != output + "/model.gguf":
+        raise RuntimeUnitPolicyError("Artefakt musi być montowany wyłącznie jako model.gguf w katalogu zadania.")
     if artifact == output or artifact.startswith(output.rstrip("/") + "/"):
-        raise RuntimeUnitPolicyError("Artefakt nie może znajdować się wewnątrz katalogu zapisu runtime.")
+        raise RuntimeUnitPolicyError("Artefakt źródłowy nie może znajdować się wewnątrz katalogu zapisu runtime.")
 
     numeric = {
         "memory_max_bytes": (memory_max_bytes, 256 * 1024 * 1024, 64 * 1024**3),
@@ -99,6 +107,7 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("SystemCallArchitectures", "native"),
         ("RestrictAddressFamilies", "AF_UNIX AF_INET"),
         ("WorkingDirectory", output),
+        ("Environment", f"ARENA_API_UID={api_uid} ARENA_API_GID={api_gid}"),
         ("KillMode", "control-group"),
         ("Delegate", "no"),
         ("MemoryMax", str(memory_max_bytes)),
@@ -108,9 +117,10 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("LimitNOFILE", "64"),
         ("RuntimeMaxSec", str(runtime_seconds)),
         ("UMask", "0077"),
-        ("ReadOnlyPaths", f"{artifact} {runtime_root}"),
+        ("ReadOnlyPaths", runtime_root),
+        ("BindReadOnlyPaths", f"{artifact}:{mount_path}"),
         ("ReadWritePaths", output),
-        ("InaccessiblePaths", "/home /root /etc/ai-chess-arena /etc/ssh /etc/ssl/private /run/systemd /run/dbus /run/credentials /var/lib/ai-chess-arena"),
+        ("InaccessiblePaths", "/home /root /etc/ai-chess-arena /etc/ssh /etc/ssl/private /run/systemd /run/dbus /run/credentials /var/lib/ai-chess-arena /var/lib/arena-handoff"),
     )
     return RuntimeUnitSpec(
         unit_name=f"{_UNIT_PREFIX}{job_id}.service",

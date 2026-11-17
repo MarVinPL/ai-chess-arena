@@ -97,30 +97,48 @@ This remains a transport prototype. It is not connected to
 `runtime_subprocess.py`, the API, or any real systemd unit; no account, ACL,
 socket, service, network, or production configuration was changed.
 
-## Filesystem handoff contract prototype (2026-11-17)
+## Filesystem and socket handoff prototype (2026-11-17)
 
-`runtime_socket_handoff.py` now defines and verifies the per-job socket DAC
-contract without changing host state:
-- directory: `/run/arena-runtime/job-<id>`, owner `arena-runtime`, group equal
-  to the API service's primary group, mode `02710`;
-- socket: `control.sock`, owner `arena-runtime`, inherited API group, mode
-  `0660`;
-- API group receives directory traversal and socket connect permission, but
-  no directory write permission, so it cannot replace or unlink the socket;
-- runtime owns the directory and socket and can clean up its own endpoint.
+The artifact handoff is now isolated per job rather than exposed through a
+shared runtime group:
+- host handoff root: supervisor:supervisor, mode 0711;
+- per-job source directory: supervisor:supervisor, mode 0700;
+- exact artifact: runtime UID, supervisor group, mode 0400;
+- the runtime cannot traverse the host source tree;
+- systemd BindReadOnlyPaths maps only the exact model file into
+  /run/arena-runtime/job-ID/model.gguf;
+- InaccessiblePaths hides /var/lib/arena-handoff inside the unit.
 
-The bridge now refuses to start unless the directory owner/group/mode match
-that contract, then verifies the created socket's owner/group/mode before
-serving. Verification uses `lstat` and rejects symlinks and regular files.
-The setgid-directory group-inheritance behavior is covered with a real local
-AF_UNIX socket in tests.
+The pre-provisioned output root /run/arena-runtime is supervisor:supervisor
+0755. The supervisor creates a per-job output directory owned by
+arena-runtime and the API group, mode 02710. It contains a root-owned,
+mode-000 model mount placeholder and the runtime-created control.sock
+(runtime UID, API GID, mode 0660). The API group can traverse/connect but
+cannot write the directory. The worker bridge leaves the socket in place;
+only the root supervisor removes the socket, placeholder and output directory
+after the exact unit cgroup is confirmed empty. Cleanup is non-recursive and
+refuses unexpected files.
 
-These tests run as the current account and validate the filesystem contract
-and inherited group behavior only. They do not impersonate a separate
-`arena-runtime` UID or prove cross-UID access controls. The production
-directory, runtime account, API group membership, and namespace mount handoff
-remain unprovisioned and unchanged. A privileged disposable integration test
-under the actual service identities is still required before wiring.
+The systemd spec now includes Environment properties for the configured API
+UID/GID, ReadOnlyPaths for the root-owned worker bundle, BindReadOnlyPaths for
+the one artifact, ReadWritePaths for the per-job output directory, and
+InaccessiblePaths for the host handoff tree. The systemd backend reconstructs
+and verifies this complete policy before accepting the spec.
+
+runtime_worker_supervised.py now supplies the source for the fixed executable
+runtime_worker --job ID. It derives the bind-mounted model path, verifies its
+read-only owner/mode and the pinned root-owned llamafile binary, starts fixed
+loopback-only llamafile arguments, and runs the AF_UNIX bridge in the same
+PrivateNetwork namespace. It does not access the DB, host quarantine, other
+job artifacts, secrets or SSH material.
+
+This is code-only. The handoff/output roots, runtime identity, bundle and
+binary have not been provisioned. No systemd unit, mount namespace, model
+download, inference or production setting was exercised. Debian/systemd 257
+must still prove that BindReadOnlyPaths remains visible after the source tree
+is hidden, that the placeholder is cleaned after unit teardown, and that the
+PrivateNetwork bridge works without egress. Property normalization and
+independent review remain open.
 
 ### Cross-UID socket DAC integration evidence (2026-11-17)
 
@@ -160,3 +178,42 @@ a regression test leaves one peer idle, waits for its timeout, then confirms a
 subsequent health request is still served. The default upstream redirect test
 also confirms that a loopback response cannot redirect the bridge to another
 URL. Both controls are covered by local tests.
+
+## Per-job bind mount, output handoff and fixed worker entrypoint (2026-11-17)
+
+The artifact handoff model was tightened to avoid a shared-runtime-group
+exposure. The host handoff root is supervisor:supervisor 0711, each job
+subdirectory is supervisor:supervisor 0700, and the exact artifact file is
+owned by the runtime UID with mode 0400. The runtime cannot traverse the host
+handoff tree. The unit uses BindReadOnlyPaths to expose only that one file as
+/run/arena-runtime/job-ID/model.gguf, while InaccessiblePaths hides
+/var/lib/arena-handoff inside the unit. This is stronger than making the
+whole handoff root traversable by a shared runtime group.
+
+The root supervisor creates the pre-provisioned output child under
+/run/arena-runtime with owner arena-runtime, API group, mode 02710. It also
+creates a root-owned mode-000 model mount placeholder. The unit overlays that
+exact file with the verified artifact read-only. The runtime worker can create
+control.sock (runtime UID, API GID, mode 0660); the API group can traverse and
+connect but cannot write the directory. The worker bridge deliberately does
+not unlink the socket. After exact cgroup-empty confirmation, the root
+supervisor removes only the expected socket, mount placeholder, output dir and
+artifact handoff. Unexpected files or metadata cause cleanup refusal.
+
+runtime_worker_supervised.py now matches the backend's fixed argv contract
+and is the source intended to be installed as
+/usr/local/lib/ai-chess-arena-runtime/runtime_worker. It accepts only
+--job ID, derives the bind-mounted model path, checks its immutable file
+contract and the pinned root-owned llamafile binary, launches fixed loopback
+arguments, and runs the AF_UNIX bridge in the same private network namespace.
+The systemd unit passes only the API UID/GID as fixed numeric Environment
+properties; no caller-controlled command or path is passed over IPC.
+
+This is still code-only. The /var/lib/arena-handoff and /run/arena-runtime
+roots, runtime account/group, bundle and binary have not been provisioned. No
+systemd unit, mount namespace, model download, inference or production setting
+was exercised. In particular, Debian/systemd 257 must still prove that the
+exact BindReadOnlyPaths mount remains visible after the source tree is hidden,
+that the destination placeholder is cleaned after unit teardown, and that the
+PrivateNetwork bridge works without egress. The systemd property-normalization
+risk and independent review remain open.

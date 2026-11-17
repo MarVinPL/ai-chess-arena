@@ -18,12 +18,13 @@ class FakeResponse:
     def read(self, limit=-1): return self.body[:limit]
 
 
-def start_bridge(tmp_path, urlopen=None, allowed_uid=None):
+def start_bridge(tmp_path, urlopen=None, allowed_uid=None, cleanup_socket=True):
     os.chmod(tmp_path, 0o2710)
     path = tmp_path / "control.sock"
     bridge = UnixRuntimeBridge(
         path, loopback_port=19090, allowed_uid=allowed_uid if allowed_uid is not None else os.getuid(),
         urlopen=urlopen or (lambda req, timeout: FakeResponse(200, b'{"ok":true}')),
+        cleanup_socket=cleanup_socket,
     )
     thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     thread.start()
@@ -187,3 +188,12 @@ def test_idle_peer_times_out_without_blocking_next_request(tmp_path):
         assert body == b'{"ok":true}'
     finally:
         stop_bridge(bridge, thread)
+
+
+def test_bridge_can_leave_socket_for_root_supervisor_cleanup(tmp_path):
+    bridge, thread, path = start_bridge(tmp_path, cleanup_socket=False)
+    stop_bridge(bridge, thread)
+    try:
+        assert path.exists()
+    finally:
+        path.unlink(missing_ok=True)

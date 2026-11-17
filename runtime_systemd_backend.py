@@ -24,7 +24,8 @@ _VERIFY_PROPERTIES = (
     "AmbientCapabilities", "ProtectSystem", "ProtectHome", "PrivateTmp",
     "PrivateDevices", "PrivateNetwork", "ProtectControlGroups",
     "RestrictNamespaces", "RestrictAddressFamilies", "KillMode", "Delegate",
-    "Type", "WorkingDirectory", "ReadOnlyPaths", "ReadWritePaths",
+    "Type", "WorkingDirectory", "Environment", "ReadOnlyPaths",
+    "BindReadOnlyPaths", "ReadWritePaths",
     "InaccessiblePaths", "ProtectKernelTunables", "ProtectKernelModules",
     "ProtectKernelLogs", "ProtectClock", "ProtectHostname", "ProtectProc",
     "ProcSubset", "RestrictSUIDSGID", "LockPersonality", "RestrictRealtime",
@@ -75,13 +76,20 @@ class SystemdTransientBackend:
         # callers from weakening a security property while retaining a valid unit name.
         try:
             read_only = props["ReadOnlyPaths"].split()
+            bind_source, bind_target = props["BindReadOnlyPaths"].split(":", 1)
+            environment = dict(item.split("=", 1) for item in props["Environment"].split())
+            api_uid = int(environment["ARENA_API_UID"])
+            api_gid = int(environment["ARENA_API_GID"])
+            if set(environment) != {"ARENA_API_UID", "ARENA_API_GID"}:
+                raise ValueError("unexpected runtime environment")
             quota = props["CPUQuota"]
             if not quota.endswith("%") or not quota[:-1].isdigit():
                 raise ValueError("invalid CPU quota")
             expected_spec = build_runtime_unit_spec(
                 job_id=job_id,
                 runtime_user=props["User"], runtime_group=props["Group"],
-                artifact_path=read_only[0], output_dir=props["ReadWritePaths"],
+                artifact_path=bind_source, artifact_mount_path=bind_target,
+                output_dir=props["ReadWritePaths"], api_uid=api_uid, api_gid=api_gid,
                 memory_max_bytes=int(props["MemoryMax"]),
                 memory_swap_max_bytes=int(props["MemorySwapMax"]),
                 cpu_quota_percent=int(quota[:-1]), tasks_max=int(props["TasksMax"]),
@@ -89,7 +97,8 @@ class SystemdTransientBackend:
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise SystemdBackendError("Odmowa: niekompletna lub nieprawidłowa specyfikacja jednostki.") from exc
-        if spec != expected_spec or len(read_only) != 2 or read_only[1] != "/usr/local/lib/ai-chess-arena-runtime":
+        if (spec != expected_spec or read_only != ["/usr/local/lib/ai-chess-arena-runtime"]
+                or "/var/lib/arena-handoff" not in props["InaccessiblePaths"].split()):
             raise SystemdBackendError("Odmowa: specyfikacja odbiega od kompletnej polityki izolacji.")
         return job_id
 

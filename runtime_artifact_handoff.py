@@ -30,12 +30,14 @@ class ArtifactHandoff:
     path: str
     sha256: str
     size_bytes: int
-    owner_uid: int
-    runtime_gid: int
+    supervisor_uid: int
+    supervisor_gid: int
+    runtime_uid: int
 
 
 def _validate_identity(job_id: int, source_path: str, expected_sha256: str,
-                       expected_size: int, runtime_gid: int) -> None:
+                       expected_size: int, runtime_uid: int,
+                       supervisor_gid: int) -> None:
     if type(job_id) is not int or job_id < 1:
         raise ArtifactHandoffError("Invalid job ID.")
     if not isinstance(source_path, str) or not source_path.startswith("/") or "\x00" in source_path:
@@ -47,8 +49,10 @@ def _validate_identity(job_id: int, source_path: str, expected_sha256: str,
         raise ArtifactHandoffError("Pinned artifact SHA-256 is invalid.")
     if type(expected_size) is not int or not 1 <= expected_size <= MAX_ARTIFACT_BYTES:
         raise ArtifactHandoffError("Pinned artifact size is outside policy.")
-    if type(runtime_gid) is not int or runtime_gid < 0:
-        raise ArtifactHandoffError("Runtime group ID is invalid.")
+    if type(runtime_uid) is not int or runtime_uid < 1:
+        raise ArtifactHandoffError("Runtime UID is invalid.")
+    if type(supervisor_gid) is not int or supervisor_gid < 0:
+        raise ArtifactHandoffError("Supervisor group ID is invalid.")
 
 
 def _open_source_beneath(source_root: Path, source_path: str) -> int:
@@ -95,19 +99,27 @@ def _open_source_beneath(source_root: Path, source_path: str) -> int:
 def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
                              source_path: str, expected_sha256: str,
                              expected_size: int, handoff_root: str | Path,
-                             runtime_gid: int, owner_uid: int | None = None) -> ArtifactHandoff:
+                             runtime_uid: int, supervisor_gid: int,
+                             supervisor_uid: int | None = None) -> ArtifactHandoff:
     """Copy one pinned file into a new root-managed, runtime-readable job directory.
 
-    handoff_root must already be root-owned (or owned by the injected test
-    identity), runtime-group-owned, and mode 0710. The API identity must not
-    have membership in the runtime group. The function does not create it.
+    handoff_root must already be supervisor-owned, supervisor-group-owned and
+    mode 0711. Each job directory is supervisor-owned mode 0700, while the
+    file is runtime-UID-owned mode 0400. The runtime can access it only through
+    a per-unit BindReadOnlyPaths mount; it cannot traverse the host handoff.
     """
-    owner_uid = os.getuid() if owner_uid is None else owner_uid
-    if type(owner_uid) is not int or owner_uid < 0:
+    supervisor_uid = os.getuid() if supervisor_uid is None else supervisor_uid
+    if type(supervisor_uid) is not int or supervisor_uid < 0:
         raise ArtifactHandoffError("Supervisor owner UID is invalid.")
+    if type(supervisor_gid) is not int or supervisor_gid < 0:
+        raise ArtifactHandoffError("Supervisor group ID is invalid.")
+    if type(runtime_uid) is not int or runtime_uid < 1:
+        raise ArtifactHandoffError("Runtime UID is invalid.")
     source_root = Path(source_root)
     handoff_root = Path(handoff_root)
-    _validate_identity(job_id, source_path, expected_sha256, expected_size, runtime_gid)
+    _validate_identity(
+        job_id, source_path, expected_sha256, expected_size, runtime_uid, supervisor_gid
+    )
     if not handoff_root.is_absolute() or handoff_root.resolve(strict=True) != handoff_root:
         raise ArtifactHandoffError("Handoff root must be an existing canonical directory.")
 
@@ -121,10 +133,10 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
     job_name = f"job-{job_id}"
     try:
         root_stat = os.fstat(root_fd)
-        if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != owner_uid
-                or root_stat.st_gid != runtime_gid
-                or stat.S_IMODE(root_stat.st_mode) != 0o710):
-            raise ArtifactHandoffError("Handoff root ownership/mode does not match root:runtime 0710 policy.")
+        if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != supervisor_uid
+                or root_stat.st_gid != supervisor_gid
+                or stat.S_IMODE(root_stat.st_mode) != 0o711):
+            raise ArtifactHandoffError("Handoff root ownership/mode does not match supervisor 0711 policy.")
 
         if shutil.disk_usage(handoff_root).free < required_handoff_free_bytes(expected_size):
             raise ArtifactHandoffError("Handoff volume lacks the required free-space reserve.")
@@ -133,14 +145,14 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
         if source_stat.st_size != expected_size:
             raise ArtifactHandoffError("Quarantine artifact size differs from the pinned registry.")
 
-        os.mkdir(job_name, 0o750, dir_fd=root_fd)
+        os.mkdir(job_name, 0o700, dir_fd=root_fd)
         job_created = True
         job_fd = os.open(
             job_name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=root_fd,
         )
-        os.fchown(job_fd, owner_uid, runtime_gid)
-        os.fchmod(job_fd, 0o750)
+        os.fchown(job_fd, supervisor_uid, supervisor_gid)
+        os.fchmod(job_fd, 0o700)
 
         temp_fd = os.open(
             "model.gguf.part",
@@ -167,8 +179,8 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
                     view = view[written:]
             if copied != expected_size or digest.hexdigest() != expected_sha256:
                 raise ArtifactHandoffError("Copied artifact does not match the pinned size/SHA-256.")
-            os.fchown(temp_fd, owner_uid, runtime_gid)
-            os.fchmod(temp_fd, 0o440)
+            os.fchown(temp_fd, runtime_uid, supervisor_gid)
+            os.fchmod(temp_fd, 0o400)
             os.fsync(temp_fd)
         finally:
             os.close(temp_fd)
@@ -182,8 +194,9 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
             path=str(handoff_root / job_name / "model.gguf"),
             sha256=expected_sha256,
             size_bytes=expected_size,
-            owner_uid=owner_uid,
-            runtime_gid=runtime_gid,
+            supervisor_uid=supervisor_uid,
+            supervisor_gid=supervisor_gid,
+            runtime_uid=runtime_uid,
         )
         success = True
         return result
@@ -216,16 +229,18 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
 
 
 def remove_artifact_handoff(*, job_id: int, handoff_root: str | Path,
-                             runtime_gid: int, owner_uid: int | None = None) -> bool:
+                             runtime_uid: int, supervisor_gid: int,
+                             supervisor_uid: int | None = None) -> bool:
     """Remove only the exact per-job snapshot after its systemd cgroup is empty.
 
     This function never recurses. Unexpected files, ownership, modes or
     symlinks cause a refusal instead of broad cleanup.
     """
-    owner_uid = os.getuid() if owner_uid is None else owner_uid
-    if type(job_id) is not int or job_id < 1 or type(runtime_gid) is not int or runtime_gid < 0:
+    supervisor_uid = os.getuid() if supervisor_uid is None else supervisor_uid
+    if (type(job_id) is not int or job_id < 1 or type(runtime_uid) is not int
+            or runtime_uid < 1 or type(supervisor_gid) is not int or supervisor_gid < 0):
         raise ArtifactHandoffError("Invalid handoff cleanup identity.")
-    if type(owner_uid) is not int or owner_uid < 0:
+    if type(supervisor_uid) is not int or supervisor_uid < 0:
         raise ArtifactHandoffError("Invalid handoff cleanup owner.")
     handoff_root = Path(handoff_root)
     if not handoff_root.is_absolute() or handoff_root.resolve(strict=True) != handoff_root:
@@ -235,8 +250,8 @@ def remove_artifact_handoff(*, job_id: int, handoff_root: str | Path,
     job_fd = None
     try:
         root_stat = os.fstat(root_fd)
-        if (root_stat.st_uid != owner_uid or root_stat.st_gid != runtime_gid
-                or stat.S_IMODE(root_stat.st_mode) != 0o710):
+        if (root_stat.st_uid != supervisor_uid or root_stat.st_gid != supervisor_gid
+                or stat.S_IMODE(root_stat.st_mode) != 0o711):
             raise ArtifactHandoffError("Handoff root ownership/mode does not match cleanup policy.")
         job_name = f"job-{job_id}"
         try:
@@ -247,8 +262,8 @@ def remove_artifact_handoff(*, job_id: int, handoff_root: str | Path,
         except FileNotFoundError:
             return False
         job_stat = os.fstat(job_fd)
-        if (job_stat.st_uid != owner_uid or job_stat.st_gid != runtime_gid
-                or stat.S_IMODE(job_stat.st_mode) != 0o750):
+        if (job_stat.st_uid != supervisor_uid or job_stat.st_gid != supervisor_gid
+                or stat.S_IMODE(job_stat.st_mode) != 0o700):
             raise ArtifactHandoffError("Per-job directory ownership/mode does not match cleanup policy.")
         try:
             file_fd = os.open(
@@ -260,9 +275,9 @@ def remove_artifact_handoff(*, job_id: int, handoff_root: str | Path,
         if file_fd is not None:
             try:
                 file_stat = os.fstat(file_fd)
-                if (not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != owner_uid
-                        or file_stat.st_gid != runtime_gid
-                        or stat.S_IMODE(file_stat.st_mode) != 0o440):
+                if (not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != runtime_uid
+                        or file_stat.st_gid != supervisor_gid
+                        or stat.S_IMODE(file_stat.st_mode) != 0o400):
                     raise ArtifactHandoffError("Per-job artifact ownership/mode does not match cleanup policy.")
             finally:
                 os.close(file_fd)

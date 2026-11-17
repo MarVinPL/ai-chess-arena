@@ -9,6 +9,7 @@ from dataclasses import replace
 from runtime_supervisor import RuntimeSupervisor, SQLiteRuntimeUnitStore
 from runtime_systemd import build_runtime_unit_spec
 from runtime_resource_policy import model_memory_limit_bytes
+from runtime_socket_handoff import SocketHandoffSpec, create_handoff
 from runtime_supervisor_authority import RuntimeJobAuthorization
 from runtime_supervisor_handlers import (
     RuntimeSupervisorHandlerError,
@@ -33,6 +34,27 @@ class FakeBackend:
 
     def stop(self, unit_name):
         self.stopped.append(unit_name)
+
+
+class PolicyRuntimeSupervisor(RuntimeSupervisor):
+    def _validate(self, spec, argv):
+        expected = (
+            "/usr/local/lib/ai-chess-arena-runtime/runtime_worker",
+            "--job", spec.unit_name.removeprefix("ai-chess-arena-runtime-").removesuffix(".service"),
+        )
+        assert argv == expected
+        job_id = int(expected[-1])
+        assert spec.unit_name == f"ai-chess-arena-runtime-{job_id}.service"
+        properties = spec.as_dict()
+        assert properties["User"] == "arena-runtime"
+        assert properties["Group"] == "arena-runtime"
+        assert properties["PrivateNetwork"] == "yes"
+        assert properties["KillMode"] == "control-group"
+        assert properties["ReadOnlyPaths"] == "/usr/local/lib/ai-chess-arena-runtime"
+        assert properties["BindReadOnlyPaths"].startswith(
+            f"/var/lib/arena-handoff/job-{job_id}/model.gguf:"
+        )
+        return job_id
 
 
 class FakeAuthority:
@@ -60,7 +82,7 @@ def harness(tmp_path, *, fail_start=False, authority_options=None, persist_overr
         connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(7,'running')")
     store = SQLiteRuntimeUnitStore(db)
     backend = FakeBackend(store=store, fail_start=fail_start)
-    supervisor = RuntimeSupervisor(
+    supervisor = PolicyRuntimeSupervisor(
         backend=backend,
         persist=persist_override or store.persist,
         set_state=store.set_state,
@@ -76,9 +98,13 @@ def harness(tmp_path, *, fail_start=False, authority_options=None, persist_overr
     source.write_bytes(content)
 
     handoff = tmp_path / "handoff"
-    handoff.mkdir(mode=0o710)
-    os.chmod(handoff, 0o710)
+    handoff.mkdir(mode=0o711)
+    os.chmod(handoff, 0o711)
     os.chown(handoff, os.getuid(), os.getgid())
+    output_root = tmp_path / "output"
+    output_root.mkdir(mode=0o755)
+    os.chmod(output_root, 0o755)
+    os.chown(output_root, os.getuid(), os.getgid())
 
     auth = RuntimeJobAuthorization(
         job_id=7, model_id=3, repo_id="org/model", revision="a" * 40,
@@ -89,35 +115,45 @@ def harness(tmp_path, *, fail_start=False, authority_options=None, persist_overr
         authorized_at="2030-01-01T00:00:00Z",
     )
     authority = FakeAuthority(auth, **(authority_options or {}))
-    def test_spec_builder(auth, handoff_result):
+    def test_spec_builder(auth, handoff_result, socket_handoff):
         memory_max = model_memory_limit_bytes(auth.size_bytes)
         base = build_runtime_unit_spec(
             job_id=auth.job_id, runtime_user="arena-runtime", runtime_group="arena-runtime",
             artifact_path=f"/var/lib/arena-handoff/job-{auth.job_id}/model.gguf",
+            artifact_mount_path=f"/run/arena-runtime/job-{auth.job_id}/model.gguf",
             output_dir=f"/run/arena-runtime/job-{auth.job_id}",
+            api_uid=os.getuid(), api_gid=os.getgid(),
             memory_max_bytes=memory_max, memory_swap_max_bytes=0,
             cpu_quota_percent=100, tasks_max=8, runtime_seconds=auth.timeout_seconds,
         )
-        properties = tuple(
-            (key, value.replace(
-                f"/var/lib/arena-handoff/job-{auth.job_id}/model.gguf",
-                handoff_result.path,
-            ) if key == "ReadOnlyPaths" else value)
-            for key, value in base.properties
-        )
+        properties = []
+        canonical_output = f"/run/arena-runtime/job-{auth.job_id}"
+        temp_output = str(socket_handoff.directory)
+        for key, value in base.properties:
+            if key in {"ReadWritePaths", "WorkingDirectory"}:
+                value = value.replace(canonical_output, temp_output)
+            elif key == "BindReadOnlyPaths":
+                value = value.replace(
+                    canonical_output + "/model.gguf",
+                    temp_output + "/model.gguf",
+                )
+            properties.append((key, value))
+        properties = tuple(properties)
         return replace(base, properties=properties)
 
     handlers = RuntimeSupervisorHandlers(
         authority=authority, supervisor=supervisor, lease_store=store,
-        quarantine_root=quarantine, handoff_root=handoff,
-        runtime_gid=os.getgid(), supervisor_uid=os.getuid(),
+        quarantine_root=quarantine, handoff_root=handoff, output_root=output_root,
+        runtime_uid=os.getuid(), runtime_gid=os.getgid(),
+        api_uid=os.getuid(), api_gid=os.getgid(),
+        supervisor_uid=os.getuid(), supervisor_gid=os.getgid(),
         spec_builder=test_spec_builder,
     )
-    return handlers, store, backend, authority, handoff
+    return handlers, store, backend, authority, handoff, output_root
 
 
 def test_start_persists_exact_lease_before_backend_and_keeps_handoff(tmp_path):
-    handlers, store, backend, authority, handoff = harness(tmp_path)
+    handlers, store, backend, authority, handoff, output_root = harness(tmp_path)
     result = handlers.start(7)
     assert result == {
         "job_id": 7,
@@ -134,33 +170,37 @@ def test_start_persists_exact_lease_before_backend_and_keeps_handoff(tmp_path):
         model_memory_limit_bytes(len(b"verified artifact for supervisor handler"))
     )
     assert (handoff / "job-7" / "model.gguf").is_file()
+    assert (output_root / "job-7").is_dir()
 
 
 def test_stop_targets_persisted_unit_then_removes_handoff(tmp_path):
-    handlers, store, backend, _, handoff = harness(tmp_path)
+    handlers, store, backend, _, handoff, output_root = harness(tmp_path)
     handlers.start(7)
     result = handlers.stop(7)
     assert result["lease_state"] == "stopped"
     assert backend.stopped == ["ai-chess-arena-runtime-7.service"]
     assert store.get(7).state == "stopped"
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
 
 
 def test_ambiguous_backend_start_keeps_handoff_for_recovery(tmp_path):
-    handlers, store, backend, _, handoff = harness(tmp_path, fail_start=True)
+    handlers, store, backend, _, handoff, output_root = harness(tmp_path, fail_start=True)
     with pytest.raises(RuntimeSupervisorHandlerError, match="uncertain"):
         handlers.start(7)
     assert store.get(7).state == "start_uncertain"
     assert (handoff / "job-7" / "model.gguf").is_file()
+    assert (output_root / "job-7").is_dir()
     result = handlers.recover()
     assert result["count"] == 1
     assert result["cleaned_handoffs"] == [7]
     assert backend.stopped == ["ai-chess-arena-runtime-7.service"]
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
 
 
 def test_second_authority_check_failure_cleans_unleased_handoff(tmp_path):
-    handlers, store, backend, _, handoff = harness(
+    handlers, store, backend, _, handoff, output_root = harness(
         tmp_path, authority_options={"fail_on_call": 2}
     )
     with pytest.raises(RuntimeSupervisorHandlerError):
@@ -168,10 +208,11 @@ def test_second_authority_check_failure_cleans_unleased_handoff(tmp_path):
     assert store.get(7) is None
     assert backend.started == []
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
 
 
 def test_changed_authorization_during_handoff_is_rejected_and_cleaned(tmp_path):
-    handlers, store, backend, _, handoff = harness(
+    handlers, store, backend, _, handoff, output_root = harness(
         tmp_path, authority_options={"changed_on_second": True}
     )
     with pytest.raises(RuntimeSupervisorHandlerError, match="changed"):
@@ -179,12 +220,13 @@ def test_changed_authorization_during_handoff_is_rejected_and_cleaned(tmp_path):
     assert store.get(7) is None
     assert backend.started == []
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
 
 
 def test_persistence_failure_never_starts_backend_and_cleans_handoff(tmp_path):
     def fail_persist(_record):
         raise OSError("lease database unavailable")
-    handlers, store, backend, _, handoff = harness(
+    handlers, store, backend, _, handoff, output_root = harness(
         tmp_path, persist_override=fail_persist
     )
     with pytest.raises(RuntimeSupervisorHandlerError):
@@ -192,10 +234,11 @@ def test_persistence_failure_never_starts_backend_and_cleans_handoff(tmp_path):
     assert store.get(7) is None
     assert backend.started == []
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
 
 
 def test_status_reports_durable_lease_not_claimed_live_systemd_state(tmp_path):
-    handlers, store, _, _, _ = harness(tmp_path)
+    handlers, store, _, _, _, _ = harness(tmp_path)
     assert handlers.status(7) == {
         "job_id": 7, "lease_exists": False, "lease_state": "absent"
     }
@@ -206,27 +249,35 @@ def test_status_reports_durable_lease_not_claimed_live_systemd_state(tmp_path):
 
 
 def test_stop_without_durable_lease_is_refused(tmp_path):
-    handlers, _, backend, _, _ = harness(tmp_path)
+    handlers, _, backend, _, _, _ = harness(tmp_path)
     with pytest.raises(RuntimeSupervisorHandlerError, match="No durable"):
         handlers.stop(7)
     assert backend.stopped == []
 
 
 def test_recovery_removes_handoff_without_lease_because_unit_start_requires_prior_lease(tmp_path):
-    handlers, _, _, _, handoff = harness(tmp_path)
+    handlers, _, _, _, handoff, output_root = harness(tmp_path)
     handlers.start(7)
     # Simulate a stale unleased handoff belonging to a different job ID.
     orphan = handoff / "job-8"
-    orphan.mkdir(mode=0o750)
+    orphan.mkdir(mode=0o700)
     os.chown(orphan, os.getuid(), os.getgid())
     (orphan / "model.gguf").write_bytes(b"orphan")
-    os.chmod(orphan / "model.gguf", 0o440)
+    os.chmod(orphan / "model.gguf", 0o400)
     os.chown(orphan / "model.gguf", os.getuid(), os.getgid())
+    orphan_output = SocketHandoffSpec(
+        8, os.getuid(), os.getgid(), output_root=output_root
+    )
+    create_handoff(
+        orphan_output, supervisor_uid=os.getuid(), supervisor_gid=os.getgid()
+    )
     result = handlers.recover()
     assert 8 in result["cleaned_handoffs"]
     assert not orphan.exists()
+    assert not orphan_output.directory.exists()
     # The active job is stopped by recovery and cleaned too.
     assert 7 in result["cleaned_handoffs"]
+    assert not (output_root / "job-7").exists()
 
 
 def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path):
@@ -234,7 +285,7 @@ def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path)
     import time
     from runtime_supervisor_ipc import supervisor_request
 
-    handlers, store, backend, _, _ = harness(tmp_path)
+    handlers, store, backend, _, _, _ = harness(tmp_path)
     socket_path = tmp_path / "supervisor.sock"
     server = handlers.make_ipc_server(socket_path, allowed_uid=os.getuid())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -258,7 +309,7 @@ def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path)
 
 
 def test_final_authority_check_after_lease_persistence_aborts_before_backend(tmp_path):
-    handlers, store, backend, _, handoff = harness(
+    handlers, store, backend, _, handoff, output_root = harness(
         tmp_path, authority_options={"fail_on_call": 3}
     )
     with pytest.raises(RuntimeSupervisorHandlerError):
@@ -266,3 +317,22 @@ def test_final_authority_check_after_lease_persistence_aborts_before_backend(tmp
     assert store.get(7).state == "stopped"
     assert backend.started == []
     assert not (handoff / "job-7").exists()
+    assert not (output_root / "job-7").exists()
+
+
+def test_production_handler_rejects_overlapping_runtime_and_api_identity(tmp_path):
+    handlers, store, backend, authority, handoff, output_root = harness(tmp_path)
+    with pytest.raises(ValueError, match="distinct"):
+        RuntimeSupervisorHandlers(
+            authority=authority, supervisor=handlers._supervisor, lease_store=store,
+            quarantine_root=handlers._quarantine_root, handoff_root=handoff,
+            output_root=output_root, runtime_uid=os.getuid(), runtime_gid=os.getgid(),
+            api_uid=os.getuid(), api_gid=os.getgid(),
+            supervisor_uid=os.getuid(), supervisor_gid=os.getgid(),
+        )
+
+
+def test_ipc_server_refuses_peer_uid_different_from_configured_api(tmp_path):
+    handlers, _, _, _, _, _ = harness(tmp_path)
+    with pytest.raises(RuntimeSupervisorHandlerError, match="peer UID"):
+        handlers.make_ipc_server(tmp_path / "supervisor.sock", allowed_uid=os.getuid() + 1)
