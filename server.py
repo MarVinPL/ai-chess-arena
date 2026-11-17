@@ -23,6 +23,8 @@ import tournament_checkpoint
 import arena_auth
 import model_permissions
 import runtime_executor
+from runtime_deployment import resolve_runtime_deployment
+from runtime_startup import recover_runtime_on_startup
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1888,9 +1890,17 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
-    recovery = runtime_executor.recover_orphaned_jobs()
-    if recovery['count']:
-        print(f"Recovered {recovery['count']} orphaned runtime test job(s)", flush=True)
+    deployment = resolve_runtime_deployment()
+    recovery = recover_runtime_on_startup(
+        deployment=deployment,
+        # Production startup remains blocked until the privileged supervisor
+        # recovery transport is installed and independently tested.
+        supervisor_recover=None,
+        executor_recover=runtime_executor.recover_orphaned_jobs,
+    )
+    executor_recovery = recovery['executor']
+    if executor_recovery['count']:
+        print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()
