@@ -274,5 +274,5 @@ class RuntimeSupervisorHandlers:
         return RuntimeSupervisorIPCServer(
             socket_path, allowed_uid=allowed_uid,
             start=self.start, stop=self.stop, status=self.status,
-            socket_mode=socket_mode,
+            recover=self.recover, socket_mode=socket_mode,
         )

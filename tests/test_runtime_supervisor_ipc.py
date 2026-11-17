@@ -18,6 +18,7 @@ def test_request_schema_is_job_id_only():
     assert _validate_request(b'{"action":"status","job_id":7}\n') == {
         "action": "status", "job_id": 7
     }
+    assert _validate_request(b'{"action":"recover"}\n') == {"action": "recover"}
     for payload in (
         b'{"action":"start","job_id":7,"argv":["sh"]}\n',
         b'{"action":"exec","job_id":7}\n',
@@ -26,6 +27,8 @@ def test_request_schema_is_job_id_only():
         b'{"action":"start","job_id":true}\n',
         b'{"action":"start","job_id":0}\n',
         b'{"action":"start","job_id":7}',
+        b'{"action":"recover","job_id":7}\n',
+        b'{"action":"recover","extra":true}\n',
         b'x' * (MAX_REQUEST_BYTES + 1),
     ):
         with pytest.raises(SupervisorIPCError):
@@ -37,6 +40,8 @@ def test_client_rejects_arbitrary_action_and_invalid_job_id(tmp_path):
         supervisor_request(tmp_path / "missing.sock", "exec", 1)
     with pytest.raises(SupervisorIPCError):
         supervisor_request(tmp_path / "missing.sock", "start", True)
+    with pytest.raises(SupervisorIPCError):
+        supervisor_request(tmp_path / "missing.sock", "recover", 1)
 
 
 def test_server_refuses_existing_socket_or_symlink(tmp_path):
@@ -56,6 +61,7 @@ def test_round_trip_calls_only_injected_job_handlers(tmp_path):
         start=lambda job_id: calls.append(("start", job_id)) or {"accepted": True},
         stop=lambda job_id: calls.append(("stop", job_id)) or {"stopped": True},
         status=lambda job_id: calls.append(("status", job_id)) or {"state": "idle"},
+        recover=lambda: calls.append(("recover", None)) or {"count": 2},
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -63,7 +69,8 @@ def test_round_trip_calls_only_injected_job_handlers(tmp_path):
         assert server.ready.wait(timeout=2), "supervisor IPC did not become ready"
         assert supervisor_request(path, "start", 13) == {"accepted": True}
         assert supervisor_request(path, "status", 13) == {"state": "idle"}
-        assert calls == [("start", 13), ("status", 13)]
+        assert supervisor_request(path, "recover") == {"count": 2}
+        assert calls == [("start", 13), ("status", 13), ("recover", None)]
     finally:
         server.shutdown()
         thread.join(timeout=2)

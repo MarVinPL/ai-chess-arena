@@ -25,6 +25,7 @@ import model_permissions
 import runtime_executor
 from runtime_deployment import resolve_runtime_deployment
 from runtime_startup import recover_runtime_on_startup
+from runtime_supervisor_ipc import supervisor_request
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1893,9 +1894,15 @@ if __name__ == '__main__':
     deployment = resolve_runtime_deployment()
     recovery = recover_runtime_on_startup(
         deployment=deployment,
-        # Production startup remains blocked until the privileged supervisor
-        # recovery transport is installed and independently tested.
-        supervisor_recover=None,
+        # The privileged supervisor owns exact-unit recovery and handoff
+        # cleanup. If its socket/service is unavailable, production startup
+        # aborts before executor reconciliation.
+        supervisor_recover=(
+            lambda: supervisor_request(
+                deployment.supervisor_socket, "recover", None,
+                timeout_seconds=1800.0,
+            )
+        ),
         executor_recover=runtime_executor.recover_orphaned_jobs,
     )
     executor_recovery = recovery['executor']

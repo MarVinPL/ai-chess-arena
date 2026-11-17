@@ -18,7 +18,7 @@ from typing import Callable
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 4096
-_ALLOWED_ACTIONS = {"start", "stop", "status"}
+_ALLOWED_ACTIONS = {"start", "stop", "status", "recover"}
 
 
 class SupervisorIPCError(RuntimeError):
@@ -47,10 +47,16 @@ def _validate_request(raw: bytes) -> dict:
         request = json.loads(raw[:-1], object_pairs_hook=reject_duplicate_keys)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SupervisorIPCError("Niepoprawny JSON żądania.") from exc
-    if not isinstance(request, dict) or set(request) != {"action", "job_id"}:
-        raise SupervisorIPCError("Żądanie zawiera niedozwolone pola.")
-    if not isinstance(request["action"], str) or request["action"] not in _ALLOWED_ACTIONS:
+    if not isinstance(request, dict):
+        raise SupervisorIPCError("Żądanie musi być obiektem JSON.")
+    if not isinstance(request.get("action"), str) or request["action"] not in _ALLOWED_ACTIONS:
         raise SupervisorIPCError("Akcja poza allowlist.")
+    if request["action"] == "recover":
+        if set(request) != {"action"}:
+            raise SupervisorIPCError("Odzyskiwanie nie przyjmuje identyfikatora ani innych pól.")
+        return request
+    if set(request) != {"action", "job_id"}:
+        raise SupervisorIPCError("Żądanie zawiera niedozwolone pola.")
     if type(request["job_id"]) is not int or request["job_id"] <= 0:
         raise SupervisorIPCError("Nieprawidłowy identyfikator zadania.")
     return request
@@ -78,7 +84,7 @@ class _Handler(socketserver.StreamRequestHandler):
             handler = server.handlers[request["action"]]
             if not callable(handler):
                 raise SupervisorIPCError("Akcja nie jest skonfigurowana.")
-            result = handler(request["job_id"])
+            result = handler() if request["action"] == "recover" else handler(request["job_id"])
             response = {"ok": True, "result": result}
         except Exception as exc:
             # Do not leak exception text, paths, DB data or command output.
@@ -95,12 +101,17 @@ class _Handler(socketserver.StreamRequestHandler):
 class RuntimeSupervisorIPCServer:
     def __init__(self, socket_path: str | Path, *, allowed_uid: int,
                  start: Callable[[int], object], stop: Callable[[int], object],
-                 status: Callable[[int], object], timeout_seconds: float = 3.0,
+                 status: Callable[[int], object], recover: Callable[[], object] | None = None,
+                 timeout_seconds: float = 3.0,
                  response_timeout_seconds: float = 1800.0,
                  socket_mode: int = 0o660):
         self.socket_path = Path(socket_path)
         self.allowed_uid = int(allowed_uid)
         self.handlers = {"start": start, "stop": stop, "status": status}
+        if recover is not None:
+            if not callable(recover):
+                raise SupervisorIPCError("Handler odzyskiwania musi być wywoływalny.")
+            self.handlers["recover"] = recover
         self.timeout_seconds = float(timeout_seconds)
         self.response_timeout_seconds = float(response_timeout_seconds)
         self.socket_mode = int(socket_mode)
@@ -153,14 +164,21 @@ class RuntimeSupervisorIPCServer:
             self._server.shutdown()
 
 
-def supervisor_request(socket_path: str | Path, action: str, job_id: int,
+def supervisor_request(socket_path: str | Path, action: str, job_id: int | None = None,
                        *, timeout_seconds: float = 3.0) -> object:
-    if action not in _ALLOWED_ACTIONS or type(job_id) is not int or job_id <= 0:
+    if action not in _ALLOWED_ACTIONS:
         raise SupervisorIPCError("Nieprawidłowe żądanie supervisor IPC.")
+    if action == "recover":
+        if job_id is not None:
+            raise SupervisorIPCError("Odzyskiwanie nie przyjmuje identyfikatora zadania.")
+        request = {"action": action}
+    else:
+        if type(job_id) is not int or job_id <= 0:
+            raise SupervisorIPCError("Nieprawidłowe żądanie supervisor IPC.")
+        request = {"action": action, "job_id": job_id}
     if timeout_seconds <= 0:
         raise SupervisorIPCError("Timeout musi być dodatni.")
-    payload = json.dumps({"action": action, "job_id": job_id},
-                         separators=(",", ":")).encode() + b"\n"
+    payload = json.dumps(request, separators=(",", ":")).encode() + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
         try:
