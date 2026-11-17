@@ -81,9 +81,31 @@ def test_stop_refuses_to_mark_unit_stopped_when_cgroup_still_has_processes(tmp_p
     unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
     unit_cgroup.mkdir(parents=True)
     (unit_cgroup / "cgroup.procs").write_text("1234\n", encoding="ascii")
+    (unit_cgroup / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="ascii")
     fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
     backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
     with pytest.raises(SystemdBackendError, match="nadal zawiera procesy"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_refuses_cgroup_with_nested_descendant_even_when_direct_procs_empty(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("", encoding="ascii")
+    (unit_cgroup / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="nadal zawiera procesy"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_fails_closed_when_existing_cgroup_lacks_events_file(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="Nie można jednoznacznie"):
         backend.stop("ai-chess-arena-runtime-9.service")
 
 

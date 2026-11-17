@@ -151,13 +151,27 @@ class SystemdTransientBackend:
         target = (root / shown.lstrip("/")).resolve()
         if root not in target.parents:
             raise SystemdBackendError("Cgroup jednostki wychodzi poza kontrolowany root.")
-        procs = target / "cgroup.procs"
-        try:
-            return not procs.read_text(encoding="ascii").strip()
-        except FileNotFoundError:
+        # A vanished cgroup means systemd has fully removed this exact unit's
+        # control group. If the directory still exists, missing controller
+        # files are not evidence of emptiness: fail closed. cgroup.procs only
+        # lists direct members, while cgroup.events populated includes nested
+        # descendants on cgroup v2.
+        if not target.exists():
             return True
-        except OSError as exc:
-            raise SystemdBackendError("Nie można potwierdzić opróżnienia cgroup.") from exc
+        if not target.is_dir():
+            raise SystemdBackendError("Ścieżka cgroup jednostki nie jest katalogiem.")
+        procs = target / "cgroup.procs"
+        events = target / "cgroup.events"
+        try:
+            direct_members = procs.read_text(encoding="ascii").strip()
+            event_lines = events.read_text(encoding="ascii").splitlines()
+            populated_values = [line.split()[1] for line in event_lines
+                                if len(line.split()) == 2 and line.split()[0] == "populated"]
+            if len(populated_values) != 1 or populated_values[0] not in {"0", "1"}:
+                raise ValueError("missing or malformed populated field")
+            return not direct_members and populated_values[0] == "0"
+        except (OSError, ValueError, IndexError) as exc:
+            raise SystemdBackendError("Nie można jednoznacznie potwierdzić opróżnienia cgroup v2.") from exc
 
     def stop(self, unit_name: str) -> None:
         if not isinstance(unit_name, str) or not _UNIT_RE.fullmatch(unit_name):
