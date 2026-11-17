@@ -290,9 +290,9 @@ def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path)
     server = handlers.make_ipc_server(socket_path, allowed_uid=os.getuid())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 2
-    while not socket_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
+    # Filesystem presence precedes listen(); wait for the server's explicit
+    # readiness event so CI runners cannot race the bind/listen transition.
+    assert server.ready.wait(timeout=2)
     try:
         assert supervisor_request(socket_path, "status", 7) == {
             "job_id": 7, "lease_exists": False, "lease_state": "absent"
