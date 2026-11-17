@@ -14,6 +14,7 @@ BUNDLE_MODULES = (
     "runtime_artifact_handoff.py",
     "runtime_lease_broker.py",
     "runtime_resource_policy.py",
+    "runtime_revocation_watchdog.py",
     "runtime_socket_handoff.py",
     "runtime_supervisor.py",
     "runtime_supervisor_authority.py",

@@ -284,3 +284,61 @@ class RuntimeJobAuthority:
                 batch_id=int(row["batch_id"]), timeout_seconds=timeout,
                 authorized_at=now,
             )
+
+    def is_execution_authorized(self, job_id: int) -> bool:
+        """Check only live revocation gates for an already-running job.
+
+        This deliberately avoids repeating artifact hashing and resource probes;
+        it verifies that the execution claim, batch, exact TEST_ONLY grant and
+        both independent execution switches still authorize the active unit.
+        Database/connection errors propagate so the watchdog can fail closed.
+        """
+        job_id = self._job_id(job_id)
+        if not self._execution_opt_in():
+            return False
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._clock()))
+        with self._connect() as connection:
+            query_only = connection.execute("PRAGMA query_only").fetchone()
+            if not query_only or int(query_only[0]) != 1:
+                raise RuntimeAuthorityError("Supervisor DB connection is not query-only.")
+            connection.execute("BEGIN")
+            settings = connection.execute(
+                "SELECT enabled FROM runtime_execution_settings WHERE id=1"
+            ).fetchone()
+            if not settings or int(settings["enabled"]) != 1:
+                return False
+            job = connection.execute(
+                "SELECT model_id,repo_id,revision,artifact_sha256,permission_request_id,"
+                "status,cancel_requested,batch_id FROM runtime_test_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if (not job or job["status"] != "running"
+                    or bool(job["cancel_requested"]) or job["batch_id"] is None):
+                return False
+            batch = connection.execute(
+                "SELECT status,expires_at FROM runtime_test_batches WHERE id=?",
+                (job["batch_id"],),
+            ).fetchone()
+            if not batch or batch["status"] not in {"approved", "running"}:
+                return False
+            # The approval window gates admission, not an already-running job.
+            # Once the executor atomically moves the batch to running, its
+            # original short approval expiry must not kill a valid long test.
+            if (batch["status"] == "approved"
+                    and (not isinstance(batch["expires_at"], str)
+                         or batch["expires_at"] <= now)):
+                return False
+            grant = connection.execute(
+                "SELECT model_id,repo_id,revision,artifact_sha256,scope,status "
+                "FROM model_permission_requests WHERE id=?",
+                (job["permission_request_id"],),
+            ).fetchone()
+            if not grant or grant["status"] != "approved" or grant["scope"] != "TEST_ONLY":
+                return False
+            return (
+                grant["model_id"], grant["repo_id"], grant["revision"],
+                grant["artifact_sha256"],
+            ) == (
+                job["model_id"], job["repo_id"], job["revision"],
+                job["artifact_sha256"],
+            )

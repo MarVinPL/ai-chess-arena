@@ -18,6 +18,7 @@ from runtime_supervisor import RuntimeSupervisor
 from runtime_lease_broker import RuntimeLeaseBrokerClient
 from runtime_supervisor_authority import RuntimeJobAuthority, readonly_sqlite_factory
 from runtime_supervisor_handlers import RuntimeSupervisorHandlers
+from runtime_revocation_watchdog import RuntimeRevocationWatchdog
 from runtime_supervisor_ipc import SupervisorIPCError
 from runtime_systemd_backend import SystemdTransientBackend
 
@@ -202,13 +203,25 @@ def build_service(environ: dict[str, str] | None = None):
     server = handlers.make_ipc_server(
         socket_path, allowed_uid=api_uid, socket_mode=0o660, socket_gid=api_gid,
     )
+    server.revocation_watchdog = RuntimeRevocationWatchdog(
+        authority=authority, lease_store=leases, handlers=handlers,
+        interval_seconds=1.0,
+        on_error=lambda message: print(
+            f"ai-chess-arena-runtime-supervisor: {message}", file=sys.stderr, flush=True
+        ),
+    )
     return server
 
 
 def main() -> int:
     try:
         server = build_service()
-        server.serve_forever()
+        watchdog = server.revocation_watchdog
+        watchdog.start()
+        try:
+            server.serve_forever()
+        finally:
+            watchdog.stop()
     except (SupervisorServiceConfigError, SupervisorIPCError, OSError, RuntimeError) as exc:
         print(f"ai-chess-arena-runtime-supervisor: startup refused ({type(exc).__name__})", file=sys.stderr, flush=True)
         return 1

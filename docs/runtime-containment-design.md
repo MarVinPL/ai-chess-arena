@@ -285,7 +285,19 @@ reservation before reading their state, so their outcomes are serialized with
 job claim and result commit; a cancel request made after completion reports
 the actual terminal state.
 The focused lifecycle/supervisor/handler suite passed (66 tests); the full suite
-passed (663 passed, 1 skipped, 43 subtests).
+passed (663 passed, 1 skipped, 43 subtests) before the watchdog addition.
+
+The root supervisor service now has a fail-closed revocation watchdog
+prototype. It polls active/start-uncertain durable leases once per second and
+checks the live execution switch, job claim/cancel flag, batch status and
+pre-start approval expiry, plus exact TEST_ONLY grant identity/status. The
+approval expiry does not terminate a batch already marked running. A revoked or unverifiable job is
+stopped through the exact-unit handler. A failed stop leaves its durable lease
+and handoff intact for recovery; start_pending and stop-transition leases are
+left to their in-flight operation/recovery path. The watchdog does not perform
+artifact hashing or resource preflight on every poll. The focused watchdog,
+authority and immutable-bundle suite passed (50 tests); the full suite passed
+(682 passed, 1 skipped, 43 subtests).
 
 This is code/test evidence only. It does not claim that the adapter is wired
 into the production API worker, that a root supervisor is installed, or that

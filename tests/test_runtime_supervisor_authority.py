@@ -368,3 +368,47 @@ def test_read_only_authority_reads_wal_database_while_api_writer_is_open(tmp_pat
             ).fetchone()[0] == 180
     finally:
         writer.close()
+
+
+@pytest.mark.parametrize("mutation", [
+    "UPDATE runtime_execution_settings SET enabled=0",
+    "UPDATE runtime_test_jobs SET status='cancelled' WHERE id=7",
+    "UPDATE runtime_test_jobs SET cancel_requested=1 WHERE id=7",
+    "UPDATE runtime_test_batches SET status='revoked' WHERE id=4",
+    "UPDATE model_permission_requests SET status='revoked' WHERE id=9",
+])
+def test_live_execution_authority_detects_revocation_gates(tmp_path, mutation):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    authority = make_authority(db)
+    assert authority.is_execution_authorized(7) is True
+    with sqlite3.connect(db) as connection:
+        connection.execute(mutation)
+    assert authority.is_execution_authorized(7) is False
+
+
+def test_live_execution_authority_fails_closed_without_environment_opt_in(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    assert make_authority(db, opt_in=False).is_execution_authorized(7) is False
+
+
+def test_live_execution_authority_rejects_invalid_job_id(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    with pytest.raises(RuntimeAuthorityError, match="Invalid runtime job ID"):
+        make_authority(db).is_execution_authorized(True)
+
+
+def test_live_authority_does_not_expire_an_already_running_batch(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE runtime_test_batches SET status='running',expires_at='2029-12-31T23:59:00Z' WHERE id=4")
+    assert make_authority(db).is_execution_authorized(7) is True
+
+
+def test_live_authority_rejects_expired_approval_before_batch_is_running(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    assert make_authority(db, now=NOW + 601).is_execution_authorized(7) is False
