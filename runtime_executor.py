@@ -1,7 +1,8 @@
 """Fail-closed, explicit runtime-test job queue.
 
 This module does not auto-start workers and has no default model launcher.
-A trusted, model-specific runner must be injected by a future integration.
+The production-only API dispatcher injects the job-ID-only supervisor client;
+all execution gates are revalidated here before artifact handoff.
 Every execution rechecks the exact TEST_ONLY grant, quarantine record, hardware
 preflight and SHA-256 immediately before handing the artifact to that runner.
 """

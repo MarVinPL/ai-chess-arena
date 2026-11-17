@@ -296,11 +296,24 @@ stopped through the exact-unit handler. A failed stop leaves its durable lease
 and handoff intact for recovery; start_pending and stop-transition leases are
 left to their in-flight operation/recovery path. The watchdog does not perform
 artifact hashing or resource preflight on every poll. The focused watchdog,
-authority and immutable-bundle suite passed (50 tests); the full suite passed
-(682 passed, 1 skipped, 43 subtests).
+authority and immutable-bundle suite passed (50 tests); the API worker/startup/client/executor
+focused suite passed (68 tests); the full suite passed (689 passed, 1 skipped,
+43 subtests).
+
+The API-side production dispatcher is now wired in code after supervisor
+lease recovery completes. It is constructed only for the validated production
+deployment profile (explicit production acknowledgement, systemd backend,
+canonical artifact/output/bundle paths, supervisor and broker sockets, and
+independent `ARENA_RUNTIME_EXECUTION_ENABLED=1`). It polls only queued jobs
+whose batch and exact TEST_ONLY grant remain eligible, passes only the job ID
+through `RuntimeSupervisorClientRunner`, and relies on `execute_job` to repeat
+all authorization, quarantine, hardware and SHA-256 checks before handoff.
+Disabled/staging profiles do not construct the dispatcher. Startup still
+fails closed if supervisor recovery cannot be confirmed. The API dispatcher
+is not started in the current VPS deployment.
 
 This is code/test evidence only. It does not claim that the adapter is wired
-into the production API worker, that a root supervisor is installed, or that
-model inference was run. A failed/unconfirmed stop continues to leave its
-durable lease for supervisor recovery; no handoff cleanup is permitted until
-the exact unit cgroup is confirmed empty.
+into the currently deployed production API worker, that a root supervisor is
+installed, or that model inference was run. A failed/unconfirmed stop continues
+to leave its durable lease for supervisor recovery; no handoff cleanup is
+permitted until the exact unit cgroup is confirmed empty.

@@ -27,6 +27,8 @@ from runtime_deployment import resolve_runtime_deployment
 from runtime_startup import recover_runtime_on_startup
 from runtime_supervisor_ipc import supervisor_request
 from runtime_supervisor import SQLiteRuntimeUnitStore
+from runtime_supervisor_client import RuntimeSupervisorClientRunner
+from runtime_api_worker import RuntimeApiWorker
 from runtime_lease_broker import RuntimeLeaseBrokerServer
 
 def _route_path(request_target):
@@ -1896,6 +1898,7 @@ if __name__ == '__main__':
     deployment = resolve_runtime_deployment()
     lease_broker = None
     lease_broker_thread = None
+    runtime_api_worker = None
     if deployment.production_requested:
         # The API process owns SQLite schema and writes. The root supervisor
         # can reach only this fixed, peer-credential-gated lease protocol.
@@ -1929,6 +1932,16 @@ if __name__ == '__main__':
         executor_recovery = recovery['executor']
         if executor_recovery['count']:
             print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
+        # Production-only dispatcher: the profile resolver has already checked
+        # the explicit acknowledgement, systemd backend, canonical paths and
+        # independent execution opt-in. Startup recovery must finish first.
+        runtime_runner = RuntimeSupervisorClientRunner(
+            supervisor_socket=deployment.supervisor_socket,
+        )
+        runtime_api_worker = RuntimeApiWorker(
+            deployment=deployment, runner=runtime_runner,
+        )
+        runtime_api_worker.start()
         threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
         hf_candidate_queue.start_background_workers()
         hf_candidate_runtime.start_background_planner()
@@ -1937,6 +1950,8 @@ if __name__ == '__main__':
         print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
         ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
     finally:
+        if runtime_api_worker is not None:
+            runtime_api_worker.stop()
         if lease_broker is not None:
             lease_broker.shutdown()
         if lease_broker_thread is not None:
