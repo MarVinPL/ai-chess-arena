@@ -364,6 +364,56 @@ def snapshot() -> dict:
             'auto_start': False, 'max_parallel_models': 1, 'runtime_started': False}
 
 
+def _persist_authorized_result(*, job_id: int, batch_id: int,
+                              permission_request_id: int, result: dict) -> bool:
+    """Commit a result only if cancellation and every execution grant still hold.
+
+    BEGIN IMMEDIATE serializes this terminal transition against cancel, batch
+    revocation, permission revocation and global disable. Whichever transaction
+    commits first determines the terminal outcome; a late result cannot overwrite
+    a cancellation that already won the race.
+    """
+    if os.environ.get('ARENA_RUNTIME_EXECUTION_ENABLED') != '1':
+        return False
+    encoded = json.dumps(result, ensure_ascii=False, sort_keys=True)
+    with league.connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        job = connection.execute(
+            "SELECT status,cancel_requested,batch_id,permission_request_id,"
+            "model_id,repo_id,revision,artifact_sha256 "
+            "FROM runtime_test_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        batch = connection.execute(
+            "SELECT status FROM runtime_test_batches WHERE id=?", (batch_id,)
+        ).fetchone()
+        grant = connection.execute(
+            "SELECT status,scope,model_id,repo_id,revision,artifact_sha256 "
+            "FROM model_permission_requests WHERE id=?",
+            (permission_request_id,),
+        ).fetchone()
+        settings = connection.execute(
+            "SELECT enabled FROM runtime_execution_settings WHERE id=1"
+        ).fetchone()
+        if (not job or job['status'] != 'running' or bool(job['cancel_requested'])
+                or job['batch_id'] != batch_id
+                or job['permission_request_id'] != permission_request_id
+                or not batch or batch['status'] != 'running'
+                or not grant or grant['status'] != 'approved'
+                or grant['scope'] != 'TEST_ONLY'
+                or (grant['model_id'], grant['repo_id'], grant['revision'],
+                    grant['artifact_sha256']) != (
+                        job['model_id'], job['repo_id'], job['revision'],
+                        job['artifact_sha256'])
+                or not settings or not settings['enabled']):
+            return False
+        changed = connection.execute(
+            "UPDATE runtime_test_jobs SET status='completed',finished_at=?,result_json=? "
+            "WHERE id=? AND status='running' AND cancel_requested=0",
+            (_now(), encoded, job_id),
+        )
+        return changed.rowcount == 1
+
+
 def cancel(job_id: int) -> dict:
     if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id < 1:
         raise ValueError('Nieprawidłowy identyfikator zadania.')
@@ -473,9 +523,12 @@ def execute_job(job_id: int, *, runner: Callable[[dict, int, Callable[[], bool]]
                 raise TypeError('Adapter runtime musi zwrócić obiekt wyniku.')
             if cancellation_requested():
                 raise InterruptedError('Zgoda została wycofana lub zadanie anulowano podczas testu.')
-            with league.connect() as connection:
-                connection.execute("UPDATE runtime_test_jobs SET status='completed',finished_at=?,result_json=? WHERE id=? AND status='running'",
-                                   (_now(), json.dumps(result, ensure_ascii=False, sort_keys=True), job_id))
+            if not _persist_authorized_result(
+                    job_id=job_id, batch_id=job['batch_id'],
+                    permission_request_id=job['permission_request_id'], result=result):
+                raise InterruptedError(
+                    'Cancellation, permission revocation or runtime disable won the result-commit race.'
+                )
             with league.connect() as connection:
                 remaining = connection.execute(
                     "SELECT COUNT(*) AS total FROM runtime_test_jobs WHERE batch_id=? AND status='queued'",

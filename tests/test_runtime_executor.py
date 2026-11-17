@@ -241,7 +241,121 @@ class RuntimeExecutorTests(unittest.TestCase):
         self.assertEqual(seen['sha256'], self.sha)
         self.assertEqual(executor.snapshot()['jobs'][0]['process_pid'], 4321)
         self.assertEqual(seen['path'], str(self.artifact))
-        self.assertEqual(executor.snapshot()['jobs'][0]['status'], 'completed')
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'completed')
+        with league.connect() as connection:
+            stored_result = connection.execute(
+                'SELECT result_json FROM runtime_test_jobs WHERE id=?',
+                (queued['job_id'],)).fetchone()['result_json']
+        self.assertEqual(__import__('json').loads(stored_result),
+                         {'exit_code': 0, 'summary': 'fake runner only'})
+
+    def test_result_commit_rejects_cancellation_that_won_the_race(self):
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute("UPDATE runtime_test_jobs SET status='running',started_at=? WHERE id=?",
+                               (executor._now(), queued['job_id']))
+            connection.execute("UPDATE runtime_test_batches SET status='running' WHERE id=?",
+                               (batch_id,))
+            connection.execute("UPDATE runtime_test_jobs SET cancel_requested=1 WHERE id=?",
+                               (queued['job_id'],))
+        committed = executor._persist_authorized_result(
+            job_id=queued['job_id'], batch_id=batch_id,
+            permission_request_id=self.permission_id, result={'ok': True})
+        self.assertFalse(committed)
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'running')
+        with league.connect() as connection:
+            stored_result = connection.execute(
+                'SELECT result_json FROM runtime_test_jobs WHERE id=?',
+                (queued['job_id'],)).fetchone()['result_json']
+        self.assertIsNone(stored_result)
+
+    def test_result_commit_rejects_revoked_test_only_grant(self):
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        with league.connect() as connection:
+            connection.execute("UPDATE runtime_test_jobs SET status='running',started_at=? WHERE id=?",
+                               (executor._now(), queued['job_id']))
+            connection.execute("UPDATE runtime_test_batches SET status='running' WHERE id=?",
+                               (batch_id,))
+            model_permissions.decide_permission(
+                connection, request_id=self.permission_id, action='revoke',
+                confirm=True, reason='Revoke before terminal commit', actor='test-operator')
+        committed = executor._persist_authorized_result(
+            job_id=queued['job_id'], batch_id=batch_id,
+            permission_request_id=self.permission_id, result={'ok': True})
+        self.assertFalse(committed)
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'running')
+        with league.connect() as connection:
+            stored_result = connection.execute(
+                'SELECT result_json FROM runtime_test_jobs WHERE id=?',
+                (queued['job_id'],)).fetchone()['result_json']
+        self.assertIsNone(stored_result)
+
+    def test_supervised_runner_stops_exact_unit_when_job_is_cancelled(self):
+        from runtime_supervisor_client import RuntimeSupervisorClientRunner
+        queued = self.enqueue()
+        self.approve_for_fake_execution(queued['job_id'])
+        actions = []
+        def supervisor_call(_socket, action, job_id, *, timeout_seconds):
+            actions.append((action, job_id))
+            if action == 'start':
+                executor.cancel(job_id)
+                return {'job_id': job_id, 'unit_name':
+                        f'ai-chess-arena-runtime-{job_id}.service',
+                        'lease_state': 'active', 'unit_state': 'start_requested'}
+            if action == 'stop':
+                return {'job_id': job_id, 'unit_name':
+                        f'ai-chess-arena-runtime-{job_id}.service',
+                        'lease_state': 'stopped'}
+            raise AssertionError(action)
+        runner = RuntimeSupervisorClientRunner(
+            supervisor_call=supervisor_call,
+            bridge_call=lambda *_args, **_kwargs: (200, b'healthy'),
+            sleep=lambda _seconds: None)
+        result = executor.execute_job(
+            queued['job_id'], runner=runner, lock_path=self.root / 'lock')
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual(actions, [('start', queued['job_id']), ('stop', queued['job_id'])])
+        job = executor.snapshot()['jobs'][0]
+        self.assertEqual(job['status'], 'cancelled')
+        with league.connect() as connection:
+            stored_result = connection.execute(
+                'SELECT result_json FROM runtime_test_jobs WHERE id=?',
+                (queued['job_id'],)).fetchone()['result_json']
+        self.assertIsNone(stored_result)
+
+    def test_supervised_runner_stops_exact_unit_when_batch_is_revoked(self):
+        from runtime_supervisor_client import RuntimeSupervisorClientRunner
+        queued = self.enqueue()
+        batch_id = self.approve_for_fake_execution(queued['job_id'])
+        actions = []
+        def supervisor_call(_socket, action, job_id, *, timeout_seconds):
+            actions.append((action, job_id))
+            if action == 'start':
+                executor.revoke_batch(
+                    batch_id=batch_id, actor='test-operator',
+                    reason='Revoked during supervised runner test')
+                return {'job_id': job_id, 'unit_name':
+                        f'ai-chess-arena-runtime-{job_id}.service',
+                        'lease_state': 'active', 'unit_state': 'start_requested'}
+            if action == 'stop':
+                return {'job_id': job_id, 'unit_name':
+                        f'ai-chess-arena-runtime-{job_id}.service',
+                        'lease_state': 'stopped'}
+            raise AssertionError(action)
+        runner = RuntimeSupervisorClientRunner(
+            supervisor_call=supervisor_call,
+            bridge_call=lambda *_args, **_kwargs: (200, b'healthy'),
+            sleep=lambda _seconds: None)
+        result = executor.execute_job(
+            queued['job_id'], runner=runner, lock_path=self.root / 'lock')
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual(actions, [('start', queued['job_id']), ('stop', queued['job_id'])])
+        self.assertEqual(executor.snapshot()['batches'][0]['status'], 'revoked')
 
     def test_cancel_queued_job_without_starting_runtime(self):
         queued = self.enqueue()

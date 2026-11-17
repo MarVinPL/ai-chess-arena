@@ -257,5 +257,31 @@ was a harmless synthetic stub. Resource limits were inspected as effective
 properties; active memory/CPU limit-exhaustion behavior was not stress-tested.
 The runtime adapter is still not wired into the API executor, and the root
 supervisor service/worker bundle are not installed on the VPS. Independent
-review, complete revocation/cancellation lifecycle integration, and real-model
-E2E remain open release gates.
+review, production service wiring, and real-model E2E remain open release gates.
+
+### Cancellation/revocation and durable result commit (2026-11-18)
+
+The API-side supervised runner already polls the executor's cancellation
+callback during health checks and inference, and its `finally` path requests
+stop of the exact job-ID-derived unit. The executor now commits a successful
+result inside a SQLite `BEGIN IMMEDIATE` transaction that rechecks the running
+job, cancellation flag, batch state, exact TEST_ONLY grant identity/status,
+and global DB execution setting. This serializes completion against cancel,
+batch revoke, permission revoke and global disable: if the cancellation or
+revocation transaction commits first, a late model result cannot overwrite it
+with `completed`. A successful result is stored as `result_json` in the same
+terminal update that sets `completed`.
+
+Regression tests exercise the supervised client through the executor: job
+cancellation and batch revocation after the supervisor start request both
+produce an exact-unit stop request and a durable `cancelled` job state.
+Separate tests verify that a cancellation flag or revoked TEST_ONLY grant
+blocks terminal result persistence, while a successful run retains its
+serialized result. The focused lifecycle/broker/handler suite passed (75 tests);
+the full suite passed (662 passed, 1 skipped, 43 subtests).
+
+This is code/test evidence only. It does not claim that the adapter is wired
+into the production API worker, that a root supervisor is installed, or that
+model inference was run. A failed/unconfirmed stop continues to leave its
+durable lease for supervisor recovery; no handoff cleanup is permitted until
+the exact unit cgroup is confirmed empty.
