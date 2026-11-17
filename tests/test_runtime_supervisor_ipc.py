@@ -2,7 +2,6 @@ import json
 import os
 import socket
 import threading
-import time
 
 import pytest
 
@@ -61,10 +60,7 @@ def test_round_trip_calls_only_injected_job_handlers(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        deadline = time.monotonic() + 2
-        while not path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert path.exists()
+        assert server.ready.wait(timeout=2), "supervisor IPC did not become ready"
         assert supervisor_request(path, "start", 13) == {"accepted": True}
         assert supervisor_request(path, "status", 13) == {"state": "idle"}
         assert calls == [("start", 13), ("status", 13)]
@@ -83,9 +79,7 @@ def test_handler_exception_is_sanitized(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        deadline = time.monotonic() + 2
-        while not path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
+        assert server.ready.wait(timeout=2), "supervisor IPC did not become ready"
         with pytest.raises(SupervisorIPCError, match="RuntimeError") as exc:
             supervisor_request(path, "start", 4)
         assert "/etc/private" not in str(exc.value)
@@ -96,18 +90,21 @@ def test_handler_exception_is_sanitized(tmp_path):
 
 def test_server_rejects_peer_uid_outside_allowlist(tmp_path):
     path = tmp_path / "supervisor.sock"
+    calls = []
     server = RuntimeSupervisorIPCServer(
         path, allowed_uid=os.getuid() + 1,
-        start=lambda _: {"accepted": True}, stop=lambda _: None, status=lambda _: None,
+        start=lambda job_id: calls.append(("start", job_id)) or {"accepted": True},
+        stop=lambda _: None, status=lambda _: None,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        deadline = time.monotonic() + 2
-        while not path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        with pytest.raises(SupervisorIPCError, match="Supervisor odrzucił"):
+        assert server.ready.wait(timeout=2), "supervisor IPC did not become ready"
+        with pytest.raises(SupervisorIPCError):
             supervisor_request(path, "start", 2)
+        # An unauthorised peer is closed without a response; its injected
+        # handlers must never run, regardless of send/close scheduling.
+        assert calls == []
     finally:
         server.shutdown()
         thread.join(timeout=2)

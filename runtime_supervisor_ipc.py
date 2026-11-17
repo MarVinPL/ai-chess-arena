@@ -12,6 +12,7 @@ import os
 import socket
 import socketserver
 import struct
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -58,10 +59,16 @@ def _validate_request(raw: bytes) -> dict:
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self):
         server = self.server
+        # Reject unauthorised peers before reading or replying. A peer can be
+        # closed immediately after connect; the client may observe EOF/BrokenPipe
+        # depending on scheduling, but no handler or privileged operation runs.
         try:
             _pid, uid, _gid = _peer_credentials(self.connection)
-            if uid != server.allowed_uid:
-                raise SupervisorIPCError("Peer UID poza allowlist.")
+        except Exception:
+            return
+        if uid != server.allowed_uid:
+            return
+        try:
             self.connection.settimeout(server.timeout_seconds)
             raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             request = _validate_request(raw)
@@ -105,6 +112,10 @@ class RuntimeSupervisorIPCServer:
         if not all(callable(fn) for fn in self.handlers.values()):
             raise SupervisorIPCError("Wszystkie handlery muszą być jawnie skonfigurowane.")
         self._server = None
+        # Set only after the socket is bound, permissions are applied and the
+        # listener is active. Tests/owners can wait for real readiness rather
+        # than inferring it from the filesystem entry appearing.
+        self.ready = threading.Event()
 
     def serve_forever(self):
         if self.socket_path.exists() or self.socket_path.is_symlink():
@@ -115,15 +126,22 @@ class RuntimeSupervisorIPCServer:
         class Server(socketserver.UnixStreamServer):
             allow_reuse_address = False
 
-        self._server = Server(str(self.socket_path), _Handler)
+        # Delay bind/listen until all handler state is installed. Otherwise a
+        # client can connect in the constructor-to-configuration window and
+        # race the first request against missing server attributes.
+        self._server = Server(str(self.socket_path), _Handler, bind_and_activate=False)
         self._server.allowed_uid = self.allowed_uid
         self._server.handlers = self.handlers
         self._server.timeout_seconds = self.timeout_seconds
         self._server.response_timeout_seconds = self.response_timeout_seconds
         try:
+            self._server.server_bind()
             os.chmod(self.socket_path, self.socket_mode)
+            self._server.server_activate()
+            self.ready.set()
             self._server.serve_forever(poll_interval=0.1)
         finally:
+            self.ready.clear()
             self._server.server_close()
             try:
                 self.socket_path.unlink()
