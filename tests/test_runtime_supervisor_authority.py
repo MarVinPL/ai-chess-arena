@@ -339,3 +339,32 @@ def test_current_ram_must_leave_host_reserve_outside_model_cgroup(tmp_path):
     )
     with pytest.raises(RuntimeAuthorityError, match="RAM/disk"):
         authority.resolve_start(7)
+
+
+def test_read_only_authority_reads_wal_database_while_api_writer_is_open(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    writer = sqlite3.connect(db, timeout=5)
+    try:
+        mode = writer.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        assert mode.lower() == "wal"
+        writer.execute("UPDATE runtime_test_jobs SET timeout_seconds=240 WHERE id=7")
+        writer.commit()
+
+        connect = readonly_sqlite_factory(db)
+        with connect() as reader:
+            assert reader.execute(
+                "SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7"
+            ).fetchone()[0] == 240
+            with pytest.raises(sqlite3.OperationalError):
+                reader.execute("UPDATE runtime_test_jobs SET timeout_seconds=1 WHERE id=7")
+
+        # A later API-owned commit remains visible to a fresh read-only authority.
+        writer.execute("UPDATE runtime_test_jobs SET timeout_seconds=180 WHERE id=7")
+        writer.commit()
+        with connect() as reader:
+            assert reader.execute(
+                "SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7"
+            ).fetchone()[0] == 180
+    finally:
+        writer.close()
