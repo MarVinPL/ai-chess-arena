@@ -63,7 +63,7 @@ def seed_database(path):
         connection.execute("""INSERT INTO hf_download_verified_artifacts
             VALUES(?,?,123,?,'2029-12-01T00:00:00Z',1)""",
             (artifact_key, "/quarantine/model.gguf", SHA))
-        estimated = int(123 * 1.5) + 1536 * 1024**2
+        estimated = int(123 * 1.5) + 2 * 1536 * 1024**2
         connection.execute("""INSERT INTO hf_runtime_preflight
             VALUES(?,?,?,123,?,'ready_pending_approval','2030-01-01T00:00:00Z',?,?)""",
             (artifact_key, "org/model", "/quarantine/model.gguf", SHA, estimated, estimated + 1024))
@@ -304,4 +304,38 @@ def test_declared_permissive_review_requires_apache_evidence(tmp_path):
         clock=lambda: NOW,
     )
     with pytest.raises(RuntimeAuthorityError, match="Apache-2.0"):
+        authority.resolve_start(7)
+
+
+def test_persisted_preflight_must_include_separate_host_ram_reserve(tmp_path):
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE hf_runtime_preflight SET available_ram_bytes=estimated_ram_bytes-1"
+        )
+    with pytest.raises(RuntimeAuthorityError, match="Persisted RAM preflight"):
+        make_authority(db).resolve_start(7)
+
+
+def test_current_ram_must_leave_host_reserve_outside_model_cgroup(tmp_path):
+    from runtime_resource_policy import (
+        HOST_RAM_RESERVE_BYTES,
+        model_memory_limit_bytes,
+    )
+
+    db = tmp_path / "arena.sqlite3"
+    seed_database(db)
+    model_limit = model_memory_limit_bytes(123)
+    authority = RuntimeJobAuthority(
+        connect_readonly=readonly_sqlite_factory(db),
+        allowed_artifacts={f"hf:org/model|{REVISION}|model.gguf"},
+        execution_opt_in=lambda: True,
+        resource_probe=lambda _path: (
+            model_limit + HOST_RAM_RESERVE_BYTES - 1,
+            1024**3,
+        ),
+        clock=lambda: NOW,
+    )
+    with pytest.raises(RuntimeAuthorityError, match="RAM/disk"):
         authority.resolve_start(7)

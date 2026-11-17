@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from runtime_supervisor import RuntimeSupervisor, SQLiteRuntimeUnitStore
 from runtime_systemd import build_runtime_unit_spec
+from runtime_resource_policy import model_memory_limit_bytes
 from runtime_supervisor_authority import RuntimeJobAuthorization
 from runtime_supervisor_handlers import (
     RuntimeSupervisorHandlerError,
@@ -55,8 +56,8 @@ class FakeAuthority:
 def harness(tmp_path, *, fail_start=False, authority_options=None, persist_override=None):
     db = tmp_path / "arena.sqlite3"
     with sqlite3.connect(db) as connection:
-        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY,status TEXT)")
-        connection.execute("INSERT INTO runtime_test_jobs VALUES(7,'running')")
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY,status TEXT,cancel_requested INTEGER NOT NULL DEFAULT 0)")
+        connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(7,'running')")
     store = SQLiteRuntimeUnitStore(db)
     backend = FakeBackend(store=store, fail_start=fail_start)
     supervisor = RuntimeSupervisor(
@@ -89,7 +90,7 @@ def harness(tmp_path, *, fail_start=False, authority_options=None, persist_overr
     )
     authority = FakeAuthority(auth, **(authority_options or {}))
     def test_spec_builder(auth, handoff_result):
-        memory_max = int(auth.size_bytes * 1.5) + 1536 * 1024**2
+        memory_max = model_memory_limit_bytes(auth.size_bytes)
         base = build_runtime_unit_spec(
             job_id=auth.job_id, runtime_user="arena-runtime", runtime_group="arena-runtime",
             artifact_path=f"/var/lib/arena-handoff/job-{auth.job_id}/model.gguf",
@@ -124,10 +125,13 @@ def test_start_persists_exact_lease_before_backend_and_keeps_handoff(tmp_path):
         "lease_state": "active",
         "unit_state": "start_requested",
     }
-    assert authority.calls == 2
+    assert authority.calls == 3
     assert store.get(7).state == "active"
     assert backend.started[0][1] == (
         "/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "7"
+    )
+    assert dict(backend.started[0][0].properties)["MemoryMax"] == str(
+        model_memory_limit_bytes(len(b"verified artifact for supervisor handler"))
     )
     assert (handoff / "job-7" / "model.gguf").is_file()
 
@@ -251,3 +255,14 @@ def test_narrow_ipc_round_trip_uses_trusted_start_stop_status_handlers(tmp_path)
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_final_authority_check_after_lease_persistence_aborts_before_backend(tmp_path):
+    handlers, store, backend, _, handoff = harness(
+        tmp_path, authority_options={"fail_on_call": 3}
+    )
+    with pytest.raises(RuntimeSupervisorHandlerError):
+        handlers.start(7)
+    assert store.get(7).state == "stopped"
+    assert backend.started == []
+    assert not (handoff / "job-7").exists()

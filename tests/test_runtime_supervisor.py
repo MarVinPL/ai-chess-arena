@@ -126,7 +126,7 @@ def test_sqlite_store_commits_unit_identity_and_recovers_only_incomplete_leases(
 
     db = tmp_path / "arena.sqlite3"
     with sqlite3.connect(db) as connection:
-        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT)")
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0)")
         connection.executemany("INSERT INTO runtime_test_jobs(id,status) VALUES(?,?)",
                                [(21, "running"), (22, "queued")])
     store = SQLiteRuntimeUnitStore(db)
@@ -147,7 +147,7 @@ def test_sqlite_store_rejects_duplicate_or_unrelated_unit_identity(tmp_path):
 
     db = tmp_path / "arena.sqlite3"
     with sqlite3.connect(db) as connection:
-        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT)")
+        connection.execute("CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0)")
         connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(31,'running')")
     store = SQLiteRuntimeUnitStore(db)
     store.persist(RuntimeUnitRecord(31, "ai-chess-arena-runtime-31.service", "start_pending"))
@@ -179,3 +179,20 @@ def test_stop_requires_a_persisted_lease():
     with pytest.raises(RuntimeSupervisorError):
         supervisor.stop(record)
     assert backend.stopped == []
+
+
+def test_sqlite_store_refuses_cancelled_running_job(tmp_path):
+    import sqlite3
+    from runtime_supervisor import SQLiteRuntimeUnitStore
+
+    db = tmp_path / "arena.sqlite3"
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute(
+            "INSERT INTO runtime_test_jobs(id,status,cancel_requested) VALUES(51,'running',1)"
+        )
+    store = SQLiteRuntimeUnitStore(db)
+    with pytest.raises(RuntimeSupervisorError, match="nieanulowanego"):
+        store.persist(RuntimeUnitRecord(51, "ai-chess-arena-runtime-51.service", "start_pending"))

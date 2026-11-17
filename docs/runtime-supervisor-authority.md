@@ -24,7 +24,9 @@ and independently checks, in one read snapshot:
   source path, size and SHA-256;
 - the persisted runtime preflight is ready_pending_approval, matches the
   registry identity, and is no older than 15 minutes;
-- the current host RAM and quarantine-volume free-space reserves still pass;
+- the current host RAM must cover model estimate plus a separate 1.5 GiB
+  reserve for the API, database and OS; quarantine-volume free space must also
+  cover the artifact handoff plus its 512 MiB reserve;
 - candidate artifacts marked review-required have a positive, exact-revision
   manual license/technical review. Declared permissive licenses require
   Apache-2.0 evidence; all review-required candidates need a confirmed

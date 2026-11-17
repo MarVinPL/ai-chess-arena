@@ -65,6 +65,9 @@ class _Handler(socketserver.StreamRequestHandler):
             self.connection.settimeout(server.timeout_seconds)
             raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             request = _validate_request(raw)
+            # A start handler may hash/copy a large approved artifact. Keep the
+            # request-read timeout short but allow a bounded long response.
+            self.connection.settimeout(server.response_timeout_seconds)
             handler = server.handlers[request["action"]]
             if not callable(handler):
                 raise SupervisorIPCError("Akcja nie jest skonfigurowana.")
@@ -86,13 +89,16 @@ class RuntimeSupervisorIPCServer:
     def __init__(self, socket_path: str | Path, *, allowed_uid: int,
                  start: Callable[[int], object], stop: Callable[[int], object],
                  status: Callable[[int], object], timeout_seconds: float = 3.0,
+                 response_timeout_seconds: float = 1800.0,
                  socket_mode: int = 0o660):
         self.socket_path = Path(socket_path)
         self.allowed_uid = int(allowed_uid)
         self.handlers = {"start": start, "stop": stop, "status": status}
         self.timeout_seconds = float(timeout_seconds)
+        self.response_timeout_seconds = float(response_timeout_seconds)
         self.socket_mode = int(socket_mode)
-        if self.allowed_uid < 0 or self.timeout_seconds <= 0:
+        if (self.allowed_uid < 0 or self.timeout_seconds <= 0
+                or self.response_timeout_seconds <= 0):
             raise SupervisorIPCError("Nieprawidłowa konfiguracja IPC.")
         if self.socket_mode not in {0o600, 0o660}:
             raise SupervisorIPCError("Tryb socketu poza dozwoloną listą.")
@@ -113,6 +119,7 @@ class RuntimeSupervisorIPCServer:
         self._server.allowed_uid = self.allowed_uid
         self._server.handlers = self.handlers
         self._server.timeout_seconds = self.timeout_seconds
+        self._server.response_timeout_seconds = self.response_timeout_seconds
         try:
             os.chmod(self.socket_path, self.socket_mode)
             self._server.serve_forever(poll_interval=0.1)

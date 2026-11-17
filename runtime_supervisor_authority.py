@@ -17,13 +17,11 @@ from pathlib import Path
 from typing import Callable
 
 import model_permissions
+from runtime_resource_policy import DISK_RESERVE_BYTES, required_host_available_bytes
 
 _ARTIFACT_KEY = re.compile(r"^[^|\x00]{1,255}\|[0-9a-f]{40}\|[^/\\|\x00]{1,255}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PREFLIGHT_MAX_AGE_SECONDS = 15 * 60
-_MEMORY_MULTIPLIER = 1.5
-_MEMORY_RESERVE_BYTES = 1536 * 1024**2
-_DISK_RESERVE_BYTES = 512 * 1024**2
 
 
 class RuntimeAuthorityError(PermissionError):
@@ -117,7 +115,10 @@ class RuntimeJobAuthority:
         if (not isinstance(row["checked_at"], str)
                 or not fresh_after <= row["checked_at"] <= now):
             raise RuntimeAuthorityError("Runtime preflight is stale or has an invalid timestamp.")
-        estimated = int(size_bytes * _MEMORY_MULTIPLIER) + _MEMORY_RESERVE_BYTES
+        try:
+            estimated = required_host_available_bytes(size_bytes)
+        except ValueError as exc:
+            raise RuntimeAuthorityError("Artifact size exceeds runtime resource policy.") from exc
         if (type(row["estimated_ram_bytes"]) is not int
                 or row["estimated_ram_bytes"] != estimated
                 or type(row["available_ram_bytes"]) is not int
@@ -128,7 +129,7 @@ class RuntimeJobAuthority:
         except Exception as exc:
             raise RuntimeAuthorityError("Current host resource preflight failed.") from exc
         if (type(current_ram) is not int or type(current_disk) is not int
-                or current_ram < estimated or current_disk < _DISK_RESERVE_BYTES):
+                or current_ram < estimated or current_disk < DISK_RESERVE_BYTES):
             raise RuntimeAuthorityError("Current host RAM/disk reserve is insufficient.")
 
     @staticmethod

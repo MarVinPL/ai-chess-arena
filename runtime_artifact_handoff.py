@@ -14,9 +14,9 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from runtime_resource_policy import MAX_ARTIFACT_BYTES, required_handoff_free_bytes
+
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_MAX_ARTIFACT_BYTES = 16 * 1024**3
-_DISK_RESERVE_BYTES = 512 * 1024**2
 _CHUNK_BYTES = 1024 * 1024
 
 
@@ -45,7 +45,7 @@ def _validate_identity(job_id: int, source_path: str, expected_sha256: str,
         raise ArtifactHandoffError("Artifact source path is not canonical.")
     if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
         raise ArtifactHandoffError("Pinned artifact SHA-256 is invalid.")
-    if type(expected_size) is not int or not 1 <= expected_size <= _MAX_ARTIFACT_BYTES:
+    if type(expected_size) is not int or not 1 <= expected_size <= MAX_ARTIFACT_BYTES:
         raise ArtifactHandoffError("Pinned artifact size is outside policy.")
     if type(runtime_gid) is not int or runtime_gid < 0:
         raise ArtifactHandoffError("Runtime group ID is invalid.")
@@ -126,7 +126,7 @@ def prepare_artifact_handoff(*, job_id: int, source_root: str | Path,
                 or stat.S_IMODE(root_stat.st_mode) != 0o710):
             raise ArtifactHandoffError("Handoff root ownership/mode does not match root:runtime 0710 policy.")
 
-        if shutil.disk_usage(handoff_root).free < expected_size + _DISK_RESERVE_BYTES:
+        if shutil.disk_usage(handoff_root).free < required_handoff_free_bytes(expected_size):
             raise ArtifactHandoffError("Handoff volume lacks the required free-space reserve.")
         source_fd = _open_source_beneath(source_root, source_path)
         source_stat = os.fstat(source_fd)

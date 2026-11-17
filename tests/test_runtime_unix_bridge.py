@@ -48,7 +48,7 @@ def test_unix_bridge_forwards_health_only_to_loopback(tmp_path):
     try:
         status, body = unix_request(path, "GET", "/health")
         assert (status, body) == (200, b"healthy")
-        assert seen == [("http://127.0.0.1:19090/health", "GET", 2.0)]
+        assert seen == [("http://127.0.0.1:19090/health", "GET", 1800.0)]
     finally:
         stop_bridge(bridge, thread)
 
@@ -118,6 +118,7 @@ def test_bridge_handles_upstream_http_error(tmp_path):
 @pytest.mark.parametrize("kwargs", [
     {"loopback_port": 0}, {"loopback_port": 65536},
     {"allowed_uid": -1}, {"timeout_seconds": 0},
+    {"response_timeout_seconds": 0},
 ])
 def test_bridge_rejects_invalid_transport_configuration(tmp_path, kwargs):
     config = {"loopback_port": 19090, "allowed_uid": os.getuid()}

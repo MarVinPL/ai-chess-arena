@@ -20,10 +20,16 @@ For a single positive job ID, the handler:
 5. Builds the fixed worker argv and per-job systemd spec from trusted code and
    the authorization record.
 6. Persists the exact deterministic unit lease before calling the backend.
+7. The supervisor checks cancel_requested atomically with lease persistence,
+   then runs a final authority callback after persistence and immediately
+   before the backend call. If this final check fails, the lease is marked
+   stopped without invoking the backend. The API-side client polls cancellation
+   during health and inference and requests exact-unit stop after a cancellation.
 
-If failure occurs before a lease exists, the handler removes only that exact
-job handoff. If a lease exists, start outcome may be ambiguous; the artifact is
-retained for exact-unit recovery.
+If failure occurs before a lease exists, or the final pre-start check safely
+marks the lease stopped, the handler removes only that exact job handoff. If
+a lease remains in a recoverable state, start outcome may be ambiguous; the
+artifact is retained for exact-unit recovery.
 
 ## Stop, status and recovery
 
@@ -49,7 +55,8 @@ The default spec builder uses:
 - runtime identity arena-runtime:arena-runtime;
 - the exact per-job artifact under /var/lib/arena-handoff;
 - output directory /run/arena-runtime/job-<id>;
-- MemoryMax equal to the same conservative estimate used by preflight;
+- MemoryMax equal to the model-memory estimate; the separate 1.5 GiB host
+  reserve is excluded from the runtime cgroup and must remain available outside it;
 - MemorySwapMax=0, CPUQuota=100%, TasksMax=8;
 - RuntimeMaxSec equal to the approved job timeout;
 - the existing strict filesystem, namespace, network and cgroup policy.
@@ -63,10 +70,15 @@ systemd unit, cgroup, mount, or network configuration.
 
 Tests use temporary SQLite databases, temporary quarantine/handoff
 directories, and a fake backend. They exercise the IPC start/stop/status
-round-trip, lease-before-start ordering, ambiguous-start retention, exact-unit
+round-trip, lease-before-start ordering, final authorization after lease
+persistence, cancelled-job rejection, ambiguous-start retention, exact-unit
 recovery, authorization changes during copy, and safe handoff cleanup.
 
 This is not yet wired into server.py, the executor, or a persistent supervisor
-service. No real systemd command, model worker, download, inference, tournament
-or production configuration was exercised. The current worker bundle/argv
-contract and actual systemd property normalization remain open blockers.
+service. A narrow race remains between the final DB authorization check and
+systemd accepting the start request; the API client stops immediately after
+the start response if cancellation is pending, while a continuous
+supervisor-side revocation watcher remains an integration requirement. No real
+systemd command, model worker, download, inference, tournament or production
+configuration was exercised. The current worker bundle/argv contract and
+actual systemd property normalization remain open blockers.

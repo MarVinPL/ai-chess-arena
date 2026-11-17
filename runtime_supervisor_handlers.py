@@ -17,11 +17,9 @@ from runtime_supervisor import RuntimeSupervisor, SQLiteRuntimeUnitStore
 from runtime_supervisor_authority import RuntimeJobAuthorization
 from runtime_supervisor_ipc import RuntimeSupervisorIPCServer
 from runtime_systemd import build_runtime_unit_spec
+from runtime_resource_policy import model_memory_limit_bytes
 
 _JOB_DIR_RE = re.compile(r"^job-([1-9][0-9]*)$")
-_MEMORY_MULTIPLIER = 1.5
-_MEMORY_RESERVE_BYTES = 1536 * 1024**2
-
 
 class RuntimeSupervisorHandlerError(RuntimeError):
     """Raised when a trusted job operation cannot complete safely."""
@@ -72,7 +70,9 @@ class RuntimeSupervisorHandlers:
 
     @staticmethod
     def _build_spec(authorization: RuntimeJobAuthorization, handoff):
-        memory_max = int(authorization.size_bytes * _MEMORY_MULTIPLIER) + _MEMORY_RESERVE_BYTES
+        # Host reserve is enforced separately by RuntimeJobAuthority; do not
+        # assign that reserve to the runtime cgroup.
+        memory_max = model_memory_limit_bytes(authorization.size_bytes)
         return build_runtime_unit_spec(
             job_id=authorization.job_id, runtime_user="arena-runtime",
             runtime_group="arena-runtime", artifact_path=handoff.path,
@@ -117,7 +117,17 @@ class RuntimeSupervisorHandlers:
                 "/usr/local/lib/ai-chess-arena-runtime/runtime_worker",
                 "--job", str(job_id),
             )
-            unit_name = self._supervisor.start(spec, argv)
+            def final_authorization_check():
+                final = self._authority.resolve_start(job_id)
+                if (_authorization_identity(authorization)
+                        != _authorization_identity(final)):
+                    raise RuntimeSupervisorHandlerError(
+                        "Job authorization changed immediately before systemd start."
+                    )
+
+            unit_name = self._supervisor.start(
+                spec, argv, before_start=final_authorization_check
+            )
             return {
                 "job_id": job_id,
                 "unit_name": unit_name,
@@ -132,7 +142,9 @@ class RuntimeSupervisorHandlers:
                 lease = self._leases.get(job_id)
             except Exception:
                 lease = "unknown"
-            if handoff is not None and lease is None:
+            if handoff is not None and (
+                    lease is None or getattr(lease, "state", None) == "stopped"
+            ):
                 try:
                     self._remove_handoff(job_id)
                 except Exception as cleanup_exc:

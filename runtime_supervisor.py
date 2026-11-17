@@ -64,10 +64,22 @@ class RuntimeSupervisor:
             raise RuntimeSupervisorError("Plik wykonywalny musi mieć bezwzględną ścieżkę.")
         return job_id
 
-    def start(self, spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> str:
-        """Persist identity first; ambiguous starts remain recoverable."""
+    def start(self, spec: RuntimeUnitSpec, argv: tuple[str, ...], *,
+              before_start: Callable[[], None] | None = None) -> str:
+        """Persist identity first; optionally re-authorize immediately before backend start."""
         job_id = self._validate(spec, argv)
+        if before_start is not None and not callable(before_start):
+            raise RuntimeSupervisorError("Callback przed startem musi być wywoływalny.")
         self._persist(RuntimeUnitRecord(job_id, spec.unit_name, "start_pending"))
+        if before_start is not None:
+            try:
+                before_start()
+            except Exception:
+                # No backend call has happened yet, so this exact lease can be
+                # marked stopped. If the DB write fails, start_pending remains
+                # recoverable and no artifact cleanup is performed by caller.
+                self._set_state(job_id, "stopped")
+                raise
         try:
             self._backend.start(spec, argv)
         except Exception:
@@ -135,10 +147,13 @@ class SQLiteRuntimeUnitStore:
         with sqlite3.connect(self.database_path, timeout=5) as connection:
             connection.execute("BEGIN IMMEDIATE")
             job = connection.execute(
-                "SELECT status FROM runtime_test_jobs WHERE id=?", (record.job_id,)
+                "SELECT status,cancel_requested FROM runtime_test_jobs WHERE id=?",
+                (record.job_id,),
             ).fetchone()
-            if not job or job[0] != "running":
-                raise RuntimeSupervisorError("Dzierżawa wymaga istniejącego zadania w stanie running.")
+            if not job or job[0] != "running" or bool(job[1]):
+                raise RuntimeSupervisorError(
+                    "Dzierżawa wymaga nieanulowanego zadania w stanie running."
+                )
             existing = connection.execute(
                 "SELECT unit_name FROM runtime_unit_leases WHERE job_id=?", (record.job_id,)
             ).fetchone()

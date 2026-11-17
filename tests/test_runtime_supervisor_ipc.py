@@ -111,3 +111,16 @@ def test_server_rejects_peer_uid_outside_allowlist(tmp_path):
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_long_handler_response_timeout_is_separate_from_short_request_timeout(tmp_path):
+    server = RuntimeSupervisorIPCServer(
+        tmp_path / "supervisor.sock", allowed_uid=os.getuid(),
+        start=lambda job_id: {"job_id": job_id},
+        stop=lambda job_id: {"job_id": job_id},
+        status=lambda job_id: {"job_id": job_id},
+        timeout_seconds=3.0,
+        response_timeout_seconds=1800.0,
+    )
+    assert server.timeout_seconds == 3.0
+    assert server.response_timeout_seconds == 1800.0
