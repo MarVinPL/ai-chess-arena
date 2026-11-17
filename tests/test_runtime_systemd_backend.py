@@ -146,3 +146,34 @@ def test_start_rejects_worker_arguments_not_bound_to_job_id():
     with pytest.raises(SystemdBackendError, match="przypisanemu zadaniu"):
         backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "10"))
     assert fake.calls == []
+
+
+def test_start_accepts_systemd_canonical_property_representations():
+    spec = make_spec()
+    actual = SystemdTransientBackend._expected(spec)
+    actual["RestrictAddressFamilies"] = "AF_INET AF_UNIX"
+    actual["BindReadOnlyPaths"] += ":rbind"
+    actual["CPUQuotaPerSecUSec"] = "1s"
+    actual["RuntimeMaxUSec"] = "5min"
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in actual.items()))
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+
+
+def test_systemd_timespan_parser_rejects_malformed_values():
+    from runtime_systemd_backend import _timespan_to_usec
+
+    assert _timespan_to_usec("1h 30min 250ms") == 5_400_250_000
+    assert _timespan_to_usec("200ms") == 200_000
+    assert _timespan_to_usec("300000000") == 300_000_000
+    assert _timespan_to_usec("200ms garbage") is None
+
+
+def test_start_fails_closed_when_systemd_accepts_but_unit_process_fails():
+    spec = make_spec()
+    actual = SystemdTransientBackend._expected(spec)
+    actual["ActiveState"] = "failed"
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in actual.items()))
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="ActiveState"):
+        backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))

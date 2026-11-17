@@ -6,8 +6,11 @@ Tests inject a fake command runner.
 """
 from __future__ import annotations
 
+import re
 import subprocess
+import time
 from collections.abc import Callable
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from runtime_supervisor import RuntimeSupervisorError, _UNIT_RE
@@ -20,7 +23,7 @@ class SystemdBackendError(RuntimeSupervisorError):
 
 # Properties whose effective values must be verified after systemd accepts a unit.
 _VERIFY_PROPERTIES = (
-    "User", "Group", "NoNewPrivileges", "CapabilityBoundingSet",
+    "ActiveState", "User", "Group", "NoNewPrivileges", "CapabilityBoundingSet",
     "AmbientCapabilities", "ProtectSystem", "ProtectHome", "PrivateTmp",
     "PrivateDevices", "PrivateNetwork", "ProtectControlGroups",
     "RestrictNamespaces", "RestrictAddressFamilies", "KillMode", "Delegate",
@@ -32,6 +35,46 @@ _VERIFY_PROPERTIES = (
     "SystemCallArchitectures", "MemoryMax", "MemorySwapMax",
     "CPUQuotaPerSecUSec", "TasksMax", "LimitNOFILE", "RuntimeMaxUSec", "UMask",
 )
+
+
+_TIMESPAN_TOKEN = re.compile(r"(\d+(?:\.\d+)?)(us|µs|ms|s|min|h|d|w)")
+
+
+def _timespan_to_usec(value: str) -> int | None:
+    """Parse systemd's human-readable timespans or its numeric usec form."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    factors = {
+        "us": 1, "µs": 1, "ms": 1_000, "s": 1_000_000,
+        "min": 60_000_000, "h": 3_600_000_000,
+        "d": 86_400_000_000, "w": 604_800_000_000,
+    }
+    tokens = list(_TIMESPAN_TOKEN.finditer(value))
+    if not tokens or "".join(match.group(0) for match in tokens) != value.replace(" ", ""):
+        return None
+    try:
+        total = sum((Decimal(match.group(1)) * factors[match.group(2)]
+                     for match in tokens), Decimal(0))
+    except InvalidOperation:
+        return None
+    if total != total.to_integral_value():
+        return None
+    return int(total)
+
+
+def _property_matches(key: str, actual: str | None, expected: str) -> bool:
+    if actual is None:
+        return False
+    if key == "RestrictAddressFamilies":
+        return set(actual.split()) == set(expected.split())
+    if key == "BindReadOnlyPaths":
+        return actual in {expected, expected + ":rbind"}
+    if key in {"CPUQuotaPerSecUSec", "RuntimeMaxUSec"}:
+        return _timespan_to_usec(actual) == int(expected)
+    return actual == expected
 
 
 def _run_checked(runner: Callable, argv: list[str], timeout: float) -> str:
@@ -119,6 +162,7 @@ class SystemdTransientBackend:
                     if key not in {"CPUQuota", "RuntimeMaxSec"}}
         expected["CPUQuotaPerSecUSec"] = str(int(p["CPUQuota"].rstrip("%")) * 10_000)
         expected["RuntimeMaxUSec"] = str(int(p["RuntimeMaxSec"]) * 1_000_000)
+        expected["ActiveState"] = "active"
         return expected
 
     def start(self, spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> None:
@@ -130,9 +174,20 @@ class SystemdTransientBackend:
             command.append("--property=" + key + "=" + value)
         command.extend(["--", *argv])
         _run_checked(self._runner, command, 15)
-        actual = self._show(spec.unit_name)
+        # --no-block acknowledges job submission, not successful process startup.
+        # Wait for the exact unit to become active, or fail closed on terminal state.
+        deadline = time.monotonic() + 15
+        actual = {}
+        while True:
+            actual = self._show(spec.unit_name)
+            state = actual.get("ActiveState")
+            if state == "active" or state in {"failed", "inactive"} or state is None:
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
         mismatches = [key for key, value in self._expected(spec).items()
-                      if actual.get(key) != value]
+                      if not _property_matches(key, actual.get(key), value)]
         if mismatches:
             # Exact unit only; leave durable lease recoverable if stop is uncertain.
             raise SystemdBackendError("Systemd nie potwierdził wymaganych właściwości: " + ", ".join(mismatches))

@@ -86,3 +86,11 @@ def test_runtime_policy_does_not_expose_host_tcp_network():
     assert props["RestrictAddressFamilies"] == "AF_UNIX AF_INET"
     # IPv4 is permitted only within the PrivateNetwork namespace; the host/API
     # control channel is AF_UNIX and is separately peer-credential checked.
+
+
+def test_runtime_hides_systemd_control_sockets_without_masking_runtime_directory():
+    props = build().as_dict()
+    inaccessible = props["InaccessiblePaths"].split()
+    assert "/run/systemd" not in inaccessible
+    assert "/run/systemd/private" in inaccessible
+    assert "/run/systemd/notify" in inaccessible

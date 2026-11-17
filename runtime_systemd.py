@@ -120,7 +120,7 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("ReadOnlyPaths", runtime_root),
         ("BindReadOnlyPaths", f"{artifact}:{mount_path}"),
         ("ReadWritePaths", output),
-        ("InaccessiblePaths", "/home /root /etc/ai-chess-arena /etc/ssh /etc/ssl/private /run/systemd /run/dbus /run/credentials /var/lib/ai-chess-arena /var/lib/arena-handoff"),
+        ("InaccessiblePaths", "/home /root /etc/ai-chess-arena /etc/ssh /etc/ssl/private /run/systemd/private /run/systemd/notify /run/dbus /run/credentials /var/lib/ai-chess-arena /var/lib/arena-handoff"),
     )
     return RuntimeUnitSpec(
         unit_name=f"{_UNIT_PREFIX}{job_id}.service",
