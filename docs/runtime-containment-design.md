@@ -49,17 +49,12 @@ recoverable as start_uncertain. Recovery reads only persisted incomplete
 leases and asks the backend to stop each exact validated unit name; it never
 enumerates processes or issues broad process-kill commands.
 
-This remains an orchestration prototype, not an active supervisor:
-- no backend implementation invokes systemd-run or D-Bus;
-- no API/worker path constructs or calls this supervisor;
-- the SQLite lease table is created only when the store is explicitly
-  instantiated, and has not been added to the production database;
-- no systemd unit, account, ACL, cgroup, network or production setting changed;
-- backend stop() must still stop the exact unit and verify its cgroup is empty.
-
-Tests use a fake backend and temporary SQLite databases, including persistence
-failure, ambiguous start, exact-unit recovery, invalid unit names and
-non-running queue rows. They do not start a systemd unit or a model process.
+Historical implementation state (2026-11-17, before the integration work
+recorded below): the supervisor was an orchestration prototype; the backend
+had not yet invoked systemd-run, and tests used only a fake backend and
+temporary SQLite databases. The later sections below supersede that status.
+The API/worker path remains intentionally unconnected and execution remains
+disabled by default.
 
 ## AF_UNIX control bridge prototype (2026-11-17)
 
@@ -209,14 +204,11 @@ arguments, and runs the AF_UNIX bridge in the same private network namespace.
 The systemd unit passes only the API UID/GID as fixed numeric Environment
 properties; no caller-controlled command or path is passed over IPC.
 
-This is still code-only. The /var/lib/arena-handoff and /run/arena-runtime
-roots, runtime account/group, bundle and binary have not been provisioned. No
-systemd unit, mount namespace, model download, inference or production setting
-was exercised. In particular, Debian/systemd 257 must still prove that the
-exact BindReadOnlyPaths mount remains visible after the source tree is hidden,
-that the destination placeholder is cleaned after unit teardown, and that the
-PrivateNetwork bridge works without egress. The systemd property-normalization
-risk and independent review remain open.
+Historical status before the disposable nspawn integration test below:
+the runtime account, bundle and worker were not installed on the host, and no
+systemd namespace behavior had been exercised. The later evidence section
+records the corresponding isolated-container test; host provisioning and
+production deployment remain out of scope.
 
 ### Static systemd unit syntax validation (2026-11-17)
 
@@ -227,3 +219,43 @@ was written under `/tmp`; it was not installed, loaded, started or registered
 with systemd. This confirms unit-file syntax acceptance only. It does not
 confirm the effective D-Bus properties returned by `systemctl show`, bind
 mount ordering, namespace behavior, cgroup enforcement, or network isolation.
+
+## Disposable systemd-nspawn integration evidence (2026-11-18)
+
+A disposable Debian 13 / systemd 257 container (`arena-test`) was booted with
+`systemd-nspawn --private-network`. All runtime users, groups, handoff paths,
+worker stubs, artifacts, transient units, sockets and test databases described
+below existed only inside that container. No host runtime identity, persistent
+handoff/output root, supervisor service, production database or production
+setting was created or changed.
+
+Verified with the real `SystemdTransientBackend` and transient systemd units:
+- The backend starts the exact deterministic unit and waits for
+  `ActiveState=active`; effective `User`, `Group`, `PrivateNetwork`,
+  `RestrictAddressFamilies`, filesystem, capability, cgroup and resource
+  properties matched the generated policy.
+- `BindReadOnlyPaths` exposed the exact per-job artifact even while
+  `/var/lib/arena-handoff` was hidden from the worker namespace. A test source
+  with owner-write permission was readable but a write attempt returned
+  `EROFS` (errno 30), proving the bind mount itself was read-only. The exact
+  per-job output directory remained writable.
+- A worker stub inside the `PrivateNetwork=yes` unit created its AF_UNIX control
+  socket under `/run/arena-runtime/job-ID`; a client outside the unit connected
+  and completed a `PING` / `PONG` exchange. The same worker's TCP connection
+  probe to `1.1.1.1:443` was blocked. This is targeted evidence for the private
+  namespace and socket path, not a broad network penetration test.
+- Stopping a live transient unit through the backend emptied its cgroup. A
+  naturally completed transient unit was also garbage-collected by systemd;
+  that exposed a recovery edge case (`Unit not loaded`) which is now handled
+  only after `LoadState`/`ActiveState` and empty `ControlGroup` are rechecked.
+- The actual AF_UNIX lease broker + SQLite supervisor restart/recovery scenario
+  passed in the same disposable container: a new supervisor process recovered
+  the persisted exact unit lease and stopped the exact unit idempotently.
+
+No model binary or GGUF was loaded, no inference was run, and the fixed worker
+was a harmless synthetic stub. Resource limits were inspected as effective
+properties; active memory/CPU limit-exhaustion behavior was not stress-tested.
+The runtime adapter is still not wired into the API executor, and the root
+supervisor service/worker bundle are not installed on the VPS. Independent
+review, complete revocation/cancellation lifecycle integration, and real-model
+E2E remain open release gates.

@@ -192,6 +192,30 @@ class SystemdTransientBackend:
             # Exact unit only; leave durable lease recoverable if stop is uncertain.
             raise SystemdBackendError("Systemd nie potwierdził wymaganych właściwości: " + ", ".join(mismatches))
 
+    def _unit_snapshot(self, unit_name: str) -> dict[str, str]:
+        raw = _run_checked(
+            self._runner,
+            ["/usr/bin/systemctl", "show", "--no-pager",
+             "--property=LoadState,ActiveState,ControlGroup", unit_name],
+            10,
+        )
+        parsed = {}
+        for line in raw.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                parsed[key] = value
+        return parsed
+
+    @staticmethod
+    def _unit_is_gone_or_terminal_without_cgroup(snapshot: dict[str, str]) -> bool:
+        return (
+            not snapshot.get("ControlGroup")
+            and (
+                snapshot.get("LoadState") == "not-found"
+                or snapshot.get("ActiveState") in {"inactive", "failed"}
+            )
+        )
+
     def _cgroup_is_empty(self, unit_name: str) -> bool:
         match = _UNIT_RE.fullmatch(unit_name)
         if not match:
@@ -231,7 +255,22 @@ class SystemdTransientBackend:
     def stop(self, unit_name: str) -> None:
         if not isinstance(unit_name, str) or not _UNIT_RE.fullmatch(unit_name):
             raise SystemdBackendError("Odmowa zatrzymania jednostki spoza ścisłego wzorca.")
-        # systemctl stop targets only the persisted deterministic unit name.
-        _run_checked(self._runner, ["/usr/bin/systemctl", "stop", unit_name], 30)
+        # A completed transient unit may already have been garbage-collected.
+        # In that case systemd's not-found + empty ControlGroup is positive
+        # evidence that there is no unit left to stop. Do not turn this normal
+        # terminal state into a permanently pending recovery lease.
+        snapshot = self._unit_snapshot(unit_name)
+        if self._unit_is_gone_or_terminal_without_cgroup(snapshot):
+            return
+        # The unit may disappear between the snapshot and stop. Re-read exact
+        # unit state after a stop error and accept only a terminal/no-cgroup
+        # state; all ambiguous states remain fail-closed.
+        try:
+            _run_checked(self._runner, ["/usr/bin/systemctl", "stop", unit_name], 30)
+        except SystemdBackendError:
+            after_error = self._unit_snapshot(unit_name)
+            if self._unit_is_gone_or_terminal_without_cgroup(after_error):
+                return
+            raise
         if not self._cgroup_is_empty(unit_name):
             raise SystemdBackendError("Cgroup jednostki nadal zawiera procesy; lease pozostaje aktywny.")

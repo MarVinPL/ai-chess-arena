@@ -28,7 +28,11 @@ class FakeRunner:
     def __call__(self, argv, timeout):
         self.calls.append((argv, timeout))
         if argv[0].endswith("systemctl") and "show" in argv:
-            output = self.show.split("=", 1)[1] if "--value" in argv and self.show.startswith("ControlGroup=") else self.show
+            if "--value" in argv:
+                output = next((line.split("=", 1)[1] for line in self.show.splitlines()
+                               if line.startswith("ControlGroup=")), "")
+            else:
+                output = self.show
             return SimpleNamespace(returncode=0, stdout=output, stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -62,11 +66,42 @@ def test_start_rejects_worker_outside_root_owned_bundle_before_command():
 
 
 def test_stop_targets_exact_unit_and_checks_cgroup_empty(tmp_path):
-    fake = FakeRunner("ControlGroup=\n")
+    fake = FakeRunner("LoadState=loaded\nActiveState=active\nControlGroup=\n")
     backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
     backend.stop("ai-chess-arena-runtime-9.service")
-    assert fake.calls[0][0] == ["/usr/bin/systemctl", "stop", "ai-chess-arena-runtime-9.service"]
-    assert fake.calls[1][0][-1] == "ai-chess-arena-runtime-9.service"
+    assert fake.calls[0][0][1] == "show"
+    assert fake.calls[1][0] == ["/usr/bin/systemctl", "stop", "ai-chess-arena-runtime-9.service"]
+    assert fake.calls[2][0][-1] == "ai-chess-arena-runtime-9.service"
+
+
+def test_stop_accepts_transient_unit_already_garbage_collected():
+    fake = FakeRunner("LoadState=not-found\nActiveState=inactive\nControlGroup=\n")
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.stop("ai-chess-arena-runtime-9.service")
+    assert len(fake.calls) == 1
+    assert fake.calls[0][0][1] == "show"
+
+
+def test_stop_accepts_unit_disappearing_between_snapshot_and_stop():
+    class DisappearingRunner:
+        def __init__(self):
+            self.calls = []
+            self.show_count = 0
+        def __call__(self, argv, timeout):
+            self.calls.append(argv)
+            if argv[1] == "show":
+                self.show_count += 1
+                if self.show_count == 1:
+                    output = "LoadState=loaded\nActiveState=active\nControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n"
+                else:
+                    output = "LoadState=not-found\nActiveState=inactive\nControlGroup=\n"
+                return SimpleNamespace(returncode=0, stdout=output, stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr="Unit not loaded")
+    fake = DisappearingRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.stop("ai-chess-arena-runtime-9.service")
+    assert fake.show_count == 2
+    assert fake.calls[1] == ["/usr/bin/systemctl", "stop", "ai-chess-arena-runtime-9.service"]
 
 
 def test_stop_refuses_non_deterministic_or_unrelated_unit_name():
