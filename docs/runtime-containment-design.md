@@ -217,3 +217,13 @@ exact BindReadOnlyPaths mount remains visible after the source tree is hidden,
 that the destination placeholder is cleaned after unit teardown, and that the
 PrivateNetwork bridge works without egress. The systemd property-normalization
 risk and independent review remain open.
+
+### Static systemd unit syntax validation (2026-11-17)
+
+Generated a temporary service unit from the current policy builder and ran
+`systemd-analyze verify` on Debian 13 / systemd 257. The command exited 0 with
+no warnings. The fixture used `/usr/bin/true` as a syntax-only ExecStart and
+was written under `/tmp`; it was not installed, loaded, started or registered
+with systemd. This confirms unit-file syntax acceptance only. It does not
+confirm the effective D-Bus properties returned by `systemctl show`, bind
+mount ordering, namespace behavior, cgroup enforcement, or network isolation.
