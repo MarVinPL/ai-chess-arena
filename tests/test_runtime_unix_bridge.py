@@ -28,9 +28,7 @@ def start_bridge(tmp_path, urlopen=None, allowed_uid=None, cleanup_socket=True):
     )
     thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 2
-    while not path.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert bridge.ready.wait(timeout=2), "bridge did not become ready"
     assert path.exists()
     return bridge, thread, path
 
@@ -175,9 +173,7 @@ def test_idle_peer_times_out_without_blocking_next_request(tmp_path):
     thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     thread.start()
     path = tmp_path / "control.sock"
-    deadline = time.monotonic() + 2
-    while not path.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert bridge.ready.wait(timeout=2), "bridge did not become ready"
     try:
         idle = __import__("socket").socket(__import__("socket").AF_UNIX)
         idle.connect(str(path))

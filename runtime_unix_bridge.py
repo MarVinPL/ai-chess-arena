@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import socketserver
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -115,6 +116,7 @@ class UnixRuntimeBridge:
         if type(cleanup_socket) is not bool:
             raise BridgeError("Invalid socket cleanup policy.")
         self.cleanup_socket = cleanup_socket
+        self.ready = threading.Event()
         if not 1 <= self.loopback_port <= 65535:
             raise BridgeError("Nieprawidłowy port loopback.")
         if min(self.allowed_uid, self.runtime_uid, self.api_gid) < 0:
@@ -135,6 +137,10 @@ class UnixRuntimeBridge:
             raise BridgeError(str(exc)) from exc
         class Server(socketserver.UnixStreamServer):
             allow_reuse_address = False
+
+            def service_actions(server_self):
+                # Signal only after serve_forever has entered its accept loop.
+                self.ready.set()
         self._server = Server(str(self.socket_path), _Handler)
         self._server.allowed_uid = self.allowed_uid
         self._server.loopback_port = self.loopback_port
@@ -151,8 +157,9 @@ class UnixRuntimeBridge:
                 )
             except SocketHandoffError as exc:
                 raise BridgeError(str(exc)) from exc
-            self._server.serve_forever(poll_interval=0.1)
+            self._server.serve_forever(poll_interval=0.05)
         finally:
+            self.ready.clear()
             self._server.server_close()
             if self.cleanup_socket:
                 try:
@@ -161,7 +168,7 @@ class UnixRuntimeBridge:
                     pass
 
     def shutdown(self):
-        if self._server is not None:
+        if self._server is not None and self.ready.is_set():
             self._server.shutdown()
 
 
