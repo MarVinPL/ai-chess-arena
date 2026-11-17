@@ -24,7 +24,7 @@ The API broker must expose only these fixed operations; clients supply no SQL, p
 
 The broker validates every field, rejects duplicate JSON keys and oversized frames, applies bounded read/write timeouts, authenticates the peer with `SO_PEERCRED`, and returns generic errors without leaking DB content or paths. It must serialize conflicting lease operations through SQLite transactions and enforce idempotency for retries after ambiguous IPC failures.
 
-The supervisor keeps its existing read-only authorization connection for job, grant, batch, preflight and settings checks. It no longer opens the application database in read/write mode. Lease reads and writes go through the broker so there is one durable source of truth.
+The supervisor keeps its existing read-only authorization connection for job, grant, batch, preflight and settings checks. It no longer opens the application database in read/write mode. Lease reads and writes go through the broker so there is one durable source of truth. Any filesystem access needed for SQLite read-only WAL operation must be separately measured and granted read-only; the supervisor must not be able to create, replace, truncate or chmod the database or its sidecars. The disposable-VM test must cover both rollback-journal and WAL modes, including a live writer.
 
 ## Startup and request choreography
 
@@ -50,7 +50,7 @@ The systemd dependency graph and readiness contract must guarantee that the API 
 - If cancellation commits before `persist_start`, the broker rejects the lease. If lease persistence commits first, the supervisor must still revalidate authorization immediately before systemd start; stop/recovery must handle a cancellation arriving in that window.
 - A state update must compare job ID and unit name, and must not resurrect a terminal lease.
 - A missing broker, malformed response, incomplete recovery page, stale socket, peer mismatch, or DB busy/IO error fails closed.
-- Recovery completion means every recoverable lease has been reconciled and every relevant cgroup is confirmed empty before handoff cleanup. A count-only response is not sufficient unless it is cryptographically/structurally tied to a complete server-side recovery run and cannot mask pagination failure.
+- Recovery completion means every recoverable lease has been reconciled and every relevant cgroup is confirmed empty before handoff cleanup. A count-only response is not sufficient unless it is tied to a complete server-side recovery run and cannot mask pagination failure.
 - The API database schema remains API-managed. The broker must never create or migrate tables.
 
 ## Required validation before implementation is considered production-ready
