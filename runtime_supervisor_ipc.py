@@ -139,6 +139,11 @@ class RuntimeSupervisorIPCServer:
         class Server(socketserver.UnixStreamServer):
             allow_reuse_address = False
 
+            def service_actions(inner_self):
+                # Called from inside the active serve_forever poll loop. This
+                # is stronger readiness evidence than merely binding the path.
+                self.ready.set()
+
         # Delay bind/listen until all handler state is installed. Otherwise a
         # client can connect in the constructor-to-configuration window and
         # race the first request against missing server attributes.
@@ -153,7 +158,6 @@ class RuntimeSupervisorIPCServer:
                 os.chown(self.socket_path, -1, self.socket_gid, follow_symlinks=False)
             os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
             self._server.server_activate()
-            self.ready.set()
             self._server.serve_forever(poll_interval=0.1)
         finally:
             self.ready.clear()

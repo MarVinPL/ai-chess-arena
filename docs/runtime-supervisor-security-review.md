@@ -55,7 +55,7 @@ The code review here is not independent assurance. No real model was started and
 1. Freeze the exact reviewed Git commit; build the deterministic supervisor zipapp and worker from approved sources; independently verify and record SHA-256 values.
 2. Prepare a root-owned, non-writable bundle directory and root-owned environment file. Keep secrets and production acknowledgement out of Git.
 3. Create dedicated non-login API/runtime identities only after checking existing UID/GID/group membership and collisions. Runtime identity must not share API identity.
-4. Provision only the documented roots with exact owner/group/mode: handoff `root:arena-runtime-supervisor 0711` (confirm final group choice), output `root:root 0755`, quarantine `API:API-group 0711`, supervisor socket directory `root:API-group 0750`; validate every parent component and mount.
+4. Provision only the documented roots with exact owner/group/mode: handoff `root:debian 0711`, output `root:debian 0755` (the proposed service runs as `root:debian`), quarantine `API:API-group 0711`, supervisor socket directory `root:debian 0750`; validate every parent component and mount.
 5. Pre-provision the lease table through the API-owned migration path. Do not let the privileged supervisor create or migrate schema.
 6. Install the supervisor service unit only after B1–B4 have been reviewed; define API/supervisor ordering and readiness, and verify stop/restart ordering.
 7. Run the disposable-VM SQLite/WAL and systemd sandbox matrices; retain logs, property snapshots, mount/cgroup evidence, and negative permission tests.

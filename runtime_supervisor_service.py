@@ -11,6 +11,10 @@ import os
 import pwd
 import stat
 import sys
+import socket
+import threading
+import time
+import signal
 from pathlib import Path
 
 from runtime_artifact_handoff import ArtifactHandoffError
@@ -213,18 +217,73 @@ def build_service(environ: dict[str, str] | None = None):
     return server
 
 
+def _notify_systemd(message: str) -> None:
+    """Send a readiness/lifecycle datagram to systemd without third-party deps."""
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        raise SupervisorServiceConfigError("systemd notification socket is missing.")
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+        client.sendto(message.encode("utf-8"), address)
+
+
 def main() -> int:
     try:
         server = build_service()
         watchdog = server.revocation_watchdog
         watchdog.start()
-        try:
-            server.serve_forever()
-        finally:
-            watchdog.stop()
+        failures = []
+
+        def serve():
+            try:
+                server.serve_forever()
+            except BaseException as exc:
+                failures.append(exc)
+
+        listener = threading.Thread(
+            target=serve, name="arena-runtime-supervisor-ipc", daemon=False,
+        )
+        shutdown_requested = threading.Event()
+
+        def request_shutdown(_signum, _frame):
+            # Run shutdown from the main thread; socketserver requires its
+            # serve_forever loop to be running in another thread.
+            shutdown_requested.set()
+            if server.ready.is_set():
+                server.shutdown()
+
+        previous_sigterm = signal.signal(signal.SIGTERM, request_shutdown)
+        previous_sigint = signal.signal(signal.SIGINT, request_shutdown)
+        listener.start()
+        deadline = time.monotonic() + 15.0
+        while listener.is_alive() and not server.ready.wait(0.1):
+            if time.monotonic() >= deadline:
+                raise SupervisorServiceConfigError("Supervisor IPC listener readiness timed out.")
+        if failures:
+            raise failures[0]
+        if shutdown_requested.is_set():
+            if server.ready.is_set():
+                server.shutdown()
+            listener.join()
+            return 0
+        if not server.ready.is_set():
+            raise SupervisorServiceConfigError("Supervisor IPC listener exited before readiness.")
+        # Type=notify consumers (the API unit) may start only after bind/listen
+        # and the first active poll-loop iteration, not merely after Python exec.
+        _notify_systemd("READY=1\nSTATUS=Supervisor IPC socket is accepting API peers")
+        listener.join()
+        if not shutdown_requested.is_set():
+            raise RuntimeError("Supervisor IPC listener exited unexpectedly.")
     except (SupervisorServiceConfigError, SupervisorIPCError, OSError, RuntimeError) as exc:
-        print(f"ai-chess-arena-runtime-supervisor: startup refused ({type(exc).__name__})", file=sys.stderr, flush=True)
+        print(f"ai-chess-arena-runtime-supervisor: startup/runtime failure ({type(exc).__name__})", file=sys.stderr, flush=True)
         return 1
+    finally:
+        if "previous_sigterm" in locals():
+            signal.signal(signal.SIGTERM, previous_sigterm)
+            signal.signal(signal.SIGINT, previous_sigint)
+        if "watchdog" in locals():
+            watchdog.stop()
     return 0
 
 

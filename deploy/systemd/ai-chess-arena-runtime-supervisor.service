@@ -1,0 +1,55 @@
+[Unit]
+Description=AI Chess Arena privileged runtime supervisor
+Documentation=file:/home/debian/ai-chess-arena/docs/runtime-supervisor-security-review.md
+Before=ai-chess-arena.service
+After=local-fs.target
+RequiresMountsFor=/usr/local/lib/ai-chess-arena-runtime /var/lib/arena-handoff /run/arena-runtime
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=debian
+WorkingDirectory=/
+EnvironmentFile=/etc/ai-chess-arena/runtime-supervisor.env
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+KillMode=control-group
+UMask=0077
+RuntimeDirectory=ai-chess-arena-runtime
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+ReadWritePaths=/var/lib/arena-handoff /run/arena-runtime
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-chess-arena-runtime-supervisor
+
+[Install]
+WantedBy=multi-user.target
