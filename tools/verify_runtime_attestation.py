@@ -73,7 +73,12 @@ def verify_release_approval_statement(
     except (OSError, json.JSONDecodeError) as exc:
         raise AttestationVerificationError(f"Release approval statement is not valid JSON: {exc}") from exc
 
+    if not isinstance(statement, dict):
+        raise AttestationVerificationError("Release approval statement root must be a JSON object.")
+
     expected = {
+        "schema": "https://in-toto.io/Statement/v1",
+        "_type": "https://in-toto.io/Statement/v1",
         "repository": REPOSITORY,
         "source_ref": SOURCE_REF,
         "source_commit": source_commit,
@@ -94,8 +99,10 @@ def verify_release_approval_statement(
     worker_digest = hashlib.sha256(artifact_paths[0].read_bytes()).hexdigest()
     supervisor_digest = hashlib.sha256(artifact_paths[1].read_bytes()).hexdigest()
     artifacts = statement.get("artifacts")
-    worker_entry = artifacts.get("runtime_worker") if isinstance(artifacts, dict) else None
-    supervisor_entry = artifacts.get("runtime_supervisor.pyz") if isinstance(artifacts, dict) else None
+    if not isinstance(artifacts, dict) or set(artifacts) != {"runtime_worker", "runtime_supervisor.pyz"}:
+        raise AttestationVerificationError("Release approval statement artifact set does not match policy.")
+    worker_entry = artifacts.get("runtime_worker")
+    supervisor_entry = artifacts.get("runtime_supervisor.pyz")
     if not isinstance(worker_entry, dict) or not isinstance(supervisor_entry, dict):
         raise AttestationVerificationError("Release approval statement has no valid artifact digest map.")
     if worker_entry.get("sha256") != worker_digest:
@@ -104,14 +111,45 @@ def verify_release_approval_statement(
         raise AttestationVerificationError("Release approval statement supervisor digest mismatch.")
     return {"worker_sha256": worker_digest, "supervisor_sha256": supervisor_digest, "run_id": statement["run_id"]}
 
+def verify_approval_statement_attestation(
+    statement_path: str | Path, worker_path: str | Path, supervisor_path: str | Path,
+    source_commit: str, gh: str = "gh",
+) -> dict[str, str]:
+    # The approval payload is itself a signed subject. Never trust its JSON fields
+    # until GitHub verifies the same protected-main workflow identity for it.
+    statement_digest = verify_artifact(statement_path, source_commit, gh)
+    bound = verify_release_approval_statement(
+        statement_path, worker_path, supervisor_path, source_commit
+    )
+    return {"approval_statement_sha256": statement_digest, **bound}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact", required=True, type=Path)
+    subjects = parser.add_mutually_exclusive_group(required=True)
+    subjects.add_argument("--artifact", type=Path)
+    subjects.add_argument("--approval-statement", type=Path)
+    parser.add_argument("--worker", type=Path, help="Required with --approval-statement")
+    parser.add_argument("--supervisor", type=Path, help="Required with --approval-statement")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--gh", default="gh", help="GitHub CLI executable (default: gh)")
     args = parser.parse_args()
-    digest = verify_artifact(args.artifact, args.source_commit, args.gh)
-    print(f"PASS repository={REPOSITORY} ref={SOURCE_REF} source_commit={args.source_commit} sha256={digest}")
+    if args.artifact is not None:
+        if args.worker is not None or args.supervisor is not None:
+            parser.error("--worker/--supervisor are only valid with --approval-statement")
+        digest = verify_artifact(args.artifact, args.source_commit, args.gh)
+        print(f"PASS repository={REPOSITORY} ref={SOURCE_REF} source_commit={args.source_commit} sha256={digest}")
+        return 0
+    if args.worker is None or args.supervisor is None:
+        parser.error("--approval-statement requires both --worker and --supervisor")
+    verified = verify_approval_statement_attestation(
+        args.approval_statement, args.worker, args.supervisor, args.source_commit, args.gh
+    )
+    print(
+        f"PASS signed_approval_statement_sha256={verified['approval_statement_sha256']} "
+        f"worker_sha256={verified['worker_sha256']} "
+        f"supervisor_sha256={verified['supervisor_sha256']} run_id={verified['run_id']}"
+    )
     return 0
 
 

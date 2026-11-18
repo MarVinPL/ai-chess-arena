@@ -8,6 +8,7 @@ from tools.verify_runtime_attestation import (
     AttestationVerificationError,
     verify_artifact,
     verify_release_approval_statement,
+    verify_approval_statement_attestation,
 )
 
 
@@ -45,7 +46,7 @@ def test_verifier_rejects_old_gh_before_attestation_lookup(tmp_path, monkeypatch
         subprocess, "run",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "gh version 2.46.0\n", ""),
     )
-    with pytest.raises(AttestationVerificationError, match="2.102.0\+ is required"):
+    with pytest.raises(AttestationVerificationError, match=r"2.102.0\+ is required"):
         verify_artifact(artifact, COMMIT)
 
 
@@ -81,6 +82,8 @@ def test_release_approval_statement_binds_commit_reviewer_scope_and_exact_artifa
     supervisor.write_bytes(b"supervisor")
     statement = tmp_path / "release-approval.json"
     payload = {
+        "schema": "https://in-toto.io/Statement/v1",
+        "_type": "https://in-toto.io/Statement/v1",
         "repository": "MarVinPL/ai-chess-arena",
         "source_ref": "refs/heads/main",
         "source_commit": COMMIT,
@@ -102,4 +105,127 @@ def test_release_approval_statement_binds_commit_reviewer_scope_and_exact_artifa
     payload["required_reviewer"] = "someone-else"
     statement.write_text(json.dumps(payload))
     with pytest.raises(AttestationVerificationError, match="required_reviewer"):
+        verify_release_approval_statement(statement, worker, supervisor, COMMIT)
+
+
+def _approval_payload(worker, supervisor):
+    return {
+        "schema": "https://in-toto.io/Statement/v1",
+        "_type": "https://in-toto.io/Statement/v1",
+        "repository": "MarVinPL/ai-chess-arena",
+        "source_ref": "refs/heads/main",
+        "source_commit": COMMIT,
+        "workflow": ".github/workflows/runtime-artifact-attestation.yml",
+        "environment": "runtime-release",
+        "required_reviewer": "MarVinPL",
+        "approval_scope": "build-provenance-only; no runtime installation or model inference authorization",
+        "run_id": "123456789",
+        "artifacts": {
+            "runtime_worker": {"sha256": hashlib.sha256(worker.read_bytes()).hexdigest()},
+            "runtime_supervisor.pyz": {"sha256": hashlib.sha256(supervisor.read_bytes()).hexdigest()},
+        },
+    }
+
+
+@pytest.mark.parametrize("field,value", [
+    ("repository", "attacker/repo"),
+    ("source_ref", "refs/heads/feature"),
+    ("source_commit", "f" * 40),
+    ("workflow", "attacker.yml"),
+    ("environment", "unprotected"),
+    ("required_reviewer", "someone-else"),
+    ("approval_scope", "model-inference-authorized"),
+])
+def test_release_approval_statement_rejects_each_identity_or_scope_mismatch(tmp_path, field, value):
+    import json
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    payload = _approval_payload(worker, supervisor)
+    payload[field] = value
+    statement.write_text(json.dumps(payload))
+    with pytest.raises(AttestationVerificationError, match=field):
+        verify_release_approval_statement(statement, worker, supervisor, COMMIT)
+
+
+@pytest.mark.parametrize("artifact_name", ["runtime_worker", "runtime_supervisor.pyz"])
+def test_release_approval_statement_rejects_each_artifact_digest_mismatch(tmp_path, artifact_name):
+    import json
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    payload = _approval_payload(worker, supervisor)
+    payload["artifacts"][artifact_name]["sha256"] = "0" * 64
+    statement.write_text(json.dumps(payload))
+    expected_error = "worker digest mismatch" if artifact_name == "runtime_worker" else "supervisor digest mismatch"
+    with pytest.raises(AttestationVerificationError, match=expected_error):
+        verify_release_approval_statement(statement, worker, supervisor, COMMIT)
+
+
+def test_signed_approval_verifier_authenticates_statement_before_reading_approval_fields(tmp_path, monkeypatch):
+    import json
+    import tools.verify_runtime_attestation as verifier
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    statement.write_text(json.dumps(_approval_payload(worker, supervisor)))
+    calls = []
+
+    def fake_verify(path, commit, gh):
+        calls.append((Path(path), commit, gh))
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    monkeypatch.setattr(verifier, "verify_artifact", fake_verify)
+    result = verify_approval_statement_attestation(statement, worker, supervisor, COMMIT, "gh-test")
+    assert calls == [(statement, COMMIT, "gh-test")]
+    assert result["run_id"] == "123456789"
+    assert result["approval_statement_sha256"] == hashlib.sha256(statement.read_bytes()).hexdigest()
+
+
+def test_signed_approval_verifier_fails_before_payload_validation_when_attestation_missing(tmp_path, monkeypatch):
+    import json
+    import tools.verify_runtime_attestation as verifier
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    statement.write_text(json.dumps({"repository": "attacker/repo"}))
+
+    def fail_verify(*args):
+        raise AttestationVerificationError("no signed approval statement")
+
+    monkeypatch.setattr(verifier, "verify_artifact", fail_verify)
+    with pytest.raises(AttestationVerificationError, match="no signed approval statement"):
+        verify_approval_statement_attestation(statement, worker, supervisor, COMMIT)
+
+
+def test_release_approval_statement_rejects_unexpected_artifact_set(tmp_path):
+    import json
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    payload = _approval_payload(worker, supervisor)
+    payload["artifacts"]["extra-artifact"] = {"sha256": "0" * 64}
+    statement.write_text(json.dumps(payload))
+    with pytest.raises(AttestationVerificationError, match="artifact set"):
+        verify_release_approval_statement(statement, worker, supervisor, COMMIT)
+
+
+def test_release_approval_statement_rejects_non_object_json(tmp_path):
+    worker = tmp_path / "runtime_worker"
+    supervisor = tmp_path / "runtime_supervisor.pyz"
+    statement = tmp_path / "release-approval.json"
+    worker.write_bytes(b"worker")
+    supervisor.write_bytes(b"supervisor")
+    statement.write_text("[]")
+    with pytest.raises(AttestationVerificationError, match="JSON object"):
         verify_release_approval_statement(statement, worker, supervisor, COMMIT)
