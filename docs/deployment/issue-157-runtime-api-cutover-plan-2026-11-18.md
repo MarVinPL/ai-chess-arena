@@ -118,3 +118,26 @@ A separate mode-0600 SQLite database under `/var/tmp` was initialized with the e
 - SQLite: `integrity_check=ok`.
 
 This is real-systemd + disposable-SQLite evidence for exact-unit stop and recovery-state transitions, beyond mocked backend tests. It is **not** a full B1 pass: it did not launch the pinned supervisor daemon/IPC service, did not exercise API startup readiness/recovery through the broker socket, and did not test worker execution. The production API and DB were not touched; no model was launched; no permanent systemd unit or bundle was installed.
+
+## API-identity + broker + supervisor-IPC + real-systemd startup recovery (2026-11-18)
+
+Extended the disposable recovery drill to exercise the actual cross-process trust boundaries and API startup ordering. No production paths, sockets, DBs, services, or model artifacts were used.
+
+Test topology:
+
+- Root supervisor process hosted the actual `RuntimeSupervisor`, `SystemdTransientBackend`, and `RuntimeSupervisorIPCServer`; the IPC socket allowed only the `debian` API UID and used group `debian`, mode `0660`.
+- A separate child process dropped to the real `debian` UID/GID, created the API-owned `RuntimeLeaseBrokerServer` over a separate disposable SQLite DB, and called the actual `recover_runtime_on_startup()` path through `supervisor_request()`.
+- The broker accepted only root (`SO_PEERCRED`) as its supervisor peer; the API child did not receive a direct privileged backend handle.
+- The database was initialized on disposable storage with the API lease schema and a synthetic running job, then seeded with one `active` lease.
+- A real transient systemd unit (`ai-chess-arena-runtime-910000008.service`) ran a harmless `/usr/bin/sleep 300` process as `arena-runtime:arena-runtime`, with no capabilities, `NoNewPrivileges`, `ProtectSystem=strict`, private tmp/devices/network, and `KillMode=control-group`.
+
+Observed result:
+
+- API startup recovery returned supervisor `count=1`, executor `count=0`.
+- Supervisor stopped the exact unit through the real systemd backend.
+- API-owned broker persisted the lease transition to `stopped`.
+- Unit ended `LoadState=not-found`, `ActiveState=inactive`, empty `ControlGroup`.
+- Disposable DB readback showed the expected `stopped` lease; `PRAGMA integrity_check=ok`.
+- API broker and supervisor IPC listeners shut down cleanly; test resources were removed.
+
+This proves the API-identity → supervisor IPC → root supervisor → API-owned lease broker → real systemd recovery path for a pre-existing lease, including startup ordering. It materially advances B1, but **does not fully close B1**: the pinned `runtime_supervisor.pyz` was not installed or launched as its actual `Type=notify` systemd daemon; `build_service()` production path verification, systemd READY notification, revocation watchdog, API's complete real `server.py` startup, and the real executor reconciliation callback remain to be tested together. No worker was installed or launched, no model inference occurred, and production remained untouched.
