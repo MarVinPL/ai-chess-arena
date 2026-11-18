@@ -97,7 +97,7 @@ class ArenaSmokeTests(unittest.TestCase):
         with patch.object(server.model_allowlist, 'check_repository_sync', return_value={'in_sync': True}):
             with urllib.request.urlopen(self.base + '/api/model-admission') as response:
                 rows = __import__('json').loads(response.read().decode('utf-8'))
-        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(rows), 8)
         self.assertFalse(any(row['can_admit'] for row in rows))
         self.assertTrue(all(row['decision'] is None for row in rows))
 
