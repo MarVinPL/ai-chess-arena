@@ -232,3 +232,105 @@ def _capture_watchdog(watchdog, errors):
         watchdog.run_once()
     except Exception as exc:
         errors.append(exc)
+
+
+def test_revocation_during_blocking_start_is_checked_immediately_after_activation():
+    import os
+    import threading
+    from runtime_supervisor import RuntimeSupervisor, RuntimeUnitRecord
+    from runtime_systemd import build_runtime_unit_spec
+
+    job_id = 89
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    state = {"record": None, "revoked": False, "started": [], "stopped": []}
+    backend_entered = threading.Event()
+    release_backend = threading.Event()
+
+    class BlockingBackend:
+        def start(self, runtime_spec, argv):
+            backend_entered.set()
+            assert release_backend.wait(2)
+            state["started"].append(runtime_spec.unit_name)
+
+        def stop(self, unit_name):
+            state["stopped"].append(unit_name)
+
+    def persist(record):
+        assert state["record"] is None
+        state["record"] = record
+
+    def set_state(requested_job, new_state):
+        current = state["record"]
+        assert requested_job == job_id and current is not None
+        state["record"] = RuntimeUnitRecord(job_id, current.unit_name, new_state)
+
+    def load_recoverable():
+        record = state["record"]
+        return (record,) if record and record.state in {
+            "start_pending", "start_uncertain", "active", "stop_pending",
+            "recovery_stop_pending",
+        } else ()
+
+    supervisor = RuntimeSupervisor(
+        backend=BlockingBackend(), persist=persist, set_state=set_state,
+        load_recoverable=load_recoverable,
+    )
+
+    class Authority:
+        def is_execution_authorized(self, requested_job):
+            assert requested_job == job_id
+            return not state["revoked"]
+
+    class TrustedHandlers:
+        def stop(self, requested_job):
+            record = state["record"]
+            supervisor.stop(record)
+            return {"job_id": requested_job, "unit_name": record.unit_name,
+                    "lease_state": "stopped"}
+
+    watchdog = RuntimeRevocationWatchdog(
+        authority=Authority(), lease_store=SimpleNamespace(load_recoverable=load_recoverable),
+        handlers=TrustedHandlers(), interval_seconds=1,
+    )
+    runtime_spec = build_runtime_unit_spec(
+        job_id=job_id, runtime_user="arena-runtime", runtime_group="arena-runtime",
+        artifact_path=f"/var/lib/arena-handoff/job-{job_id}/model.gguf",
+        artifact_mount_path=f"/run/arena-runtime/job-{job_id}/model.gguf",
+        output_dir=f"/run/arena-runtime/job-{job_id}",
+        api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
+        memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
+        runtime_seconds=300,
+    )
+    start_errors = []
+
+    def start():
+        try:
+            supervisor.start(
+                runtime_spec,
+                ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", str(job_id)),
+                before_start=lambda: None,
+            )
+        except Exception as exc:
+            start_errors.append(exc)
+
+    thread = threading.Thread(target=start)
+    thread.start()
+    assert backend_entered.wait(2)
+    assert state["record"].state == "start_pending"
+
+    # Revocation while systemd start is still in flight must not race an
+    # unconfirmed unit; it is acted on as soon as start publishes active.
+    state["revoked"] = True
+    assert watchdog.run_once() == {"checked": 0, "stopped": [], "failed": []}
+    assert state["stopped"] == []
+
+    release_backend.set()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert start_errors == []
+    assert state["record"].state == "active"
+
+    assert watchdog.run_once() == {"checked": 1, "stopped": [job_id], "failed": []}
+    assert state["started"] == [unit]
+    assert state["stopped"] == [unit]
+    assert state["record"].state == "stopped"
