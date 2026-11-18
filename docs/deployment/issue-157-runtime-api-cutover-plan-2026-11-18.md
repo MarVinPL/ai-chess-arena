@@ -58,7 +58,7 @@ Consequently, the cutover needs a separately tested, API-owned, idempotent schem
 
 - B1: real API + broker + systemd supervisor integration on disposable DB.
 - B2: SQLite WAL/sidecar behavior and rollback proof (completed on disposable copies; see B2 evidence section).
-- B3: reviewed and pinned worker artifact; model artifact approval and separate inference permission remain independent.
+- B3: **PARTIAL / OPEN** — reproducible worker/supervisor candidate bundles built and hashed; independent review, approved/pinned runtime binary and model artifact, and separate inference permission remain outstanding.
 - B4: complete release provenance, hashes, environment pins, and approval chain.
 - B5: independent security review and operational recovery drill.
 
@@ -231,3 +231,16 @@ The machine-readable evidence was captured in `evidence.json`; SHA-256: `aefaad9
 - Keep the DB backup and exact application release as a coordinated rollback pair. Never restore only one half of a schema-changing deployment.
 
 **B2 is satisfied for the tested SQLite online-backup, committed-WAL/sidecar capture, sidecar-present rollback restore, and uncommitted-transaction crash-recovery scope on disposable copies.** This does not authorize production cutover or changing the production journal mode. B3, B4, and B5 remain open; B5 still requires an independent security review and a separately planned operational recovery exercise.
+
+## B3 candidate artifact build and provenance preflight (2026-11-18)
+
+Built the worker and supervisor zipapps twice from exact source commit `45b1c8bb16a8792d2f578624dc0aa2d71b7d7220` on the existing VPS. Both independent builds were byte-identical. ZIP CRC/integrity and exact member allowlists passed. The worker candidate's no-argument invocation reached the required `--job` parser and exited 2 before entering `run_job`; the supervisor candidate rejected a missing deployment profile/acknowledgement before importing or starting service modules. No worker process, llamafile binary, model artifact, or inference was started.
+
+Candidate SHA-256 values:
+
+- `runtime_worker`: `d7d7ab4be3637bb9c618e1e6d1ec67cbfcd7d847b791b31d045b7d7486d6dc1d` (9,574 bytes; ZIP contains only `__main__.py` plus the three reviewed standard-library project modules).
+- `runtime_supervisor.pyz`: `bddd166dc46d14f2dcb6d08ac7acfd41e7e46e8c023a51c343719a0f19bbeb02` (44,746 bytes; ZIP contains the bootstrap and the 13 allowlisted supervisor modules).
+
+Build environment: Python 3.13.5, zlib 1.3.1. The source tree was clean at build time; source commit/tree, SHA-256 for every included source/builder file, artifact hashes, sizes, modes, ZIP members, and inert smoke-test outcomes are recorded in `docs/deployment/issue-157-artifact-manifest-2026-11-18.json`.
+
+Candidates remained under `/var/tmp/ai-chess-arena-b3-artifacts-20261118-01`, owned by `debian:debian`; they were not installed into `/usr/local`, not root-pinned, and not referenced by production configuration. The worker source still pins a specific llamafile SHA-256, but the corresponding binary has not been supplied/reviewed/approved as part of this candidate build. There is no model artifact approval and no inference permission. Consequently this is reproducible packaging/provenance evidence only: **B3 remains OPEN** pending independent review, a reviewed/pinned runtime binary and model artifact, and the separately required explicit inference authorization. B4 also remains open for the complete approval/signature chain; B5 remains open for independent security review and operational recovery.
