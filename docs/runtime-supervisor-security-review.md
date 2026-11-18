@@ -1,11 +1,11 @@
 # Runtime supervisor security boundary review — Issue #157
 
 Date: 2026-11-18  
-Scope: static review of the Issue #157 supervisor, API-owned lease broker, authorization gate, artifact handoff, IPC, and transient systemd policy. This is an implementation review, not an independent penetration test or host-level certification.
+Scope: source review plus disposable Debian 13 KVM validation of the Issue #157 supervisor, API-owned lease broker protocol, authorization gate, artifact handoff, IPC, and transient systemd policy. This is not an independent penetration test or production certification.
 
 ## Executive result
 
-**No production deployment approval.** The code has several strong fail-closed controls, but the remaining gaps are operationally significant and cannot be closed by unit tests alone. No production files, services, accounts, groups, ACLs, sockets, database, or systemd configuration were changed during this review.
+**Production deployment remains technically blocked.** The user has authorized a production rollout, but authorization does not close the remaining engineering release gates. The disposable VM demonstrated the real service lifecycle and several host-enforced boundaries; the remaining gaps still require provenance review, full integration/recovery coverage, and independent security sign-off. No production files, services, accounts, groups, ACLs, sockets, database, or systemd configuration were changed during this review.
 
 ## Controls verified in source
 
@@ -17,26 +17,37 @@ Scope: static review of the Issue #157 supervisor, API-owned lease broker, autho
 - The supervisor bundle and worker are required to be root-owned, non-group/world-writable, and SHA-256 pinned; the service requires Python `-I -S` and a canonical bundle path.
 - The systemd backend rebuilds the complete unit policy from validated values, verifies effective properties after start, targets only deterministic per-job unit names, and checks cgroup-v2 population before confirming stop.
 - Recovery is based on durable exact-unit leases, not process enumeration. Broker process `SIGKILL` recovery is covered by an isolated subprocess test using temporary SQLite/socket resources and a fake backend.
+- The supervisor unit uses `Type=notify`; a disposable KVM guest confirmed that systemd reports readiness only after the AF_UNIX listener is active. Effective `ProtectSystem`, `ProtectHome`, network-family, capability, and writable-path settings were inspected in the guest.
+- The disposable guest ran a real transient systemd worker unit and verified its effective properties and empty cgroup after stop. The worker was a harmless shell fixture, not a model runtime.
+- SQLite WAL was exercised in the guest with a live writer and a separate read-only/query-only reader; reads succeeded and attempted writes were rejected.
 
 ## Findings / deployment blockers
 
-### B1 — No deployable supervisor service and dependency contract
+### B1 — Production API dependency and shutdown ordering remain uninstalled
 
-The repository contains the API service unit but no `ai-chess-arena-runtime-supervisor.service` unit. The API production startup starts the broker and then synchronously requests supervisor recovery before exposing the API. The checked-in API unit has no `Requires=`/`After=` dependency on a supervisor unit. If production runtime mode were enabled before a supervisor listener and ordering contract existed, API startup would fail closed at recovery; this is an availability/deployment blocker, not permission to add a unit to the host.
+The repository now contains `ai-chess-arena-runtime-supervisor.service` and a production API drop-in example with `Requires=`/`After=`. The service unit passed `systemd-analyze verify` and ran successfully in the disposable KVM guest. The API drop-in remains an example and has not been installed or validated with the production API startup/shutdown sequence. Production API startup starts its broker and synchronously requests supervisor recovery before exposing the API.
 
-**Required closure:** design and review a root-owned supervisor unit with explicit hardening, pinned zipapp `ExecStart`, root-owned environment file, `Restart=`/stop behavior, and a tested ordering/readiness contract. Verify broker readiness before supervisor recovery and ensure shutdown ordering does not remove the broker while supervisor callbacks remain possible.
+**Status:** service artifact and supervisor readiness are validated; production API dependency ordering and reverse shutdown behavior remain open.
 
-### B2 — SQLite read-only/WAL behavior is not validated on the target service sandbox
+**Required closure:** review the final API/supervisor/broker dependency graph, install the API drop-in only as part of the approved release, and validate API startup/restart/shutdown with the real API-owned broker in a disposable VM.
 
-Source uses read-only SQLite for authorization, but tests do not prove the effective file/sidecar access of the real API and root supervisor identities under the intended systemd sandbox while a WAL writer is active. SQLite WAL may require shared-memory coordination; the exact read-only behavior depends on SQLite version and pre-existing sidecars. Granting broad write access to the DB directory is explicitly prohibited.
+### B2 — SQLite WAL validation is partial
 
-**Required closure:** disposable-VM matrix for rollback journal and WAL, live API writer, pre-existing and absent `-wal`/`-shm` files, restart/recovery, permissions, and attempted write/create/truncate/chmod operations from the supervisor identity. Record SQLite version and effective access evidence. Do not test on production DB.
+In the disposable Debian 13 guest, a live SQLite WAL writer committed data while a separate `mode=ro`, `query_only=ON`, `trusted_schema=OFF` connection read the committed row. A write through the read-only connection was rejected and the WAL sidecar was present. This validates the basic WAL/read-only behavior, but not the full supervisor service identity and sidecar matrix.
 
-### B3 — Effective systemd isolation has only fake-runner coverage
+**Status:** basic WAL read/write separation passed in the VM; rollback-journal mode, absent/pre-existing `-wal`/`-shm` combinations, restart/recovery, and create/truncate/chmod denial across all relevant identities remain open. Granting broad write access to the DB directory remains prohibited.
 
-Unit tests verify the generated command and compare mocked `systemctl show` properties. They do not demonstrate that the target host's systemd version accepts every property with the intended semantics, that mount isolation is effective, or that cgroup-v2 teardown behaves as assumed.
+### B3 — Systemd isolation validated in a disposable VM, but not with the production worker
 
-**Required closure:** disposable VM using the actual pinned worker and root-owned supervisor bundle; inspect `systemctl show`, mount namespace, network namespace, process/cgroup visibility, writable paths, resource limits, timeout kill, and descendant cleanup. A successful `systemd-run` submission alone is not sufficient.
+A disposable Debian 13 KVM guest running systemd 257 and cgroup v2 successfully started the pinned supervisor zipapp as `Type=notify`, restarted it, and stopped it with clean socket removal. A real transient worker unit started and stopped; the backend verified effective unit properties and confirmed the exact cgroup was empty. Negative checks confirmed AF_INET was blocked under `RestrictAddressFamilies=AF_UNIX`, writes outside `ReadWritePaths` and writes under `ProtectHome=read-only` were denied, and an unrelated UID could not access the supervisor socket. `systemd-analyze verify` passed and `systemd-analyze security` reported exposure 4.1.
+
+**Status:** real systemd/cgroup and several mount/network/DAC boundaries passed with a harmless shell worker fixture. The production worker binary, actual model mount, resource exhaustion/timeout behavior, process visibility, and full descendant-kill matrix remain open.
+
+### B6 — Cleanup failed under the service's restricted capability set; fixed in this branch
+
+The first VM recovery attempt exposed that the supervisor could not remove the runtime-owned output directory with only `CAP_CHOWN` and `CAP_DAC_READ_SEARCH`: mode `02710` intentionally withholds group write, and the unit does not grant `CAP_DAC_OVERRIDE`. The cleanup routine now validates the exact known entries first, then uses its already-granted `CAP_CHOWN` to transfer that exact directory to the supervisor and set mode `0700` before unlinking the known entries. It does not broaden the service capability set or perform recursive deletion.
+
+**Status:** the updated bundle passed the restricted-capability recovery cleanup through the real supervisor IPC in the disposable VM. Unit coverage asserts the ownership/mode handback sequence. Keep this behavior in the independent review scope.
 
 ### B4 — Artifact pins and release provenance remain manual provisioning inputs
 
@@ -62,15 +73,21 @@ The code review here is not independent assurance. No real model was started and
 8. Complete independent security review and sign off each finding. Keep runtime execution opt-in disabled until all gates are closed.
 9. Enable production execution only in a separately approved change window, with a rollback plan and a verified no-model/no-unit baseline.
 
-## Explicit non-actions in this review
+## Explicit non-actions on the production host
 
-- No merge, deployment, service restart, systemd unit installation, or runtime enablement.
-- No account/group/ACL/directory/socket/firewall/cgroup changes.
+- No production merge, deployment, production service restart, systemd unit installation, or runtime enablement.
+- No production account/group/ACL/directory/socket/firewall/cgroup changes.
 - No production DB access or schema migration.
-- No model download, model execution, or real systemd runtime unit.
+- No model download or model execution. The only worker executed was a harmless fixture inside the disposable KVM guest.
+- The disposable VM, its fake broker, SQLite database, worker fixture, and transient units were test-only; no test container or VM is left running.
 
 ## Evidence snapshot
 
 - Branch: `feat/issue-157-runtime-executor-20261116`.
-- Prior runtime suite baseline: 708 passed, 1 skipped, 43 subtests passed; broker `SIGKILL` recovery test included.
-- Host guardrails checked read-only: `ai-chess-arena.service` active; `machinectl list` empty; worktree clean before this review document was added.
+- Disposable guest: Debian 13 (trixie), systemd 257, cgroup v2, 1 GiB RAM, 2 vCPU; booted under KVM using a temporary disk image and removed after validation.
+- Actual supervisor bundle SHA-256 in the VM after the cleanup fix: `7e00eb3c56ebd1470866cde1f26ccfc5499ee488145f474616726ba54663f861`.
+- VM checks passed: Type=notify/readiness, service restart, SIGTERM/socket cleanup, API-UID status/recovery IPC, restricted-capability handoff cleanup, transient worker start/stop with empty cgroup, AF_UNIX allowed/AF_INET denied, ProtectSystem writable-path boundary, ProtectHome write denial, unrelated UID socket denial, and SQLite WAL read-only access/write denial.
+- `systemd-analyze verify`: PASS. `systemd-analyze security`: exposure 4.1.
+- Updated runtime suite: 716 passed, 1 skipped, 43 subtests passed; `compileall` and `git diff --check`: PASS before the documentation update.
+- Production guardrails: `ai-chess-arena.service` active; supervisor unit not installed on production; no machines listed; production DB and configuration untouched.
+- Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, production worker/real artifact mount and timeout matrix, authenticated release provenance, independent security review, and complete recovery drill.

@@ -204,7 +204,13 @@ def cleanup_handoff(spec: SocketHandoffSpec, *, supervisor_uid: int,
                     or (sock_stat.st_uid, sock_stat.st_gid, stat.S_IMODE(sock_stat.st_mode))
                     != (spec.runtime_uid, spec.api_gid, spec.socket_mode)):
                 raise SocketHandoffError("Gniazdo ma nieprawidłowego właściciela lub tryb.")
-        # Validate every entry before removing any of them.
+        # Validate every entry before changing ownership or removing anything.
+        # The runtime-owned directory is deliberately not group-writable (02710).
+        # The supervisor has CAP_CHOWN but not CAP_DAC_OVERRIDE, so reclaim this
+        # exact, verified directory before unlinking its known entries. This keeps
+        # the privileged service's capability set narrow while allowing cleanup.
+        os.fchown(job_fd, supervisor_uid, supervisor_gid)
+        os.fchmod(job_fd, 0o700)
         if "model.gguf" in entries:
             os.unlink("model.gguf", dir_fd=job_fd)
         if "control.sock" in entries:

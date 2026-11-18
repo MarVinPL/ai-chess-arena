@@ -130,6 +130,34 @@ def test_cleanup_removes_only_exact_owned_control_socket(tmp_path):
         server.close()
 
 
+def test_cleanup_reclaims_verified_runtime_directory_with_chown_capability(tmp_path, monkeypatch):
+    root = make_output_root(tmp_path)
+    spec = SocketHandoffSpec(27, os.getuid(), os.getgid(), output_root=root)
+    create_handoff(spec, supervisor_uid=os.getuid(), supervisor_gid=os.getgid())
+    calls = []
+    original_fchown = os.fchown
+    original_fchmod = os.fchmod
+
+    def track_fchown(fd, uid, gid):
+        calls.append(("chown", uid, gid))
+        return original_fchown(fd, uid, gid)
+
+    def track_fchmod(fd, mode):
+        calls.append(("chmod", mode))
+        return original_fchmod(fd, mode)
+
+    monkeypatch.setattr(os, "fchown", track_fchown)
+    monkeypatch.setattr(os, "fchmod", track_fchmod)
+    assert cleanup_handoff(
+        spec, supervisor_uid=os.getuid(), supervisor_gid=os.getgid()
+    ) is True
+    assert calls == [
+        ("chown", os.getuid(), os.getgid()),
+        ("chmod", 0o700),
+    ]
+    assert not spec.directory.exists()
+
+
 def test_cleanup_refuses_unexpected_output_files(tmp_path):
     root = make_output_root(tmp_path)
     spec = SocketHandoffSpec(25, os.getuid(), os.getgid(), output_root=root)
