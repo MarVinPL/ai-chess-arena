@@ -55,6 +55,10 @@ The default backend listens on `127.0.0.1:8090`. Keep it bound to loopback; use 
 - An intentional `runtime.stop()` clears the desired model and disables automatic restart, so normal model switching and tournament cleanup are not undone.
 - The watchdog never searches for, signals, or adopts unrelated Llamafile processes. It does not start an arbitrary model when the Arena is idle; a tournament/runtime must first select and validate a model.
 
+## Security review policy
+
+AI Chess Arena security reviews are conducted internally by the implementation team and documented with evidence, findings, remediation, and release-owner sign-off. An external security audit or independent external auditor is **not** a mandatory repository or release gate. This does not waive technical security controls, provenance requirements, recovery testing, or explicit approvals for sensitive operations. See [`CONTRIBUTING.md`](CONTRIBUTING.md#security-review-policy) and the [Issue #157 internal audit packet](docs/deployment/issue-157-internal-audit-packet-2026-11-18.md).
+
 ## Security and operational notes
 
 This project is a local prototype, not a hardened public service. Do not expose the API or model-runtime port directly to the Internet. Do not commit credentials, private keys, model binaries, local databases, or user runtime data.

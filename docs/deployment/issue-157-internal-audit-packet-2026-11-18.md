@@ -43,7 +43,7 @@ The audit operator should record identity, audit date, exact commit and artifact
 
 ### Provenance and artifact admission
 
-- [ ] Agree on an organizationally controlled signing identity and verifier/trust-root distribution; do not trust a key created solely by the build operator.
+- [ ] Define the signing identity approved by the release owner and the verifier/trust-root distribution; do not treat a key created solely by the build operator as an authenticated approval chain.
 - [ ] Authenticate approval of the exact source commit/tree and worker, supervisor, runtime-binary, and model hashes.
 - [ ] Verify signed build provenance/attestation and its builder identity, inputs, environment, and reproducibility claims.
 - [ ] Establish runtime-binary origin from verifiable provenance and satisfy the root-owned immutable install contract.

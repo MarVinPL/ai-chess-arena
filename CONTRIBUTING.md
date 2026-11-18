@@ -36,6 +36,14 @@
 - In every status report, identify the pair explicitly as `Issue #N → PR #M`. Never label the PR number as the Issue number, or imply that two different GitHub objects share one number.
 - Do not create fake aliases, renumber references, or try to reserve future numbers. If a task must have only one GitHub number, the PR itself can serve as the task record only after the repository owner explicitly changes the `One issue = one pull request` policy; do not make that policy change implicitly.
 
+## Security review policy
+
+- Security reviews and release-gate assessments for AI Chess Arena are performed internally by the implementation team, with documented evidence and an explicit disposition.
+- **An external security audit or an independent external auditor is not a repository requirement or a release prerequisite.** Do not add either as a mandatory gate in Issues, PR checklists, deployment plans, or project documentation unless the repository owner explicitly changes this policy.
+- Internal findings must be recorded as `PASS`, `FAIL`, or `NOT VERIFIED`, with the reviewed commit/scope, evidence references, severity, remediation, and accountable release-owner sign-off. Never report `PASS` without evidence.
+- Internal review does not waive technical controls, artifact provenance/signing requirements, operational recovery tests, or explicit release-owner approvals that apply to a particular change.
+- For Issue #157, the detailed implementation is defined in [`docs/deployment/issue-157-internal-audit-packet-2026-11-18.md`](docs/deployment/issue-157-internal-audit-packet-2026-11-18.md).
+
 ## Completion and release
 
 - A task is not complete merely because code exists in a branch or on a server.
