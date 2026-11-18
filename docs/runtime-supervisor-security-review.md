@@ -160,3 +160,28 @@ No GGUF model artifact is present in the inspected model locations, so no real
 model inference or end-to-end worker-to-model run was performed. The pinned
 binary identity/version is now verified, but bundle provenance/ownership and
 real artifact execution remain open; B3 is not closed.
+
+### B1 — additional existing-VPS integration test pass (2026-11-18)
+
+The following focused integration tests were run on the existing Debian VPS
+using the repository virtualenv; no production service, DB, socket, or systemd
+unit was used by the tests:
+
+- `tests/test_runtime_supervisor_broker_restart_integration.py`,
+  `tests/test_runtime_api_worker.py`, and
+  `tests/test_runtime_revocation_watchdog.py`: **26 passed**.
+- `tests/test_runtime_api_supervisor_ipc_integration.py`,
+  `tests/test_runtime_startup.py`,
+  `tests/test_runtime_supervisor_service_notify.py`,
+  `tests/test_runtime_supervisor_systemd_unit.py`, and
+  `tests/test_runtime_worker_supervised.py`: **27 passed**.
+
+These cover real AF_UNIX API-client/supervisor IPC, cancellation during a
+blocked inference bridge, exact-job stop, broker restart/outage recovery,
+SIGKILL after durable commit, startup recovery ordering/fail-closed behavior,
+worker shutdown cancellation persistence, service readiness, and worker
+systemd policy. Total focused result: **53 passed**.
+
+This does not close B1: the actual production API process startup/restart/
+shutdown sequence against a disposable database and broker/supervisor service
+is not yet run end-to-end. The production API drop-in remains uninstalled.
