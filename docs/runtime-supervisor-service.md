@@ -47,10 +47,18 @@ The daemon refuses startup unless it runs as root, production acknowledgement
 and execution opt-in are explicit, all identities exist and are distinct,
 and the following roots already exist with exact owner/group/mode:
 
-- artifact handoff: supervisor:supervisor `0711`;
-- runtime output: supervisor:supervisor `0755`;
+- artifact handoff: `root:debian` `0711`;
+- runtime output: `root:debian` `0755`;
 - artifact quarantine: API:API-group `0711`;
-- supervisor socket parent: supervisor:API-group `0750`.
+- supervisor socket parent: `root:API-group` `0750`.
+
+The supervisor unit runs as `root:debian`, so its effective UID/GID are
+`0:debian`. The service validator derives these values from the process
+identity and rejects any other ownership. The dedicated API runtime directory
+is provisioned by the API systemd unit as `debian:debian` mode `0750`; the
+broker socket itself is `debian:debian` mode `0660`, allowing the root
+supervisor (group `debian`) to connect. The broker still authenticates the
+supervisor's peer UID as exactly `0`.
 
 It creates no accounts, groups, directories, ACLs, sockets, systemd units,
 cgroups, firewall rules or worker files. The listener is created only by the
