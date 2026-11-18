@@ -49,7 +49,7 @@ artifact is retained for exact-unit recovery.
 - An ambiguous start or failed stop keeps the lease and handoff for retry.
 
 The IPC response uses unit_state=start_requested, not runtime_started=true.
-systemd-run is invoked with --no-block in the backend prototype; the handler
+systemd-run is invoked with --no-block by the transient systemd backend; the handler
 does not claim that inference has begun. The durable lease state "active" is
 a lease lifecycle state, not proof of a live model process.
 

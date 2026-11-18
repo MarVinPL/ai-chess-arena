@@ -17,23 +17,17 @@ It controls the future test-executor integration only.
 
 The profile resolver is pure configuration: it does not create directories,
 connect to a socket, open the arena database, invoke systemd, or start a model.
+`server.py` uses it to decide whether to start the production-only dispatcher.
 Production profile resolution is **not** proof that the privileged supervisor,
-root-owned worker bundle, artifact handoff, namespace bridge, effective systemd
-property verification, and crash-recovery path have been installed and tested.
-Those are still release gates. Until the supervisor transport and worker bundle
-are implemented and reviewed, production must remain disabled and this module
-must not be used as an execution authorization source.
+root-owned worker bundle, artifact handoff, namespace bridge, effective
+systemd property verification, and crash-recovery path have been provisioned
+on this host. Those remain release gates; missing supervisor dependencies block API
+startup rather than falling back to an unsandboxed runner.
 
 ## Switching later
 
-Once all release gates are complete, the deployment change is configuration-only:
-set the production profile and its required variables in the dedicated service
-configuration, then perform the separately approved deployment/restart. Do not
-copy staging values into production or enable the legacy executor flag alone.
+Production enablement requires separately provisioned supervisor/worker assets and directories, a reviewed exact artifact allowlist, the production profile variables in the API and supervisor environments, and a separately approved deployment/restart. Do not copy staging values into production or enable the legacy executor flag alone.
 
 ## Current safety status
 
-This profile module is not wired into `server.py` or the job executor yet. That is
-intentional: wiring it before the privileged supervisor transport and worker
-bundle are ready would create a misleading production switch. No production
-configuration or host state is changed by this change.
+The profile module is wired into `server.py`. The API dispatcher is started only in the production profile after successful supervisor recovery; the profile defaults to disabled and staging is always inert. The production profile and independent opt-in are not enabled on the VPS, and this PR does not install the privileged supervisor service or worker bundle. No production configuration or host state was changed.

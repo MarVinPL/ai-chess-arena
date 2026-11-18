@@ -1,8 +1,6 @@
 # API-side supervisor client runner (Issue #157)
 
-runtime_supervisor_client.py is an opt-in runner prototype for the existing
-runtime_executor.execute_job(runner=...) injection point. It is not imported
-or selected by server.py and does not change the fail-closed default.
+runtime_supervisor_client.py implements the runner selected by the production-only `RuntimeApiWorker` in `server.py`. The worker is started only after successful startup recovery and only when the deployment profile and independent execution opt-in are enabled. Disabled/staging profiles remain inert; the persisted operator switch and batch/grant checks are additional gates.
 
 ## Protocol
 
@@ -51,12 +49,6 @@ cancellation, inference cancellation, ambiguous start reconciliation,
 invalid unit identity, non-200/empty inference, stop uncertainty, and
 invalid job IDs/digests/timeouts.
 
-This runner is not wired into runtime_executor or a deployment profile.
-Before selecting it, startup recovery in runtime_executor must be coordinated
-with the privileged supervisor so the API cannot mark a running job failed
-while leaving a unit active. The current client polls cancellation during
-health and inference; a continuous supervisor-side revocation watcher is
-still not implemented.
+The runner is wired through `RuntimeApiWorker` into `runtime_executor.execute_job`. Startup first invokes privileged supervisor recovery and blocks API startup if recovery is unavailable or incomplete; executor orphan reconciliation runs only after that succeeds. A supervisor-side revocation watchdog checks active/start-uncertain leases every second and requests exact-unit stop when live authorization is revoked or cannot be verified.
 
-No socket, service, systemd unit, model process, inference or production state
-was used.
+Tests use temporary sockets and fake supervisor/bridge calls. The production supervisor service and worker bundle have not been installed/enabled on the VPS; no real model process or inference has been run and production state was not changed.

@@ -26,17 +26,8 @@ execution feature flags, and cancellation state. It must derive the unit spec,
 worker argv, artifact handoff and resource limits itself. Never accept these
 values from the IPC request.
 
-`RuntimeSupervisorIPCServer` requires all three handlers to be injected. It does
-not construct a database store, backend, systemd unit, directory or socket
-parent. The parent directory must be prepared by a separately authorized host
-provisioning step. The module is not wired into `server.py` or production
-services, and its tests use temporary local sockets only.
+`RuntimeSupervisorIPCServer` requires its handlers to be injected. The root supervisor service composes the authority, lease broker client, exact-unit backend, handoff handlers and revocation watchdog; it does not create host identities or provision root directories. The API-side client is wired through the production-only dispatcher in `server.py`. The root supervisor service, bundle and socket parent are not installed/provisioned on the VPS by this PR; tests use temporary local sockets and fake backends.
 
 ## Production gate
 
-Before wiring this channel into the Arena API, implement and review the trusted
-job-to-spec handler, persistent lease lifecycle, exact systemd effective-property
-normalization, artifact handoff, socket ownership/mount visibility, private
-network bridge and crash recovery. Then run integration tests under dedicated
-UIDs in a disposable environment. Do not create host identities, directories,
-sockets or systemd units as part of this code-only step.
+Before production enablement, complete separate host provisioning and independent review of the trusted job-to-spec handler, persistent lease lifecycle, effective systemd properties, artifact/socket handoff, private-network bridge and crash recovery. Disposable Debian/systemd tests cover the integrated path, but do not replace host-specific validation. This PR does not install or enable the root supervisor service or create host identities/directories.

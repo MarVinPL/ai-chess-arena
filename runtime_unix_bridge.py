@@ -2,7 +2,7 @@
 
 The runtime-side bridge forwards only health and one fixed smoke-inference
 endpoint to the llamafile's loopback listener. It has no generic proxy mode.
-This module is a prototype and is not wired to the executor or systemd.
+The supervised worker uses this bridge inside each transient systemd unit's private network namespace.
 """
 from __future__ import annotations
 

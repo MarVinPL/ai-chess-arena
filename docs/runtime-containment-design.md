@@ -17,7 +17,7 @@ Status: design note only. No host accounts, ACLs, service units, cgroups, networ
 2. **Use a root-managed transient systemd service per job, not a child process owned only by the API.** The service must have a unique unit/cgroup name tied to the persisted job ID. Configure `User=`/`Group=`, `NoNewPrivileges=yes`, empty capability bounding set, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`, `ProtectProc=invisible`, `ProcSubset=pid`, `RestrictSUIDSGID=yes`, `LockPersonality=yes`, `MemoryDenyWriteExecute=yes` where compatible, `RestrictRealtime=yes`, `RestrictNamespaces=yes`, `SystemCallArchitectures=native`, and a reviewed syscall filter. Apply `MemoryMax=`, `MemorySwapMax=`, `CPUQuota=`, `TasksMax=`, `LimitNOFILE=`, `RuntimeMaxSec=`, and `KillMode=control-group` per job.
 3. **Do not give the runtime process write access to the DB or quarantine.** It receives read-only access to exactly one verified artifact and a root-owned runtime bundle under `/usr/local/lib/ai-chess-arena-runtime`, plus a private writable output/temp directory under `/run/arena-runtime/job-<id>`. The bundle must contain the pinned `llamafile` binary and the reviewed worker entrypoint; both must be installed root-owned and non-writable by the API/runtime identities. The current worker and binary under `/home/debian` are deliberately inaccessible under `ProtectHome=yes` and must not be exposed by weakening that control. The API remains responsible for updating durable queue state.
 4. **Artifact handoff must be race-safe.** The current quarantine is mode 0700 and mutable by `debian`; a separate UID cannot currently traverse it. Design a narrow read-only handoff (e.g. root-owned job snapshot or carefully managed per-file read-only ACL) and ensure the file cannot be replaced between hash verification and open by the worker. Do not recursively relax quarantine permissions.
-5. **Network isolation needs a tested transport design.** `PrivateNetwork=yes` isolates loopback, so the current host-side HTTP health/inference client cannot reach a server bound to the worker's `127.0.0.1`. Do not simply disable `PrivateNetwork` and claim egress isolation. Preferred options to prototype are a Unix-domain-socket bridge inside the private network namespace, or a dedicated network namespace with explicit no-egress filtering and a narrowly exposed control channel. Prove the channel with integration tests before enabling it.
+5. **Network isolation uses a narrow AF_UNIX bridge.** `PrivateNetwork=yes` isolates the worker's loopback from the host. The supervised worker runs the fixed health/inference bridge inside that private namespace; the API reaches only the per-job AF_UNIX socket, and the bridge forwards only the two allowlisted operations to `127.0.0.1`. Disposable Debian/systemd tests verified the socket path and a blocked outbound TCP probe. This is targeted evidence, not a broad network penetration test; repeat host-specific validation before production enablement.
 6. **Cgroup is the process ownership/recovery boundary.** Persist the transient unit name before asking systemd to start it. On cancellation, timeout, or API restart, stop only that exact unit and verify its cgroup is empty. This closes the current `Popen` → `register_process()` crash window more robustly than PID files alone. Never use broad `pkill`, process-name matching, or host-wide process cleanup.
 7. **Fail closed on unsupported properties.** At unit creation, validate that all required systemd properties were accepted and are effective. If cgroup v2 controllers, memory limits, namespace controls, or the chosen network boundary are unavailable, mark the job blocked; do not silently fall back to an unsandboxed process.
 
@@ -88,9 +88,7 @@ Required directory handoff before this can be wired:
   same path. Integration tests must prove this behavior with a disposable
   transient unit before any execution wiring.
 
-This remains a transport prototype. It is not connected to
-`runtime_subprocess.py`, the API, or any real systemd unit; no account, ACL,
-socket, service, network, or production configuration was changed.
+The bridge is now used by `runtime_worker_supervised.py` and the production-only API client runner. Disposable systemd integration tests verify the private-network AF_UNIX handoff; no production service, host identity, persistent socket, or network configuration was changed.
 
 ## Filesystem and socket handoff prototype (2026-11-17)
 
@@ -255,9 +253,10 @@ Verified with the real `SystemdTransientBackend` and transient systemd units:
 No model binary or GGUF was loaded, no inference was run, and the fixed worker
 was a harmless synthetic stub. Resource limits were inspected as effective
 properties; active memory/CPU limit-exhaustion behavior was not stress-tested.
-The runtime adapter is still not wired into the API executor, and the root
-supervisor service/worker bundle are not installed on the VPS. Independent
-review, production service wiring, and real-model E2E remain open release gates.
+The API executor is wired in code to the supervised client runner, but the root
+supervisor service and immutable worker bundle are not installed on the VPS.
+Independent review, separate host provisioning, and real-model E2E remain open
+release gates.
 
 ### Cancellation/revocation and durable result commit (2026-11-18)
 
@@ -313,8 +312,9 @@ Disabled/staging profiles do not construct the dispatcher. Startup still
 fails closed if supervisor recovery cannot be confirmed. The API dispatcher
 is not started in the current VPS deployment.
 
-This is code/test evidence only. It does not claim that the adapter is wired
-into the currently deployed production API worker, that a root supervisor is
-installed, or that model inference was run. A failed/unconfirmed stop continues
-to leave its durable lease for supervisor recovery; no handoff cleanup is
-permitted until the exact unit cgroup is confirmed empty.
+This is code/test evidence only. The production dispatcher is wired in the
+repository but is not enabled in the currently deployed API configuration; the
+root supervisor is not installed and no real-model inference was run. A
+failed/unconfirmed stop continues to leave its durable lease for supervisor
+recovery; no handoff cleanup is permitted until the exact unit cgroup is
+confirmed empty.

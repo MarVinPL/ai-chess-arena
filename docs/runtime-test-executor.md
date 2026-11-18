@@ -4,7 +4,7 @@
 
 `runtime_executor.py` provides a durable, sequential job queue. Enqueue requires an already-approved `TEST_ONLY` permission for the exact `model_id`, repository, full revision SHA, and GGUF SHA-256. It stores the requesting actor and exposes job state to the authenticated panel. Queued jobs can be cancelled.
 
-The execution entry point is deliberately not wired to a background worker or HTTP action. `execute_job()` refuses to run unless a trusted runner is explicitly injected by a future integration. Before calling that runner it:
+The production API path now wires `RuntimeApiWorker` to `RuntimeSupervisorClientRunner` only after successful supervisor recovery. Disabled and staging profiles do not construct or start this worker. `execute_job()` still refuses to run without an explicitly injected trusted runner. The authenticated HTTP actions manage queue, batch and execution gates; there is no public one-click run endpoint. Before calling the runner it:
 
 1. acquires a process-wide `flock` (one runtime test globally);
 2. checks the exact approved `TEST_ONLY` grant again;
@@ -13,16 +13,15 @@ The execution entry point is deliberately not wired to a background worker or HT
 5. checks cancellation and permission revocation before and after the runner call;
 6. persists completion, cancellation, or failure.
 
-The runner contract receives the approved artifact path, timeout budget, and a cancellation callback. A production runner must implement a bounded subprocess lifecycle (process group, hard timeout, TERM/KILL escalation, stdout/stderr capture, and cleanup) and poll cancellation. No generic shell command or user-provided executable is accepted by this module.
+The runner contract receives the approved artifact path, timeout budget, and a cancellation callback. The wired production runner sends only the job ID to the privileged supervisor; the supervisor independently resolves authorization, creates the artifact/socket handoff and starts the exact transient systemd unit. Model health and the fixed smoke inference are reached over the per-job AF_UNIX bridge. No generic shell command or user-provided executable is accepted.
 
 ## Explicitly not enabled
 
-- No background executor worker or automatic start.
-- No default runner or model launcher.
-- No inference, model download, artifact move, allowlist change, tournament admission, or tournament start.
-- No production deployment or systemd change.
+- The API dispatcher is wired but remains inert unless the production deployment profile, independent environment opt-in, persisted operator switch, approved batch and exact TEST_ONLY grant are all active.
+- The production profile is not enabled on the VPS; no real model or inference has been run.
+- The root supervisor service and immutable worker bundle are not installed/enabled by this PR. Production startup therefore fails closed unless those separately provisioned dependencies are present.
 
-This is an integration foundation, not completion of Issue #157. Runtime execution remains unavailable until the trusted model-specific adapter, hard process timeout/cancellation, isolated output directory, and end-to-end tests are implemented and reviewed.
+This remains an integration foundation, not completion of Issue #157. Disposable-environment validation and independent security review remain release gates.
 
 
 ## Two-stage execution authorization (default off)
@@ -44,9 +43,7 @@ POST /api/hf-candidates/runtime-batch-revoke. Disabling runtime revokes all
 pending/approved/running batches, cancels queued jobs, and signals active jobs
 to stop. Approval and enablement do not start a model.
 
-There is still no background worker, run endpoint, default runner, model
-process, or inference path. The execution function continues to require an
-explicitly injected runner. The deployment opt-in is not enabled by this PR.
+The production-only background dispatcher is now wired, and the fixed supervisor client runner is injected by `server.py` after successful startup recovery. The independent deployment opt-in remains disabled on the VPS; the persisted operator switch defaults off. The HTTP API exposes no direct model-launch endpoint: a batch must be explicitly assembled and approved before the dispatcher can select its jobs.
 
 
 ## Trusted subprocess adapter (not wired or invoked)
@@ -84,10 +81,4 @@ never signalled; the job is still marked failed with an explanatory record.
 
 ## Remaining security boundary
 
-The subprocess adapter provides lifecycle ownership, a dedicated process group,
-resource limits, and temporary-output isolation. It is **not** an OS security
-sandbox: it does not yet use a separate UID, namespaces, seccomp, cgroups, or a
-network namespace. It therefore must not be treated as a complete containment
-boundary for a compromised runtime. These controls, a memory-enforcement
-strategy, and final end-to-end/recovery tests remain prerequisites before
-wiring the adapter into an executor worker or considering Issue #157 complete.
+The legacy `runtime_subprocess.LlamafileSmokeRunner` remains an unwired prototype and is not the production runner. The wired path uses the privileged supervisor, a separate runtime UID, transient systemd unit/cgroup, namespace and filesystem restrictions, resource limits, immutable artifact handoff, and AF_UNIX bridge. These controls have code and disposable-container evidence, but the production supervisor service/bundle are not installed on the VPS; actual host provisioning, independent security review and a separately approved real-model E2E remain release gates.
