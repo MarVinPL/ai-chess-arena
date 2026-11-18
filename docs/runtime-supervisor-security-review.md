@@ -138,9 +138,17 @@ validation.
   rejection, and refusal of group/world-writable binary permissions.
   `tests/test_runtime_worker_supervised.py`: 12 passed.
 
-**Remaining B3 limitation:** the pinned llamafile with SHA-256
-`756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50` is not
-installed on this VPS and was not downloaded. Therefore the actual pinned
-worker executable and real model inference were not run. The fixture proves
-systemd mount/resource/timeout/cgroup behavior and worker hash-check policy,
-not the complete production worker-to-model execution path. B3 remains open.
+**Remaining B3 limitation (rechecked 2026-11-18):** the pinned llamafile is
+already present at `/home/debian/ai-agent/bin/llamafile` (43,856,395 bytes).
+Its SHA-256 exactly matches
+`756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50`, and a
+bounded `/bin/sh ... --version` probe returned `llamafile v0.10.6` (exit 0).
+No download was necessary. However, this existing file is owned by
+`debian:debian` (mode 0755), while the new supervised runtime contract requires
+a root-owned, non-group/world-writable binary under
+`/usr/local/lib/ai-chess-arena-runtime/`. That runtime bundle and its worker
+entrypoint are not installed on this VPS; `/run/arena-runtime` is also absent.
+No GGUF model artifact is present in the inspected model locations, so no real
+model inference or end-to-end worker-to-model run was performed. The pinned
+binary identity/version is now verified, but bundle provenance/ownership and
+real artifact execution remain open; B3 is not closed.
