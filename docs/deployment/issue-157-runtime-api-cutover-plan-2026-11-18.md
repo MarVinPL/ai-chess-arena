@@ -104,3 +104,17 @@ This is a packaging and source-level correction only. It does not close B1/B3/B4
 Rebuilt the existing deterministic supervisor zipapp from this branch on the VPS. It contains exactly the 14 expected source entries and passes ZIP integrity validation. Observed SHA-256: `7e00eb3c56ebd1470866cde1f26ccfc5499ee488145f474616726ba54663f861`. The candidate remains in a private `/var/tmp` directory and is not installed. The bootstrap deliberately requires its canonical production path, so invoking the temporary copy fails closed before service imports; the repository bundle tests separately verify dependency imports without a checkout.
 
 This confirms reproducible packaging only. It is not evidence of a started supervisor daemon, and it does not close the real-systemd B1 integration gate or the independent review gates.
+
+## Disposable real-systemd recovery drill (2026-11-18)
+
+Ran a bounded integration drill on the existing VPS using only disposable resources and no model process. A transient systemd unit named `ai-chess-arena-runtime-910000002.service` ran `/usr/bin/sleep 300` as `arena-runtime:arena-runtime` with `NoNewPrivileges`, empty capability sets, `ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`, `PrivateNetwork`, and `KillMode=control-group`. The unit was not installed persistently and was removed after the test.
+
+A separate mode-0600 SQLite database under `/var/tmp` was initialized with the exact `runtime_unit_leases` schema and one synthetic `active` lease pointing to that exact transient unit. The actual `RuntimeSupervisor` + `SystemdTransientBackend` + `SQLiteRuntimeUnitStore(initialize_schema=False)` recovery path ran as root (the same effective UID required by the supervisor service):
+
+- Before: one durable `active` lease.
+- Recovery: exact unit stopped; count 1.
+- After: no recoverable leases; persisted state `stopped`.
+- systemd: `LoadState=not-found`, empty `ControlGroup`.
+- SQLite: `integrity_check=ok`.
+
+This is real-systemd + disposable-SQLite evidence for exact-unit stop and recovery-state transitions, beyond mocked backend tests. It is **not** a full B1 pass: it did not launch the pinned supervisor daemon/IPC service, did not exercise API startup readiness/recovery through the broker socket, and did not test worker execution. The production API and DB were not touched; no model was launched; no permanent systemd unit or bundle was installed.
