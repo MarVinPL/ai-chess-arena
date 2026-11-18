@@ -35,8 +35,30 @@
   },
   "build_host": "existing-vps",
   "execution": "NO worker process, model binary, or inference started",
+  "model_artifact": {
+    "downloaded": false,
+    "filename": null,
+    "inference_run": false,
+    "license_review": "not performed",
+    "repository": null,
+    "revision": null,
+    "sha256": null,
+    "status": "not selected or approved"
+  },
   "python": "3.13.5",
   "reproducibility": "two independent builds byte-identical",
+  "runtime_binary_cross_check": {
+    "canonical_runtime_install_present": false,
+    "executed": false,
+    "expected_sha256": "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50",
+    "observed_existing_path": "/home/debian/ai-agent/bin/llamafile",
+    "observed_mode": "0755",
+    "observed_owner": "debian:debian",
+    "observed_sha256": "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50",
+    "observed_size_bytes": 43856395,
+    "status": "hash match only; not approved or installable",
+    "worker_root_owner_contract": "FAIL (requires UID 0)"
+  },
   "smoke_tests": {
     "supervisor_missing_profile_ack": "rejected before service imports",
     "worker_no_args_exit": 2,
