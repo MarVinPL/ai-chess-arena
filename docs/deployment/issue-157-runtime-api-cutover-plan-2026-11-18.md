@@ -355,3 +355,8 @@ The earlier statements in this plan that no model was downloaded/copied and no q
 ## B3 candidate reset — owner-requested removal (2026-11-18)
 
 Light-R1-14B and Spark-X2.5 4B were removed from the active candidate manifest at the owner’s request. Their exact quarantined files (one Light-R1 GGUF and three Spark-X2.5 4B quantizations) were deleted from the VPS; matching verified-artifact registry entries were removed and durable removal events recorded. Historical SHA-256 values and exact identities remain in `issue-157-model-artifact-quarantine-2026-11-18.md`. No model was loaded or executed. B3 remains open pending selection of a smaller candidate that passes the conservative RAM preflight on the existing VPS (approximately 1.63 GiB available at the last measurement).
+
+
+## B3 small-model candidate assessment — 2026-11-18
+
+The metadata-only assessment in `issue-157-small-model-candidate-assessment-2026-11-18.md` supersedes the earlier provisional suggestion to use SmolLM2 360M. SmolLM2 is English-centric and its GGUF mirror lacks a separate license file; Qwen2.5 0.5B is the better metadata candidate for multilingual tasks, but both fail the current host RAM policy. `MemAvailable` was 1.623 GiB; the policy has 3 GiB fixed reserves before artifact overhead. Qwen2.5 Q2_K needs 3.580 GiB available; SmolLM2 Q2_K needs 3.305 GiB. Do not weaken reserves or stop unrelated services to force preflight. No weights downloaded, no runtime candidate selected, no inference or production change.
