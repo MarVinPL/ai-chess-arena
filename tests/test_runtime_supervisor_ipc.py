@@ -10,6 +10,7 @@ from runtime_supervisor_ipc import (
     RuntimeSupervisorIPCServer,
     SupervisorIPCError,
     _remove_stale_unix_socket,
+    _unix_socket_start_lock,
     _validate_request,
     supervisor_request,
 )
@@ -53,6 +54,33 @@ def test_server_refuses_existing_socket_or_symlink(tmp_path):
                                    start=lambda _: None, stop=lambda _: None,
                                    status=lambda _: None).serve_forever()
 
+
+
+def test_socket_start_lock_serializes_concurrent_starters(tmp_path):
+    path = tmp_path / "supervisor.sock"
+    with _unix_socket_start_lock(
+        path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+    ):
+        with pytest.raises(SupervisorIPCError, match="Another process"):
+            with _unix_socket_start_lock(
+                path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+            ):
+                pytest.fail("a second socket starter acquired the held lock")
+    lock_info = (tmp_path / "supervisor.sock.lock").stat()
+    assert lock_info.st_uid == os.getuid()
+    assert lock_info.st_gid == os.getgid()
+    assert (lock_info.st_mode & 0o777) == 0o600
+    lock_path = tmp_path / "supervisor.sock.lock"
+    lock_path.unlink()
+    target = tmp_path / "foreign-lock-target"
+    target.touch()
+    lock_path.symlink_to(target)
+    with pytest.raises(SupervisorIPCError, match="cannot be opened safely"):
+        with _unix_socket_start_lock(
+            path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+        ):
+            pytest.fail("symlink lock file was accepted")
+    assert lock_path.is_symlink() and target.exists()
 
 def test_server_recovers_only_a_stale_owned_socket(tmp_path):
     path = tmp_path / "supervisor.sock"

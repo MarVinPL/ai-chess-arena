@@ -8,6 +8,7 @@ permissions/artifact pins before acting. No socket is created at import time.
 from __future__ import annotations
 
 import errno
+import fcntl
 import json
 import os
 import socket
@@ -15,6 +16,7 @@ import socketserver
 import stat
 import struct
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -75,6 +77,36 @@ def _remove_stale_unix_socket(path: Path, *, expected_uid: int,
         raise error_type("Socket inode or ownership changed during stale cleanup; refusing unlink.")
     path.unlink()
     return True
+
+
+@contextmanager
+def _unix_socket_start_lock(path: Path, *, expected_uid: int,
+                            expected_gid: int, error_type=SupervisorIPCError):
+    """Serialize socket startup and hold the lock for the listener lifetime.
+
+    The lock file intentionally remains after shutdown; flock ownership is
+    released by close or process death, while a stable inode prevents two
+    concurrent starters from racing the stale-socket probe and bind.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise error_type("Socket startup lock cannot be opened safely.") from exc
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or (info.st_uid, info.st_gid) != (expected_uid, expected_gid)
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise error_type("Socket startup lock has an unsafe identity or mode.")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise error_type("Another process already owns this socket startup lock.") from exc
+        yield
+    finally:
+        os.close(fd)
 
 
 def _peer_credentials(conn: socket.socket) -> tuple[int, int, int]:
@@ -193,51 +225,51 @@ class RuntimeSupervisorIPCServer:
                 or stat.S_IMODE(parent_info.st_mode) & 0o022
                 or self.socket_path.parent.resolve(strict=True) != self.socket_path.parent):
             raise SupervisorIPCError("Katalog socketu ma niebezpieczną tożsamość lub uprawnienia.")
-        _remove_stale_unix_socket(
-            self.socket_path, expected_uid=os.geteuid(),
-            expected_gid=self.socket_gid if self.socket_gid is not None else os.getegid(),
-            expected_mode=self.socket_mode,
-        )
 
-        class Server(socketserver.UnixStreamServer):
-            allow_reuse_address = False
+        with _unix_socket_start_lock(
+            self.socket_path, expected_uid=os.geteuid(), expected_gid=os.getegid(),
+        ):
+            _remove_stale_unix_socket(
+                self.socket_path, expected_uid=os.geteuid(),
+                expected_gid=self.socket_gid if self.socket_gid is not None else os.getegid(),
+                expected_mode=self.socket_mode,
+            )
 
-            def service_actions(inner_self):
-                # Called from inside the active serve_forever poll loop. This
-                # is stronger readiness evidence than merely binding the path.
-                self.ready.set()
+            class Server(socketserver.UnixStreamServer):
+                allow_reuse_address = False
 
-        # Delay bind/listen until all handler state is installed. Otherwise a
-        # client can connect in the constructor-to-configuration window and
-        # race the first request against missing server attributes.
-        self._server = Server(str(self.socket_path), _Handler, bind_and_activate=False)
-        self._server.allowed_uid = self.allowed_uid
-        self._server.handlers = self.handlers
-        self._server.timeout_seconds = self.timeout_seconds
-        self._server.response_timeout_seconds = self.response_timeout_seconds
-        bound_socket_identity = None
-        try:
-            self._server.server_bind()
-            bound_info = self.socket_path.lstat()
-            if not stat.S_ISSOCK(bound_info.st_mode):
-                raise SupervisorIPCError("Bound supervisor path is not a socket.")
-            bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
-            if self.socket_gid is not None:
-                os.chown(self.socket_path, -1, self.socket_gid, follow_symlinks=False)
-            os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
-            self._server.server_activate()
-            self._server.serve_forever(poll_interval=0.1)
-        finally:
-            self.ready.clear()
-            self._server.server_close()
-            if bound_socket_identity is not None:
-                try:
-                    current = self.socket_path.lstat()
-                    if (stat.S_ISSOCK(current.st_mode)
-                            and (current.st_dev, current.st_ino) == bound_socket_identity):
-                        self.socket_path.unlink()
-                except FileNotFoundError:
-                    pass
+                def service_actions(inner_self):
+                    # Called from inside the active serve_forever poll loop.
+                    self.ready.set()
+
+            self._server = Server(str(self.socket_path), _Handler, bind_and_activate=False)
+            self._server.allowed_uid = self.allowed_uid
+            self._server.handlers = self.handlers
+            self._server.timeout_seconds = self.timeout_seconds
+            self._server.response_timeout_seconds = self.response_timeout_seconds
+            bound_socket_identity = None
+            try:
+                self._server.server_bind()
+                bound_info = self.socket_path.lstat()
+                if not stat.S_ISSOCK(bound_info.st_mode):
+                    raise SupervisorIPCError("Bound supervisor path is not a socket.")
+                bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
+                if self.socket_gid is not None:
+                    os.chown(self.socket_path, -1, self.socket_gid, follow_symlinks=False)
+                os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
+                self._server.server_activate()
+                self._server.serve_forever(poll_interval=0.1)
+            finally:
+                self.ready.clear()
+                self._server.server_close()
+                if bound_socket_identity is not None:
+                    try:
+                        current = self.socket_path.lstat()
+                        if (stat.S_ISSOCK(current.st_mode)
+                                and (current.st_dev, current.st_ino) == bound_socket_identity):
+                            self.socket_path.unlink()
+                    except FileNotFoundError:
+                        pass
 
     def shutdown(self):
         if self._server is not None:

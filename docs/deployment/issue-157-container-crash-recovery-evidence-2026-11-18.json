@@ -8,12 +8,15 @@
     "network": "private",
     "repository_mount": "read-only",
     "python_venv_mount": "read-only",
-    "new_image_created": false
+    "new_image_created": false,
+    "test_root_removed": true,
+    "machine_powered_off": true,
+    "existing_image_retained": true
   },
-  "test_root": "/var/tmp/arena-crash-recovery-20261118-01",
+  "test_root": "/var/tmp/arena-crash-recovery-20261118-02",
   "deployment_profile": "test-recovery",
   "execution_enabled": false,
-  "supervisor_bundle_sha256": "95a68bd360b09bdb4d9d2b26449416c9f11d3993323ca0dcc7beb83b6bb1eef3",
+  "supervisor_bundle_sha256": "0264f8659824c0a4eacd18287336c5340f03faa97aa05f8e260165e1dbc8ebef",
   "fault_injection": {
     "api_sigkill": "PASS",
     "in_process_lease_broker_crash": "PASS",
@@ -29,21 +32,33 @@
       "device/inode unchanged immediately before unlink",
       "ambiguous/live listener states fail closed"
     ],
-    "supervisor_unlinks_only_bound_inode": true
+    "supervisor_unlinks_only_bound_inode": true,
+    "listener_lifetime_flock": "PASS",
+    "lock_files": {
+      "broker": {
+        "owner": "debian:debian",
+        "mode": "0600"
+      },
+      "supervisor": {
+        "owner": "root:root",
+        "mode": "0600"
+      }
+    }
   },
   "post_fix_repeat": {
     "api_restart": "PASS",
     "broker_restart": "PASS",
     "supervisor_type_notify_restart": "PASS",
     "api_http_readiness": 200,
-    "synthetic_unit": "ai-chess-arena-runtime-test-910000103.service",
+    "synthetic_unit": "ai-chess-arena-runtime-test-910000105.service",
     "synthetic_unit_recovered": "PASS",
     "lease_state": "stopped",
     "synthetic_job_state": "failed",
     "cgroup_empty": true,
     "sqlite_integrity": "ok",
     "foreign_key_violations": 0,
-    "ipc_start_blocked": true
+    "ipc_start_blocked": true,
+    "concurrent_start_lock": "PASS"
   },
   "worker_model_inference": {
     "worker_start": "blocked by recovery-only profile",
@@ -53,13 +68,13 @@
     "unclean_worker_exit": "NOT VERIFIED"
   },
   "full_test_suite": {
-    "passed": 766,
+    "passed": 767,
     "skipped": 1,
     "subtests_passed": 43,
-    "duration_seconds": 26.96
+    "duration_seconds": 26.9
   },
   "focused_ipc_broker_tests": {
-    "passed": 23
+    "passed": 24
   },
   "production": {
     "api_active": true,

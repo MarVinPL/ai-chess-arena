@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 
 from runtime_supervisor import RuntimeUnitRecord
-from runtime_supervisor_ipc import _remove_stale_unix_socket
+from runtime_supervisor_ipc import _remove_stale_unix_socket, _unix_socket_start_lock
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 65536
@@ -171,48 +171,51 @@ class RuntimeLeaseBrokerServer:
                 or stat.S_IMODE(parent_info.st_mode) & 0o027
                 or self.socket_path.parent.resolve(strict=True) != self.socket_path.parent):
             raise RuntimeLeaseBrokerError("Broker socket parent ownership/mode is unsafe.")
-        _remove_stale_unix_socket(
-            self.socket_path, expected_uid=os.geteuid(),
-            expected_gid=os.getegid(), expected_mode=self.socket_mode,
+
+        with _unix_socket_start_lock(
+            self.socket_path, expected_uid=os.geteuid(), expected_gid=os.getegid(),
             error_type=RuntimeLeaseBrokerError,
-        )
+        ):
+            _remove_stale_unix_socket(
+                self.socket_path, expected_uid=os.geteuid(),
+                expected_gid=os.getegid(), expected_mode=self.socket_mode,
+                error_type=RuntimeLeaseBrokerError,
+            )
 
-        class Server(socketserver.ThreadingUnixStreamServer):
-            daemon_threads = False
-            block_on_close = True
-            allow_reuse_address = False
+            class Server(socketserver.ThreadingUnixStreamServer):
+                daemon_threads = False
+                block_on_close = True
+                allow_reuse_address = False
 
-            def service_actions(server_self):
-                # This callback runs only after BaseServer.serve_forever has
-                # entered its loop, so shutdown() cannot race its startup.
-                self.ready.set()
+                def service_actions(server_self):
+                    self.ready.set()
 
-        self._server = Server(str(self.socket_path), _BrokerHandler, bind_and_activate=False)
-        self._server.allowed_uid = self.allowed_uid
-        self._server.unit_namespace = self.unit_namespace
-        self._server.dispatch = self.dispatch
-        self._server.request_timeout_seconds = self.request_timeout_seconds
-        bound_socket_identity = None
-        try:
-            self._server.server_bind()
-            bound_info = self.socket_path.lstat()
-            if not stat.S_ISSOCK(bound_info.st_mode):
-                raise RuntimeLeaseBrokerError("Bound broker path is not a socket.")
-            bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
-            os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
-            self._server.server_activate()
-            self._server.serve_forever(poll_interval=0.05)
-        finally:
-            self.ready.clear()
-            self._server.server_close()
-            if bound_socket_identity is not None:
-                try:
-                    current = self.socket_path.lstat()
-                    if (stat.S_ISSOCK(current.st_mode)
-                            and (current.st_dev, current.st_ino) == bound_socket_identity):
-                        self.socket_path.unlink()
-                except FileNotFoundError:
-                    pass
+            self._server = Server(str(self.socket_path), _BrokerHandler, bind_and_activate=False)
+            self._server.allowed_uid = self.allowed_uid
+            self._server.unit_namespace = self.unit_namespace
+            self._server.dispatch = self.dispatch
+            self._server.request_timeout_seconds = self.request_timeout_seconds
+            bound_socket_identity = None
+            try:
+                self._server.server_bind()
+                bound_info = self.socket_path.lstat()
+                if not stat.S_ISSOCK(bound_info.st_mode):
+                    raise RuntimeLeaseBrokerError("Bound broker path is not a socket.")
+                bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
+                os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
+                self._server.server_activate()
+                self._server.serve_forever(poll_interval=0.05)
+            finally:
+                self.ready.clear()
+                self._server.server_close()
+                if bound_socket_identity is not None:
+                    try:
+                        current = self.socket_path.lstat()
+                        if (stat.S_ISSOCK(current.st_mode)
+                                and (current.st_dev, current.st_ino) == bound_socket_identity):
+                            self.socket_path.unlink()
+                    except FileNotFoundError:
+                        pass
 
     def shutdown(self):
         if self._server is not None and self.ready.is_set():
