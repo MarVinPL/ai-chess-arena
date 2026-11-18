@@ -143,7 +143,15 @@ already present at `/home/debian/ai-agent/bin/llamafile` (43,856,395 bytes).
 Its SHA-256 exactly matches
 `756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50`, and a
 bounded `/bin/sh ... --version` probe returned `llamafile v0.10.6` (exit 0).
-No download was necessary. However, this existing file is owned by
+A second probe copied the exact-hash binary into a temporary root-owned,
+read-only fixture under `/var/cache`, then executed it as `nobody:nogroup`
+inside a transient systemd unit with `NoNewPrivileges=yes`,
+`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes`,
+`PrivateNetwork=yes`, `MemoryMax=256M`, `MemorySwapMax=0`, `CPUQuota=50%`,
+`TasksMax=8`, and `RuntimeMaxSec=20s`. It returned `llamafile v0.10.6`
+(exit 0). The temporary copy and unit were removed. An initial attempt from
+`/run` failed because that tmpfs is mounted `noexec`; no mount flags were
+changed. No download was necessary. However, the original file is owned by
 `debian:debian` (mode 0755), while the new supervised runtime contract requires
 a root-owned, non-group/world-writable binary under
 `/usr/local/lib/ai-chess-arena-runtime/`. That runtime bundle and its worker
