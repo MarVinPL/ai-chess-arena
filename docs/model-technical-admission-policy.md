@@ -39,3 +39,22 @@ Passing this technical criterion does **not** waive any independent requirement 
 - Arena runner validation of every committed move.
 
 This policy does not automatically add a model to the official allowlist, tournament roster, or production runtime. Those changes remain subject to their existing review and approval workflow.
+
+## Mandatory current-VPS runtime gate
+
+The runtime target is the **currently configured VPS that will host AI Chess Arena**, using its actual available resources and the approved Arena runtime. A model is not technically ready merely because it runs on a developer workstation, another server, a theoretical hardware configuration, or in a mocked test.
+
+Before attempting to start a candidate, perform a safe resource preflight against the current VPS (including available RAM/swap, disk space, and other relevant runtime constraints). Never infer compatibility or incompatibility from parameter count or GGUF file size alone.
+
+Use these distinct outcomes and preserve evidence:
+
+- **PASS** — the exact, integrity-verified model artifact was actually loaded and started on the current VPS, accepted a real inference request, and produced a move accepted as legal by the Arena chess rules.
+- **FAIL** — an explicitly authorized real attempt on the current VPS demonstrated that the candidate cannot start or remain usable under the approved runtime. Record the exact failure and supporting logs/metadata.
+- **SKIPPED_BLOCKED** — the preflight demonstrated that the candidate cannot safely fit within the current VPS resource budget. Do not launch it. Record the measured constraint and reason; this is an operational exclusion, not proof of a runtime crash.
+- **NOT_VERIFIED** — no qualifying real test has been completed. Missing evidence, metadata-only review, a successful worker/API/supervisor test, or a dummy-model recovery drill must never be represented as PASS or FAIL.
+
+A candidate marked **FAIL** or **SKIPPED_BLOCKED** is excluded from the active candidate pool, further comparative evaluation, and admission consideration for the current VPS. Retain its historical record and evidence. Do not retry it or return it to the active pool unless a material condition changes (for example, VPS resources, runtime compatibility, or the exact artifact) and a separate decision authorizes reconsideration. Continue with the next candidate where the test queue supports it.
+
+A **NOT_VERIFIED** candidate is not yet passed and cannot be treated as ready, but must not be described as a confirmed runtime failure or silently relabelled as excluded due to failure. Any real download or model execution still requires the separate explicit authorization and safeguards described above.
+
+The gate applies to every future candidate and every model-derived artifact proposed for use (including a fine-tuned model/adapter). Each candidate is evaluated independently. Passing the runtime gate does not automatically admit it to the allowlist, roster, or a tournament.
