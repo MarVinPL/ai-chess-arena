@@ -59,7 +59,7 @@ Consequently, the cutover needs a separately tested, API-owned, idempotent schem
 - B1: real API + broker + systemd supervisor integration on disposable DB.
 - B2: SQLite WAL/sidecar behavior and rollback proof (completed on disposable copies; see B2 evidence section).
 - B3: **PARTIAL / OPEN** — reproducible worker/supervisor candidate bundles built and hashed; independent review, approved/pinned runtime binary and model artifact, and separate inference permission remain outstanding.
-- B4: complete release provenance, hashes, environment pins, and approval chain.
+- B4: **PARTIAL / OPEN** — source/build/hash traceability is recorded; authenticated signing identity, trusted verifier, independent approval, and signed provenance chain are absent.
 - B5: independent security review and operational recovery drill.
 
 A successful CI run or a passing unit test does not close these gates. The existing source review is not an independent security audit.
@@ -254,3 +254,13 @@ A further read-only cross-check compared the worker's compiled-in `LLAMAFILE_SHA
 Static source review confirmed the intended trust chain is artifact-specific: enqueue checks a TEST_ONLY permission against model ID/repository/full 40-character revision/SHA-256; supervisor authority rechecks the same grant and verified quarantine registry; handoff copies the expected size/hash into a per-job immutable snapshot; the worker checks the read-only model file's owner/mode/size and checks the llamafile's root ownership/mode/hash. This was a source-level review only, not an independent security assessment.
 
 No exact GGUF model repository, revision, artifact SHA-256, filename, or licence has been selected/approved for this runtime release. No model was downloaded or copied. There is no active TEST_ONLY grant for a concrete artifact in this B3 candidate record, and no inference authorization. This is consistent with the user's earlier explicit constraint that proceeding with PR review does not approve model download, execution, or inference. **B3 remains OPEN.** Do not promote the legacy binary by changing ownership or permissions: a future install needs an independently verified binary provenance, a root-owned immutable bundle, a separately reviewed model artifact and licence, and the required explicit user approvals.
+
+## B4 release-provenance and signing-infrastructure inventory (2026-11-18)
+
+The current evidence chain now records the source commit/tree, per-source SHA-256 values, two-build byte reproducibility, worker/supervisor candidate hashes, build Python/zlib versions, ZIP member allowlists, inert smoke-test results, and the read-only legacy llamafile hash cross-check. The full regression suite and CI result are also tied to the PR head. This is useful traceability, but it is not an authenticated release attestation.
+
+A read-only repository/host inventory found no existing `cosign`, `gpgv`, or `in-toto-run` executable, no repository signing/attestation workflow, and no documented release-signing key or trust-root policy. `gpg` and `openssl` executables exist, but their presence is not a signing identity or an approval chain. No key was generated, imported, inspected, or used; no self-signed or locally trusted signature was fabricated. The current JSON manifest is deliberately unsigned.
+
+Required B4 closure still needs an agreed trusted signing identity and verifier/trust-root distribution, authenticated approval of the exact source commit and worker/supervisor/binary/model hashes, a signed provenance/attestation artifact, and a root-owned environment/pin file whose installation is verified against that approved record. The current PR author/CI and local VPS build operator are not independent approvers. **B4 remains OPEN (traceability evidence present; authenticated approval/signature chain absent).**
+
+The repository contains a separate SmolLM2-1.7B GGUF candidate record (`docs/model-audit/candidate-issue-132-smollm2-1.7b.md`), but its status is `review_required`, `not_admitted`, and `not technically evaluated`; it is not a runtime model selection or approval. Its presence does not authorize download, handoff, execution, or inference.
