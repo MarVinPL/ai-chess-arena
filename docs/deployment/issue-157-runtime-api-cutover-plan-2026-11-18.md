@@ -314,3 +314,14 @@ The workflow is intentionally **not** triggered by pull requests, workflow_dispa
 ## Runtime artifact provenance approval gate
 
 The main-only `Runtime artifact provenance` job is bound to the GitHub `runtime-release` environment. GitHub pauses the job before any build or attestation step until the configured `MarVinPL` reviewer approves the deployment. Self-review is allowed by explicit owner policy; administrator bypass is disabled and the environment accepts deployments only from `main`. This approval gate is distinct from pull-request CI and does not authorize installation or model inference on the VPS.
+
+
+## B4 continuation — protected release gate and verification tooling (2026-11-18)
+
+The repository now has protected `main` governance and a `runtime-release` Environment with `MarVinPL` as its only required reviewer. The environment accepts only `main`, allows self-review per the owner's explicit choice, and disables administrator bypass. No secrets were added. The branch requires a PR and the strict `tests` status check; force-push and deletion are disabled.
+
+The main-only provenance workflow now separates an unprivileged candidate-build job from the protected attestation job. The first job publishes the source commit and exact worker/supervisor SHA-256 values in the run summary before approval. The gated job then rebuilds from the same commit, requires byte-identical digests, and creates attestations for the worker, supervisor, and a release-approval statement that records the exact digest set and the narrow build-provenance-only scope. It does not grant install or inference permission.
+
+Added `tools/verify_runtime_attestation.py` to enforce the exact repository, signer workflow path, protected-main ref, source commit digest, SLSA provenance predicate, GitHub Actions OIDC issuer, and hosted-runner policy through `gh attestation verify`. It requires GitHub CLI 2.102.0 or newer because that release fixed a case-insensitive source-ref comparison flaw (GHSA-4mq3-hpgx-9cx8). A temporary GitHub CLI 2.105.0 archive was checksum-verified and inspected on the VPS but not installed; the host's existing CLI remains 2.46.0.
+
+Two same-tree VPS builds of each runtime artifact were byte-identical. Targeted tests: 13 passed; workflow YAML/policy validation and `git diff --check` passed. These are preflight results only. The main-only workflow has not run because PR #173 remains Draft/unmerged; no attestation or approval statement has been generated. VPS verification and a cross-check of the actual GitHub deployment review actor remain NOT VERIFIED. **B4 remains OPEN.** Production files/services, runtime artifact installation, model download, and inference remain untouched.
