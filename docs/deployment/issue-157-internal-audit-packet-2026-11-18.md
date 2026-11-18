@@ -8,18 +8,19 @@ Status: **internal audit evidence complete for the documented B5 scope; release-
 |---|---|---|
 | B1 — API, broker, real systemd supervisor startup/recovery | **COMPLETE for the documented disposable integration scope** | See the B1 evidence section in `issue-157-runtime-api-cutover-plan-2026-11-18.md`. Does not authorize worker execution or production cutover. |
 | B2 — SQLite WAL/sidecar backup and rollback | **COMPLETE for the documented disposable-copy scope** | See the B2 evidence section in the cutover plan. Production DB/journal mode were not changed. |
-| B3 — runtime artifacts and model admission | **OPEN** | Reproducible candidate packaging is evidenced; runtime binary root-ownership/install contract is unmet; no exact GGUF repository, revision, filename, SHA-256, or licence has been approved; no model was downloaded and no inference permission exists. |
+| B3 — runtime artifacts and model admission | **OPEN — CANDIDATE METADATA PINNED; LICENSE/ARTIFACT ADMISSION PENDING** | Exact Light-R1 repository/revision/file/upstream LFS SHA-256/size are now recorded from read-only Hugging Face API metadata. The repository/card declare Apache-2.0, but no LICENSE/COPYING file exists, so manual license review remains pending and `verified_permissive` stays false. Root-owned worker/binary verification passed only in the isolated container; host runtime installation, quarantined artifact, TEST_ONLY grant and inference authorization remain absent. No weights were downloaded. See `issue-157-model-candidate-metadata-2026-11-18.json`. |
 | B4 — authenticated provenance and signing | **OPEN — GOVERNANCE + WORKFLOW IMPLEMENTED; LIVE ATTESTATION/VERIFICATION PENDING** | Protected-main CI and the `runtime-release` required-reviewer environment are configured. The main-only workflow precomputes candidate digests, gates attestation on owner approval, rebuilds and compares exact digests, and emits worker/supervisor plus approval-statement attestations. The VPS verifier now authenticates the approval statement before checking its exact identity/scope/digest bindings; negative policy tests pass. No main-ref run exists yet; live VPS cryptographic verification and deployment-review actor cross-check remain unverified. |
 | B5 — internal security audit and operational recovery drill | **TECHNICAL PASS — OWNER SIGN-OFF PENDING** | IA-01–IA-10 source/test review, isolated API/broker/supervisor crash/restart, and a real `runtime_worker` SIGKILL after integrity checks but before model subprocess creation are evidenced. Exact lease recovery and empty cgroup verified. No model or inference was run. Final release-owner acceptance remains pending. No external/independent auditor is required. |
 
 ## Evidence index
 
 1. `issue-157-runtime-api-cutover-plan-2026-11-18.md` — scope, B1/B2 evidence, B3 artifact preflight, B4 trust-gap inventory, and explicit limitations.
-2. `issue-157-artifact-manifest-2026-11-18.json` — candidate artifact hashes, sizes, modes, source commit/tree, reproducible-build result, ZIP member allowlists, and smoke-test outcomes.
-3. PR #173 — implementation and review history: https://github.com/MarVinPL/ai-chess-arena/pull/173
-4. Issue #157 — requested behavior and safety constraints: https://github.com/MarVinPL/ai-chess-arena/issues/157
-5. `issue-157-container-crash-recovery-evidence-2026-11-18.json` — machine-readable evidence for the isolated-container API/broker/supervisor SIGKILL/restart matrix and production invariants.
-6. `issue-157-worker-crash-evidence-2026-11-18.json` — machine-readable evidence for the real supervised worker SIGKILL and exact-lease recovery drill.
+2. `issue-157-artifact-manifest-2026-11-18.json` — runtime candidate artifact hashes, sizes, modes, source commit/tree, reproducible-build result, ZIP member allowlists, and smoke-test outcomes.
+3. `issue-157-model-candidate-metadata-2026-11-18.json` — metadata-only pin of the Light-R1 GGUF revision, filename, upstream LFS SHA-256/size, and still-pending license/admission state.
+4. PR #173 — implementation and review history: https://github.com/MarVinPL/ai-chess-arena/pull/173
+5. Issue #157 — requested behavior and safety constraints: https://github.com/MarVinPL/ai-chess-arena/issues/157
+6. `issue-157-container-crash-recovery-evidence-2026-11-18.json` — machine-readable evidence for the isolated-container API/broker/supervisor SIGKILL/restart matrix and production invariants.
+7. `issue-157-worker-crash-evidence-2026-11-18.json` — machine-readable evidence for the real supervised worker SIGKILL and exact-lease recovery drill.
 
 ## Candidate artifact identifiers (not approved for installation)
 
@@ -230,3 +231,8 @@ The final code was rebuilt and retested in the reused `arena-test` Debian 13 ima
 - Added negative tests for wrong repository, ref, commit, workflow, environment, reviewer, scope, extra artifacts, both digest mismatches, non-object JSON, and missing signed approval attestation. The tests also prove attestation verification happens before approval payload acceptance.
 - Verifier-focused tests: **18 passed**. Full VPS suite: **793 passed, 1 skipped, 43 subtests passed**. `compileall` and `git diff --check`: PASS.
 - No real main-ref approval statement or Sigstore attestation exists yet. B4 remains **OPEN** until the main-only workflow runs after merge, the exact digest set is approved in `runtime-release`, all three attestations are generated, the VPS verifies them, and the actual GitHub deployment review record is cross-checked.
+
+
+## B3 continuation — metadata-only pin of Light-R1 candidate (2026-11-18)
+
+Read-only Hugging Face API metadata confirmed the exact candidate identity: repository `360ZhiNao/Light-R1-14B-DS-GGUF`, revision `0d4531e58894e0019d4a9a6aa775eb32098213cb`, file `Light-R1-14B-Q4_0.gguf`, size `8,517,725,312` bytes, upstream LFS SHA-256 `d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa`. The repo tag and card metadata say `apache-2.0`; the revision has no `LICENSE`, `LICENSE.txt` or `COPYING` file. Therefore license status remains `pending_manual_review`, not `verified_permissive`. The upstream hash is recorded as metadata only and has not been recomputed from downloaded weights. No weights were downloaded, no artifact was placed in quarantine, no TEST_ONLY grant was activated, and no inference or tournament admission was authorized. See `issue-157-model-candidate-metadata-2026-11-18.json` and Issue #159.
