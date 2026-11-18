@@ -80,3 +80,9 @@ Completed on the existing VPS using a private disposable directory under `/var/t
 ### What this proves — and what it does not
 
 This closes the disposable API-schema/idempotence proof and provides a real Unix broker integration result on a disposable DB. It is useful evidence toward B1 and B2, but it does **not** close either gate: no actual systemd supervisor service was installed or started, no supervisor unit recovery/stop was exercised, and the WAL test does not establish a production cutover/rollback procedure. A coordinated backup-restore rollback drill and a real systemd supervisor integration test remain required.
+
+## Real systemd supervisor gate — blocked by missing pinned worker bundle
+
+A final read-only installation audit found that `/usr/local/lib/ai-chess-arena-runtime` does not exist; neither the pinned `runtime_supervisor.pyz` nor `runtime_worker` is installed, and no candidate worker artifact exists in the checked project/agent directories. The supervisor service refuses to start unless both artifacts are root-owned, canonical, and match explicit SHA-256 pins. Its service configuration also binds the fixed production socket paths and canonical handoff/output roots.
+
+I did not install a placeholder worker, create an unreviewed artifact, or start a fake supervisor: that would invalidate the artifact-provenance gate and could make a future runtime start execute the wrong program. Therefore the real `Type=notify` systemd supervisor integration test cannot safely run yet. This is a concrete B3 dependency and keeps B1 open. The remaining B1 test must use a reviewed, pinned worker bundle and supervisor zipapp on the disposable DB, with no model invocation and no production API handover.
