@@ -1,6 +1,9 @@
 """Supervisor restart and broker outage/recovery over real AF_UNIX sockets."""
 import os
+import signal
 import sqlite3
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -135,6 +138,98 @@ def test_broker_outage_fails_closed_then_recovers_after_restart(tmp_path):
     finally:
         broker2.shutdown()
         thread2.join(3)
+
+
+def test_sigkill_broker_after_sqlite_commit_before_ack_recovers_exact_lease(tmp_path):
+    """A real broker process death must leave its committed lease recoverable."""
+    job_id = 97
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    database = tmp_path / "sigkill-leases.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, "
+            "cancel_requested INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute(
+            "INSERT INTO runtime_test_jobs(id,status) VALUES(?,'running')", (job_id,)
+        )
+    store = SQLiteRuntimeUnitStore(database)
+    socket_path = tmp_path / "sigkill-broker.sock"
+    child_code = r"""
+import os, sys, threading
+from runtime_lease_broker import RuntimeLeaseBrokerServer
+from runtime_supervisor import SQLiteRuntimeUnitStore
+database, socket_path = sys.argv[1:]
+store = SQLiteRuntimeUnitStore(database, initialize_schema=False)
+original_persist = store.persist
+def persist_then_wait(record):
+    original_persist(record)
+    print("COMMITTED", flush=True)
+    sys.stdin.readline()
+store.persist = persist_then_wait
+server = RuntimeLeaseBrokerServer(socket_path, store=store, allowed_uid=os.getuid())
+thread = threading.Thread(target=server.serve_forever)
+thread.start()
+assert server.ready.wait(5)
+print("READY", flush=True)
+thread.join()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(database), str(socket_path)],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    request_result = []
+    from runtime_supervisor import RuntimeUnitRecord
+    record = RuntimeUnitRecord(job_id, unit, "start_pending")
+
+    def send_persist():
+        try:
+            RuntimeLeaseBrokerClient(socket_path, timeout_seconds=3).persist(record)
+            request_result.append("acknowledged")
+        except Exception as exc:
+            request_result.append(exc)
+
+    request_thread = threading.Thread(target=send_persist)
+    try:
+        assert process.stdout.readline().strip() == "READY"
+        request_thread.start()
+        assert process.stdout.readline().strip() == "COMMITTED"
+        # COMMIT returned, but the handler is blocked before writing its ACK.
+        os.kill(process.pid, signal.SIGKILL)
+        assert process.wait(timeout=5) == -signal.SIGKILL
+        request_thread.join(5)
+        assert not request_thread.is_alive()
+        assert len(request_result) == 1
+        assert isinstance(request_result[0], RuntimeLeaseBrokerError)
+        assert store.get(job_id) == record
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if process.stdin:
+            process.stdin.close()
+        if process.stdout:
+            process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+        request_thread.join(5)
+
+    broker, broker_thread, client = _broker(tmp_path, store)
+    backend = FakeSystemdBackend()
+    try:
+        assert client.get(job_id) == record
+        assert client.load_recoverable() == (record,)
+        recovery = _supervisor(client, backend).recover()
+        assert recovery == {"stopped_units": [unit], "count": 1}
+        assert backend.stops == [unit]
+        assert backend.active == set()
+        assert client.get(job_id).state == "stopped"
+    finally:
+        broker.shutdown()
+        broker_thread.join(3)
+    assert not broker_thread.is_alive()
 
 
 def _restartable_runtime(tmp_path, job_id):
