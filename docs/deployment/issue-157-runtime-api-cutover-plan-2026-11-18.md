@@ -273,3 +273,31 @@ The repository contains a separate SmolLM2-1.7B GGUF candidate record (`docs/mod
 ## Runtime worker regression continuation (2026-11-18)
 
 On the existing VPS worktree, reran the focused worker/supervisor/runtime regression set with `PYTHONPATH` pinned to the worktree root: worker supervised entrypoint, supervisor handlers, systemd backend, broker restart integration, revocation watchdog, and executor tests. Result: **107 passed in 3.88s**. This confirms the reviewed source/test contracts but is not a live worker crash test. The worker's real path verifies the immutable handoff/model, canonical bundle and pinned llamafile before starting the model subprocess; the recovery-only supervisor profile intentionally rejects worker starts. No replacement worker, model process, or inference was used. IA-08 remains PARTIAL / worker exit NOT VERIFIED (High); B5 remains OPEN.
+
+## B4 proposed trust model — GitHub OIDC + Sigstore (2026-11-18)
+
+The lowest-maintenance, no-secret/no-paid-service candidate for this public repository is **keyless build provenance**: a GitHub Actions workflow obtains a short-lived OIDC identity and emits a Sigstore-backed build-provenance attestation for the exact worker/supervisor bundle digests. Verification on the VPS must validate the Sigstore certificate chain/Rekor inclusion and constrain the certificate identity to this exact repository, the dedicated workflow path, and the protected `refs/heads/main` ref. The trust roots are the verifier's maintained Sigstore trusted-root bundle; they are not a key generated or trusted by the build operator. No long-lived private signing key is stored on the VPS or in GitHub secrets.
+
+The build attestation and release-owner approval are separate statements:
+
+1. **Builder statement:** GitHub Actions OIDC + Sigstore attests which workflow built which artifact digests from which source commit. It does not itself approve deployment or model execution.
+2. **Release-owner statement:** approval must be an authenticated GitHub control-plane action on the exact immutable commit and artifact digest set. The candidate control is a required-reviewer GitHub Environment (`runtime-release`) used by a dedicated release-attestation workflow, with deployment protection configured so only the designated release owner can approve. The approval record must include source commit, worker/supervisor/llamafile/model SHA-256 values, and intended scope. A normal CI success, a workflow_dispatch by itself, or a PR merge alone is not a substitute for this exact-digest release approval.
+3. **VPS enforcement:** a root-owned pin/approval file is installed only after offline/online verification of both statements. It records repository, source commit, workflow identity, artifact names and SHA-256 values, model identity/licence/revision, approval run/actor/time, and permitted scope. Worker preflight must compare its exact values to this file. No deployment or inference is authorized by this design document.
+
+### Current feasibility checks
+
+- Repository `MarVinPL/ai-chess-arena` is public; GitHub Actions is enabled.
+- The existing test workflow has only `contents: read`; it has no `id-token: write` or `attestations: write` permissions and does not emit attestations.
+- GitHub CLI on the VPS is `2.46.0`; no `cosign` or `gpgv` executable is installed. The current host has `gpg` and OpenSSL only.
+- GitHub API inspection on 2026-11-18 found **no branch protection on `main`, no repository rulesets, and no GitHub Environments**. Therefore neither protected-ref identity nor a required release-owner approval gate currently exists.
+- No signing key, Sigstore identity, environment, branch rule, secret, workflow, or repository setting was created or changed during this inspection.
+
+### B4 implementation sequence / gates
+
+1. Configure repository governance first: protect `main` against direct pushes, require the intended CI checks, and create a `runtime-release` Environment with the release owner as required reviewer. Verify the effective rules through GitHub API before relying on them. This is a repository security-setting change and is not performed by this documentation-only step.
+2. Add a dedicated workflow pinned to immutable action SHAs, triggered only from the protected main ref, with minimum `id-token: write`, `attestations: write`, and `contents: read` permissions. Build deterministic worker/supervisor bundles from the checked-out commit; attest their exact digests. Do not give this job deployment or model-execution permissions.
+3. Add a separate approval-bound release statement only after the `runtime-release` Environment protection is active. The approved payload must bind the exact source commit and all runtime/model hashes; the environment approval must be visible in the run provenance.
+4. Verify attestations using a maintained Sigstore verifier and explicit certificate-identity/issuer constraints. Record verifier version, trust-root bundle version/digest, Rekor evidence, and negative tests for wrong repository, workflow, ref, commit, and digest.
+5. Implement and test root-owned pin-file verification in a disposable test root. Only after all above evidence and explicit release-owner approval may a later, separate change install the pin file. This does not authorize model download, worker execution, inference, or production cutover.
+
+**Disposition:** this is a selected candidate architecture, not a completed trust chain. The repository currently lacks the governance controls needed to make its identity and approval claims meaningful. B4 remains **OPEN — DESIGN SELECTED, GOVERNANCE AND ATTESTATION NOT IMPLEMENTED/VERIFIED**. No external auditor is required.
