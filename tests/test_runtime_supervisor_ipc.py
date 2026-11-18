@@ -9,6 +9,7 @@ from runtime_supervisor_ipc import (
     MAX_REQUEST_BYTES,
     RuntimeSupervisorIPCServer,
     SupervisorIPCError,
+    _remove_stale_unix_socket,
     _validate_request,
     supervisor_request,
 )
@@ -52,6 +53,65 @@ def test_server_refuses_existing_socket_or_symlink(tmp_path):
                                    start=lambda _: None, stop=lambda _: None,
                                    status=lambda _: None).serve_forever()
 
+
+def test_server_recovers_only_a_stale_owned_socket(tmp_path):
+    path = tmp_path / "supervisor.sock"
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(path))
+    stale.close()  # equivalent to a process dying without unlinking its socket
+    os.chmod(path, 0o660)
+    server = RuntimeSupervisorIPCServer(
+        path, allowed_uid=os.getuid(),
+        start=lambda job_id: {"job_id": job_id},
+        stop=lambda job_id: {"job_id": job_id},
+        status=lambda job_id: {"job_id": job_id},
+        socket_gid=os.getgid(),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert server.ready.wait(timeout=2), "supervisor IPC did not recover stale socket"
+        assert supervisor_request(path, "status", 910000001) == {"job_id": 910000001}
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+    assert not path.exists()
+
+
+def test_stale_socket_cleanup_refuses_live_listener_and_foreign_path(tmp_path):
+    path = tmp_path / "live.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+    os.chmod(path, 0o660)
+    try:
+        with pytest.raises(SupervisorIPCError, match="live listener"):
+            _remove_stale_unix_socket(
+                path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+                expected_mode=0o660,
+            )
+        assert path.exists()
+    finally:
+        listener.close()
+        path.unlink(missing_ok=True)
+
+    path.write_text("not a socket", encoding="utf-8")
+    with pytest.raises(SupervisorIPCError, match="niebezpieczną tożsamością"):
+        _remove_stale_unix_socket(
+            path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+            expected_mode=0o660,
+        )
+    assert path.read_text(encoding="utf-8") == "not a socket"
+    path.unlink()
+    target = tmp_path / "target"
+    target.touch()
+    path.symlink_to(target)
+    with pytest.raises(SupervisorIPCError, match="niebezpieczną tożsamością"):
+        _remove_stale_unix_socket(
+            path, expected_uid=os.getuid(), expected_gid=os.getgid(),
+            expected_mode=0o660,
+        )
+    assert path.is_symlink() and target.exists()
 
 def test_round_trip_calls_only_injected_job_handlers(tmp_path):
     path = tmp_path / "supervisor.sock"

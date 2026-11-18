@@ -1,0 +1,72 @@
+{
+  "date": "2026-11-18",
+  "host": "vps-678a1be0",
+  "container": {
+    "machine": "arena-test",
+    "rootfs": "/var/lib/machines/arena-test",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "network": "private",
+    "repository_mount": "read-only",
+    "python_venv_mount": "read-only",
+    "new_image_created": false
+  },
+  "test_root": "/var/tmp/arena-crash-recovery-20261118-01",
+  "deployment_profile": "test-recovery",
+  "execution_enabled": false,
+  "supervisor_bundle_sha256": "95a68bd360b09bdb4d9d2b26449416c9f11d3993323ca0dcc7beb83b6bb1eef3",
+  "fault_injection": {
+    "api_sigkill": "PASS",
+    "in_process_lease_broker_crash": "PASS",
+    "supervisor_sigkill": "PASS",
+    "stale_socket_restart_failure_reproduced_before_fix": true
+  },
+  "remediation": {
+    "safe_stale_socket_recovery": "PASS",
+    "requirements": [
+      "socket file, not symlink or regular file",
+      "exact expected UID/GID/mode",
+      "connect probe returns ECONNREFUSED",
+      "device/inode unchanged immediately before unlink",
+      "ambiguous/live listener states fail closed"
+    ],
+    "supervisor_unlinks_only_bound_inode": true
+  },
+  "post_fix_repeat": {
+    "api_restart": "PASS",
+    "broker_restart": "PASS",
+    "supervisor_type_notify_restart": "PASS",
+    "api_http_readiness": 200,
+    "synthetic_unit": "ai-chess-arena-runtime-test-910000103.service",
+    "synthetic_unit_recovered": "PASS",
+    "lease_state": "stopped",
+    "synthetic_job_state": "failed",
+    "cgroup_empty": true,
+    "sqlite_integrity": "ok",
+    "foreign_key_violations": 0,
+    "ipc_start_blocked": true
+  },
+  "worker_model_inference": {
+    "worker_start": "blocked by recovery-only profile",
+    "worker_processes": 0,
+    "model_processes": 0,
+    "inference_executed": false,
+    "unclean_worker_exit": "NOT VERIFIED"
+  },
+  "full_test_suite": {
+    "passed": 766,
+    "skipped": 1,
+    "subtests_passed": 43,
+    "duration_seconds": 26.96
+  },
+  "focused_ipc_broker_tests": {
+    "passed": 23
+  },
+  "production": {
+    "api_active": true,
+    "api_main_pid": 3417317,
+    "supervisor_load_state": "not-found",
+    "supervisor_active": false,
+    "production_db_changed": false,
+    "production_services_restarted": false
+  }
+}

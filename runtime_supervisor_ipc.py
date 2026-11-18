@@ -7,10 +7,12 @@ permissions/artifact pins before acting. No socket is created at import time.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
 import socketserver
+import stat
 import struct
 import threading
 from pathlib import Path
@@ -23,6 +25,56 @@ _ALLOWED_ACTIONS = {"start", "stop", "status", "recover"}
 
 class SupervisorIPCError(RuntimeError):
     pass
+
+
+def _remove_stale_unix_socket(path: Path, *, expected_uid: int,
+                              expected_gid: int, expected_mode: int,
+                              error_type=SupervisorIPCError) -> bool:
+    """Remove only an owned socket whose listener is demonstrably absent.
+
+    A SIGKILL leaves AF_UNIX filesystem entries behind. Never unlink a regular
+    file, symlink, foreign socket, live listener, or path whose inode changes
+    during the probe. Any ambiguous connect error fails closed.
+    """
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return False
+    if (not stat.S_ISSOCK(before.st_mode)
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or stat.S_IMODE(before.st_mode) != expected_mode):
+        raise error_type("Socket path już istnieje z niebezpieczną tożsamością; odmowa czyszczenia.")
+
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.25)
+        try:
+            probe.connect(str(path))
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    return False
+                raise error_type("Socket path changed during stale check.") from exc
+            if exc.errno != errno.ECONNREFUSED:
+                raise error_type("Existing socket listener state is ambiguous; refusing cleanup.") from exc
+        else:
+            raise error_type("Socket path has a live listener; refusing cleanup.")
+    finally:
+        probe.close()
+
+    try:
+        after = path.lstat()
+    except FileNotFoundError:
+        return False
+    if ((after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            or not stat.S_ISSOCK(after.st_mode)
+            or (after.st_uid, after.st_gid) != (expected_uid, expected_gid)
+            or stat.S_IMODE(after.st_mode) != expected_mode):
+        raise error_type("Socket inode or ownership changed during stale cleanup; refusing unlink.")
+    path.unlink()
+    return True
 
 
 def _peer_credentials(conn: socket.socket) -> tuple[int, int, int]:
@@ -131,10 +183,21 @@ class RuntimeSupervisorIPCServer:
         self.ready = threading.Event()
 
     def serve_forever(self):
-        if self.socket_path.exists() or self.socket_path.is_symlink():
-            raise SupervisorIPCError("Socket path już istnieje; odmowa nadpisania.")
-        if not self.socket_path.parent.is_dir():
-            raise SupervisorIPCError("Katalog socketu musi być wcześniej przygotowany przez administratora.")
+        try:
+            parent_info = self.socket_path.parent.lstat()
+        except OSError as exc:
+            raise SupervisorIPCError("Katalog socketu musi być wcześniej przygotowany przez administratora.") from exc
+        if (not stat.S_ISDIR(parent_info.st_mode)
+                or stat.S_ISLNK(parent_info.st_mode)
+                or parent_info.st_uid != os.geteuid()
+                or stat.S_IMODE(parent_info.st_mode) & 0o022
+                or self.socket_path.parent.resolve(strict=True) != self.socket_path.parent):
+            raise SupervisorIPCError("Katalog socketu ma niebezpieczną tożsamość lub uprawnienia.")
+        _remove_stale_unix_socket(
+            self.socket_path, expected_uid=os.geteuid(),
+            expected_gid=self.socket_gid if self.socket_gid is not None else os.getegid(),
+            expected_mode=self.socket_mode,
+        )
 
         class Server(socketserver.UnixStreamServer):
             allow_reuse_address = False
@@ -152,8 +215,13 @@ class RuntimeSupervisorIPCServer:
         self._server.handlers = self.handlers
         self._server.timeout_seconds = self.timeout_seconds
         self._server.response_timeout_seconds = self.response_timeout_seconds
+        bound_socket_identity = None
         try:
             self._server.server_bind()
+            bound_info = self.socket_path.lstat()
+            if not stat.S_ISSOCK(bound_info.st_mode):
+                raise SupervisorIPCError("Bound supervisor path is not a socket.")
+            bound_socket_identity = (bound_info.st_dev, bound_info.st_ino)
             if self.socket_gid is not None:
                 os.chown(self.socket_path, -1, self.socket_gid, follow_symlinks=False)
             os.chmod(self.socket_path, self.socket_mode, follow_symlinks=False)
@@ -162,10 +230,14 @@ class RuntimeSupervisorIPCServer:
         finally:
             self.ready.clear()
             self._server.server_close()
-            try:
-                self.socket_path.unlink()
-            except FileNotFoundError:
-                pass
+            if bound_socket_identity is not None:
+                try:
+                    current = self.socket_path.lstat()
+                    if (stat.S_ISSOCK(current.st_mode)
+                            and (current.st_dev, current.st_ino) == bound_socket_identity):
+                        self.socket_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     def shutdown(self):
         if self._server is not None:

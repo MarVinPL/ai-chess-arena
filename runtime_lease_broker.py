@@ -15,6 +15,7 @@ import threading
 from pathlib import Path
 
 from runtime_supervisor import RuntimeUnitRecord
+from runtime_supervisor_ipc import _remove_stale_unix_socket
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 65536
@@ -160,8 +161,6 @@ class RuntimeLeaseBrokerServer:
         raise RuntimeLeaseBrokerError("Unknown broker action.")
 
     def serve_forever(self):
-        if self.socket_path.exists() or self.socket_path.is_symlink():
-            raise RuntimeLeaseBrokerError("Broker socket path already exists.")
         try:
             parent_info = self.socket_path.parent.lstat()
         except OSError as exc:
@@ -172,6 +171,11 @@ class RuntimeLeaseBrokerServer:
                 or stat.S_IMODE(parent_info.st_mode) & 0o027
                 or self.socket_path.parent.resolve(strict=True) != self.socket_path.parent):
             raise RuntimeLeaseBrokerError("Broker socket parent ownership/mode is unsafe.")
+        _remove_stale_unix_socket(
+            self.socket_path, expected_uid=os.geteuid(),
+            expected_gid=os.getegid(), expected_mode=self.socket_mode,
+            error_type=RuntimeLeaseBrokerError,
+        )
 
         class Server(socketserver.ThreadingUnixStreamServer):
             daemon_threads = False

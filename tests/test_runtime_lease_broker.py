@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import socket
 import sqlite3
 import threading
 
@@ -74,6 +75,24 @@ def test_broker_round_trip_persist_state_get_and_recovery(tmp_path):
         thread.join(3)
     assert not path.exists()
 
+
+def test_broker_recovers_only_a_stale_owned_socket(tmp_path):
+    store = _store(tmp_path)
+    path = tmp_path / "lease-broker.sock"
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(path))
+    stale.close()  # leave the filesystem socket entry behind as SIGKILL does
+    os.chmod(path, 0o600)
+    server = RuntimeLeaseBrokerServer(path, store=store, allowed_uid=os.getuid())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert server.ready.wait(2)
+        assert RuntimeLeaseBrokerClient(path).load_recoverable() == ()
+    finally:
+        server.shutdown()
+        thread.join(3)
+    assert not path.exists()
 
 def test_broker_can_expose_group_write_socket_for_root_supervisor_peer(tmp_path):
     store = _store(tmp_path)
