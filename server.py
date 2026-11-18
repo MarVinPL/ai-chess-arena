@@ -1905,7 +1905,7 @@ if __name__ == '__main__':
         lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True)
         lease_broker = RuntimeLeaseBrokerServer(
             deployment.lease_broker_socket, store=lease_store,
-            allowed_uid=0, socket_mode=0o600,
+            allowed_uid=0, socket_mode=0o660,
         )
         lease_broker_thread = threading.Thread(
             target=lease_broker.serve_forever,

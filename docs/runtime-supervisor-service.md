@@ -32,8 +32,12 @@ Start from `runtime-supervisor.env.example`. The API and supervisor must point
 to the exact same canonical Arena SQLite database for the supervisor's
 read-only authorization checks. Lease writes are performed by the API-owned
 broker at `/run/ai-chess-arena-api/lease-broker.sock`; the supervisor does not
-open the application database read/write. The API service must provision its
-own `/run/ai-chess-arena-api` runtime directory before starting the broker.
+open the application database read/write. The API process runs as `debian:debian`
+and creates the broker socket as `debian:debian` mode `0660`. The supervisor runs
+as `root:debian` with no `CAP_DAC_OVERRIDE`, so the API-group write bit is
+required for the root peer to connect; the broker still authenticates the peer
+UID as exactly `0` through `SO_PEERCRED`. The API service must provision its own
+`/run/ai-chess-arena-api` runtime directory before starting the broker.
 The artifact allowlist must
 contain exact `repo|revision|filename` keys; wildcards and empty values are
 rejected. The worker must be root-owned, executable, not group/world writable,
@@ -57,15 +61,18 @@ explicit `main()` entry point after validation.
 The API-owned lease broker now performs transactional lease writes and
 cancellation checks. The privileged supervisor uses the broker for lease
 persistence/state/recovery and retains a read-only connection for authorization.
-The broker protocol and integration tests do not substitute for the required
-disposable-VM validation of actual SQLite WAL permissions, systemd sandboxing,
-socket ownership and restart ordering. This change deliberately does **not**
-add or install an enableable `.service` unit. A broad writable
+The repository includes a proposed `ai-chess-arena-runtime-supervisor.service`
+and an API dependency drop-in example. A disposable KVM guest validated the
+supervisor's notify/readiness, restart/SIGTERM lifecycle, real transient worker
+start/stop and several isolation boundaries. Basic SQLite WAL read-only behavior
+was also verified. The remaining production API/broker lifecycle and shutdown
+ordering, full SQLite sidecar matrix, production worker/artifact mount, release
+provenance and independent security review are still open. A broad writable
 `/home/debian/ai-chess-arena` allowance remains prohibited.
 
-Before production: validate the immutable bundle installation and the
-implemented database access boundary, plus actual systemd sandbox/mount
-behavior in a disposable VM; then provision roots and
-identities under separate authorization, install the pinned worker bundle,
-then run independent security review. No production action is performed by
-this module.
+Before production: validate that the actual API process creates a `0660`
+`debian:debian` broker socket and that the root supervisor connects using only
+its bounded capabilities; complete API/supervisor/broker startup and shutdown
+ordering; finish the SQLite and worker matrices; then provision roots and
+identities under the reviewed release procedure and complete independent
+security review. No production action is performed by this module.

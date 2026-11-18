@@ -10,7 +10,7 @@ Scope: source review plus disposable Debian 13 KVM validation of the Issue #157 
 ## Controls verified in source
 
 - Supervisor IPC accepts only fixed actions and a positive integer job ID; peer UID is checked with Linux `SO_PEERCRED` before handler dispatch.
-- The API lease broker accepts a strict four-action schema, rejects duplicate JSON keys, validates deterministic job-to-unit identity, bounds request/response sizes and timeouts, and authenticates only the configured peer UID. The production wiring fixes that UID to root and the socket to mode `0600`.
+- The API lease broker accepts a strict four-action schema, rejects duplicate JSON keys, validates deterministic job-to-unit identity, bounds request/response sizes and timeouts, and authenticates only the configured peer UID. Production wiring fixes that UID to root and uses a `debian:debian` mode `0660` socket so the `root:debian` supervisor can connect without `CAP_DAC_OVERRIDE`.
 - The privileged supervisor uses a broker client for lease writes and a separate SQLite `mode=ro`, `query_only=ON`, `trusted_schema=OFF` connection for authorization reads.
 - Authorization rechecks the execution opt-in, persisted setting, running/non-cancelled job, approved unexpired batch, exact TEST_ONLY grant, artifact allowlist, verified artifact registry, fresh preflight, host reserves, and required manual review.
 - Artifact handoff hashes while copying, uses directory file descriptors and `O_NOFOLLOW`, and retains handoff data while a durable lease is recoverable.
@@ -27,9 +27,9 @@ Scope: source review plus disposable Debian 13 KVM validation of the Issue #157 
 
 The repository now contains `ai-chess-arena-runtime-supervisor.service` and a production API drop-in example with `Requires=`/`After=`. The service unit passed `systemd-analyze verify` and ran successfully in the disposable KVM guest. The API drop-in remains an example and has not been installed or validated with the production API startup/shutdown sequence. Production API startup starts its broker and synchronously requests supervisor recovery before exposing the API.
 
-**Status:** service artifact and supervisor readiness are validated; production API dependency ordering and reverse shutdown behavior remain open.
+**Status:** service artifact and supervisor readiness are validated. A host-side isolated broker test ran the broker as `debian:debian` and the client as `root:debian` with only `CAP_CHOWN CAP_DAC_READ_SEARCH`: socket mode `0660` passed, while `0600` correctly failed. `server.py` now configures `0660`. Production API dependency ordering and reverse shutdown behavior remain open.
 
-**Required closure:** review the final API/supervisor/broker dependency graph, install the API drop-in only as part of the approved release, and validate API startup/restart/shutdown with the real API-owned broker in a disposable VM.
+**Required closure:** review the final API/supervisor/broker dependency graph, install the API drop-in only as part of the approved release, and validate API startup/restart/shutdown with the actual API process and DB in a disposable VM.
 
 ### B2 — SQLite WAL validation is partial
 
@@ -87,6 +87,7 @@ The code review here is not independent assurance. No real model was started and
 - Disposable guest: Debian 13 (trixie), systemd 257, cgroup v2, 1 GiB RAM, 2 vCPU; booted under KVM using a temporary disk image and removed after validation.
 - Actual supervisor bundle SHA-256 in the VM after the cleanup fix: `7e00eb3c56ebd1470866cde1f26ccfc5499ee488145f474616726ba54663f861`.
 - VM checks passed: Type=notify/readiness, service restart, SIGTERM/socket cleanup, API-UID status/recovery IPC, restricted-capability handoff cleanup, transient worker start/stop with empty cgroup, AF_UNIX allowed/AF_INET denied, ProtectSystem writable-path boundary, ProtectHome write denial, unrelated UID socket denial, and SQLite WAL read-only access/write denial.
+- Isolated host broker group test: `debian:debian` broker socket `0660` accepted a `root:debian` client with only `CAP_CHOWN CAP_DAC_READ_SEARCH`; identical `0600` socket was denied. Temporary socket/service/files were removed.
 - `systemd-analyze verify`: PASS. `systemd-analyze security`: exposure 4.1.
 - Updated runtime suite: 716 passed, 1 skipped, 43 subtests passed; `compileall` and `git diff --check`: PASS before the documentation update.
 - Production guardrails: `ai-chess-arena.service` active; supervisor unit not installed on production; no machines listed; production DB and configuration untouched.

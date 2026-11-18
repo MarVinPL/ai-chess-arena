@@ -75,6 +75,27 @@ def test_broker_round_trip_persist_state_get_and_recovery(tmp_path):
     assert not path.exists()
 
 
+def test_broker_can_expose_group_write_socket_for_root_supervisor_peer(tmp_path):
+    store = _store(tmp_path)
+    path = tmp_path / "lease-broker.sock"
+    server = RuntimeLeaseBrokerServer(
+        path, store=store, allowed_uid=os.getuid(), socket_mode=0o660,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert server.ready.wait(2)
+        info = path.stat()
+        assert info.st_uid == os.getuid()
+        assert info.st_gid == os.getgid()
+        assert (info.st_mode & 0o777) == 0o660
+        assert RuntimeLeaseBrokerClient(path).load_recoverable() == ()
+    finally:
+        server.shutdown()
+        thread.join(3)
+    assert not path.exists()
+
+
 def test_broker_rejects_unauthorized_peer_before_dispatch(tmp_path):
     store = _store(tmp_path)
     path = tmp_path / "lease-broker.sock"
