@@ -106,3 +106,41 @@ directory because SQLite attempts to create shared-memory state. The
 supervisor must not be granted database-directory write access to mask this.
 Keep the application on its default rollback-journal mode unless a separate
 WAL lifecycle design is reviewed and validated.
+
+### B3 — additional host-side systemd probes (2026-11-18)
+
+The existing VPS was used for isolated transient-unit probes; no VM, container,
+package installation, production unit change, or production artifact was used.
+All test units were named `arena-b3-*-probe-20261118` and removed/reset after
+validation.
+
+- A disposable model fixture owned by the runtime test identity, mode `0400`,
+  was bind-mounted read-only into a transient `nobody:nogroup` unit. The unit
+  could read it and could not write it. The fixture and mount were removed.
+- A live transient unit's effective properties were captured from systemd:
+  `User=nobody`, `Group=nogroup`, `NoNewPrivileges=yes`,
+  `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes`,
+  `PrivateNetwork=yes`, the exact `BindReadOnlyPaths` model mount,
+  `MemoryMax=67108864`, `MemorySwapMax=0`, `CPUQuotaPerSecUSec=500ms`,
+  `TasksMax=4`, `RuntimeMaxUSec=30s`, and `KillMode=control-group`.
+  Stop removed the exact transient cgroup.
+- Memory exhaustion probe: a 128 MiB allocation under `MemoryMax=32M` ended
+  with systemd result `oom-kill`; observed peak was exactly 32 MiB, swap 0.
+- Timeout/descendant probe: a parent with a `sleep 300` child under
+  `RuntimeMaxSec=3s`, `KillMode=control-group` ended with result `timeout`;
+  the descendant PID was no longer alive and the transient cgroup was removed.
+- A read-only bind mount probe and a model-fixture bind mount both passed.
+  An initial attempt using a runtime-owned `/var/tmp` parent failed due to the
+  host's mount/path visibility boundary; no permissions were broadened to
+  work around it. The successful fixture used a root-owned `0755` parent and
+  runtime-owned `0400` file.
+- Added unit coverage for worker binary SHA-256 acceptance, hash mismatch
+  rejection, and refusal of group/world-writable binary permissions.
+  `tests/test_runtime_worker_supervised.py`: 12 passed.
+
+**Remaining B3 limitation:** the pinned llamafile with SHA-256
+`756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50` is not
+installed on this VPS and was not downloaded. Therefore the actual pinned
+worker executable and real model inference were not run. The fixture proves
+systemd mount/resource/timeout/cgroup behavior and worker hash-check policy,
+not the complete production worker-to-model execution path. B3 remains open.

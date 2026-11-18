@@ -64,3 +64,64 @@ def test_worker_uses_shell_polyglot_only_for_the_pinned_binary_path(tmp_path, mo
     monkeypatch.setattr(worker, "LLAMAFILE", binary)
     command = worker._fixed_command(tmp_path / "model.gguf")
     assert command[:2] == ["/bin/sh", str(binary)]
+
+
+def test_worker_accepts_only_root_owned_pinned_executable(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    binary = tmp_path / "llamafile"
+    content = b"#!/bin/sh\nexit 0\n"
+    binary.write_bytes(content)
+    monkeypatch.setattr(worker, "LLAMAFILE", binary)
+    monkeypatch.setattr(worker, "LLAMAFILE_SHA256", hashlib.sha256(content).hexdigest())
+    real_fstat = worker.os.fstat
+    monkeypatch.setattr(
+        worker.os, "fstat",
+        lambda fd: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o755, st_uid=0,
+            st_size=real_fstat(fd).st_size,
+        ),
+    )
+
+    worker._verify_binary()
+
+
+def test_worker_rejects_pinned_binary_hash_mismatch(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    binary = tmp_path / "llamafile"
+    binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+    monkeypatch.setattr(worker, "LLAMAFILE", binary)
+    monkeypatch.setattr(worker, "LLAMAFILE_SHA256", "0" * 64)
+    real_fstat = worker.os.fstat
+    monkeypatch.setattr(
+        worker.os, "fstat",
+        lambda fd: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o755, st_uid=0,
+            st_size=real_fstat(fd).st_size,
+        ),
+    )
+
+    with pytest.raises(worker.WorkerError, match="SHA-256 mismatch"):
+        worker._verify_binary()
+
+
+def test_worker_rejects_group_or_world_writable_pinned_binary(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    binary = tmp_path / "llamafile"
+    content = b"#!/bin/sh\nexit 0\n"
+    binary.write_bytes(content)
+    monkeypatch.setattr(worker, "LLAMAFILE", binary)
+    monkeypatch.setattr(worker, "LLAMAFILE_SHA256", hashlib.sha256(content).hexdigest())
+    real_fstat = worker.os.fstat
+    monkeypatch.setattr(
+        worker.os, "fstat",
+        lambda fd: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o775, st_uid=0,
+            st_size=real_fstat(fd).st_size,
+        ),
+    )
+
+    with pytest.raises(worker.WorkerError, match="permissions are invalid"):
+        worker._verify_binary()
