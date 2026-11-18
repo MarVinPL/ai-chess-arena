@@ -454,3 +454,32 @@ def test_recovery_and_stop_race_cannot_double_stop_same_unit():
     assert backend.stopped == [unit]
     assert records[65].state == "stopped"
     assert recovery_results == [{"stopped_units": [], "count": 0}]
+
+
+def test_worker_crash_environment_is_accepted_only_in_test_recovery_namespace():
+    from dataclasses import replace
+    base = build_runtime_unit_spec(
+        job_id=77, runtime_user="arena-runtime", runtime_group="arena-runtime",
+        artifact_path="/var/lib/arena-handoff/job-77/model.gguf",
+        artifact_mount_path="/run/arena-runtime/job-77/model.gguf",
+        output_dir="/run/arena-runtime/job-77", api_uid=1000, api_gid=1000,
+        memory_max_bytes=1024**3, memory_swap_max_bytes=0, cpu_quota_percent=100,
+        tasks_max=8, runtime_seconds=300, test_worker_crash=True,
+    )
+    test_spec = replace(base, unit_name="ai-chess-arena-runtime-test-77.service")
+    test_supervisor = RuntimeSupervisor(
+        backend=FakeBackend(), persist=lambda r: None, set_state=lambda i, s: None,
+        load_recoverable=lambda: (), unit_namespace="test-recovery",
+    )
+    assert test_supervisor._validate(test_spec, (
+        "/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "77"
+    )) == 77
+
+    production_supervisor = RuntimeSupervisor(
+        backend=FakeBackend(), persist=lambda r: None, set_state=lambda i, s: None,
+        load_recoverable=lambda: (),
+    )
+    with pytest.raises(RuntimeSupervisorError, match="allowlist"):
+        production_supervisor._validate(base, (
+            "/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "77"
+        ))

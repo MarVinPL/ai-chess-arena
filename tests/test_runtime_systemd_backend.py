@@ -8,7 +8,7 @@ from runtime_systemd import build_runtime_unit_spec
 from runtime_systemd_backend import SystemdBackendError, SystemdTransientBackend
 
 
-def make_spec():
+def make_spec(*, test_worker_crash=False):
     return build_runtime_unit_spec(
         job_id=9, runtime_user="arena-runtime", runtime_group="arena-runtime",
         artifact_path="/var/lib/arena-handoff/job-9/model.gguf",
@@ -16,7 +16,7 @@ def make_spec():
         output_dir="/run/arena-runtime/job-9",
         api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
         memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
-        runtime_seconds=300,
+        runtime_seconds=300, test_worker_crash=test_worker_crash,
     )
 
 
@@ -249,3 +249,36 @@ def test_recovery_test_backend_validates_and_starts_only_test_namespace():
     backend = SystemdTransientBackend(command_runner=fake, unit_namespace="test-recovery")
     backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "910000009"))
     assert fake.calls[0][0][3] == "--unit=ai-chess-arena-runtime-test-910000009.service"
+
+
+def test_test_recovery_backend_accepts_only_exact_worker_crash_environment():
+    from dataclasses import replace
+    base = make_spec(test_worker_crash=True)
+    test_spec = replace(base, unit_name="ai-chess-arena-runtime-test-9.service")
+    backend = SystemdTransientBackend(unit_namespace="test-recovery", command_runner=FakeRunner())
+    assert backend._validate(
+        test_spec,
+        ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+    ) == 9
+
+    production_backend = SystemdTransientBackend(command_runner=FakeRunner())
+    with pytest.raises(SystemdBackendError):
+        production_backend._validate(
+            make_spec(test_worker_crash=True),
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+        )
+
+
+def test_test_recovery_backend_rejects_incomplete_worker_crash_environment():
+    from dataclasses import replace
+    from runtime_systemd import RuntimeUnitSpec
+    base = make_spec()
+    props = tuple((key, "ARENA_API_UID=1000 ARENA_API_GID=1000 ARENA_RUNTIME_TEST_CRASH_MODE=SIGKILL_BEFORE_MODEL_EXEC")
+                  if key == "Environment" else (key, value) for key, value in base.properties)
+    test_spec = replace(base, unit_name="ai-chess-arena-runtime-test-9.service", properties=props)
+    backend = SystemdTransientBackend(unit_namespace="test-recovery", command_runner=FakeRunner())
+    with pytest.raises(SystemdBackendError):
+        backend._validate(
+            test_spec,
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+        )

@@ -94,3 +94,19 @@ def test_runtime_hides_systemd_control_sockets_without_masking_runtime_directory
     assert "/run/systemd" not in inaccessible
     assert "/run/systemd/private" in inaccessible
     assert "/run/systemd/notify" in inaccessible
+
+
+def test_worker_crash_injection_environment_is_opt_in_and_exact():
+    normal = build().as_dict()["Environment"].split()
+    assert len(normal) == 2
+    test_only = build(test_worker_crash=True).as_dict()["Environment"].split()
+    assert test_only == [
+        f"ARENA_API_UID={os.getuid()}", f"ARENA_API_GID={os.getgid()}",
+        "ARENA_RUNTIME_TEST_CRASH_MODE=SIGKILL_BEFORE_MODEL_EXEC",
+        "ARENA_RUNTIME_TEST_ACK=I_UNDERSTAND_WORKER_CRASH_TEST",
+    ]
+
+
+def test_worker_crash_injection_flag_requires_boolean():
+    with pytest.raises(RuntimeUnitPolicyError, match="explicit boolean"):
+        build(test_worker_crash="yes")

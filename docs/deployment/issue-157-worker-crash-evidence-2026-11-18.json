@@ -1,0 +1,75 @@
+{
+  "date": "2026-11-18",
+  "host": "vps-678a1be0",
+  "existing_test_machine": {
+    "name": "arena-test",
+    "rootfs": "/var/lib/machines/arena-test",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "systemd": "257.13-1~deb13u1",
+    "container_runtime": "systemd-nspawn",
+    "private_network": true,
+    "new_image_created": false,
+    "machine_powered_off_after_test": true,
+    "existing_image_retained": true
+  },
+  "test_profile": "test-recovery/test-worker-crash",
+  "test_acknowledgement": "I_UNDERSTAND_WORKER_CRASH_TEST",
+  "execution_enabled": false,
+  "job_id": 910000107,
+  "unit_name": "ai-chess-arena-runtime-test-910000107.service",
+  "worker_entrypoint": "/usr/local/lib/ai-chess-arena-runtime/runtime_worker",
+  "worker_drill_script": "tools/issue157_worker_crash_drill.py",
+  "worker_drill_script_sha256": "fe4d12bce75897c2cbfaa6a4b92a21d2232f7a5fbc47587aadec6d273b819870",
+  "worker_bundle_sha256": "b319d82830f1833ac891009ae7d3fe29abaac0b341c0d545adc7e98d8d2dcec9",
+  "llamafile_sha256": "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50",
+  "model_input": {
+    "kind": "dummy-test-placeholder",
+    "size_bytes": 33,
+    "not_a_gguf_model": true,
+    "model_weights_downloaded": false
+  },
+  "fault_injection": {
+    "worker_process_started": true,
+    "worker_real_entrypoint": true,
+    "worker_passed_handoff_bundle_and_binary_checks": true,
+    "injection_point": "after immutable handoff/bundle/llamafile verification; before Unix bridge and before subprocess.Popen",
+    "signal": "SIGKILL",
+    "systemd_result": "signal",
+    "exec_main_code": "2",
+    "exec_main_status": 9,
+    "active_state_after_crash": "failed",
+    "control_group_after_crash": ""
+  },
+  "supervisor_recovery": {
+    "durable_lease_state_after_worker_crash": "active",
+    "new_supervisor_instance_created": true,
+    "recovered_exact_unit": "ai-chess-arena-runtime-test-910000107.service",
+    "recovery_count": 1,
+    "durable_lease_state_after_recovery": "stopped",
+    "cgroup_empty": true
+  },
+  "model_execution": {
+    "llamafile_process_started": false,
+    "model_process_spawned": false,
+    "inference_executed": false
+  },
+  "cleanup": {
+    "test_paths_removed": true,
+    "test_accounts_and_groups_removed": true,
+    "test_unit_stopped_and_reset": true,
+    "container_powered_off": true,
+    "host_temp_sources_removed": true
+  },
+  "production_invariants": {
+    "api_active": true,
+    "api_main_pid": 3417317,
+    "supervisor_unit_load_state": "not-found",
+    "supervisor_unit_active": false,
+    "host_runtime_worker_processes": 0,
+    "host_llamafile_processes": 0,
+    "production_database_changed": false,
+    "production_service_restarted": false,
+    "canonical_runtime_bundle_installed_on_host": false
+  },
+  "result": "PASS"
+}

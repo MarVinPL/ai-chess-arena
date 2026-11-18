@@ -94,6 +94,7 @@ class SystemdTransientBackend:
     def __init__(self, *, command_runner=None, cgroup_root="/sys/fs/cgroup", unit_namespace="production"):
         if unit_namespace not in {"production", "test-recovery"}:
             raise ValueError("Unsupported systemd unit namespace.")
+        self._unit_namespace = unit_namespace
         self._unit_re = _UNIT_RE if unit_namespace == "production" else re.compile(r"^ai-chess-arena-runtime-test-([1-9][0-9]*)\.service$")
         self._runner = command_runner or self._subprocess_runner
         self._cgroup_root = Path(cgroup_root)
@@ -122,10 +123,25 @@ class SystemdTransientBackend:
         try:
             read_only = props["ReadOnlyPaths"].split()
             bind_source, bind_target = props["BindReadOnlyPaths"].split(":", 1)
-            environment = dict(item.split("=", 1) for item in props["Environment"].split())
+            environment = {}
+            for item in props["Environment"].split():
+                key, value = item.split("=", 1)
+                if key in environment:
+                    raise ValueError("duplicate runtime environment key")
+                environment[key] = value
             api_uid = int(environment["ARENA_API_UID"])
             api_gid = int(environment["ARENA_API_GID"])
-            if set(environment) != {"ARENA_API_UID", "ARENA_API_GID"}:
+            base_keys = {"ARENA_API_UID", "ARENA_API_GID"}
+            test_keys = {"ARENA_RUNTIME_TEST_CRASH_MODE", "ARENA_RUNTIME_TEST_ACK"}
+            test_worker_crash = False
+            if set(environment) == base_keys:
+                pass
+            elif (self._unit_namespace == "test-recovery"
+                  and set(environment) == base_keys | test_keys
+                  and environment["ARENA_RUNTIME_TEST_CRASH_MODE"] == "SIGKILL_BEFORE_MODEL_EXEC"
+                  and environment["ARENA_RUNTIME_TEST_ACK"] == "I_UNDERSTAND_WORKER_CRASH_TEST"):
+                test_worker_crash = True
+            else:
                 raise ValueError("unexpected runtime environment")
             quota = props["CPUQuota"]
             if not quota.endswith("%") or not quota[:-1].isdigit():
@@ -139,6 +155,7 @@ class SystemdTransientBackend:
                 memory_swap_max_bytes=int(props["MemorySwapMax"]),
                 cpu_quota_percent=int(quota[:-1]), tasks_max=int(props["TasksMax"]),
                 runtime_seconds=int(props["RuntimeMaxSec"]),
+                test_worker_crash=test_worker_crash,
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise SystemdBackendError("Odmowa: niekompletna lub nieprawidłowa specyfikacja jednostki.") from exc

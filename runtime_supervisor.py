@@ -74,16 +74,29 @@ class RuntimeSupervisor:
             raise RuntimeSupervisorError("Specyfikacja nie spełnia wymaganej polityki izolacji.")
         if "/var/lib/arena-handoff" not in props.get("InaccessiblePaths", "").split():
             raise RuntimeSupervisorError("Katalog źródłowy artefaktów musi być ukryty przed runtime.")
-        environment = props.get("Environment", "").split()
-        if (len(environment) != 2
-                or not environment[0].startswith("ARENA_API_UID=")
-                or not environment[1].startswith("ARENA_API_GID=")):
-            raise RuntimeSupervisorError("Środowisko runtime może zawierać wyłącznie UID/GID API.")
+        environment_items = props.get("Environment", "").split()
+        environment = {}
         try:
-            if int(environment[0].split("=", 1)[1]) < 1 or int(environment[1].split("=", 1)[1]) < 1:
-                raise ValueError
-        except ValueError as exc:
-            raise RuntimeSupervisorError("Nieprawidłowe identyfikatory API w środowisku runtime.") from exc
+            for item in environment_items:
+                key, value = item.split("=", 1)
+                if key in environment:
+                    raise ValueError("duplicate environment key")
+                environment[key] = value
+            base_keys = {"ARENA_API_UID", "ARENA_API_GID"}
+            test_keys = {"ARENA_RUNTIME_TEST_CRASH_MODE", "ARENA_RUNTIME_TEST_ACK"}
+            if set(environment) == base_keys:
+                pass
+            elif (self._unit_namespace == "test-recovery"
+                  and set(environment) == base_keys | test_keys
+                  and environment["ARENA_RUNTIME_TEST_CRASH_MODE"] == "SIGKILL_BEFORE_MODEL_EXEC"
+                  and environment["ARENA_RUNTIME_TEST_ACK"] == "I_UNDERSTAND_WORKER_CRASH_TEST"):
+                pass
+            else:
+                raise ValueError("unexpected runtime environment")
+            if int(environment["ARENA_API_UID"]) < 1 or int(environment["ARENA_API_GID"]) < 1:
+                raise ValueError("invalid API identity")
+        except (ValueError, KeyError) as exc:
+            raise RuntimeSupervisorError("Środowisko runtime nie spełnia dokładnej allowlisty.") from exc
         if not argv or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv):
             raise RuntimeSupervisorError("Polecenie runtime jest nieprawidłowe.")
         if not argv[0].startswith("/"):

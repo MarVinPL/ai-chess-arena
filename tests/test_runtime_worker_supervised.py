@@ -180,3 +180,25 @@ def test_worker_bundle_builder_is_deterministic_and_executable(tmp_path):
     result = subprocess.run([str(first)], text=True, capture_output=True, check=False)
     assert result.returncode == 2
     assert "--job" in result.stderr
+
+
+def test_worker_crash_hook_requires_exact_test_only_acknowledgement(monkeypatch):
+    monkeypatch.delenv("ARENA_RUNTIME_TEST_CRASH_MODE", raising=False)
+    monkeypatch.delenv("ARENA_RUNTIME_TEST_ACK", raising=False)
+    worker._maybe_inject_test_worker_crash()
+
+    monkeypatch.setenv("ARENA_RUNTIME_TEST_CRASH_MODE", "SIGKILL_BEFORE_MODEL_EXEC")
+    monkeypatch.delenv("ARENA_RUNTIME_TEST_ACK", raising=False)
+    with pytest.raises(worker.WorkerError, match="incomplete or invalid"):
+        worker._maybe_inject_test_worker_crash()
+
+
+def test_worker_crash_hook_sends_sigkill_only_with_exact_test_ack(monkeypatch):
+    import signal
+    calls = []
+    monkeypatch.setenv("ARENA_RUNTIME_TEST_CRASH_MODE", "SIGKILL_BEFORE_MODEL_EXEC")
+    monkeypatch.setenv("ARENA_RUNTIME_TEST_ACK", "I_UNDERSTAND_WORKER_CRASH_TEST")
+    monkeypatch.setattr(worker.os, "getpid", lambda: 424242)
+    monkeypatch.setattr(worker.os, "kill", lambda pid, sig: calls.append((pid, sig)))
+    worker._maybe_inject_test_worker_crash()
+    assert calls == [(424242, signal.SIGKILL)]

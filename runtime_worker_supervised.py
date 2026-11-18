@@ -141,6 +141,20 @@ def _verify_output_root(path: Path, *, supervisor_gid: int) -> None:
         raise WorkerError("Runtime output root ownership/mode is invalid.")
 
 
+def _maybe_inject_test_worker_crash() -> None:
+    mode = os.environ.get("ARENA_RUNTIME_TEST_CRASH_MODE")
+    acknowledgement = os.environ.get("ARENA_RUNTIME_TEST_ACK")
+    if mode is None and acknowledgement is None:
+        return
+    if (mode != "SIGKILL_BEFORE_MODEL_EXEC"
+            or acknowledgement != "I_UNDERSTAND_WORKER_CRASH_TEST"):
+        raise WorkerError("Runtime worker test-crash gate is incomplete or invalid.")
+    # This branch is reachable only from a test unit whose exact Environment
+    # is accepted by SystemdTransientBackend in the test-recovery namespace.
+    # It runs after real handoff/bundle/binary checks and before Popen/llamafile.
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
 def run_job(job_id: int) -> int:
     runtime_uid = os.getuid()
     runtime_gid = os.getgid()
@@ -170,6 +184,7 @@ def run_job(job_id: int) -> int:
     _verify_readonly_file(model_path, expected_uid=runtime_uid)
     _verify_bundle()
     _verify_binary()
+    _maybe_inject_test_worker_crash()
 
     bridge = UnixRuntimeBridge(
         socket_path, loopback_port=LOOPBACK_PORT, allowed_uid=api_uid,

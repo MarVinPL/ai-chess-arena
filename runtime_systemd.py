@@ -43,7 +43,8 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
                             api_uid: int, api_gid: int,
                             memory_max_bytes: int,
                             memory_swap_max_bytes: int, cpu_quota_percent: int,
-                            tasks_max: int, runtime_seconds: int) -> RuntimeUnitSpec:
+                            tasks_max: int, runtime_seconds: int,
+                            test_worker_crash: bool = False) -> RuntimeUnitSpec:
     """Build a fail-closed policy spec; it does not execute or validate host state."""
     if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id < 1:
         raise RuntimeUnitPolicyError("Nieprawidłowy identyfikator zadania.")
@@ -79,7 +80,16 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
             raise RuntimeUnitPolicyError(f"{name} poza dozwolonym zakresem.")
 
+    if type(test_worker_crash) is not bool:
+        raise RuntimeUnitPolicyError("test_worker_crash must be an explicit boolean.")
+
     # No ambient host access: a future supervisor must provide only these paths.
+    environment = f"ARENA_API_UID={api_uid} ARENA_API_GID={api_gid}"
+    if test_worker_crash:
+        environment += (
+            " ARENA_RUNTIME_TEST_CRASH_MODE=SIGKILL_BEFORE_MODEL_EXEC"
+            " ARENA_RUNTIME_TEST_ACK=I_UNDERSTAND_WORKER_CRASH_TEST"
+        )
     props = (
         ("User", runtime_user),
         ("Group", runtime_group),
@@ -107,7 +117,7 @@ def build_runtime_unit_spec(*, job_id: int, runtime_user: str,
         ("SystemCallArchitectures", "native"),
         ("RestrictAddressFamilies", "AF_UNIX AF_INET"),
         ("WorkingDirectory", output),
-        ("Environment", f"ARENA_API_UID={api_uid} ARENA_API_GID={api_gid}"),
+        ("Environment", environment),
         ("KillMode", "control-group"),
         ("Delegate", "no"),
         ("MemoryMax", str(memory_max_bytes)),

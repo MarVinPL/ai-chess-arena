@@ -5,7 +5,7 @@ Scope: source review plus disposable Debian 13 KVM validation of the Issue #157 
 
 ## Executive result
 
-**Production deployment remains technically blocked.** The user has authorized a production rollout, but authorization does not close the remaining engineering release gates. The disposable VM demonstrated the real service lifecycle and several host-enforced boundaries; the remaining gaps still require provenance review, full integration/recovery coverage, and independent security sign-off. No production files, services, accounts, groups, ACLs, sockets, database, or systemd configuration were changed during this review.
+**Production deployment remains technically blocked.** The user has authorized a production rollout, but authorization does not close the remaining engineering release gates. The disposable VM demonstrated the real service lifecycle and several host-enforced boundaries; the remaining gaps still require provenance review and full integration/recovery coverage, followed by internal release-owner sign-off. No production files, services, accounts, groups, ACLs, sockets, database, or systemd configuration were changed during this review.
 
 ## Controls verified in source
 
@@ -59,7 +59,7 @@ The service checks root ownership, non-writable modes and SHA-256 pins, but the 
 
 This is an internal audit criterion, not an external assurance claim. No real model was started and no production service or host resource was touched.
 
-**Required closure:** the implementation team performs and records a structured internal audit of privilege boundaries, TOCTOU assumptions, SQLite broker transactions, artifact handoff, systemd policy, logging, and failure recovery. Record PASS/FAIL/NOT VERIFIED, evidence, severity, remediation, and final release-owner sign-off. Then run a documented disaster/restart drill in the disposable VM, including API restart, supervisor restart, broker crash, cancellation races, and an unclean worker exit. No external or independent auditor is a prerequisite.
+**Required closure:** the implementation team performs and records a structured internal audit of privilege boundaries, TOCTOU assumptions, SQLite broker transactions, artifact handoff, systemd policy, logging, and failure recovery. Record PASS/FAIL/NOT VERIFIED, evidence, severity, remediation, and final release-owner sign-off. Then run a documented disaster/restart drill in the existing isolated test environment, including API restart, supervisor restart, broker crash, cancellation races, and an unclean worker exit. The implementation team performs the review and records evidence; no external or independent auditor is a prerequisite.
 
 ## Provisioning checklist — only after separate approval
 
@@ -91,7 +91,7 @@ This is an internal audit criterion, not an external assurance claim. No real mo
 - `systemd-analyze verify`: PASS. `systemd-analyze security`: exposure 4.1.
 - Updated runtime suite: 716 passed, 1 skipped, 43 subtests passed; `compileall` and `git diff --check`: PASS before the documentation update.
 - Production guardrails: `ai-chess-arena.service` active; supervisor unit not installed on production; no machines listed; production DB and configuration untouched.
-- Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, production worker/real artifact mount and timeout matrix, authenticated release provenance, internal security audit, and complete recovery drill.
+- Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, approved real-model artifact and separately authorized inference matrix, authenticated release provenance, and release-owner sign-off of the completed internal audit. No external/independent auditor is required.
 
 
 ### SQLite journal-mode boundary (2026-11-18)
