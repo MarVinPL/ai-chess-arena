@@ -71,3 +71,37 @@ The API process now initializes and owns `runtime_unit_leases`; the privileged s
 This implementation is not yet cleared for deployment. The disposable-VM test must prove that the real API service can create its broker socket, the root supervisor can connect, unprivileged peers are rejected, the supervisor cannot write the database or SQLite sidecars, and read-only authorization works in both rollback-journal and WAL modes. It must also exercise cancellation-vs-persist races and supervisor/API restart ordering.
 
 No host service, account, group, directory, socket, ACL, cgroup, firewall rule, model process or production configuration is changed by this design.
+
+
+## SQLite journal-mode compatibility matrix
+
+The privileged supervisor opens the Arena database with SQLite URI mode=ro,
+PRAGMA query_only=ON, and PRAGMA trusted_schema=OFF. Its service identity is
+root:debian with only CAP_CHOWN and CAP_DAC_READ_SEARCH; in particular it does
+not have CAP_DAC_OVERRIDE or CAP_FOWNER. It can read the API-owned database
+but must not modify the database, truncate it, chmod it, or create files
+beside it.
+
+Validated using a disposable database and that exact UID/GID/capability
+boundary:
+
+- Rollback journal (DELETE): read-only supervisor query succeeds while the
+  API writer holds a RESERVED transaction; SQL writes are rejected. After
+  writer commit and close, a fresh read-only connection sees the committed
+  value and no journal sidecar is required.
+- WAL with live writer and existing -wal/-shm: read-only query succeeds while
+  the API writer is open; SQL writes and filesystem write/truncate/chmod/create
+  attempts are rejected.
+- WAL after clean last-writer shutdown, with both -wal and -shm absent:
+  read-only open fails closed (attempt to write a readonly database) because
+  SQLite needs to create WAL shared-memory state but the supervisor cannot
+  write to the API-owned database directory.
+
+Therefore the current read-only supervisor boundary is compatible with the
+application's default rollback-journal mode. WAL mode is not an unconditional
+supported deployment mode: it requires an explicit lifecycle design that
+guarantees the required sidecars are available for every supervisor read,
+without granting the supervisor write access to the database directory. Do
+not switch the production database to WAL as a workaround. The application
+source currently does not enable WAL; this matrix used disposable databases
+only and did not inspect or change the production database.

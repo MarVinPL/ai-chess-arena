@@ -92,3 +92,17 @@ The code review here is not independent assurance. No real model was started and
 - Updated runtime suite: 716 passed, 1 skipped, 43 subtests passed; `compileall` and `git diff --check`: PASS before the documentation update.
 - Production guardrails: `ai-chess-arena.service` active; supervisor unit not installed on production; no machines listed; production DB and configuration untouched.
 - Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, production worker/real artifact mount and timeout matrix, authenticated release provenance, independent security review, and complete recovery drill.
+
+
+### SQLite journal-mode boundary (2026-11-18)
+
+The read-only supervisor identity was tested on the VPS with a disposable
+database and the actual root:debian identity plus the service capability
+bounding set (CAP_CHOWN, CAP_DAC_READ_SEARCH, with CAP_DAC_OVERRIDE and
+CAP_FOWNER absent). Rollback-journal reads work alongside an API writer; WAL
+reads work while -wal and -shm exist. A cleanly closed WAL database with both
+sidecars absent cannot be opened read-only from the protected database
+directory because SQLite attempts to create shared-memory state. The
+supervisor must not be granted database-directory write access to mask this.
+Keep the application on its default rollback-journal mode unless a separate
+WAL lifecycle design is reviewed and validated.

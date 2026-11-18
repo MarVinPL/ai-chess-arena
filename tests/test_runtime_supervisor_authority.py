@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from pathlib import Path
 import time
 
 import pytest
@@ -412,3 +413,74 @@ def test_live_authority_rejects_expired_approval_before_batch_is_running(tmp_pat
     db = tmp_path / "arena.sqlite3"
     seed_database(db)
     assert make_authority(db, now=NOW + 601).is_execution_authorized(7) is False
+
+
+def test_read_only_authority_reads_rollback_journal_while_writer_has_reserved_lock(tmp_path):
+    db = tmp_path / "arena-rollback.sqlite3"
+    seed_database(db)
+    writer = sqlite3.connect(db, timeout=5)
+    try:
+        mode = writer.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+        assert mode.lower() == "delete"
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("UPDATE runtime_test_jobs SET timeout_seconds=240 WHERE id=7")
+        connect = readonly_sqlite_factory(db)
+        with connect() as reader:
+            assert reader.execute(
+                "SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7"
+            ).fetchone()[0] == 300
+            with pytest.raises(sqlite3.OperationalError):
+                reader.execute("UPDATE runtime_test_jobs SET timeout_seconds=1 WHERE id=7")
+        writer.commit()
+        with connect() as reader:
+            assert reader.execute(
+                "SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7"
+            ).fetchone()[0] == 240
+    finally:
+        writer.close()
+
+
+def test_read_only_authority_reopens_rollback_database_after_clean_writer_shutdown(tmp_path):
+    db = tmp_path / "arena-rollback-restart.sqlite3"
+    seed_database(db)
+    with sqlite3.connect(db) as writer:
+        assert writer.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() == "delete"
+        writer.execute("UPDATE runtime_test_jobs SET timeout_seconds=210 WHERE id=7")
+    assert not Path(str(db) + "-journal").exists()
+    with readonly_sqlite_factory(db)() as reader:
+        assert reader.execute(
+            "SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7"
+        ).fetchone()[0] == 210
+
+
+def test_read_only_authority_fails_closed_for_wal_database_without_sidecars(tmp_path):
+    import os
+
+    db = tmp_path / "arena-wal-no-sidecars.sqlite3"
+    seed_database(db)
+    writer = sqlite3.connect(db)
+    try:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+        writer.execute("UPDATE runtime_test_jobs SET timeout_seconds=222 WHERE id=7")
+        writer.commit()
+    finally:
+        writer.close()
+    assert not Path(str(db) + "-wal").exists()
+    assert not Path(str(db) + "-shm").exists()
+
+    # Model the supervisor's read-only database directory: it may traverse
+    # and read, but it cannot create SQLite's missing WAL shared-memory file.
+    os.chmod(tmp_path, 0o550)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            with readonly_sqlite_factory(db)() as reader:
+                reader.execute("SELECT timeout_seconds FROM runtime_test_jobs WHERE id=7").fetchone()
+    finally:
+        os.chmod(tmp_path, 0o700)
+
+
+def test_read_only_authority_does_not_create_missing_database(tmp_path):
+    missing = tmp_path / "must-not-be-created.sqlite3"
+    with pytest.raises((sqlite3.OperationalError, FileNotFoundError)):
+        readonly_sqlite_factory(missing)
+    assert not missing.exists()
