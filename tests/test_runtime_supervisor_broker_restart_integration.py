@@ -135,3 +135,114 @@ def test_broker_outage_fails_closed_then_recovers_after_restart(tmp_path):
     finally:
         broker2.shutdown()
         thread2.join(3)
+
+
+def _restartable_runtime(tmp_path, job_id):
+    database = tmp_path / f"leases-{job_id}.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY, status TEXT, "
+            "cancel_requested INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute(
+            "INSERT INTO runtime_test_jobs(id,status) VALUES(?,'running')", (job_id,)
+        )
+    store = SQLiteRuntimeUnitStore(database)
+    backend = FakeSystemdBackend()
+    broker, thread, client = _broker(tmp_path, store)
+    return store, backend, broker, thread, client
+
+
+def _restart_broker(tmp_path, store):
+    broker, thread, client = _broker(tmp_path, store)
+    return broker, thread, client
+
+
+def test_process_loss_after_backend_start_before_active_commit_recovers_exact_unit(tmp_path):
+    job_id = 93
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    store, backend, broker1, thread1, client1 = _restartable_runtime(tmp_path, job_id)
+    try:
+        def crash_before_active_commit(requested_job, state):
+            if state == "active":
+                # Simulate supervisor process termination after systemd accepted
+                # start but before the durable lease transition can commit.
+                raise OSError("simulated supervisor process loss")
+            client1.set_state(requested_job, state)
+
+        interrupted = RuntimeSupervisor(
+            backend=backend, persist=client1.persist,
+            set_state=crash_before_active_commit,
+            load_recoverable=client1.load_recoverable,
+        )
+        with pytest.raises(OSError, match="process loss"):
+            interrupted.start(
+                _spec(job_id),
+                ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", str(job_id)),
+            )
+        assert backend.active == {unit}
+        assert store.get(job_id).state == "start_pending"
+    finally:
+        broker1.shutdown()
+        thread1.join(3)
+    assert not thread1.is_alive()
+
+    broker2, thread2, client2 = _restart_broker(tmp_path, store)
+    try:
+        restarted = _supervisor(client2, backend)
+        assert restarted.recover() == {"stopped_units": [unit], "count": 1}
+        assert backend.stops == [unit]
+        assert backend.active == set()
+        assert store.get(job_id).state == "stopped"
+    finally:
+        broker2.shutdown()
+        thread2.join(3)
+    assert not thread2.is_alive()
+
+
+def test_process_loss_after_backend_stop_before_stopped_commit_retries_exact_unit(tmp_path):
+    job_id = 94
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    store, backend, broker1, thread1, client1 = _restartable_runtime(tmp_path, job_id)
+    try:
+        supervisor = _supervisor(client1, backend)
+        supervisor.start(
+            _spec(job_id),
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", str(job_id)),
+        )
+        record = client1.get(job_id)
+
+        def crash_before_stopped_commit(requested_job, state):
+            if state == "stopped":
+                # Backend stop succeeded; process disappears before the final
+                # durable acknowledgement is committed.
+                raise OSError("simulated supervisor process loss")
+            client1.set_state(requested_job, state)
+
+        interrupted = RuntimeSupervisor(
+            backend=backend, persist=client1.persist,
+            set_state=crash_before_stopped_commit,
+            load_recoverable=client1.load_recoverable,
+        )
+        with pytest.raises(OSError, match="process loss"):
+            interrupted.stop(record)
+        assert backend.active == set()
+        assert store.get(job_id).state == "stop_pending"
+    finally:
+        broker1.shutdown()
+        thread1.join(3)
+    assert not thread1.is_alive()
+
+    broker2, thread2, client2 = _restart_broker(tmp_path, store)
+    try:
+        restarted = _supervisor(client2, backend)
+        assert restarted.recover() == {"stopped_units": [unit], "count": 1}
+        # Recovery repeats an idempotent exact-unit stop because the first
+        # stop's durable acknowledgement was lost with the supervisor process.
+        assert backend.stops == [unit, unit]
+        assert backend.active == set()
+        assert store.get(job_id).state == "stopped"
+    finally:
+        broker2.shutdown()
+        thread2.join(3)
+    assert not thread2.is_alive()
