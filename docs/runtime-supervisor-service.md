@@ -76,3 +76,21 @@ its bounded capabilities; complete API/supervisor/broker startup and shutdown
 ordering; finish the SQLite and worker matrices; then provision roots and
 identities under the reviewed release procedure and complete independent
 security review. No production action is performed by this module.
+
+
+## API shutdown and active-job cancellation
+
+The API process handles SIGTERM/SIGINT as a graceful shutdown request rather
+than relying on Python's default process termination. It stops accepting HTTP
+requests, marks only the currently dispatched runtime job as cancellation
+requested while the API-owned SQLite broker is still available, and waits for
+the dispatcher to finish its runner cleanup before closing the broker. The
+executor observes the durable cancellation flag; the supervisor rechecks the
+same authorization before starting a unit and the runner requests an exact-unit
+stop for a unit that has already started.
+
+The API unit's TimeoutStopSec must cover the maximum supervisor start IPC
+request (1800 seconds) plus the bounded exact-unit stop window (120 seconds)
+and a small shutdown margin. This intentionally makes service stop potentially
+long when an artifact handoff/start operation is slow; it avoids killing the
+API and closing its lease broker while a start transition is unresolved.

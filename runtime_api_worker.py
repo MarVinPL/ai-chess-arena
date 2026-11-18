@@ -19,7 +19,8 @@ class RuntimeApiWorker:
     def __init__(self, *, deployment, runner: Callable,
                  interval_seconds: float = 1.0,
                  execute: Callable = runtime_executor.execute_job,
-                 find_next: Callable | None = None):
+                 find_next: Callable | None = None,
+                 cancel_active: Callable[[int], None] | None = None):
         if not getattr(deployment, "production_requested", False):
             raise ValueError("Runtime API worker requires the production deployment profile.")
         if not getattr(deployment, "execution_enabled", False):
@@ -34,6 +35,11 @@ class RuntimeApiWorker:
         self._runner = runner
         self._execute = execute
         self._find_next = find_next or self._find_next_queued_job
+        if cancel_active is not None and not callable(cancel_active):
+            raise TypeError("Active-job cancellation callback must be callable.")
+        self._cancel_active = cancel_active
+        self._state_lock = threading.Lock()
+        self._active_job_id: int | None = None
         self._interval = float(interval_seconds)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -74,17 +80,28 @@ class RuntimeApiWorker:
             return dict(self.last_result)
         if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id < 1:
             raise RuntimeError("Queue selector returned an invalid job ID.")
+        with self._state_lock:
+            if self._stop_event.is_set():
+                self.last_result = {"status": "stopping", "job_id": None}
+                return dict(self.last_result)
+            if self._active_job_id is not None:
+                raise RuntimeError("Runtime API worker already has an active job.")
+            self._active_job_id = job_id
         try:
-            result = self._execute(job_id, runner=self._runner)
-        except Exception as exc:
-            self.last_error = type(exc).__name__
-            self.last_result = {"status": "error", "job_id": job_id,
-                                "error_type": self.last_error}
+            try:
+                result = self._execute(job_id, runner=self._runner)
+            except Exception as exc:
+                self.last_error = type(exc).__name__
+                self.last_result = {"status": "error", "job_id": job_id,
+                                    "error_type": self.last_error}
+                return dict(self.last_result)
+            self.last_error = None
+            self.last_result = {"status": "dispatched", "job_id": job_id,
+                                "result_status": result.get("status") if isinstance(result, dict) else None}
             return dict(self.last_result)
-        self.last_error = None
-        self.last_result = {"status": "dispatched", "job_id": job_id,
-                            "result_status": result.get("status") if isinstance(result, dict) else None}
-        return dict(self.last_result)
+        finally:
+            with self._state_lock:
+                self._active_job_id = None
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -108,10 +125,24 @@ class RuntimeApiWorker:
         self._thread.start()
 
     def stop(self, *, timeout_seconds: float = 5.0) -> None:
+        if (isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or timeout_seconds <= 0):
+            raise ValueError("Worker shutdown timeout must be positive.")
         self._stop_event.set()
+        with self._state_lock:
+            active_job_id = self._active_job_id
+        cancel_error = None
+        if active_job_id is not None and self._cancel_active is not None:
+            try:
+                self._cancel_active(active_job_id)
+            except Exception as exc:
+                cancel_error = exc
         thread = self._thread
         if thread is not None:
             thread.join(timeout_seconds)
             if thread.is_alive():
-                raise RuntimeError("Runtime API worker did not stop cleanly.")
+                raise RuntimeError("Runtime API worker did not stop cleanly; active job remains under supervisor control.")
             self._thread = None
+        if cancel_error is not None:
+            raise RuntimeError("Active runtime job cancellation could not be persisted.") from cancel_error

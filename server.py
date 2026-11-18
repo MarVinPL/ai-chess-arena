@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, json, os, re, shutil, signal, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -34,6 +34,16 @@ from runtime_lease_broker import RuntimeLeaseBrokerServer
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
     return urlsplit(request_target).path
+
+
+def _serve_http_until_shutdown(http_server, shutdown_requested):
+    """Serve threaded HTTP requests with a signal-safe, bounded poll interval."""
+    http_server.timeout = 0.5
+    try:
+        while not shutdown_requested.is_set():
+            http_server.handle_request()
+    finally:
+        http_server.server_close()
 
 
 ROOT = Path(__file__).resolve().parent
@@ -1899,24 +1909,26 @@ if __name__ == '__main__':
     lease_broker = None
     lease_broker_thread = None
     runtime_api_worker = None
-    if deployment.production_requested:
-        # The API process owns SQLite schema and writes. The root supervisor
-        # can reach only this fixed, peer-credential-gated lease protocol.
-        lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True)
-        lease_broker = RuntimeLeaseBrokerServer(
-            deployment.lease_broker_socket, store=lease_store,
-            allowed_uid=0, socket_mode=0o660,
-        )
-        lease_broker_thread = threading.Thread(
-            target=lease_broker.serve_forever,
-            daemon=True,
-            name='runtime-lease-broker',
-        )
-        lease_broker_thread.start()
-        if not lease_broker.ready.wait(timeout=5):
-            raise RuntimeError('Runtime lease broker did not become ready.')
-
+    shutdown_requested = threading.Event()
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: shutdown_requested.set())
+    previous_sigint = signal.signal(signal.SIGINT, lambda *_: shutdown_requested.set())
     try:
+        if deployment.production_requested:
+            # The API process owns SQLite schema and writes. The root supervisor
+            # can reach only this fixed, peer-credential-gated lease protocol.
+            lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True)
+            lease_broker = RuntimeLeaseBrokerServer(
+                deployment.lease_broker_socket, store=lease_store,
+                allowed_uid=0, socket_mode=0o660,
+            )
+            lease_broker_thread = threading.Thread(
+                target=lease_broker.serve_forever,
+                daemon=True,
+                name='runtime-lease-broker',
+            )
+            lease_broker_thread.start()
+            if not lease_broker.ready.wait(timeout=5):
+                raise RuntimeError('Runtime lease broker did not become ready.')
         recovery = recover_runtime_on_startup(
             deployment=deployment,
             # The privileged supervisor owns exact-unit recovery and handoff
@@ -1938,21 +1950,46 @@ if __name__ == '__main__':
         runtime_runner = RuntimeSupervisorClientRunner(
             supervisor_socket=deployment.supervisor_socket,
         )
+        def cancel_runtime_job_for_shutdown(job_id):
+            # Persist cancellation while the API-owned broker and DB are still
+            # available. The executor's live cancellation predicate observes
+            # this flag and the supervisor revalidates it before unit start.
+            with league.connect() as connection:
+                runtime_executor._init(connection)
+                connection.execute(
+                    "UPDATE runtime_test_jobs SET cancel_requested=1 "
+                    "WHERE id=? AND status IN ('queued','running')",
+                    (job_id,),
+                )
+
         runtime_api_worker = RuntimeApiWorker(
             deployment=deployment, runner=runtime_runner,
+            cancel_active=cancel_runtime_job_for_shutdown,
         )
-        runtime_api_worker.start()
-        threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
-        hf_candidate_queue.start_background_workers()
-        hf_candidate_runtime.start_background_planner()
-        _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
-        _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
-        print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
-        ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+        if not shutdown_requested.is_set():
+            runtime_api_worker.start()
+            threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
+            hf_candidate_queue.start_background_workers()
+            hf_candidate_runtime.start_background_planner()
+            _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+            _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
+            print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
+            http_server = ThreadingHTTPServer((HOST, PORT), Handler)
+            _serve_http_until_shutdown(http_server, shutdown_requested)
     finally:
-        if runtime_api_worker is not None:
-            runtime_api_worker.stop()
-        if lease_broker is not None:
-            lease_broker.shutdown()
-        if lease_broker_thread is not None:
-            lease_broker_thread.join(timeout=5)
+        try:
+            if runtime_api_worker is not None:
+                # The longest supervisor start request is bounded at 1800s;
+                # exact-unit stop may need up to 120s after cancellation.
+                runtime_api_worker.stop(timeout_seconds=1930)
+        finally:
+            try:
+                if lease_broker is not None:
+                    lease_broker.shutdown()
+            finally:
+                try:
+                    if lease_broker_thread is not None:
+                        lease_broker_thread.join(timeout=5)
+                finally:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+                    signal.signal(signal.SIGINT, previous_sigint)

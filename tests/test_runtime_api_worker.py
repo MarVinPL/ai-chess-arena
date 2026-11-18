@@ -129,3 +129,66 @@ def test_queue_selector_filters_to_approved_unexpired_test_only_jobs(tmp_path):
         with league.connect() as connection:
             connection.execute("UPDATE model_permission_requests SET status='revoked' WHERE id=?", (permission["id"],))
         assert worker._find_next_queued_job() is None
+
+
+def test_worker_shutdown_persists_active_job_cancellation_before_join(monkeypatch):
+    import threading
+    entered = threading.Event()
+    cancelled = threading.Event()
+    calls = []
+
+    def execute(job_id, *, runner):
+        entered.set()
+        assert cancelled.wait(2)
+        return {"status": "cancelled"}
+
+    worker = RuntimeApiWorker(
+        deployment=Production(), runner=lambda *_: {},
+        interval_seconds=0.1, find_next=lambda: 91,
+        execute=execute,
+        cancel_active=lambda job_id: (calls.append(job_id), cancelled.set()),
+    )
+    monkeypatch.setenv("ARENA_RUNTIME_EXECUTION_ENABLED", "1")
+    worker.start()
+    assert entered.wait(2)
+    worker.stop(timeout_seconds=2)
+    assert calls == [91]
+    assert worker._thread is None
+    assert worker._active_job_id is None
+
+
+def test_worker_shutdown_does_not_cancel_a_job_selected_after_stop(monkeypatch):
+    import threading
+    selected = threading.Event()
+    release = threading.Event()
+    calls = []
+    def find_next():
+        selected.set()
+        release.wait(2)
+        return 92
+    worker = RuntimeApiWorker(
+        deployment=Production(), runner=lambda *_: {},
+        interval_seconds=0.1, find_next=find_next,
+        execute=lambda *_args, **_kwargs: pytest.fail("job must not execute after shutdown"),
+        cancel_active=calls.append,
+    )
+    monkeypatch.setenv("ARENA_RUNTIME_EXECUTION_ENABLED", "1")
+    worker.start()
+    assert selected.wait(2)
+    # Stop wins before the queue selector hands the selected ID to execution.
+    stopped = threading.Event()
+    errors = []
+    def stop_worker():
+        try:
+            worker.stop(timeout_seconds=2)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            stopped.set()
+    stopper = threading.Thread(target=stop_worker)
+    stopper.start()
+    release.set()
+    assert stopped.wait(2)
+    stopper.join(2)
+    assert errors == []
+    assert calls == []

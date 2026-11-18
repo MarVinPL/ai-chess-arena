@@ -15,7 +15,7 @@ def test_arena_service_has_independent_identity_and_lifecycle():
     assert "ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py" in text
     assert "Restart=on-failure" in text
     assert "KillMode=control-group" in text
-    assert "TimeoutStopSec=30s" in text
+    assert "TimeoutStopSec=1960s" in text
     assert "NoNewPrivileges=true" in text
     assert "ProtectHome=read-only" in text
     assert "BindPaths=/home/debian/ai-chess-arena" in text
