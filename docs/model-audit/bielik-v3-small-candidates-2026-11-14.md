@@ -1,6 +1,6 @@
 # Bielik v3 Small — wstępny audyt kandydatów GGUF
 
-Data przeglądu: 2026-11-14
+Data przeglądu: 2026-11-19 (weryfikacja HF API)
 Zakres: wyłącznie publiczne karty modeli i indeksy plików Hugging Face.
 Status obu kandydatów: `review_required`, `license_review=pending`, `technical_readiness=not_evaluated`, `revision_confirmed=false`, `scope_formats=[]`, `admission_status=not_admitted`.
 
@@ -10,7 +10,7 @@ Status obu kandydatów: `review_required`, `license_review=pending`, `technical_
 - Nie uruchamiano kodu, modelu ani inferencji.
 - Nie zmieniano katalogu kandydatów, manifestu modeli, allowlisty, bazy produkcyjnej, rosterów, wyników ani stanu turniejów.
 - Nie jest to opinia prawna ani decyzja o dopuszczeniu.
-- Karty i indeksy plików sprawdzono na `main`, a następnie otwarto strony commitów wskazanych przez bieżący widok Hugging Face. Poniżej zapisano pełne SHA commitów widocznych w tych stronach. To przypina obserwowany snapshot, ale nie jest równoznaczne z audytem każdego pliku ani z zatwierdzeniem przez operatora; `revision_confirmed` pozostaje `false`.
+- 2026-11-19 ponownie pobrano publiczne metadane przez Hugging Face API dla wszystkich czterech repozytoriów (dwa oficjalne SpeakLeash i dwa oddzielne second-state). Dla każdego `GET /api/models/{repo}` zwrócił SHA identyczne z zapisanym SHA commitu; dodatkowo `GET /api/models/{repo}/revision/{sha}` zwrócił dokładnie tę samą rewizję. Indeksy plików nie zawierają LICENSE/COPYING w żadnym z czterech repozytoriów. To potwierdza aktualne rewizje i widoczny indeks, ale nie audyt każdego artefaktu ani praw do danych treningowych; `revision_confirmed` pozostaje `false` do decyzji operatora.
 
 ## Kandydat A — Bielik 1.5B v3.0 Instruct GGUF
 
@@ -29,7 +29,7 @@ Repozytorium: https://huggingface.co/speakleash/Bielik-1.5B-v3.0-Instruct-GGUF
 
 - Deklaracja licencji modelu i karty GGUF: Apache-2.0.
 - Niezależne potwierdzenie tekstem LICENSE dla dokładnej rewizji GGUF: brak.
-- SHA obserwowanego commitu repozytorium GGUF: `bb7ba70f60f2eee48d46857966ba3cf91bccb260` (strona commitu Hugging Face).
+- SHA aktualnego `main` i odpowiedzi API dla przypiętej rewizji: `bb7ba70f60f2eee48d46857966ba3cf91bccb260` (zgodność 1:1, API 2026-11-19; indeks 4 plików, brak LICENSE/COPYING, brak Q4_K_M).
 - Dokładny artefakt Q4_K_M w oficjalnym repozytorium: niepotwierdzony.
 - Raport techniczny Bielik v3 opisuje korpus treningowy na poziomie ogólnym; ta wstępna kontrola nie ustala praw do każdego źródłowego dokumentu ani pełnej proweniencji danych.
 - Wniosek: kandydat ma obiecującą deklarację licencji, ale dowody nie wystarczają do statusu `verified_permissive`.
@@ -52,7 +52,7 @@ Repozytorium: https://huggingface.co/speakleash/Bielik-4.5B-v3.0-Instruct-GGUF
 
 - Deklaracja licencji modelu i karty GGUF: Apache-2.0.
 - Niezależne potwierdzenie tekstem LICENSE dla dokładnej rewizji GGUF: brak.
-- SHA obserwowanego commitu repozytorium GGUF: `c80ffe0e154fab9f7af170993a16d6f8acc83903` (strona commitu Hugging Face).
+- SHA aktualnego `main` i odpowiedzi API dla przypiętej rewizji: `c80ffe0e154fab9f7af170993a16d6f8acc83903` (zgodność 1:1, API 2026-11-19; indeks 4 plików, brak LICENSE/COPYING, brak Q4_K_M).
 - Dokładny artefakt Q4_K_M w oficjalnym repozytorium: niepotwierdzony.
 - Prawa do wszystkich elementów korpusu treningowego nie zostały niezależnie przeanalizowane.
 - Wniosek: kandydat ma obiecującą deklarację licencji, ale dowody nie wystarczają do statusu `verified_permissive`.
@@ -81,9 +81,9 @@ Dla obu kandydatów, do czasu uzupełnienia dowodów:
 
 ## Wymagane kolejne dowody (bez pobierania wag)
 
-1. Zweryfikować na poziomie Hugging Face API, że pełne SHA commitów zapisane niżej nadal są aktualnymi rewizjami repozytoriów (widok stron commitów jest potwierdzeniem identyfikatora commitu, nie niezależnym audytem plików).
-2. Dla tych SHA ponownie odczytać indeks plików, model card, metadane licencji oraz sprawdzić obecność LICENSE/COPYING.
-3. Ustalić, czy Q4_K_M ma być kandydatem z repo SpeakLeash, czy osobnym artefaktem z repozytorium konwertującego. Nie mieszać tych identyfikatorów.
+1. [Wykonano 2026-11-19] Zweryfikowano przez Hugging Face API aktualny SHA `main` oraz odpowiedź dla każdej przypiętej rewizji — wszystkie cztery SHA są zgodne.
+2. [Wykonano 2026-11-19] Ponownie odczytano indeksy plików i deklaracje licencji; żadne z czterech repozytoriów nie zawiera LICENSE/COPYING. Oficjalne SpeakLeash nadal nie publikuje Q4_K_M w indeksie; oba oddzielne repozytoria second-state mają odpowiedni plik Q4_K_M.
+3. Pozostaje ustalić, czy Q4_K_M ma być kandydatem z repo SpeakLeash, czy osobnym artefaktem z repozytorium konwertującego. Nie mieszać tych identyfikatorów.
 4. Przypiąć rewizje upstream modeli bazowych i przeanalizować odpowiednie warunki oraz znane informacje o korpusie treningowym.
 5. Dopiero po uzupełnieniu dowodów przedstawić człowiekowi podsumowanie zmian i decyzję do zatwierdzenia.
 

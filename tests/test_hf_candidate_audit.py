@@ -50,6 +50,11 @@ class CandidateAuditTests(unittest.TestCase):
         self.assertEqual(report['suggested_form']['proposed_status'], 'review_required')
         self.assertEqual(report['suggested_form']['scope_formats'], [])
         self.assertFalse(report['suggested_form']['revision_confirmed'])
+        provenance = report['field_provenance']
+        for field in ('license_id', 'license_notes', 'technical_readiness', 'technical_evidence',
+                      'technical_blockers', 'revision_confirmed', 'revision_notes',
+                      'proposed_status', 'restrictions', 'obligations', 'block_reason', 'scope_formats'):
+            self.assertEqual(provenance[field]['value'], report['suggested_form'][field])
         self.assertNotIn('verified_permissive', json.dumps(report))
         self.assertIn('Nie pobrano wag', ' '.join(report['limitations']))
 
@@ -63,6 +68,12 @@ class CandidateAuditTests(unittest.TestCase):
         self.assertEqual(provenance['proposed_status']['value'], 'review_required')
         self.assertEqual(provenance['scope_formats']['value'], [])
         self.assertFalse(provenance['revision_confirmed']['value'])
+        for field in ('license_id', 'license_notes', 'technical_evidence', 'technical_blockers',
+                      'revision_notes', 'block_reason', 'restrictions', 'obligations'):
+            self.assertIn(field, provenance)
+            self.assertIn('source', provenance[field])
+            self.assertIn('confidence', provenance[field])
+            self.assertIn('decision', provenance[field])
         self.assertFalse(report['suggested_form']['revision_confirmed'])
 
     def test_conflicting_license_declarations_are_flagged(self):

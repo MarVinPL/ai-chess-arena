@@ -26,6 +26,8 @@ class CandidateReviewPreviewFrontendTests(unittest.TestCase):
         self.assertIn("przed: ", self.review_form)
         self.assertIn(" → po: ", self.review_form)
         self.assertIn('report.pinned_revision', self.review_form)
+        self.assertIn('Pochodzenie, pewność i decyzja wymagane dla każdego pola', self.html)
+        self.assertIn('field_provenance:report.field_provenance', self.html)
 
     def test_editing_after_preview_invalidates_confirmation(self):
         self.assertIn('invalidatePreview', self.review_form)

@@ -578,6 +578,7 @@ function renderHfAuditReport(report){
  const summary=document.createElement('p');summary.textContent='Wynik: public_metadata_only · rewizja zgodna: '+(report.revision_matches?'tak':'nie')+' · licencja deklarowana: '+(report.declared_license||'brak')+' · pliki licencji: '+((report.license_files||[]).join(', ')||'brak');host.appendChild(summary);
  const notes=document.createElement('ul');(report.sources||[]).forEach(source=>{const li=document.createElement('li');li.textContent=source;notes.appendChild(li)});host.appendChild(notes);
  const blockers=document.createElement('p');blockers.textContent='Ograniczenia: '+(report.limitations||[]).join(' ');host.appendChild(blockers);
+ const provenance=document.createElement('details');const provenanceSummary=document.createElement('summary');provenanceSummary.textContent='Pochodzenie, pewność i decyzja wymagane dla każdego pola';provenance.appendChild(provenanceSummary);const provenancePre=document.createElement('pre');provenancePre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';provenancePre.textContent=JSON.stringify(report.field_provenance||{},null,2);provenance.appendChild(provenancePre);host.appendChild(provenance);
  const link=document.createElement('a');link.href='https://huggingface.co/'+report.repo_id+'/tree/'+report.pinned_revision;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz przypiętą rewizję Hugging Face';host.appendChild(link);
  const f=report.suggested_form||{};
  if(report.arena_model_id){
@@ -592,7 +593,7 @@ function renderHfAuditReport(report){
   };host.appendChild(fill);
  }else{const note=document.createElement('p');note.textContent='To kandydat katalogowy bez aktywnego model_id w allowliście. Raport zapisano osobno; nie można wysłać go do formularza decyzji admission.';host.appendChild(note)}
  const evidence=document.createElement('details');const summaryEl=document.createElement('summary');summaryEl.textContent='Szczegóły techniczne i odczytane pliki tekstowe';evidence.appendChild(summaryEl);
- const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify({metadata:report.metadata,license_file_texts:report.license_file_texts,readme_excerpt:report.readme_excerpt,suggested_form:f},null,2);evidence.appendChild(pre);host.appendChild(evidence);
+ const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify({metadata:report.metadata,field_provenance:report.field_provenance,license_file_texts:report.license_file_texts,readme_excerpt:report.readme_excerpt,suggested_form:f},null,2);evidence.appendChild(pre);host.appendChild(evidence);
  const reviewHost=document.createElement('section');reviewHost.style.cssText='margin-top:12px;padding:12px;border:1px solid #52627a;border-radius:9px';reviewHost.textContent='Ładuję formularz ręcznej weryfikacji…';host.appendChild(reviewHost);
  loadHfCandidateReview(report,reviewHost);
 }
