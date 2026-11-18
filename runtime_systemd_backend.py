@@ -103,9 +103,8 @@ class SystemdTransientBackend:
         return subprocess.run(argv, text=True, capture_output=True, timeout=timeout,
                               check=False, stdin=subprocess.DEVNULL, close_fds=True)
 
-    @staticmethod
-    def _validate(spec: RuntimeUnitSpec, argv: tuple[str, ...]):
-        match = _UNIT_RE.fullmatch(spec.unit_name) if isinstance(spec, RuntimeUnitSpec) else None
+    def _validate(self, spec: RuntimeUnitSpec, argv: tuple[str, ...]):
+        match = self._unit_re.fullmatch(spec.unit_name) if isinstance(spec, RuntimeUnitSpec) else None
         if not match:
             raise SystemdBackendError("Odmowa: nazwa jednostki poza ścisłym wzorcem.")
         job_id = int(match.group(1))
@@ -143,7 +142,7 @@ class SystemdTransientBackend:
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise SystemdBackendError("Odmowa: niekompletna lub nieprawidłowa specyfikacja jednostki.") from exc
-        if (spec != expected_spec or read_only != ["/usr/local/lib/ai-chess-arena-runtime"]
+        if (spec.properties != expected_spec.properties or read_only != ["/usr/local/lib/ai-chess-arena-runtime"]
                 or "/var/lib/arena-handoff" not in props["InaccessiblePaths"].split()):
             raise SystemdBackendError("Odmowa: specyfikacja odbiega od kompletnej polityki izolacji.")
         return job_id

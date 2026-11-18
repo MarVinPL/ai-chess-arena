@@ -229,3 +229,23 @@ def test_recovery_test_backend_accepts_only_test_unit_namespace():
     assert len(fake.calls) == 1
     with pytest.raises(SystemdBackendError):
         backend.stop("ai-chess-arena-runtime-910000001.service")
+
+
+def test_recovery_test_backend_validates_and_starts_only_test_namespace():
+    from dataclasses import replace
+
+    base = build_runtime_unit_spec(
+        job_id=910000009, runtime_user="arena-runtime", runtime_group="arena-runtime",
+        artifact_path="/var/lib/arena-handoff/job-910000009/model.gguf",
+        artifact_mount_path="/run/arena-runtime/job-910000009/model.gguf",
+        output_dir="/run/arena-runtime/job-910000009",
+        api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
+        memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
+        runtime_seconds=300,
+    )
+    spec = replace(base, unit_name="ai-chess-arena-runtime-test-910000009.service")
+    expected = SystemdTransientBackend._expected(spec)
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in expected.items()))
+    backend = SystemdTransientBackend(command_runner=fake, unit_namespace="test-recovery")
+    backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "910000009"))
+    assert fake.calls[0][0][3] == "--unit=ai-chess-arena-runtime-test-910000009.service"

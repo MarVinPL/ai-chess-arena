@@ -77,3 +77,37 @@ The audit operator should record identity, audit date, exact commit and artifact
 - Decision: `APPROVE` / `APPROVE WITH CONDITIONS` / `REJECT` / `MORE EVIDENCE REQUIRED`
 - Audit record / authenticated release-owner approval reference:
 - Date:
+
+## Internal audit execution log — 2026-11-18 (in progress)
+
+- Audit operator: implementation-team internal review (assisted source/test inspection).
+- Reviewed commit at start: `a3fc257a4e1f7d953a748438e9383d47601edb2b`.
+- Review branch: `feat/issue-157-runtime-executor-20261116`.
+- Environment: existing VPS `debian-local`; no new VM/container; no model download, worker launch, or inference.
+- CI evidence for starting commit: GitHub Actions run `44385353981` (`Python test suite`) completed with conclusion `success`.
+- Targeted runtime/security tests: **152 passed** (executor, artifact handoff, authority, IPC, handlers, worker wrapper, revocation watchdog, broker restart integration, API/supervisor IPC integration, systemd unit hardening).
+- Full repository test suite after the audit correction: **763 passed, 1 skipped, 43 subtests passed** in 26.21s, using `/home/debian/ai-chess-arena/.venv/bin/pytest` with `PYTHONPATH=.`.
+
+### Findings and disposition
+
+| ID | Area | Result | Severity | Evidence / action |
+|---|---|---|---|---|
+| IA-01 | Systemd test-recovery namespace validation | **FIXED** | Medium | Source inspection found `SystemdTransientBackend` accepted a `test-recovery` namespace for stop/recovery but its start validator still hard-coded the production unit regex and compared the production-generated unit name. Updated validation to use the instance's namespace allowlist and compare the complete policy properties independently of the namespace-specific unit name. Added a regression test proving test namespace start validation and preserving the pinned worker argv/policy. `tests/test_runtime_systemd_backend.py`: 20 passed; full suite passed. |
+| IA-02 | Exact TEST_ONLY grant, batch approval, opt-in, preflight and artifact identity | **PASS (source + tests)** | — | Reviewed `runtime_executor.py` and `runtime_supervisor_authority.py`; authority resolves job IDs from the read-only canonical DB, requires both execution switches, a running non-cancelled claim, approved/unexpired batch at admission, exact model/repository/revision/SHA-256 TEST_ONLY grant, privileged artifact allowlist, matching quarantine record, fresh resource preflight, and bounded timeout. Revocation checks fail closed on DB/authority errors. Covered by the targeted tests above. |
+| IA-03 | Artifact quarantine handoff and filesystem traversal controls | **PASS (source + tests)** | — | Reviewed `runtime_artifact_handoff.py`: canonical existing quarantine root, descriptor-relative traversal with `O_NOFOLLOW`, regular-file validation, root-contained source, pinned size/hash and per-job handoff permissions. Regression coverage included in the targeted suite. |
+| IA-04 | IPC authentication and request boundary | **PASS (source + tests)** | — | Reviewed `runtime_supervisor_ipc.py`: Linux `SO_PEERCRED` required; exact allowed UID checked before request handling; bounded newline-framed JSON; duplicate keys and extra fields rejected; job-ID-only actions; errors do not expose exception/path/DB details; socket path must not pre-exist and mode is restricted to 0600/0660. |
+| IA-05 | Lease lifecycle, revocation and crash-recovery logic | **PASS (source + tests)** | — | Reviewed supervisor, broker and watchdog paths. Existing tests cover exact-unit lease persistence/recovery, cancellation/persist races, supervisor/broker restart, broker SIGKILL after commit-before-ack, and fail-closed stop behavior. This is code/test evidence, not a substitute for the live operational drill below. |
+| IA-06 | systemd unit hardening and child/process containment | **PASS (static + tests); LIVE EXECUTION NOT VERIFIED** | — | Reviewed fixed argv, rebuilt unit policy, effective systemd property verification, `KillMode=control-group`, bounded CPU/memory/tasks/runtime, and cgroup-v2 populated/direct-process checks. No runtime worker or model was launched; live worker/cgroup termination remains unverified by design. |
+| IA-07 | Logs, panel rendering, secret exposure and allowlist mutation | **NOT VERIFIED** | Low/Medium | Not yet completed in this audit pass. Requires separate targeted source review and evidence. |
+| IA-08 | Operational disaster/restart drill for API, supervisor, broker, cancellation and unclean worker exit on disposable live profile | **NOT VERIFIED** | High | No production API restart was attempted. Existing B1/B2 evidence and automated broker/supervisor crash tests are recorded separately, but a complete B5 live disposable-profile drill has not yet been performed. Worker/model execution remains prohibited pending separate exact-artifact authorization and B3/B4 closure. |
+
+### Host safety snapshot after tests
+
+- `ai-chess-arena.service`: **active**; production API was not restarted.
+- `ai-chess-arena-runtime-supervisor.service`: **not-found / inactive / MainPID=0**; no production supervisor installation or start.
+- Production database, Caddy, ACLs, legacy llamafile ownership/permissions and unrelated services were not changed by this audit pass.
+- Tests ran in the existing repository worktree using disposable test fixtures; no model inference occurred.
+
+### Current internal audit decision
+
+**MORE EVIDENCE REQUIRED.** The identified test-recovery validator defect has been fixed and regression-tested. B5 remains **OPEN** because IA-07 and IA-08 are not verified and the audit has not received final release-owner sign-off. B3 and B4 remain independently **OPEN**; this audit does not waive their requirements.
