@@ -48,3 +48,32 @@ def resolve_process_settings(
     if not 0 <= port <= 65535:
         raise RuntimeProcessConfigError("ARENA_HTTP_PORT must be an integer from 0 to 65535.")
     return database, host, port
+
+
+def resolve_log_directory(
+    environ: Mapping[str, str] | None = None,
+    *,
+    root: Path,
+) -> Path:
+    """Resolve the API log directory, defaulting to the historical app path."""
+    env = os.environ if environ is None else environ
+    raw = env.get("ARENA_LOG_DIR", str(root / "logs")).strip()
+    if not raw or "\x00" in raw:
+        raise RuntimeProcessConfigError("ARENA_LOG_DIR must be a non-empty path.")
+    path = Path(raw).expanduser()
+    if not path.is_absolute() or ".." in path.parts:
+        raise RuntimeProcessConfigError("ARENA_LOG_DIR must be an absolute canonical path.")
+    return path
+
+
+def background_jobs_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether optional catalog/planner background loops should start."""
+    env = os.environ if environ is None else environ
+    value = env.get("ARENA_BACKGROUND_JOBS", "1").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeProcessConfigError(
+        "ARENA_BACKGROUND_JOBS must be one of 1/0, true/false, yes/no, on/off."
+    )

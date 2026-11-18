@@ -15,6 +15,7 @@ RuntimeDirectoryMode=0750
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/ai-chess-arena/auth.env
+EnvironmentFile=-/etc/ai-chess-arena/runtime-process.env
 ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py
 Restart=on-failure
 RestartSec=5s

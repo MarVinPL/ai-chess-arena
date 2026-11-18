@@ -30,7 +30,9 @@ from runtime_supervisor import SQLiteRuntimeUnitStore
 from runtime_supervisor_client import RuntimeSupervisorClientRunner
 from runtime_api_worker import RuntimeApiWorker
 from runtime_lease_broker import RuntimeLeaseBrokerServer
-from runtime_process_config import resolve_process_settings
+from runtime_process_config import (
+    background_jobs_enabled, resolve_log_directory, resolve_process_settings,
+)
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -53,7 +55,7 @@ DB, HOST, PORT = resolve_process_settings(root=ROOT)
 # Every API-owned SQLite subsystem must use the same explicitly selected DB.
 league.DB = DB
 hf_candidate_downloads.DB_PATH = DB
-LOG_DIR = ROOT / 'logs'
+LOG_DIR = resolve_log_directory(root=ROOT)
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
 MODEL_RESPONSE_RETENTION_SECONDS = 3 * 24 * 60 * 60
@@ -189,6 +191,7 @@ def active_model():
 
 
 def db_init():
+    DB.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     league.init()
     tournament_checkpoint.ensure_schema(DB)
     with sqlite3.connect(DB) as c:
@@ -1965,15 +1968,19 @@ if __name__ == '__main__':
                     (job_id,),
                 )
 
-        runtime_api_worker = RuntimeApiWorker(
-            deployment=deployment, runner=runtime_runner,
-            cancel_active=cancel_runtime_job_for_shutdown,
-        )
+        if deployment.production_requested:
+            runtime_api_worker = RuntimeApiWorker(
+                deployment=deployment, runner=runtime_runner,
+                cancel_active=cancel_runtime_job_for_shutdown,
+            )
         if not shutdown_requested.is_set():
-            runtime_api_worker.start()
-            threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
-            hf_candidate_queue.start_background_workers()
-            hf_candidate_runtime.start_background_planner()
+            if runtime_api_worker is not None:
+                runtime_api_worker.start()
+            if background_jobs_enabled():
+                threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
+                hf_candidate_queue.start_background_workers()
+                hf_candidate_runtime.start_background_planner()
+            LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
             _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
             _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
             http_server = ThreadingHTTPServer((HOST, PORT), Handler)
