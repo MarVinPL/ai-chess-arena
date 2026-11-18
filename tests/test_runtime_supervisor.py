@@ -273,3 +273,66 @@ def test_sqlite_lease_state_update_checks_exact_unit_and_transition(tmp_path):
     with pytest.raises(RuntimeSupervisorError):
         store.set_state(81, "start_pending", "ai-chess-arena-runtime-81.service")
     assert store.get(81).state == "active"
+
+
+def test_stop_failure_keeps_exact_lease_recoverable_across_supervisor_restart():
+    class StopFailsAfterSideEffect(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.running = set()
+            self.fail_stop_once = True
+
+        def start(self, runtime_spec, argv):
+            super().start(runtime_spec, argv)
+            self.running.add(runtime_spec.unit_name)
+
+        def stop(self, unit_name):
+            self.stopped.append(unit_name)
+            self.running.discard(unit_name)
+            if self.fail_stop_once:
+                self.fail_stop_once = False
+                raise TimeoutError("stop completed but acknowledgement was lost")
+
+    backend = StopFailsAfterSideEffect()
+    supervisor, records, _ = harness(backend)
+    unit = supervisor.start(
+        spec(61), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "61")
+    )
+    assert unit in backend.running
+
+    with pytest.raises(TimeoutError):
+        supervisor.stop(records[61])
+    assert records[61].state == "stop_pending"
+    assert unit not in backend.running
+
+    # A fresh supervisor instance sees the same durable lease and confirms the
+    # exact unit is stopped; it never invents or enumerates another target.
+    restarted, _, _ = harness(backend, records)
+    assert restarted.recover() == {"stopped_units": [unit], "count": 1}
+    assert records[61].state == "stopped"
+    assert backend.stopped == [unit, unit]
+
+
+def test_recovery_stop_failure_retains_lease_for_a_later_recovery_attempt():
+    class StopFailsOnce(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        def stop(self, unit_name):
+            self.stopped.append(unit_name)
+            if self.fail:
+                self.fail = False
+                raise OSError("systemd stop response unavailable")
+
+    backend = StopFailsOnce()
+    record = RuntimeUnitRecord(62, "ai-chess-arena-runtime-62.service", "active")
+    supervisor, records, _ = harness(backend, {62: record})
+    with pytest.raises(OSError):
+        supervisor.recover()
+    assert records[62].state == "recovery_stop_pending"
+
+    restarted, _, _ = harness(backend, records)
+    assert restarted.recover() == {"stopped_units": [record.unit_name], "count": 1}
+    assert records[62].state == "stopped"
+    assert backend.stopped == [record.unit_name, record.unit_name]

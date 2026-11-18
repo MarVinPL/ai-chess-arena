@@ -122,3 +122,48 @@ def test_cancellation_during_inference_uses_real_ipc_stop(tmp_path):
         release.set()
         server.shutdown()
         thread.join(2)
+
+
+def test_ipc_start_side_effect_survives_lost_response_and_status_reconciles(tmp_path):
+    import socketserver
+    import pytest
+    from runtime_supervisor_ipc import SupervisorIPCError, supervisor_request
+
+    state = {"lease": "absent", "unit": None, "start_calls": 0}
+    job_id = 74
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+
+    class Handler(socketserver.StreamRequestHandler):
+        def handle(self):
+            request = json.loads(self.rfile.readline().decode())
+            if request["action"] == "start":
+                state.update(lease="active", unit=unit)
+                state["start_calls"] += 1
+                # Simulate process/socket loss after the privileged side effect
+                # but before the client receives its acknowledgement.
+                return
+            if request["action"] == "status":
+                response = {"ok": True, "result": {
+                    "job_id": job_id, "lease_exists": state["lease"] != "absent",
+                    "unit_name": state["unit"], "lease_state": state["lease"],
+                }}
+                self.wfile.write(json.dumps(response).encode() + b"\n")
+
+    class Server(socketserver.ThreadingUnixStreamServer):
+        daemon_threads = True
+
+    socket_path = str(tmp_path / "drop-response.sock")
+    server = Server(socket_path, Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(SupervisorIPCError, match="nieprawidłową odpowiedź"):
+            supervisor_request(socket_path, "start", job_id)
+        status = supervisor_request(socket_path, "status", job_id)
+        assert status["lease_state"] == "active"
+        assert status["unit_name"] == unit
+        assert state["start_calls"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
