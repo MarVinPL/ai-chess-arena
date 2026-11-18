@@ -98,3 +98,9 @@ A disposable candidate was built and invoked directly on the existing VPS. The n
 Targeted tests covering the worker, deterministic supervisor bundle, supervisor service configuration/notify, systemd policy/backend and worker packaging: **72 passed**. Both versioned systemd units pass `systemd-analyze verify`; Python compile checks and `git diff --check` pass.
 
 This is a packaging and source-level correction only. It does not close B1/B3/B4/B5 or authorize production installation. The final reviewed commit must be rebuilt to produce its own artifact hash, then undergo independent security review and disposable real-systemd integration before installation.
+
+## Supervisor zipapp reproducibility check
+
+Rebuilt the existing deterministic supervisor zipapp from this branch on the VPS. It contains exactly the 14 expected source entries and passes ZIP integrity validation. Observed SHA-256: `7e00eb3c56ebd1470866cde1f26ccfc5499ee488145f474616726ba54663f861`. The candidate remains in a private `/var/tmp` directory and is not installed. The bootstrap deliberately requires its canonical production path, so invoking the temporary copy fails closed before service imports; the repository bundle tests separately verify dependency imports without a checkout.
+
+This confirms reproducible packaging only. It is not evidence of a started supervisor daemon, and it does not close the real-systemd B1 integration gate or the independent review gates.
