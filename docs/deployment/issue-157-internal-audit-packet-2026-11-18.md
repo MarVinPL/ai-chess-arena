@@ -26,7 +26,9 @@ Status: **internal audit packet; audit execution and sign-off are tracked separa
 - `runtime_worker` SHA-256: `d7d7ab4be3637bb9c618e1e6d1ec67cbfcd7d847b791b31d045b7d7486d6dc1d` (9,574 bytes)
 - `runtime_supervisor.pyz` SHA-256: `bddd166dc46d14f2dcb6d08ac7acfd41e7e46e8c023a51c343719a0f19bbeb02` (44,746 bytes)
 - Two independent builds were byte-identical. This establishes reproducibility for the recorded build process, not trusted provenance or source approval.
-- Existing legacy binary `/home/debian/ai-agent/bin/llamafile` has the expected hash but is owned by `debian:debian`; the worker requires UID 0. It was not modified, copied, or executed. Hash equality alone is not provenance.
+- Official Mozilla AI release `0.10.6`, asset `llamafile-0.10.6-thin`: GitHub release API digest and size match the worker pin exactly (`756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50`, 43,856,395 bytes); a fresh HTTPS download was rehashed on the VPS and matched.
+- A separate root-owned `0555` staging copy at `/var/tmp/ai-chess-arena-runtime-provenance-20261118/llamafile` passed the worker's actual `_verify_binary()` check. The binary was not executed. The legacy `/home/debian/ai-agent/bin/llamafile` remains unchanged; its ACL grants runtime read/execute but it remains `debian:debian`.
+- This validates the staged binary against the published release digest, not a cryptographic signature or authenticated approval chain. Canonical bundle installation, model admission and inference authorization remain outstanding; B3/B4 stay open.
 
 ## Internal audit checklist
 
