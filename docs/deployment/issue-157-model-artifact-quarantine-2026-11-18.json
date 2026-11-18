@@ -60,5 +60,13 @@
     "No tournament roster or admission change",
     "No runtime installation or deployment"
   ],
-  "correction": "Earlier Issue #157 notes that stated no quarantine file existed were based on the verified-artifact registry and were incomplete. A pre-existing matching file was found outside that registry. The file content is now hash-verified and indexed; its original transfer provenance remains unknown."
+  "correction": "Earlier Issue #157 notes that stated no quarantine file existed were based on the verified-artifact registry and were incomplete. A pre-existing matching file was found outside that registry. The file content is now hash-verified and indexed; its original transfer provenance remains unknown.",
+  "current_disposition": {
+    "status": "removed_by_owner_request",
+    "removed_at": "2026-11-18T22:10:00Z",
+    "file_present": false,
+    "registry_entry_present": false,
+    "reason": "Owner requested removal of Light-R1 from the candidate list and quarantine.",
+    "no_inference": true
+  }
 }

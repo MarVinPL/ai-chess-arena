@@ -350,3 +350,8 @@ Read-only Hugging Face API metadata confirms repository `360ZhiNao/Light-R1-14B-
 ## B3 correction — Light-R1 artifact is present but runtime-blocked (2026-11-18)
 
 The earlier statements in this plan that no model was downloaded/copied and no quarantine artifact existed are superseded by `issue-157-model-artifact-quarantine-2026-11-18.md`. A pre-existing exact Light-R1 GGUF was found, fully SHA-256-verified against the pinned upstream LFS digest, and reconciled into the quarantine registry. The original transfer provenance is unknown because no matching download job/event exists. The refreshed runtime preflight remains `skipped_blocked`: manual candidate review is missing and RAM is insufficient (14.90 GiB estimated versus 1.63 GiB available). This does not authorize TEST_ONLY, runtime handoff, inference, tournament admission, or production deployment.
+
+
+## B3 candidate reset — owner-requested removal (2026-11-18)
+
+Light-R1-14B and Spark-X2.5 4B were removed from the active candidate manifest at the owner’s request. Their exact quarantined files (one Light-R1 GGUF and three Spark-X2.5 4B quantizations) were deleted from the VPS; matching verified-artifact registry entries were removed and durable removal events recorded. Historical SHA-256 values and exact identities remain in `issue-157-model-artifact-quarantine-2026-11-18.md`. No model was loaded or executed. B3 remains open pending selection of a smaller candidate that passes the conservative RAM preflight on the existing VPS (approximately 1.63 GiB available at the last measurement).

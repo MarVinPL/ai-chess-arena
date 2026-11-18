@@ -18,11 +18,7 @@ REFRESH_SECONDS = 15 * 60
 
 # Separate from the download allowlist. This adds a candidate to the runtime
 # review/preflight workflow only; it does not authorize downloading or execution.
-RUNTIME_CANDIDATES = {
-    ('hf:360ZhiNao/Light-R1-14B-DS-GGUF',
-     '0d4531e58894e0019d4a9a6aa775eb32098213cb',
-     'Light-R1-14B-Q4_0.gguf'),
-}
+RUNTIME_CANDIDATES = set()  # No model candidate is currently selected for runtime review.
 
 
 def _now(): return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
