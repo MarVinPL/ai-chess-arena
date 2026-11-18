@@ -62,7 +62,7 @@ The systemd dependency graph and readiness contract must guarantee that the API 
 - Fault injection at every IPC boundary: disconnect before commit, after commit/before response, during recovery, and during state updates.
 - Startup integration tests proving broker readiness precedes supervisor recovery and executor reconciliation never runs after incomplete recovery.
 - A disposable-VM test with the actual systemd sandbox, UID/GID identities, socket permissions and SQLite WAL mode. No production deployment may substitute for this test.
-- Independent security review of the broker protocol and systemd policy.
+- Documented internal security audit of the broker protocol and systemd policy.
 
 ## Current implementation state
 

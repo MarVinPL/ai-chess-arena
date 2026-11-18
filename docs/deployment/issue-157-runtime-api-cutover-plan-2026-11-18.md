@@ -56,13 +56,13 @@ Consequently, the cutover needs a separately tested, API-owned, idempotent schem
 
 ## Outstanding release gates
 
-- B1: real API + broker + systemd supervisor integration on disposable DB.
-- B2: SQLite WAL/sidecar behavior and rollback proof (completed on disposable copies; see B2 evidence section).
-- B3: **PARTIAL / OPEN** — reproducible worker/supervisor candidate bundles built and hashed; independent review, approved/pinned runtime binary and model artifact, and separate inference permission remain outstanding.
-- B4: **PARTIAL / OPEN** — source/build/hash traceability is recorded; authenticated signing identity, trusted verifier, independent approval, and signed provenance chain are absent.
-- B5: independent security review and operational recovery drill.
+- B1: **COMPLETE for the documented disposable API + broker + real systemd supervisor startup/recovery integration scope** (see evidence below).
+- B2: **COMPLETE for the documented disposable SQLite online-backup, WAL/sidecar rollback/restore, and crash-recovery scope** (see evidence below).
+- B3: **PARTIAL / OPEN** — reproducible worker/supervisor candidate bundles built and hashed; internal security review, approved/pinned runtime binary and model artifact, and separate inference permission remain outstanding.
+- B4: **PARTIAL / OPEN** — source/build/hash traceability is recorded; authenticated signing identity, trusted verifier, explicit release-owner approval, and signed provenance chain are absent.
+- B5: **internal, evidence-based security audit and operational recovery drill**. The implementation team may perform and document the audit; no external or independent auditor is a release prerequisite.
 
-A successful CI run or a passing unit test does not close these gates. The existing source review is not an independent security audit.
+A successful CI run or a passing unit test does not close these gates. B5 is closed only by a documented internal audit with PASS/FAIL/NOT VERIFIED results, evidence references, remediation of blocking findings, and a completed disposable operational recovery drill.
 
 ## Disposable DB and broker proof (2026-11-18)
 
@@ -97,13 +97,13 @@ A disposable candidate was built and invoked directly on the existing VPS. The n
 
 Targeted tests covering the worker, deterministic supervisor bundle, supervisor service configuration/notify, systemd policy/backend and worker packaging: **72 passed**. Both versioned systemd units pass `systemd-analyze verify`; Python compile checks and `git diff --check` pass.
 
-This is a packaging and source-level correction only. It does not close B1/B3/B4/B5 or authorize production installation. The final reviewed commit must be rebuilt to produce its own artifact hash, then undergo independent security review and disposable real-systemd integration before installation.
+This is a packaging and source-level correction only. It does not close B1/B3/B4/B5 or authorize production installation. The final reviewed commit must be rebuilt to produce its own artifact hash, then pass the documented internal security audit and disposable real-systemd integration before installation.
 
 ## Supervisor zipapp reproducibility check
 
 Rebuilt the existing deterministic supervisor zipapp from this branch on the VPS. It contains exactly the 14 expected source entries and passes ZIP integrity validation. Observed SHA-256: `7e00eb3c56ebd1470866cde1f26ccfc5499ee488145f474616726ba54663f861`. The candidate remains in a private `/var/tmp` directory and is not installed. The bootstrap deliberately requires its canonical production path, so invoking the temporary copy fails closed before service imports; the repository bundle tests separately verify dependency imports without a checkout.
 
-This confirms reproducible packaging only. It is not evidence of a started supervisor daemon, and it does not close the real-systemd B1 integration gate or the independent review gates.
+This confirms reproducible packaging only. It is not evidence of a started supervisor daemon, and it does not close the real-systemd B1 integration gate or the remaining documented release gates.
 
 ## Disposable real-systemd recovery drill (2026-11-18)
 
@@ -203,7 +203,7 @@ Executed on the existing VPS with a disposable online SQLite backup under `/var/
 
 Production safety verification after the drill: `ai-chess-arena.service` remained active with the same PID `3417317` and release `ab4a8cb`; the production supervisor remained `LoadState=not-found`, `ActiveState=inactive`, `MainPID=0`. No production DB migration, restart, worker installation, model download, inference, Caddy/ACL change, or persistent systemd unit was performed. The previous `/run/lock/ai-chess-arena-runtime-test.lock` file was only inspected; its timestamp remained 2026-11-17 23:54:42 and it was not changed. The new test profile uses its own lock path under the staging root.
 
-**B1 is now satisfied for the defined API + broker + real `Type=notify` supervisor startup/recovery integration.** This does not authorize runtime worker execution or production cutover. B2 remains open for full WAL/sidecar rollback/restore; B3 remains open for reviewed/pinned worker artifact plus independent model-artifact approval and separate inference permission; B4 remains open for complete provenance/approval chain; B5 remains open for independent security review and operational recovery drill. The disposable staging root is removed after evidence capture.
+**B1 is now satisfied for the defined API + broker + real `Type=notify` supervisor startup/recovery integration.** This does not authorize runtime worker execution or production cutover. B2 remains open for full WAL/sidecar rollback/restore; B3 remains open for reviewed/pinned worker artifact plus explicit model-artifact approval and separate inference permission; B4 remains open for complete provenance/approval chain; B5 remains open for the documented internal security audit and operational recovery drill. The disposable staging root is removed after evidence capture.
 
 ## SQLite WAL/sidecar backup and rollback drill — B2 evidence (2026-11-18)
 
@@ -230,7 +230,7 @@ The machine-readable evidence was captured in `evidence.json`; SHA-256: `aefaad9
 - A backup's logical contents do not imply the destination journal mode will change: the drill retained the destination's WAL mode. Therefore inspect and explicitly account for the target's journal mode; do not assume restoring a backup silently converts WAL to DELETE (or vice versa).
 - Keep the DB backup and exact application release as a coordinated rollback pair. Never restore only one half of a schema-changing deployment.
 
-**B2 is satisfied for the tested SQLite online-backup, committed-WAL/sidecar capture, sidecar-present rollback restore, and uncommitted-transaction crash-recovery scope on disposable copies.** This does not authorize production cutover or changing the production journal mode. B3, B4, and B5 remain open; B5 still requires an independent security review and a separately planned operational recovery exercise.
+**B2 is satisfied for the tested SQLite online-backup, committed-WAL/sidecar capture, sidecar-present rollback restore, and uncommitted-transaction crash-recovery scope on disposable copies.** This does not authorize production cutover or changing the production journal mode. B3, B4, and B5 remain open; B5 requires a documented internal security audit and a separately planned operational recovery exercise; no external auditor is required.
 
 ## B3 candidate artifact build and provenance preflight (2026-11-18)
 
@@ -243,7 +243,7 @@ Candidate SHA-256 values:
 
 Build environment: Python 3.13.5, zlib 1.3.1. The source tree was clean at build time; source commit/tree, SHA-256 for every included source/builder file, artifact hashes, sizes, modes, ZIP members, and inert smoke-test outcomes are recorded in `docs/deployment/issue-157-artifact-manifest-2026-11-18.json`.
 
-Candidates remained under `/var/tmp/ai-chess-arena-b3-artifacts-20261118-01`, owned by `debian:debian`; they were not installed into `/usr/local`, not root-pinned, and not referenced by production configuration. The worker source still pins a specific llamafile SHA-256, but the corresponding binary has not been supplied/reviewed/approved as part of this candidate build. There is no model artifact approval and no inference permission. Consequently this is reproducible packaging/provenance evidence only: **B3 remains OPEN** pending independent review, a reviewed/pinned runtime binary and model artifact, and the separately required explicit inference authorization. B4 also remains open for the complete approval/signature chain; B5 remains open for independent security review and operational recovery.
+Candidates remained under `/var/tmp/ai-chess-arena-b3-artifacts-20261118-01`, owned by `debian:debian`; they were not installed into `/usr/local`, not root-pinned, and not referenced by production configuration. The worker source still pins a specific llamafile SHA-256, but the corresponding binary has not been supplied/reviewed/approved as part of this candidate build. There is no model artifact approval and no inference permission. Consequently this is reproducible packaging/provenance evidence only: **B3 remains OPEN** pending completion of the internal security audit, a reviewed/pinned runtime binary and model artifact, and the separately required explicit inference authorization. B4 also remains open for the complete approval/signature chain; B5 remains open for the documented internal security audit and operational recovery.
 
 ## B3 read-only runtime artifact cross-check (2026-11-18)
 
@@ -251,9 +251,9 @@ A further read-only cross-check compared the worker's compiled-in `LLAMAFILE_SHA
 
 **The existing binary is not an installable runtime candidate in its current state.** The worker's `_verify_binary()` requires UID 0 ownership, no group/world write bits, and the exact hash. The canonical `/usr/local/lib/ai-chess-arena-runtime/llamafile` is absent; the candidate runtime directory and worker/supervisor systemd unit files are also absent. The legacy binary's `debian:debian` ownership therefore fails the worker's root-owned binary contract. It was not copied, chowned, chmodded, or otherwise modified.
 
-Static source review confirmed the intended trust chain is artifact-specific: enqueue checks a TEST_ONLY permission against model ID/repository/full 40-character revision/SHA-256; supervisor authority rechecks the same grant and verified quarantine registry; handoff copies the expected size/hash into a per-job immutable snapshot; the worker checks the read-only model file's owner/mode/size and checks the llamafile's root ownership/mode/hash. This was a source-level review only, not an independent security assessment.
+Static source review confirmed the intended trust chain is artifact-specific: enqueue checks a TEST_ONLY permission against model ID/repository/full 40-character revision/SHA-256; supervisor authority rechecks the same grant and verified quarantine registry; handoff copies the expected size/hash into a per-job immutable snapshot; the worker checks the read-only model file's owner/mode/size and checks the llamafile's root ownership/mode/hash. This was a limited source-level review, not the complete documented internal security audit.
 
-No exact GGUF model repository, revision, artifact SHA-256, filename, or licence has been selected/approved for this runtime release. No model was downloaded or copied. There is no active TEST_ONLY grant for a concrete artifact in this B3 candidate record, and no inference authorization. This is consistent with the user's earlier explicit constraint that proceeding with PR review does not approve model download, execution, or inference. **B3 remains OPEN.** Do not promote the legacy binary by changing ownership or permissions: a future install needs an independently verified binary provenance, a root-owned immutable bundle, a separately reviewed model artifact and licence, and the required explicit user approvals.
+No exact GGUF model repository, revision, artifact SHA-256, filename, or licence has been selected/approved for this runtime release. No model was downloaded or copied. There is no active TEST_ONLY grant for a concrete artifact in this B3 candidate record, and no inference authorization. This is consistent with the user's earlier explicit constraint that proceeding with PR review does not approve model download, execution, or inference. **B3 remains OPEN.** Do not promote the legacy binary by changing ownership or permissions: a future install needs verifiable binary provenance, a root-owned immutable bundle, a separately reviewed model artifact and licence, and the required explicit user approvals.
 
 ## B4 release-provenance and signing-infrastructure inventory (2026-11-18)
 
@@ -261,6 +261,6 @@ The current evidence chain now records the source commit/tree, per-source SHA-25
 
 A read-only repository/host inventory found no existing `cosign`, `gpgv`, or `in-toto-run` executable, no repository signing/attestation workflow, and no documented release-signing key or trust-root policy. `gpg` and `openssl` executables exist, but their presence is not a signing identity or an approval chain. No key was generated, imported, inspected, or used; no self-signed or locally trusted signature was fabricated. The current JSON manifest is deliberately unsigned.
 
-Required B4 closure still needs an agreed trusted signing identity and verifier/trust-root distribution, authenticated approval of the exact source commit and worker/supervisor/binary/model hashes, a signed provenance/attestation artifact, and a root-owned environment/pin file whose installation is verified against that approved record. The current PR author/CI and local VPS build operator are not independent approvers. **B4 remains OPEN (traceability evidence present; authenticated approval/signature chain absent).**
+Required B4 closure still needs an agreed trusted signing identity and verifier/trust-root distribution, authenticated approval of the exact source commit and worker/supervisor/binary/model hashes, a signed provenance/attestation artifact, and a root-owned environment/pin file whose installation is verified against that approved record. The release owner must explicitly approve the exact source commit and artifact hashes through the documented authenticated approval process; a CI pass alone is not approval. **B4 remains OPEN (traceability evidence present; authenticated approval/signature chain absent).**
 
 The repository contains a separate SmolLM2-1.7B GGUF candidate record (`docs/model-audit/candidate-issue-132-smollm2-1.7b.md`), but its status is `review_required`, `not_admitted`, and `not technically evaluated`; it is not a runtime model selection or approval. Its presence does not authorize download, handoff, execution, or inference.

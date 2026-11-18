@@ -131,7 +131,7 @@ download, inference or production setting was exercised. Debian/systemd 257
 must still prove that BindReadOnlyPaths remains visible after the source tree
 is hidden, that the placeholder is cleaned after unit teardown, and that the
 PrivateNetwork bridge works without egress. Property normalization and
-independent review remain open.
+internal security audit remain open.
 
 ### Cross-UID socket DAC integration evidence (2026-11-17)
 
@@ -255,7 +255,7 @@ was a harmless synthetic stub. Resource limits were inspected as effective
 properties; active memory/CPU limit-exhaustion behavior was not stress-tested.
 The API executor is wired in code to the supervised client runner, but the root
 supervisor service and immutable worker bundle are not installed on the VPS.
-Independent review, separate host provisioning, and real-model E2E remain open
+Internal security audit, separate host provisioning, and real-model E2E remain open
 release gates.
 
 ### Cancellation/revocation and durable result commit (2026-11-18)

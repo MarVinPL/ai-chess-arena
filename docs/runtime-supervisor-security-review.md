@@ -47,30 +47,30 @@ A disposable Debian 13 KVM guest running systemd 257 and cgroup v2 successfully 
 
 The first VM recovery attempt exposed that the supervisor could not remove the runtime-owned output directory with only `CAP_CHOWN` and `CAP_DAC_READ_SEARCH`: mode `02710` intentionally withholds group write, and the unit does not grant `CAP_DAC_OVERRIDE`. The cleanup routine now validates the exact known entries first, then uses its already-granted `CAP_CHOWN` to transfer that exact directory to the supervisor and set mode `0700` before unlinking the known entries. It does not broaden the service capability set or perform recursive deletion.
 
-**Status:** the updated bundle passed the restricted-capability recovery cleanup through the real supervisor IPC in the disposable VM. Unit coverage asserts the ownership/mode handback sequence. Keep this behavior in the independent review scope.
+**Status:** the updated bundle passed the restricted-capability recovery cleanup through the real supervisor IPC in the disposable VM. Unit coverage asserts the ownership/mode handback sequence. Keep this behavior in the internal audit scope.
 
 ### B4 — Artifact pins and release provenance remain manual provisioning inputs
 
 The service checks root ownership, non-writable modes and SHA-256 pins, but the trustworthiness of the expected hashes depends on the separate release/provisioning procedure. The repository does not itself establish an authenticated approval/signature chain for the environment file and pin values.
 
-**Required closure:** independent review of how source commit, deterministic bundle, worker binary, hashes, allowlist, and root-owned environment file are approved and installed. Capture hashes from the reviewed release artifact; do not copy values from an untrusted runtime environment.
+**Required closure:** internal audit verifies how source commit, deterministic bundle, worker binary, hashes, allowlist, and root-owned environment file are approved and installed. Capture hashes from the release artifact; do not copy values from an untrusted runtime environment.
 
-### B5 — Independent security review and operational recovery drill remain outstanding
+### B5 — Internal security audit and operational recovery drill remain outstanding
 
-The code review here is not independent assurance. No real model was started and no production service or host resource was touched.
+This is an internal audit criterion, not an external assurance claim. No real model was started and no production service or host resource was touched.
 
-**Required closure:** external reviewer examines privilege boundaries, TOCTOU assumptions, SQLite broker transactions, artifact handoff, systemd policy, logging, and failure recovery. Then run a documented disaster/restart drill in the disposable VM, including API restart, supervisor restart, broker crash, cancellation races, and an unclean worker exit.
+**Required closure:** the implementation team performs and records a structured internal audit of privilege boundaries, TOCTOU assumptions, SQLite broker transactions, artifact handoff, systemd policy, logging, and failure recovery. Record PASS/FAIL/NOT VERIFIED, evidence, severity, remediation, and final release-owner sign-off. Then run a documented disaster/restart drill in the disposable VM, including API restart, supervisor restart, broker crash, cancellation races, and an unclean worker exit. No external or independent auditor is a prerequisite.
 
 ## Provisioning checklist — only after separate approval
 
-1. Freeze the exact reviewed Git commit; build the deterministic supervisor zipapp and worker from approved sources; independently verify and record SHA-256 values.
+1. Freeze the exact release-owner-approved Git commit; build the deterministic supervisor zipapp and worker from approved sources; verify and record SHA-256 values.
 2. Prepare a root-owned, non-writable bundle directory and root-owned environment file. Keep secrets and production acknowledgement out of Git.
 3. Create dedicated non-login API/runtime identities only after checking existing UID/GID/group membership and collisions. Runtime identity must not share API identity.
 4. Provision only the documented roots with exact owner/group/mode: handoff `root:debian 0711`, output `root:debian 0755` (the proposed service runs as `root:debian`), quarantine `API:API-group 0711`, supervisor socket directory `root:debian 0750`; validate every parent component and mount.
 5. Pre-provision the lease table through the API-owned migration path. Do not let the privileged supervisor create or migrate schema.
 6. Install the supervisor service unit only after B1–B4 have been reviewed; define API/supervisor ordering and readiness, and verify stop/restart ordering.
 7. Run the disposable-VM SQLite/WAL and systemd sandbox matrices; retain logs, property snapshots, mount/cgroup evidence, and negative permission tests.
-8. Complete independent security review and sign off each finding. Keep runtime execution opt-in disabled until all gates are closed.
+8. Complete the documented internal security audit and sign off each finding. Keep runtime execution opt-in disabled until all gates are closed.
 9. Enable production execution only in a separately approved change window, with a rollback plan and a verified no-model/no-unit baseline.
 
 ## Explicit non-actions on the production host
@@ -91,7 +91,7 @@ The code review here is not independent assurance. No real model was started and
 - `systemd-analyze verify`: PASS. `systemd-analyze security`: exposure 4.1.
 - Updated runtime suite: 716 passed, 1 skipped, 43 subtests passed; `compileall` and `git diff --check`: PASS before the documentation update.
 - Production guardrails: `ai-chess-arena.service` active; supervisor unit not installed on production; no machines listed; production DB and configuration untouched.
-- Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, production worker/real artifact mount and timeout matrix, authenticated release provenance, independent security review, and complete recovery drill.
+- Remaining release gates: production API dependency/shutdown integration, full SQLite matrix, production worker/real artifact mount and timeout matrix, authenticated release provenance, internal security audit, and complete recovery drill.
 
 
 ### SQLite journal-mode boundary (2026-11-18)

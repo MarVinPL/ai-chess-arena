@@ -21,7 +21,7 @@ The runner contract receives the approved artifact path, timeout budget, and a c
 - The production profile is not enabled on the VPS; no real model or inference has been run.
 - The root supervisor service and immutable worker bundle are not installed/enabled by this PR. Production startup therefore fails closed unless those separately provisioned dependencies are present.
 
-This remains an integration foundation, not completion of Issue #157. Disposable-environment validation and independent security review remain release gates.
+This remains an integration foundation, not completion of Issue #157. Disposable-environment validation and the documented internal security audit remain release gates.
 
 
 ## Two-stage execution authorization (default off)
@@ -81,4 +81,4 @@ never signalled; the job is still marked failed with an explanatory record.
 
 ## Remaining security boundary
 
-The legacy `runtime_subprocess.LlamafileSmokeRunner` remains an unwired prototype and is not the production runner. The wired path uses the privileged supervisor, a separate runtime UID, transient systemd unit/cgroup, namespace and filesystem restrictions, resource limits, immutable artifact handoff, and AF_UNIX bridge. These controls have code and disposable-container evidence, but the production supervisor service/bundle are not installed on the VPS; actual host provisioning, independent security review and a separately approved real-model E2E remain release gates.
+The legacy `runtime_subprocess.LlamafileSmokeRunner` remains an unwired prototype and is not the production runner. The wired path uses the privileged supervisor, a separate runtime UID, transient systemd unit/cgroup, namespace and filesystem restrictions, resource limits, immutable artifact handoff, and AF_UNIX bridge. These controls have code and disposable-container evidence, but the production supervisor service/bundle are not installed on the VPS; actual host provisioning, internal security audit and a separately approved real-model E2E remain release gates.

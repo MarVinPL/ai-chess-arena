@@ -30,4 +30,4 @@ values from the IPC request.
 
 ## Production gate
 
-Before production enablement, complete separate host provisioning and independent review of the trusted job-to-spec handler, persistent lease lifecycle, effective systemd properties, artifact/socket handoff, private-network bridge and crash recovery. Disposable Debian/systemd tests cover the integrated path, but do not replace host-specific validation. This PR does not install or enable the root supervisor service or create host identities/directories.
+Before production enablement, complete separate host provisioning and the documented internal audit of the trusted job-to-spec handler, persistent lease lifecycle, effective systemd properties, artifact/socket handoff, private-network bridge and crash recovery. Disposable Debian/systemd tests cover the integrated path, but do not replace host-specific validation. This PR does not install or enable the root supervisor service or create host identities/directories.

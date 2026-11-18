@@ -75,7 +75,7 @@ supervisor's notify/readiness, restart/SIGTERM lifecycle, real transient worker
 start/stop and several isolation boundaries. Basic SQLite WAL read-only behavior
 was also verified. The remaining production API/broker lifecycle and shutdown
 ordering, full SQLite sidecar matrix, production worker/artifact mount, release
-provenance and independent security review are still open. A broad writable
+provenance and the internal security audit are still open. A broad writable
 `/home/debian/ai-chess-arena` allowance remains prohibited.
 
 Before production: validate that the actual API process creates a `0660`
