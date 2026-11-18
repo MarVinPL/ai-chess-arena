@@ -57,7 +57,7 @@ Consequently, the cutover needs a separately tested, API-owned, idempotent schem
 ## Outstanding release gates
 
 - B1: real API + broker + systemd supervisor integration on disposable DB.
-- B2: SQLite WAL/sidecar behavior and rollback proof.
+- B2: SQLite WAL/sidecar behavior and rollback proof (completed on disposable copies; see B2 evidence section).
 - B3: reviewed and pinned worker artifact; model artifact approval and separate inference permission remain independent.
 - B4: complete release provenance, hashes, environment pins, and approval chain.
 - B5: independent security review and operational recovery drill.
@@ -204,3 +204,30 @@ Executed on the existing VPS with a disposable online SQLite backup under `/var/
 Production safety verification after the drill: `ai-chess-arena.service` remained active with the same PID `3417317` and release `ab4a8cb`; the production supervisor remained `LoadState=not-found`, `ActiveState=inactive`, `MainPID=0`. No production DB migration, restart, worker installation, model download, inference, Caddy/ACL change, or persistent systemd unit was performed. The previous `/run/lock/ai-chess-arena-runtime-test.lock` file was only inspected; its timestamp remained 2026-11-17 23:54:42 and it was not changed. The new test profile uses its own lock path under the staging root.
 
 **B1 is now satisfied for the defined API + broker + real `Type=notify` supervisor startup/recovery integration.** This does not authorize runtime worker execution or production cutover. B2 remains open for full WAL/sidecar rollback/restore; B3 remains open for reviewed/pinned worker artifact plus independent model-artifact approval and separate inference permission; B4 remains open for complete provenance/approval chain; B5 remains open for independent security review and operational recovery drill. The disposable staging root is removed after evidence capture.
+
+## SQLite WAL/sidecar backup and rollback drill — B2 evidence (2026-11-18)
+
+Executed `tools/issue157_sqlite_rollback_drill.py` on the existing VPS with Python 3.13.5 / SQLite 3.46.1. The script opens the live source using SQLite URI `mode=ro`, takes its snapshot with `Connection.backup()`, and performs every mutation/restore under a new mode-0700 direct child of `/var/tmp`. It rejects a pre-existing staging root and never writes to the source DB.
+
+Disposable root: `/var/tmp/ai-chess-arena-b2-rollback-20261118-04` (mode `0700`). The source `/var/lib/ai-chess-arena/arena.sqlite3` was in `journal_mode=delete`; the online snapshot passed `integrity_check=ok` and `foreign_key_check` with zero violations. The baseline artifact was 7,782,400 bytes, SHA-256 `5ce1f13b5128d6bc5fa3b6e8ff9e8c3489eea041ff4c3fc6ad783d0c56ef2a33`, with 14 games, 5 tournaments, and 57 league models. Its logical SQLite dump SHA-256 was `71a42dce1303ea528df36da60e711b812c07b4c79a5a90e5a34026b9a79f205d`.
+
+### Executed matrix
+
+1. **WAL sidecars present:** on a disposable clone only, enabled WAL, pinned a reader snapshot, committed a writer update, and observed both `-wal` (24,752 bytes) and `-shm` present.
+2. **Backup includes committed WAL frames:** while both sidecars existed, made a second online backup. The backup contained the committed value `committed-before-backup`; integrity and FK checks passed. This proves the backup API captured committed WAL content rather than copying only the main DB file.
+3. **Rollback with destination sidecars present:** committed a separate mutation to the disposable target and verified its logical dump differed from the restore point. Both sidecars were still present before restore. Restored with `Connection.backup()` into the same WAL-mode target; both sidecars remained SQLite-managed, the logical dump matched the restore point exactly (`d50ec91e6fb6e363fd2d00cc8eafa89b81739b8c07d16d34caa31133f97d22a0`), and the mutation-only row disappeared. `integrity_check=ok`, zero FK violations.
+4. **Uncommitted writer termination:** a child process opened `BEGIN IMMEDIATE`, inserted an uncommitted probe row, signalled readiness, and was terminated with `SIGKILL` (exit `-9`). Reopening the disposable DB did not expose the uncommitted row; integrity and FK checks passed.
+5. **Production invariants:** the production API remained active with MainPID `3417317`; the production DB remained `journal_mode=delete`, `integrity_check=ok`, zero FK violations, and no `-wal`/`-shm` sidecars. The production supervisor remained absent/inactive. No production DB write, API restart, journal-mode change, or service/configuration change occurred.
+
+The machine-readable evidence was captured in `evidence.json`; SHA-256: `aefaad915e0247d4d967c23cf6cddc91fe19c20bbbeff1d73e7efc20ed58e35a`. The script and its tests are committed to the PR so the drill is reproducible; the private staging root is removed after evidence capture.
+
+### Operational rollback rules established by the drill
+
+- Take the rollback snapshot with SQLite's online backup API; never use a plain copy of a live DB file as the backup method.
+- Quiesce/stop only the Arena API before a production restore and verify that no process still has the target DB open. Do not restore underneath active readers/writers.
+- Restore through SQLite's backup API with a fresh connection. Do not manually copy, unlink, or synthesize `-wal`, `-shm`, or rollback-journal files; SQLite manages those files as part of its locking/recovery protocol.
+- After restore, close all restore connections, reopen read-only, verify `integrity_check`, `foreign_key_check`, journal mode, schema/version, and application-level row/status snapshots before restarting the previous API release.
+- A backup's logical contents do not imply the destination journal mode will change: the drill retained the destination's WAL mode. Therefore inspect and explicitly account for the target's journal mode; do not assume restoring a backup silently converts WAL to DELETE (or vice versa).
+- Keep the DB backup and exact application release as a coordinated rollback pair. Never restore only one half of a schema-changing deployment.
+
+**B2 is satisfied for the tested SQLite online-backup, committed-WAL/sidecar capture, sidecar-present rollback restore, and uncommitted-transaction crash-recovery scope on disposable copies.** This does not authorize production cutover or changing the production journal mode. B3, B4, and B5 remain open; B5 still requires an independent security review and a separately planned operational recovery exercise.
