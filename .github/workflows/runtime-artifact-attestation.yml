@@ -16,6 +16,9 @@ jobs:
     name: Build and attest runtime artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # GitHub pauses this job until the runtime-release reviewer approves it.
+    environment:
+      name: runtime-release
     permissions:
       contents: read
       id-token: write
