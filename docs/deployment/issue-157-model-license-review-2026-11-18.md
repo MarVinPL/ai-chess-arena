@@ -47,3 +47,9 @@ This is strong evidence of a permissive model-weight license chain, but it is no
 - `tournament_admission`: `false`.
 
 To close the license sub-gate, the release owner must explicitly accept the documented license evidence and residual dataset limitation, or keep the candidate blocked. Even an accepted license review does not itself authorize downloading weights, creating a quarantine artifact, granting TEST_ONLY, executing inference, or admitting the model to the tournament; those remain separate gates.
+
+## Release-owner acceptance — 2026-11-18
+
+**Decision: ACCEPTED WITH RECORDED LIMITATION.** The release owner explicitly accepted the documented Apache-2.0/MIT model-weight license evidence and acknowledged the stated limitation that a complete dataset-by-dataset training-data rights and attribution inventory was not verified. The license sub-gate is recorded as **PASS_WITH_RECORDED_LIMITATION**.
+
+This is an owner risk-acceptance decision for the reviewed model-weight license evidence, not a statement that every training dataset has been independently cleared. Accordingly `verified_permissive` remains `false`; the dataset-rights limitation and absence of a separate GGUF LICENSE/NOTICE remain visible. The acceptance does not admit the model artifact, authorize downloading weights, create a quarantine artifact, recompute the local hash, activate TEST_ONLY, execute inference, alter the tournament roster, or authorize production deployment. Those are separate gates and remain closed. Machine-readable owner decision: `issue-157-model-license-owner-acceptance-2026-11-18.json`.

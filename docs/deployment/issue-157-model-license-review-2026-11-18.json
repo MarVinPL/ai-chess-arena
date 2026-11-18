@@ -46,11 +46,14 @@
     "training_data_rights_inventory": "not_verified"
   },
   "review": {
-    "result": "PERMISSIVE_LICENSE_EVIDENCE_FOUND_FINAL_ADMISSION_NOT_APPROVED",
-    "license_status": "review_required",
+    "result": "OWNER_ACCEPTED_PERMISSIVE_WEIGHT_LICENSE_EVIDENCE_WITH_TRAINING_DATA_CAVEAT",
+    "license_status": "owner_accepted_with_dataset_caveat",
     "verified_permissive": false,
     "technical_readiness": "not_assessed_by_this_review",
-    "owner_acceptance_required": true
+    "owner_acceptance_required": false,
+    "license_subgate": "PASS_WITH_RECORDED_LIMITATION",
+    "owner_acceptance_date": "2026-11-18",
+    "owner_acceptance_scope": "acceptance of the documented Apache-2.0/MIT model-weight license evidence and explicit acknowledgement that the complete dataset-by-dataset training-data rights inventory is not verified"
   },
   "safety": {
     "weights_downloaded": false,

@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-18",
+  "decision": "ACCEPTED_WITH_RECORDED_LIMITATION",
+  "decision_source": "explicit release-owner approval in ChatGPT conversation",
+  "candidate": "360ZhiNao/Light-R1-14B-DS-GGUF@0d4531e58894e0019d4a9a6aa775eb32098213cb:Light-R1-14B-Q4_0.gguf",
+  "accepted_evidence": [
+    "Qihoo360 Light-R1 publisher project Apache-2.0 license",
+    "official Light-R1 model Apache-2.0 declaration",
+    "official Light-R1 GGUF Apache-2.0 declaration",
+    "DeepSeek-R1-Distill-Qwen-14B MIT license evidence",
+    "Qwen2.5-14B-Instruct Apache-2.0 license evidence",
+    "candidate mirror upstream LFS size and SHA-256 match the official GGUF publication"
+  ],
+  "acknowledged_limitations": [
+    "complete dataset-by-dataset training-data rights and attribution inventory is not verified",
+    "candidate GGUF repository has no separate LICENSE or NOTICE file",
+    "upstream LFS hash has not been recomputed against a locally downloaded artifact"
+  ],
+  "license_subgate": "PASS_WITH_RECORDED_LIMITATION",
+  "verified_permissive": false,
+  "artifact_admission": false,
+  "weights_downloaded": false,
+  "quarantine_artifact_present": false,
+  "local_hash_recomputed": false,
+  "runtime_test_only_grant_active": false,
+  "inference_authorized": false,
+  "tournament_admission": false,
+  "production_deployment_authorized": false
+}
