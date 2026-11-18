@@ -51,6 +51,15 @@ class CandidateReviewPreviewFrontendTests(unittest.TestCase):
         self.assertIn("reviewForm.dataset.originalProposal=JSON.stringify(p)", self.html)
         self.assertIn('przed: '+"'", self.proposal_form)
 
+
+    def test_candidate_queue_filters_by_model_and_review_status(self):
+        self.assertIn('id=\"hf-candidate-query\"', self.html)
+        self.assertIn('id=\"hf-candidate-status-filter\"', self.html)
+        self.assertIn("statusFilter==='needs_review'", self.html)
+        self.assertIn("statusFilter==='review_in_progress'", self.html)
+        self.assertIn("statusFilter==='inactive'", self.html)
+        self.assertIn("addEventListener('change',renderHfCandidates)", self.html)
+
     def test_review_remains_evidence_only_and_does_not_admit_model(self):
         self.assertIn('nie zmienia allowlisty', self.review_form)
         self.assertIn('nie dopuszcza modelu do turnieju', self.review_form)

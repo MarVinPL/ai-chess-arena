@@ -203,7 +203,7 @@ button.stop{background:#744b4b;border-color:#986363}
   </section>
   <h4>Wstępny audyt kandydatów Hugging Face</h4>
   <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
-  <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
+  <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><select class="field" id="hf-candidate-status-filter" aria-label="Filtr statusu kandydata"><option value="all">Wszystkie statusy</option><option value="no_audit">Bez audytu</option><option value="needs_review">Po audycie · oczekuje na ręczny przegląd</option><option value="review_in_progress">Ręczny przegląd rozpoczęty</option><option value="inactive">Nieaktywne źródło</option></select><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
   <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
   <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
   <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
@@ -553,7 +553,13 @@ let hfCandidateItems=[];
 function renderHfCandidates(){
  const host=$('hf-candidate-list');if(!host)return;host.replaceChildren();
  const query=String($('hf-candidate-query')?.value||'').trim().toLowerCase();
- const filtered=hfCandidateItems.filter(x=>!query||[x.display_name,x.repo_id,x.declared_license_tag,x.catalog_id].some(v=>String(v||'').toLowerCase().includes(query)));
+ const statusFilter=String($('hf-candidate-status-filter')?.value||'all');
+ const filtered=hfCandidateItems.filter(x=>{
+  const matchesQuery=!query||[x.display_name,x.repo_id,x.declared_license_tag,x.catalog_id].some(v=>String(v||'').toLowerCase().includes(query));
+  const inactive=!['active','not_checked'].includes(x.source_status);
+  const matchesStatus=statusFilter==='all'||(statusFilter==='no_audit'&&!x.last_audit&&!inactive)||(statusFilter==='needs_review'&&!!x.last_audit&&!x.last_review&&!inactive)||(statusFilter==='review_in_progress'&&!!x.last_review)||(statusFilter==='inactive'&&inactive);
+  return matchesQuery&&matchesStatus;
+ });
  $('hf-candidate-count').textContent='Katalog: '+hfCandidateItems.length+' kandydatów · widoczne: '+Math.min(filtered.length,30)+' / '+filtered.length+'. Audyt uruchamiany osobno dla wybranego wpisu.';
  if(!filtered.length){host.textContent='Brak kandydatów pasujących do wyszukiwania.';return;}
  filtered.slice(0,30).forEach(item=>{
@@ -638,6 +644,7 @@ async function loadHfCandidates(){
  catch(e){host.textContent='Nie udało się odczytać katalogu kandydatów: '+e;}
 }
 $('hf-candidate-query')?.addEventListener('input',renderHfCandidates);
+$('hf-candidate-status-filter')?.addEventListener('change',renderHfCandidates);
 $('hf-candidate-refresh')?.addEventListener('click',loadHfCandidates);
 let hfDownloadSelections=[];
 let hfDownloadInventories={};
