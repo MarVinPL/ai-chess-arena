@@ -246,61 +246,6 @@
         "summary": "The exact selected GGUF SHA-256 and size match the pinned revision and the official Qwen base model identifies Apache-2.0. The same pinned derived repository also contains separate imatrix_unsloth.gguf and mmproj-BF16/F16.gguf helper artifacts; their provenance and terms were not independently reviewed, so the combined entry remains review_required.",
         "component_review": "No separate tokenizer/code/dataset files identified in the pinned derived tree. Optional imatrix_unsloth.gguf and mmproj-BF16.gguf/mmproj-F16.gguf are present but are not the selected manifest target and need a separate component review."
       }
-    },
-    {
-      "model_id": 9,
-      "repo_id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
-      "filename": "Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
-      "source_path": "Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
-      "size_bytes": 16810714528,
-      "sha256": "4c5e2db039e9325ac7724c8846c71356a24ad1cdfa28002d73ecb6be645f9675",
-      "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18",
-      "license": "apache-2.0",
-      "license_review_status": "review_required",
-      "license_notes": "Przypieto pelny model Q4_K_M, nie plik draft-Q8_0. Repozytorium deklaruje Apache-2.0; nalezy zachowac warunki modelu bazowego.",
-      "license_evidence": "Hugging Face model card license tag; full GGUF distinguished from separate draft head",
-      "license_url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/blob/main/README.md",
-      "excluded_files": [
-        {
-          "filename": "Qwen3.8-27B-Uncensored-draft-Q8_0.gguf",
-          "size_bytes": 3164006592,
-          "reason": "Draft head, nie samodzielny pelny model."
-        }
-      ],
-      "download_url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
-      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
-      "arena_admission": {
-        "status": "not_admitted",
-        "download_allowed": false,
-        "runtime_allowed": false,
-        "allowlist_allowed": false,
-        "tournament_allowed": false,
-        "reason": "Wpis pozostaje niezakwalifikowany; wymagany jest zwykły, niezależny przegląd. Brak zgody na pobieranie, uruchamianie, allowlistę lub turniej."
-      }
-    },
-    {
-      "model_id": 10,
-      "repo_id": "mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF",
-      "filename": "JonathanColetti-Qwen3.8-27B-Uncensored.Q4_K_S.gguf",
-      "source_path": "JonathanColetti-Qwen3.8-27B-Uncensored.Q4_K_S.gguf",
-      "size_bytes": 15825299680,
-      "sha256": "3f91986d8d136e8a8884fa6eae57c26c45e2c3a686adb5cf3e7c738204dcaf8d",
-      "revision": "be0e37087303291b3967f8cd19a193ea04cdc150",
-      "license": "apache-2.0",
-      "license_review_status": "review_required",
-      "license_notes": "README deklaruje Apache-2.0; plik Q4_K_S jest pelnym GGUF, a nie mmproj ani plikiem pomocniczym.",
-      "license_evidence": "Hugging Face README license declaration",
-      "license_url": "https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/blob/main/README.md",
-      "download_url": "https://huggingface.co/mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF/resolve/be0e37087303291b3967f8cd19a193ea04cdc150/JonathanColetti-Qwen3.8-27B-Uncensored.Q4_K_S.gguf",
-      "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
-      "arena_admission": {
-        "status": "not_admitted",
-        "download_allowed": false,
-        "runtime_allowed": false,
-        "allowlist_allowed": false,
-        "tournament_allowed": false,
-        "reason": "Wpis pozostaje niezakwalifikowany; wymagany jest zwykły, niezależny przegląd. Brak zgody na pobieranie, uruchamianie, allowlistę lub turniej."
-      }
     }
   ]
 }

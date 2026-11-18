@@ -29,31 +29,37 @@ class ModelManifestTests(unittest.TestCase):
                 source = repo_url
                 if item["model_id"] in (1, 2):
                     source = f"{repo_url}/resolve/{item['revision']}/{item['filename']}"
-                protected = item["model_id"] in (9, 10)
+                protected = False
                 metadata = {"inference": {"thinking": False}}
-                if protected:
-                    metadata["issue_71_scope_guard"] = "must-remain-unchanged"
                 connection.execute(
                     """INSERT INTO model_versions
                        (id,model_id,source,filename,sha256,size_bytes,license_verified,
                         metadata_json,license,status,managed_copy)
                        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                     (item["model_id"], item["model_id"], source,
-                     f"preexisting-{item['model_id']}.gguf" if protected else None,
-                     "a" * 64 if protected else None,
-                     12345 if protected else None, 1, json.dumps(metadata),
-                     "preexisting-license" if protected else "",
-                     "held-for-issue-71" if protected else "catalogued", 0),
+                     None, None, None, 1, json.dumps(metadata),
+                     "", "catalogued", 0),
                 )
+            # Legacy registry rows are retained untouched; removing candidates from
+            # Git manifests must not delete or rewrite production DB history.
+            for model_id in (9, 10):
+                metadata = {"issue_71_scope_guard": "legacy-preserve", "model_id": model_id}
+                connection.execute("INSERT INTO league_models(id,name) VALUES(?,?)", (model_id, f"legacy-{model_id}"))
+                connection.execute("""INSERT INTO model_versions
+                    (id,model_id,source,filename,sha256,size_bytes,license_verified,metadata_json,license,status,managed_copy)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (model_id, model_id, f"https://huggingface.co/legacy/model-{model_id}",
+                     f"legacy-{model_id}.gguf", "a"*64, 12345, 1, json.dumps(metadata),
+                     "legacy-license", "held-for-removal", 0))
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_checked_in_manifest_is_complete_and_pinned(self):
         payload = load_manifest()
-        self.assertEqual(len(payload["models"]), 10)
-        self.assertEqual(len({m["model_id"] for m in payload["models"]}), 10)
-        self.assertEqual(len({m["repo_id"] for m in payload["models"]}), 10)
+        self.assertEqual([m["model_id"] for m in payload["models"]], list(range(1, 9)))
+        self.assertEqual(len({m["repo_id"] for m in payload["models"]}), 8)
+        self.assertFalse({9, 10} & {m["model_id"] for m in payload["models"]})
         self.assertTrue(all(len(m["sha256"]) == 64 and len(m["revision"]) == 40
                             for m in payload["models"]))
 
@@ -92,28 +98,8 @@ class ModelManifestTests(unittest.TestCase):
 
     def test_non_admitted_manifest_entries_use_generic_fail_closed_permissions(self):
         payload = load_manifest()
-        for model_id in (9, 10):
-            item = next(m for m in payload["models"] if m["model_id"] == model_id)
-            self.assertEqual(item["license_review_status"], "review_required")
-            self.assertEqual(item["arena_admission"]["status"], "not_admitted")
-            for field in ("download_allowed", "runtime_allowed", "allowlist_allowed", "tournament_allowed"):
-                self.assertIs(item["arena_admission"][field], False)
-
-        # The validator applies the same rule to any manifest ID, not a special
-        # hard-coded exception for IDs 9 and 10.
-        generic = json.loads(json.dumps(payload))
-        generic_item = next(m for m in generic["models"] if m["model_id"] == 9)
-        generic_item["model_id"] = 11
-        generic_item["arena_admission"]["issue"] = 999
-        validate_manifest(generic)
-
-        for field, value in (("download_allowed", True), ("runtime_allowed", True),
-                             ("allowlist_allowed", True), ("tournament_allowed", True),
-                             ("status", "approved")):
-            broken = json.loads(json.dumps(payload))
-            next(m for m in broken["models"] if m["model_id"] == 9)["arena_admission"][field] = value
-            with self.subTest(field=field), self.assertRaises(ManifestError):
-                validate_manifest(broken)
+        self.assertEqual([m["model_id"] for m in payload["models"]], list(range(1, 9)))
+        self.assertFalse({9, 10} & {m["model_id"] for m in payload["models"]})
 
     def test_admission_metadata_is_not_reserved_for_specific_model_ids(self):
         payload = load_manifest()
@@ -128,7 +114,7 @@ class ModelManifestTests(unittest.TestCase):
     def test_draft_head_cannot_be_used_as_the_target_model(self):
         payload = load_manifest()
         broken = json.loads(json.dumps(payload))
-        draft_model = next(m for m in broken["models"] if m["model_id"] == 9)
+        draft_model = broken["models"][0]
         draft_model["filename"] = "draft-placeholder.gguf"
         draft_model["source_path"] = draft_model["filename"]
         with self.assertRaises(ManifestError):
