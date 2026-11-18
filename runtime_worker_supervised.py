@@ -7,6 +7,7 @@ The bundle, its Python modules and llamafile must be root-owned and read-only.
 from __future__ import annotations
 
 import argparse
+import grp
 import hashlib
 import os
 import queue
@@ -24,6 +25,8 @@ from runtime_socket_handoff import verify_handoff
 from runtime_unix_bridge import UnixRuntimeBridge
 
 BUNDLE_ROOT = Path("/usr/local/lib/ai-chess-arena-runtime")
+WORKER_PATH = BUNDLE_ROOT / "runtime_worker"
+SUPERVISOR_GROUP = "debian"
 LLAMAFILE = BUNDLE_ROOT / "llamafile"
 LLAMAFILE_SHA256 = "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50"
 LOOPBACK_PORT = 18080
@@ -113,13 +116,29 @@ def _limits() -> None:
 def _verify_bundle() -> None:
     root_info = BUNDLE_ROOT.lstat()
     if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0
-            or root_info.st_gid != 0 or stat.S_IMODE(root_info.st_mode) != 0o755):
+            or root_info.st_gid != 0 or stat.S_IMODE(root_info.st_mode) != 0o755
+            or BUNDLE_ROOT.resolve(strict=True) != BUNDLE_ROOT):
         raise WorkerError("Runtime bundle root ownership/mode is invalid.")
-    script = Path(__file__).resolve(strict=True)
-    script_info = script.stat()
+    script = Path(sys.argv[0])
+    if script != WORKER_PATH or script.resolve(strict=True) != WORKER_PATH:
+        raise WorkerError("Runtime worker entrypoint path is not canonical.")
+    script_info = script.lstat()
     if (not stat.S_ISREG(script_info.st_mode) or script_info.st_uid != 0
-            or (script_info.st_mode & 0o022) or not (script_info.st_mode & 0o111)):
+            or script_info.st_gid != 0 or (script_info.st_mode & 0o022)
+            or not (script_info.st_mode & stat.S_IXUSR)):
         raise WorkerError("Runtime worker entrypoint is not root-owned and immutable.")
+
+
+def _verify_output_root(path: Path, *, supervisor_gid: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise WorkerError("Runtime output root is unavailable.") from exc
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0 or info.st_gid != supervisor_gid
+            or stat.S_IMODE(info.st_mode) != 0o755
+            or path.resolve(strict=True) != path):
+        raise WorkerError("Runtime output root ownership/mode is invalid.")
 
 
 def run_job(job_id: int) -> int:
@@ -135,10 +154,11 @@ def run_job(job_id: int) -> int:
         raise WorkerError("Supervisor-provided API identity is invalid.")
 
     output_root = Path("/run/arena-runtime")
-    root_info = output_root.lstat()
-    if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0
-            or root_info.st_gid != 0 or stat.S_IMODE(root_info.st_mode) != 0o755):
-        raise WorkerError("Runtime output root ownership/mode is invalid.")
+    try:
+        supervisor_gid = grp.getgrnam(SUPERVISOR_GROUP).gr_gid
+    except KeyError as exc:
+        raise WorkerError("Configured supervisor group is unavailable.") from exc
+    _verify_output_root(output_root, supervisor_gid=supervisor_gid)
 
     output_dir = output_root / f"job-{job_id}"
     socket_path = output_dir / "control.sock"

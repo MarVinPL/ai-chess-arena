@@ -125,3 +125,58 @@ def test_worker_rejects_group_or_world_writable_pinned_binary(tmp_path, monkeypa
 
     with pytest.raises(worker.WorkerError, match="permissions are invalid"):
         worker._verify_binary()
+
+
+def test_worker_output_root_matches_supervisor_group_policy(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    output = tmp_path / "runtime-output"
+    output.mkdir()
+    os.chmod(output, 0o755)
+    real_lstat = worker.Path.lstat
+    monkeypatch.setattr(worker.Path, "lstat", lambda path: SimpleNamespace(
+        st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=1000,
+    ) if path == output else real_lstat(path))
+    worker._verify_output_root(output, supervisor_gid=1000)
+    with pytest.raises(worker.WorkerError, match="ownership/mode"):
+        worker._verify_output_root(output, supervisor_gid=0)
+
+
+def test_worker_bundle_requires_fixed_root_owned_executable_path(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(worker, "BUNDLE_ROOT", __import__("pathlib").Path("/tmp/not-installed"))
+    monkeypatch.setattr(worker, "WORKER_PATH", __import__("pathlib").Path("/tmp/not-installed/runtime_worker"))
+    monkeypatch.setattr(worker.sys, "argv", ["/tmp/not-installed/runtime_worker"])
+    monkeypatch.setattr(worker.Path, "resolve", lambda self, strict=False: self)
+    # Root-owned path verification proceeds to the entrypoint stat; no host path is opened.
+    calls = {"count": 0}
+    def fake_lstat(self):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0)
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_gid=0)
+    monkeypatch.setattr(worker.Path, "lstat", fake_lstat)
+    worker._verify_bundle()
+
+
+def test_worker_bundle_builder_is_deterministic_and_executable(tmp_path):
+    import subprocess
+    import sys
+    import zipfile
+    from tools.build_runtime_worker_bundle import WORKER_MODULES, build_worker_bundle
+
+    first = tmp_path / "runtime_worker"
+    second = tmp_path / "runtime_worker.second"
+    digest1 = build_worker_bundle(__import__("pathlib").Path(__file__).resolve().parents[1], first)
+    digest2 = build_worker_bundle(__import__("pathlib").Path(__file__).resolve().parents[1], second)
+    assert digest1 == digest2
+    assert first.read_bytes() == second.read_bytes()
+    assert first.read_bytes().startswith(b"#!/usr/bin/python3\n")
+    assert first.stat().st_mode & stat.S_IXUSR
+    with zipfile.ZipFile(first) as archive:
+        assert set(archive.namelist()) == {"__main__.py", *WORKER_MODULES}
+        assert archive.testzip() is None
+    result = subprocess.run([str(first)], text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert "--job" in result.stderr
