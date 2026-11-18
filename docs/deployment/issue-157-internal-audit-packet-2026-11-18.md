@@ -236,3 +236,9 @@ The final code was rebuilt and retested in the reused `arena-test` Debian 13 ima
 ## B3 continuation — metadata-only pin of Light-R1 candidate (2026-11-18)
 
 Read-only Hugging Face API metadata confirmed the exact candidate identity: repository `360ZhiNao/Light-R1-14B-DS-GGUF`, revision `0d4531e58894e0019d4a9a6aa775eb32098213cb`, file `Light-R1-14B-Q4_0.gguf`, size `8,517,725,312` bytes, upstream LFS SHA-256 `d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa`. The repo tag and card metadata say `apache-2.0`; the revision has no `LICENSE`, `LICENSE.txt` or `COPYING` file. Therefore license status remains `pending_manual_review`, not `verified_permissive`. The upstream hash is recorded as metadata only and has not been recomputed from downloaded weights. No weights were downloaded, no artifact was placed in quarantine, no TEST_ONLY grant was activated, and no inference or tournament admission was authorized. See `issue-157-model-candidate-metadata-2026-11-18.json` and Issue #159.
+
+## B5 final release-owner sign-off — 2026-11-18
+
+**Decision: APPROVED.** The release owner explicitly approved the internal B5 technical audit findings and the documented recovery/crash matrix, including the real supervised worker SIGKILL and durable-lease recovery drill. The technical disposition is therefore **B5: PASS — owner sign-off recorded**.
+
+This approval is limited to B5 audit findings. It does not close B3 model artifact/license admission or B4 protected-main attestation and VPS verification. It does not authorize model download, inference, runtime installation, production deployment, PR merge, or tournament admission. No such action is implied. Machine-readable decision: `issue-157-b5-owner-signoff-2026-11-18.json`.
