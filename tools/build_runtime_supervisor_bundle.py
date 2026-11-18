@@ -37,8 +37,24 @@ import os
 import stat
 from pathlib import Path
 
-expected_path = Path("/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz")
+production_path = Path("/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz")
 path = Path(sys.argv[0])
+profile = os.environ.get("ARENA_RUNTIME_DEPLOYMENT", "")
+if profile == "test-recovery":
+    test_root = Path(os.environ.get("ARENA_RUNTIME_TEST_ROOT", ""))
+    if (os.environ.get("ARENA_RUNTIME_TEST_ACK") != "I_UNDERSTAND_RECOVERY_ONLY_TEST"
+            or os.environ.get("ARENA_RUNTIME_EXECUTION_ENABLED") != "0"
+            or not test_root.is_absolute() or ".." in test_root.parts):
+        raise SystemExit("runtime supervisor test profile acknowledgement is invalid")
+    expected_path = test_root / "bundle" / "runtime_supervisor.pyz"
+    root_info = test_root.lstat()
+    if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+            or root_info.st_uid != 0 or stat.S_IMODE(root_info.st_mode) & 0o027):
+        raise SystemExit("runtime supervisor test root ownership/mode is unsafe")
+elif profile == "production":
+    expected_path = production_path
+else:
+    raise SystemExit("runtime supervisor deployment profile is invalid")
 expected_hash = os.environ.get("ARENA_RUNTIME_SUPERVISOR_BUNDLE_SHA256", "")
 if (path != expected_path or path.resolve(strict=True) != path
         or len(expected_hash) != 64

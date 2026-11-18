@@ -338,3 +338,10 @@ def test_ipc_server_refuses_peer_uid_different_from_configured_api(tmp_path):
     handlers, _, _, _, _, _ = harness(tmp_path)
     with pytest.raises(RuntimeSupervisorHandlerError, match="peer UID"):
         handlers.make_ipc_server(tmp_path / "supervisor.sock", allowed_uid=os.getuid() + 1)
+
+
+def test_recovery_only_handler_rejects_runtime_start(tmp_path):
+    handlers, *_ = harness(tmp_path)
+    handlers._allow_start = False
+    with pytest.raises(RuntimeSupervisorHandlerError, match="recovery-only"):
+        handlers.start(7)

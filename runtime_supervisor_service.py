@@ -127,13 +127,123 @@ def _verify_worker(path: Path, expected_sha256: str) -> None:
         raise SupervisorServiceConfigError("Pinned worker bundle SHA-256 mismatch.")
 
 
+def _build_recovery_test_service(env: dict[str, str]):
+    """Build an isolated, recovery-only supervisor; it cannot launch workers."""
+    if env.get("ARENA_RUNTIME_TEST_ACK") != "I_UNDERSTAND_RECOVERY_ONLY_TEST":
+        raise SupervisorServiceConfigError("Recovery-only test acknowledgement is missing.")
+    if env.get("ARENA_RUNTIME_BACKEND") != "systemd" or env.get("ARENA_RUNTIME_EXECUTION_ENABLED") != "0":
+        raise SupervisorServiceConfigError("Test profile requires systemd recovery with execution disabled.")
+    if not (sys.flags.isolated and sys.flags.no_site):
+        raise SupervisorServiceConfigError("Supervisor daemon must run with Python isolated/no-site mode (-I -S).")
+
+    root = _absolute(env, "ARENA_RUNTIME_TEST_ROOT")
+    api_uid, api_gid = _identity("ARENA_RUNTIME_API_USER", "ARENA_RUNTIME_API_GROUP", env)
+    runtime_uid, runtime_gid = _identity("ARENA_RUNTIME_USER", "ARENA_RUNTIME_GROUP", env)
+    if runtime_uid == api_uid or runtime_gid == api_gid:
+        raise SupervisorServiceConfigError("API and runtime identities must be distinct.")
+    supervisor_uid, supervisor_gid = os.getuid(), os.getgid()
+    _verify_root(root, mode=0o710, uid=0, gid=api_gid, label="Recovery test root")
+    bundle = root / "bundle" / "runtime_supervisor.pyz"
+    database = root / "state" / "arena.sqlite3"
+    socket_path = root / "run" / "supervisor" / "supervisor.sock"
+    broker_socket = root / "run" / "api" / "lease-broker.sock"
+    quarantine = root / "data" / "quarantine"
+    handoff = root / "data" / "handoff"
+    output = root / "run" / "output"
+    expected = (bundle, database, socket_path, broker_socket, quarantine, handoff, output)
+    configured_paths = {
+        "ARENA_RUNTIME_DATABASE": database,
+        "ARENA_RUNTIME_SUPERVISOR_SOCKET": socket_path,
+        "ARENA_RUNTIME_LEASE_BROKER_SOCKET": broker_socket,
+        "ARENA_RUNTIME_QUARANTINE_ROOT": quarantine,
+        "ARENA_RUNTIME_ARTIFACT_ROOT": handoff,
+        "ARENA_RUNTIME_OUTPUT_ROOT": output,
+    }
+    if any(_absolute(env, key) != expected_path for key, expected_path in configured_paths.items()):
+        raise SupervisorServiceConfigError("Test profile environment paths do not match its isolated root.")
+    if root.parent != Path("/var/tmp") or any(path == root or root not in path.parents for path in expected):
+        raise SupervisorServiceConfigError("Test profile root must be a dedicated direct child of /var/tmp and contain every test path.")
+    production_paths = {
+        SUPERVISOR_BUNDLE_PATH, Path("/usr/local/lib/ai-chess-arena-runtime/runtime_worker"),
+        Path("/var/lib/arena-handoff"), Path("/run/arena-runtime"),
+        Path("/run/ai-chess-arena-runtime"), Path("/run/ai-chess-arena-api"),
+        Path("/var/lib/ai-chess-arena/quarantine"),
+    }
+    if any(path == production or path in production.parents or production in path.parents
+           for path in expected for production in production_paths):
+        raise SupervisorServiceConfigError("Test profile overlaps a production runtime path.")
+
+    _verify_root(bundle.parent, mode=0o700, uid=0, gid=0, label="Test immutable bundle directory")
+    _verify_root(database.parent, mode=0o700, uid=api_uid, gid=api_gid, label="Test API state directory")
+    _verify_root(root / "data", mode=0o710, uid=0, gid=api_gid, label="Test data directory")
+    _verify_root(root / "run", mode=0o710, uid=0, gid=api_gid, label="Test runtime directory")
+    _verify_supervisor_bundle(
+        bundle, _required(env, "ARENA_RUNTIME_SUPERVISOR_BUNDLE_SHA256"),
+        expected_path=bundle,
+    )
+    _verify_root(handoff, mode=0o711, uid=supervisor_uid, gid=supervisor_gid, label="Test artifact handoff root")
+    _verify_root(output, mode=0o755, uid=supervisor_uid, gid=supervisor_gid, label="Test runtime output root")
+    _verify_root(quarantine, mode=0o711, uid=api_uid, gid=api_gid, label="Test artifact quarantine root")
+    _verify_root(socket_path.parent, mode=0o750, uid=supervisor_uid, gid=api_gid, label="Test supervisor socket directory")
+    _verify_root(broker_socket.parent, mode=0o750, uid=api_uid, gid=api_gid, label="Test API broker socket directory")
+    try:
+        db_info = database.lstat()
+        if (not stat.S_ISREG(db_info.st_mode) or stat.S_ISLNK(db_info.st_mode)
+                or (db_info.st_uid, db_info.st_gid, stat.S_IMODE(db_info.st_mode))
+                != (api_uid, api_gid, 0o600) or database.resolve(strict=True) != database):
+            raise SupervisorServiceConfigError("Test database must be a canonical API-owned 0600 regular file.")
+    except OSError as exc:
+        raise SupervisorServiceConfigError("Disposable test database is not provisioned.") from exc
+
+    raw_allowlist = _required(env, "ARENA_RUNTIME_ARTIFACT_ALLOWLIST")
+    allowlist = frozenset(item.strip() for item in raw_allowlist.split(",") if item.strip())
+    if not allowlist or len(allowlist) != len(raw_allowlist.split(",")):
+        raise SupervisorServiceConfigError("Artifact allowlist must contain unique, non-empty exact keys.")
+    authority = RuntimeJobAuthority(
+        connect_readonly=readonly_sqlite_factory(database),
+        allowed_artifacts=allowlist,
+        review_required_artifacts=frozenset(
+            item.strip() for item in env.get("ARENA_RUNTIME_REVIEW_REQUIRED_ARTIFACTS", "").split(",") if item.strip()
+        ),
+    )
+    leases = RuntimeLeaseBrokerClient(broker_socket, unit_namespace="test-recovery")
+    supervisor = RuntimeSupervisor(
+        backend=SystemdTransientBackend(unit_namespace="test-recovery"), persist=leases.persist,
+        set_state=leases.set_state, load_recoverable=leases.load_recoverable,
+        unit_namespace="test-recovery",
+    )
+    handlers = RuntimeSupervisorHandlers(
+        authority=authority, supervisor=supervisor, lease_store=leases,
+        quarantine_root=quarantine, handoff_root=handoff, output_root=output,
+        runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+        api_uid=api_uid, api_gid=api_gid,
+        supervisor_uid=supervisor_uid, supervisor_gid=supervisor_gid,
+        allow_start=False,
+    )
+    server = handlers.make_ipc_server(
+        socket_path, allowed_uid=api_uid, socket_mode=0o660, socket_gid=api_gid,
+    )
+    server.recovery_only_test_profile = True
+    server.revocation_watchdog = RuntimeRevocationWatchdog(
+        authority=authority, lease_store=leases, handlers=handlers,
+        interval_seconds=1.0,
+        on_error=lambda message: print(
+            f"ai-chess-arena-runtime-supervisor: {message}", file=sys.stderr, flush=True
+        ),
+    )
+    return server
+
+
 def build_service(environ: dict[str, str] | None = None):
     """Build handlers and IPC server without starting a listener or systemd job."""
     env = dict(os.environ if environ is None else environ)
     if os.geteuid() != 0:
         raise SupervisorServiceConfigError("Supervisor daemon must run as root.")
-    if env.get("ARENA_RUNTIME_DEPLOYMENT") != "production":
-        raise SupervisorServiceConfigError("Supervisor daemon requires production deployment profile.")
+    deployment = env.get("ARENA_RUNTIME_DEPLOYMENT")
+    if deployment == "test-recovery":
+        return _build_recovery_test_service(env)
+    if deployment != "production":
+        raise SupervisorServiceConfigError("Supervisor daemon requires production deployment or explicit test-recovery profile.")
     if env.get("ARENA_RUNTIME_PRODUCTION_ACK") != "I_UNDERSTAND_RUNTIME_EXECUTION":
         raise SupervisorServiceConfigError("Production acknowledgement is missing.")
     if env.get("ARENA_RUNTIME_BACKEND") != "systemd" or env.get("ARENA_RUNTIME_EXECUTION_ENABLED") != "1":
@@ -176,7 +286,6 @@ def build_service(environ: dict[str, str] | None = None):
     _verify_root(output, mode=0o755, uid=supervisor_uid, gid=supervisor_gid, label="Runtime output root")
     _verify_root(quarantine, mode=0o711, uid=api_uid, gid=api_gid, label="Artifact quarantine root")
     _verify_root(socket_path.parent, mode=0o750, uid=supervisor_uid, gid=api_gid, label="Supervisor socket directory")
-    _verify_worker(worker, _required(env, "ARENA_RUNTIME_WORKER_SHA256"))
 
     raw_allowlist = _required(env, "ARENA_RUNTIME_ARTIFACT_ALLOWLIST")
     allowlist = frozenset(item.strip() for item in raw_allowlist.split(",") if item.strip())
@@ -232,7 +341,8 @@ def main() -> int:
     try:
         server = build_service()
         watchdog = server.revocation_watchdog
-        watchdog.start()
+        if not getattr(server, "recovery_only_test_profile", False):
+            watchdog.start()
         failures = []
 
         def serve():

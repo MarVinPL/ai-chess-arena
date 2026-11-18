@@ -212,3 +212,20 @@ def test_start_fails_closed_when_systemd_accepts_but_unit_process_fails():
     backend = SystemdTransientBackend(command_runner=fake)
     with pytest.raises(SystemdBackendError, match="ActiveState"):
         backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+
+
+def test_production_backend_rejects_test_unit_namespace():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError):
+        backend.stop("ai-chess-arena-runtime-test-910000001.service")
+    assert fake.calls == []
+
+
+def test_recovery_test_backend_accepts_only_test_unit_namespace():
+    fake = FakeRunner("LoadState=not-found\nActiveState=inactive\nControlGroup=\n")
+    backend = SystemdTransientBackend(command_runner=fake, unit_namespace="test-recovery")
+    backend.stop("ai-chess-arena-runtime-test-910000001.service")
+    assert len(fake.calls) == 1
+    with pytest.raises(SystemdBackendError):
+        backend.stop("ai-chess-arena-runtime-910000001.service")

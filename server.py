@@ -1919,13 +1919,13 @@ if __name__ == '__main__':
     previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: shutdown_requested.set())
     previous_sigint = signal.signal(signal.SIGINT, lambda *_: shutdown_requested.set())
     try:
-        if deployment.production_requested:
+        if deployment.supervisor_requested:
             # The API process owns SQLite schema and writes. The root supervisor
             # can reach only this fixed, peer-credential-gated lease protocol.
-            lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True)
+            lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True, unit_namespace=deployment.unit_namespace)
             lease_broker = RuntimeLeaseBrokerServer(
                 deployment.lease_broker_socket, store=lease_store,
-                allowed_uid=0, socket_mode=0o660,
+                allowed_uid=0, socket_mode=0o660, unit_namespace=deployment.unit_namespace,
             )
             lease_broker_thread = threading.Thread(
                 target=lease_broker.serve_forever,

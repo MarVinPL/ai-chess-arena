@@ -49,14 +49,17 @@ def _validate_job_id(value) -> int:
     return value
 
 
-def _validate_unit_name(value, job_id: int) -> str:
-    expected = f"ai-chess-arena-runtime-{job_id}.service"
+def _validate_unit_name(value, job_id: int, unit_namespace: str = "production") -> str:
+    if unit_namespace not in {"production", "test-recovery"}:
+        raise RuntimeLeaseBrokerError("Unsupported unit namespace.")
+    prefix = "ai-chess-arena-runtime-" if unit_namespace == "production" else "ai-chess-arena-runtime-test-"
+    expected = f"{prefix}{job_id}.service"
     if not isinstance(value, str) or value != expected:
         raise RuntimeLeaseBrokerError("Unit identity mismatch.")
     return value
 
 
-def _validate_request(raw: bytes) -> dict:
+def _validate_request(raw: bytes, *, unit_namespace: str = "production") -> dict:
     if not raw or len(raw) > MAX_REQUEST_BYTES or not raw.endswith(b"\n"):
         raise RuntimeLeaseBrokerError("Invalid request framing.")
     try:
@@ -79,7 +82,7 @@ def _validate_request(raw: bytes) -> dict:
         return request
     job_id = _validate_job_id(request["job_id"])
     if action in {"persist", "set_state"}:
-        _validate_unit_name(request["unit_name"], job_id)
+        _validate_unit_name(request["unit_name"], job_id, unit_namespace)
         if not isinstance(request["state"], str) or request["state"] not in _ALLOWED_STATES:
             raise RuntimeLeaseBrokerError("Invalid lease state.")
         if action == "persist" and request["state"] != "start_pending":
@@ -102,7 +105,7 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
             if _peer_uid(self.connection) != server.allowed_uid:
                 return
             self.connection.settimeout(server.request_timeout_seconds)
-            request = _validate_request(self.rfile.readline(MAX_REQUEST_BYTES + 1))
+            request = _validate_request(self.rfile.readline(MAX_REQUEST_BYTES + 1), unit_namespace=server.unit_namespace)
             result = server.dispatch(request)
             response = {"ok": True, "result": result}
         except Exception as exc:
@@ -120,7 +123,11 @@ class RuntimeLeaseBrokerServer:
     """Threaded API-side broker; the supplied store must be API-owned."""
 
     def __init__(self, socket_path, *, store, allowed_uid: int = 0,
-                 socket_mode: int = 0o600, request_timeout_seconds: float = 10.0):
+                 socket_mode: int = 0o600, request_timeout_seconds: float = 10.0,
+                 unit_namespace: str = "production"):
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise RuntimeLeaseBrokerError("Unsupported unit namespace.")
+        self.unit_namespace = unit_namespace
         self.socket_path = Path(socket_path)
         self.store = store
         self.allowed_uid = allowed_uid
@@ -178,6 +185,7 @@ class RuntimeLeaseBrokerServer:
 
         self._server = Server(str(self.socket_path), _BrokerHandler, bind_and_activate=False)
         self._server.allowed_uid = self.allowed_uid
+        self._server.unit_namespace = self.unit_namespace
         self._server.dispatch = self.dispatch
         self._server.request_timeout_seconds = self.request_timeout_seconds
         bound_socket_identity = None
@@ -210,7 +218,11 @@ class RuntimeLeaseBrokerServer:
 class RuntimeLeaseBrokerClient:
     """Lease-store adapter used by the privileged supervisor."""
 
-    def __init__(self, socket_path, *, timeout_seconds: float = 10.0):
+    def __init__(self, socket_path, *, timeout_seconds: float = 10.0,
+                 unit_namespace: str = "production"):
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise RuntimeLeaseBrokerError("Unsupported unit namespace.")
+        self.unit_namespace = unit_namespace
         self.socket_path = str(socket_path)
         self.timeout_seconds = timeout_seconds
         if timeout_seconds <= 0:
@@ -248,7 +260,7 @@ class RuntimeLeaseBrokerClient:
         if not isinstance(record, RuntimeUnitRecord):
             raise RuntimeLeaseBrokerError("Invalid lease record.")
         _validate_job_id(record.job_id)
-        _validate_unit_name(record.unit_name, record.job_id)
+        _validate_unit_name(record.unit_name, record.job_id, self.unit_namespace)
         if record.state != "start_pending":
             raise RuntimeLeaseBrokerError("New lease must start pending.")
         result = self._request("persist", job_id=record.job_id, unit_name=record.unit_name, state=record.state)
@@ -262,7 +274,7 @@ class RuntimeLeaseBrokerClient:
             if current is None:
                 raise RuntimeLeaseBrokerError("Lease does not exist.")
             unit_name = current.unit_name
-        _validate_unit_name(unit_name, job_id)
+        _validate_unit_name(unit_name, job_id, self.unit_namespace)
         if not isinstance(state, str) or state not in _ALLOWED_STATES:
             raise RuntimeLeaseBrokerError("Invalid lease state.")
         result = self._request("set_state", job_id=job_id, unit_name=unit_name, state=state)
@@ -278,7 +290,7 @@ class RuntimeLeaseBrokerClient:
             raise RuntimeLeaseBrokerError("Invalid lease record response.")
         record = RuntimeUnitRecord(result["job_id"], result["unit_name"], result["state"])
         _validate_job_id(record.job_id)
-        _validate_unit_name(record.unit_name, record.job_id)
+        _validate_unit_name(record.unit_name, record.job_id, self.unit_namespace)
         if (record.job_id != job_id or not isinstance(record.state, str)
                 or record.state not in _ALLOWED_STATES):
             raise RuntimeLeaseBrokerError("Lease record identity mismatch.")
@@ -296,7 +308,7 @@ class RuntimeLeaseBrokerClient:
                 raise RuntimeLeaseBrokerError("Malformed recovery lease record.")
             record = RuntimeUnitRecord(item["job_id"], item["unit_name"], item["state"])
             _validate_job_id(record.job_id)
-            _validate_unit_name(record.unit_name, record.job_id)
+            _validate_unit_name(record.unit_name, record.job_id, self.unit_namespace)
             if (not isinstance(record.state, str)
                     or record.state not in _ALLOWED_STATES - {"stopped"}):
                 raise RuntimeLeaseBrokerError("Non-recoverable state in recovery response.")

@@ -16,22 +16,22 @@ def recover_runtime_on_startup(*, deployment, supervisor_recover, executor_recov
         raise TypeError("Executor recovery callback is required.")
 
     supervisor_result = None
-    if getattr(deployment, "production_requested", False):
+    if getattr(deployment, "supervisor_requested", getattr(deployment, "production_requested", False)):
         if not callable(supervisor_recover):
             raise RuntimeStartupRecoveryError(
-                "Production startup blocked: supervisor lease recovery is not wired."
+                "Runtime startup blocked: supervisor lease recovery is not wired."
             )
         try:
             supervisor_result = supervisor_recover()
         except Exception as exc:
             raise RuntimeStartupRecoveryError(
-                "Production startup blocked: supervisor recovery failed."
+                "Runtime startup blocked: supervisor recovery failed."
             ) from exc
         if (not isinstance(supervisor_result, dict)
                 or type(supervisor_result.get("count")) is not int
                 or supervisor_result["count"] < 0):
             raise RuntimeStartupRecoveryError(
-                "Production startup blocked: supervisor recovery returned invalid evidence."
+                "Runtime startup blocked: supervisor recovery returned invalid evidence."
             )
 
     try:

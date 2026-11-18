@@ -174,3 +174,33 @@ The read-only host check reconfirmed: production API active at PID `3417317`; su
 6. Run recovery against one synthetic harmless transient unit, verify broker persistence, cgroup emptiness, API readiness/shutdown, SQLite integrity, and cleanup. Finally verify production PID, DB metadata, service units, and canonical paths are unchanged.
 
 No staging-profile code has been added yet. The next implementation change must preserve this end-to-end boundary rather than bypass individual checks.
+
+## Isolated `test-recovery` profile and full daemon/API recovery drill (2026-11-18)
+
+Implemented a dedicated `test-recovery` deployment profile across the deployment resolver, supervisor service builder, API startup, lease broker, SQLite lease store, supervisor, and systemd backend. The profile is deliberately recovery-only:
+
+- Requires `ARENA_RUNTIME_TEST_ACK=I_UNDERSTAND_RECOVERY_ONLY_TEST`, `ARENA_RUNTIME_BACKEND=systemd`, and `ARENA_RUNTIME_EXECUTION_ENABLED=0`.
+- Requires one dedicated direct child of `/var/tmp`; every configured DB, socket, quarantine, handoff, output, bundle, log, and executor-lock path is derived from that root and checked against production-path overlap.
+- Uses `ai-chess-arena-runtime-test-<job>.service`, a separate lease-broker namespace, and separate supervisor/backend namespace. Production defaults still accept only `ai-chess-arena-runtime-<job>.service`.
+- Does not require, build, install, or launch a worker artifact. The IPC handler rejects every `start` request in this profile; the test daemon does not start the revocation watchdog. It can only report status and recover/stop a previously seeded exact test-namespace unit.
+- API binds only `127.0.0.1` on port `0` (OS-assigned), uses a disposable SQLite DB and isolated log/lock paths, and requires background jobs off. The API runtime worker is not created because `production_requested` is false.
+- The supervisor zipapp bootstrap accepts the test bundle only when the test acknowledgement, disabled execution flag, dedicated root, root ownership, immutable bundle path, and hash pin all match. Production bootstrap path/pinning remains unchanged.
+
+The profile implementation also corrected `resolve_runtime_deployment()` to read `os.environ` when no explicit mapping is passed. Previously the default path silently resolved `{}`; server startup calls the resolver without an argument, so environment-based deployment selection would not have been observed. Explicit mapping-based tests remain supported.
+
+### Real existing-VPS integration result
+
+Executed on the existing VPS with a disposable online SQLite backup under `/var/tmp/ai-chess-arena-recovery-20261118-01`; no new VM/container was created. The test root was provisioned with separate ownership/modes for root supervisor files, API DB/logs/broker, quarantine, handoff, and output. No worker binary or model artifact was created or installed.
+
+1. Built the actual supervisor zipapp from the current branch and pinned SHA-256 `4288196b7a517e0639f3732e6012f670a71568a2febbba178972f56b6c68339a` inside the disposable root.
+2. Seeded the disposable DB with one synthetic active lease for `ai-chess-arena-runtime-test-910000001.service`.
+3. Started a harmless `/usr/bin/sleep 300` transient unit under `arena-runtime` with no capabilities, `NoNewPrivileges`, strict filesystem protection, private tmp/devices/network, and `KillMode=control-group`.
+4. Started the actual supervisor zipapp as a transient systemd `Type=notify` service with `python3 -I -S`. systemd observed `ActiveState=active`, `SubState=running`, and `StatusText=Supervisor IPC socket is accepting API peers`; the real supervisor IPC socket was root-owned `0660` in the isolated test root.
+5. Started the actual branch `server.py` as `debian` with the test profile, disposable DB, loopback-only ephemeral HTTP port, isolated log directory and isolated executor lock path. API startup initialized its DB schema, started the API-owned broker, called supervisor startup recovery through IPC, ran executor orphan reconciliation, and reached HTTP readiness (`HTTP 200`).
+6. Recovery stopped the exact synthetic systemd unit. The broker persisted the lease as `stopped`; systemd reported the test unit `LoadState=not-found`, `ActiveState=inactive`, empty `ControlGroup`; disposable DB `integrity_check=ok`, zero foreign-key violations.
+7. An explicit IPC `start` request was rejected (`start_blocked=PASS`); no second unit was created. No worker or model process was launched.
+8. API graceful shutdown removed its broker socket; stopping the transient supervisor removed its IPC socket. Both transient test units ended `LoadState=not-found`, `ActiveState=inactive`, `MainPID=0`.
+
+Production safety verification after the drill: `ai-chess-arena.service` remained active with the same PID `3417317` and release `ab4a8cb`; the production supervisor remained `LoadState=not-found`, `ActiveState=inactive`, `MainPID=0`. No production DB migration, restart, worker installation, model download, inference, Caddy/ACL change, or persistent systemd unit was performed. The previous `/run/lock/ai-chess-arena-runtime-test.lock` file was only inspected; its timestamp remained 2026-11-17 23:54:42 and it was not changed. The new test profile uses its own lock path under the staging root.
+
+**B1 is now satisfied for the defined API + broker + real `Type=notify` supervisor startup/recovery integration.** This does not authorize runtime worker execution or production cutover. B2 remains open for full WAL/sidecar rollback/restore; B3 remains open for reviewed/pinned worker artifact plus independent model-artifact approval and separate inference permission; B4 remains open for complete provenance/approval chain; B5 remains open for independent security review and operational recovery drill. The disposable staging root is removed after evidence capture.

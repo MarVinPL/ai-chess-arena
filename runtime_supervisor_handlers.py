@@ -45,7 +45,9 @@ class RuntimeSupervisorHandlers:
                  handoff_root: str | Path, output_root: str | Path,
                  runtime_uid: int, runtime_gid: int, api_uid: int, api_gid: int,
                  supervisor_uid: int, supervisor_gid: int,
-                 spec_builder: Callable | None = None):
+                 spec_builder: Callable | None = None, allow_start: bool = True):
+        if type(allow_start) is not bool:
+            raise TypeError("allow_start must be an explicit boolean.")
         if not callable(getattr(authority, "resolve_start", None)):
             raise TypeError("Trusted job authority is required.")
         if not isinstance(supervisor, RuntimeSupervisor):
@@ -64,6 +66,7 @@ class RuntimeSupervisorHandlers:
         self._api_gid = api_gid
         self._supervisor_uid = supervisor_uid
         self._supervisor_gid = supervisor_gid
+        self._allow_start = allow_start
         self._test_spec_builder = spec_builder is not None
         self._spec_builder = spec_builder or self._build_spec
         if not callable(self._spec_builder):
@@ -129,6 +132,8 @@ class RuntimeSupervisorHandlers:
         )
 
     def start(self, job_id: int) -> dict:
+        if not self._allow_start:
+            raise RuntimeSupervisorHandlerError("Runtime start is disabled in recovery-only test profile.")
         if type(job_id) is not int or job_id < 1:
             raise RuntimeSupervisorHandlerError("Invalid job ID.")
         if self._leases.get(job_id) is not None:

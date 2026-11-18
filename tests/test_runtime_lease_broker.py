@@ -317,3 +317,45 @@ def _start_test_broker(tmp_path, store):
     thread.start()
     assert server.ready.wait(2)
     return server, thread, RuntimeLeaseBrokerClient(path)
+
+
+def test_broker_namespaces_are_separate_for_recovery_only_profile():
+    payload = b'{"action":"persist","job_id":7,"unit_name":"ai-chess-arena-runtime-test-7.service","state":"start_pending"}\n'
+    assert _validate_request(payload, unit_namespace="test-recovery")["job_id"] == 7
+    with pytest.raises(RuntimeLeaseBrokerError):
+        _validate_request(payload)
+    production_payload = b'{"action":"persist","job_id":7,"unit_name":"ai-chess-arena-runtime-7.service","state":"start_pending"}\n'
+    with pytest.raises(RuntimeLeaseBrokerError):
+        _validate_request(production_payload, unit_namespace="test-recovery")
+
+
+def test_test_recovery_broker_client_round_trip_uses_separate_namespace(tmp_path):
+    database = tmp_path / "test-recovery.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE runtime_test_jobs(id INTEGER PRIMARY KEY,status TEXT,cancel_requested INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute("INSERT INTO runtime_test_jobs(id,status) VALUES(910000007,'running')")
+    store = SQLiteRuntimeUnitStore(database, unit_namespace="test-recovery")
+    path = tmp_path / "test-recovery.sock"
+    server = RuntimeLeaseBrokerServer(
+        path, store=store, allowed_uid=os.getuid(), unit_namespace="test-recovery",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert server.ready.wait(2)
+        client = RuntimeLeaseBrokerClient(path, unit_namespace="test-recovery")
+        record = RuntimeUnitRecord(
+            910000007, "ai-chess-arena-runtime-test-910000007.service", "start_pending",
+        )
+        client.persist(record)
+        assert client.get(record.job_id) == record
+        client.set_state(record.job_id, "active")
+        client.set_state(record.job_id, "recovery_stop_pending")
+        client.set_state(record.job_id, "stopped")
+        assert client.load_recoverable() == ()
+    finally:
+        server.shutdown()
+        thread.join(3)
+    assert not path.exists()

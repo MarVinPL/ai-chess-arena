@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from runtime_systemd import RuntimeUnitSpec
 
 _UNIT_RE = re.compile(r"^ai-chess-arena-runtime-([1-9][0-9]*)\.service$")
+_TEST_UNIT_RE = re.compile(r"^ai-chess-arena-runtime-test-([1-9][0-9]*)\.service$")
 
 
 class RuntimeSupervisorError(RuntimeError):
@@ -31,7 +32,12 @@ class RuntimeSupervisor:
 
     def __init__(self, *, backend, persist: Callable[[RuntimeUnitRecord], None],
                  set_state: Callable[[int, str], None],
-                 load_recoverable: Callable[[], Iterable[RuntimeUnitRecord]]):
+                 load_recoverable: Callable[[], Iterable[RuntimeUnitRecord]],
+                 unit_namespace: str = "production"):
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise ValueError("Unsupported runtime unit namespace.")
+        self._unit_namespace = unit_namespace
+        self._unit_re = _UNIT_RE if unit_namespace == "production" else _TEST_UNIT_RE
         self._backend = backend
         self._persist = persist
         self._set_state = set_state
@@ -40,11 +46,10 @@ class RuntimeSupervisor:
         # transitions so start/stop/recovery cannot race on one durable lease.
         self._lifecycle_lock = threading.RLock()
 
-    @staticmethod
-    def _validate(spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> int:
+    def _validate(self, spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> int:
         if not isinstance(spec, RuntimeUnitSpec):
             raise RuntimeSupervisorError("Wymagana jest specyfikacja RuntimeUnitSpec.")
-        match = _UNIT_RE.fullmatch(spec.unit_name)
+        match = self._unit_re.fullmatch(spec.unit_name)
         if not match:
             raise RuntimeSupervisorError("Nazwa jednostki poza dozwolonym wzorcem.")
         job_id = int(match.group(1))
@@ -112,7 +117,7 @@ class RuntimeSupervisor:
 
     def stop(self, record: RuntimeUnitRecord) -> None:
         with self._lifecycle_lock:
-            self._validate_record(record)
+            self._validate_record(record, unit_namespace=self._unit_namespace)
             persisted = tuple(self._load_recoverable())
             if not any(item.job_id == record.job_id and item.unit_name == record.unit_name
                        for item in persisted):
@@ -126,7 +131,7 @@ class RuntimeSupervisor:
         with self._lifecycle_lock:
             recovered = []
             for record in tuple(self._load_recoverable()):
-                self._validate_record(record)
+                self._validate_record(record, unit_namespace=self._unit_namespace)
                 self._set_state(record.job_id, "recovery_stop_pending")
                 self._backend.stop(record.unit_name)
                 self._set_state(record.job_id, "stopped")
@@ -134,10 +139,13 @@ class RuntimeSupervisor:
             return {"stopped_units": recovered, "count": len(recovered)}
 
     @staticmethod
-    def _validate_record(record: RuntimeUnitRecord) -> None:
+    def _validate_record(record: RuntimeUnitRecord, *, unit_namespace: str = "production") -> None:
         if not isinstance(record, RuntimeUnitRecord):
             raise RuntimeSupervisorError("Nieprawidłowy rekord odzyskiwania.")
-        match = _UNIT_RE.fullmatch(record.unit_name)
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise RuntimeSupervisorError("Unsupported runtime unit namespace.")
+        unit_re = _UNIT_RE if unit_namespace == "production" else _TEST_UNIT_RE
+        match = unit_re.fullmatch(record.unit_name)
         if not match or int(match.group(1)) != record.job_id:
             raise RuntimeSupervisorError("Rekord nie wskazuje jednostki przypisanej do tego zadania.")
         if record.state not in {"start_pending", "start_uncertain", "active", "stop_pending", "recovery_stop_pending"}:
@@ -147,7 +155,10 @@ class RuntimeSupervisor:
 class SQLiteRuntimeUnitStore:
     """Durable lease store backed by the Arena SQLite database."""
 
-    def __init__(self, database_path, *, initialize_schema: bool = True):
+    def __init__(self, database_path, *, initialize_schema: bool = True, unit_namespace: str = "production"):
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise ValueError("Unsupported runtime unit namespace.")
+        self.unit_namespace = unit_namespace
         from pathlib import Path
         import sqlite3
 
@@ -183,7 +194,7 @@ class SQLiteRuntimeUnitStore:
     def persist(self, record: RuntimeUnitRecord) -> None:
         import sqlite3
 
-        RuntimeSupervisor._validate_record(record)
+        RuntimeSupervisor._validate_record(record, unit_namespace=self.unit_namespace)
         if record.state != "start_pending":
             raise RuntimeSupervisorError("Nowa dzierżawa musi zaczynać się od start_pending.")
         with sqlite3.connect(self.database_path, timeout=5) as connection:

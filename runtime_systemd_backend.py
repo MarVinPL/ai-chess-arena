@@ -91,7 +91,10 @@ def _run_checked(runner: Callable, argv: list[str], timeout: float) -> str:
 class SystemdTransientBackend:
     """Start/stop only deterministic per-job units and verify cgroup teardown."""
 
-    def __init__(self, *, command_runner=None, cgroup_root="/sys/fs/cgroup"):
+    def __init__(self, *, command_runner=None, cgroup_root="/sys/fs/cgroup", unit_namespace="production"):
+        if unit_namespace not in {"production", "test-recovery"}:
+            raise ValueError("Unsupported systemd unit namespace.")
+        self._unit_re = _UNIT_RE if unit_namespace == "production" else re.compile(r"^ai-chess-arena-runtime-test-([1-9][0-9]*)\.service$")
         self._runner = command_runner or self._subprocess_runner
         self._cgroup_root = Path(cgroup_root)
 
@@ -217,7 +220,7 @@ class SystemdTransientBackend:
         )
 
     def _cgroup_is_empty(self, unit_name: str) -> bool:
-        match = _UNIT_RE.fullmatch(unit_name)
+        match = self._unit_re.fullmatch(unit_name)
         if not match:
             raise SystemdBackendError("Odmowa: nieprawidłowa nazwa jednostki.")
         shown = _run_checked(self._runner, ["/usr/bin/systemctl", "show", "--property=ControlGroup",
@@ -253,7 +256,7 @@ class SystemdTransientBackend:
             raise SystemdBackendError("Nie można jednoznacznie potwierdzić opróżnienia cgroup v2.") from exc
 
     def stop(self, unit_name: str) -> None:
-        if not isinstance(unit_name, str) or not _UNIT_RE.fullmatch(unit_name):
+        if not isinstance(unit_name, str) or not self._unit_re.fullmatch(unit_name):
             raise SystemdBackendError("Odmowa zatrzymania jednostki spoza ścisłego wzorca.")
         # A completed transient unit may already have been garbage-collected.
         # In that case systemd's not-found + empty ControlGroup is positive

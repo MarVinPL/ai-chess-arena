@@ -58,3 +58,33 @@ def test_service_refuses_noncanonical_supervisor_bundle_before_host_access(monke
     }
     with pytest.raises(SupervisorServiceConfigError, match="Non-canonical supervisor bundle"):
         build_service(env)
+
+
+def test_recovery_test_profile_requires_dedicated_ack_before_paths(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys, "flags", SimpleNamespace(isolated=True, no_site=True))
+    env = {
+        "ARENA_RUNTIME_DEPLOYMENT": "test-recovery",
+        "ARENA_RUNTIME_BACKEND": "systemd",
+        "ARENA_RUNTIME_EXECUTION_ENABLED": "0",
+        "ARENA_RUNTIME_TEST_ROOT": "/var/tmp/arena-test-root",
+    }
+    with pytest.raises(SupervisorServiceConfigError, match="test acknowledgement"):
+        build_service(env)
+
+
+def test_recovery_test_profile_rejects_execution_opt_in(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys, "flags", SimpleNamespace(isolated=True, no_site=True))
+    env = {
+        "ARENA_RUNTIME_DEPLOYMENT": "test-recovery",
+        "ARENA_RUNTIME_TEST_ACK": "I_UNDERSTAND_RECOVERY_ONLY_TEST",
+        "ARENA_RUNTIME_BACKEND": "systemd",
+        "ARENA_RUNTIME_EXECUTION_ENABLED": "1",
+    }
+    with pytest.raises(SupervisorServiceConfigError, match="execution disabled"):
+        build_service(env)

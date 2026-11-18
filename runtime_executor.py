@@ -23,7 +23,13 @@ import model_permissions
 
 DEFAULT_TIMEOUT_SECONDS = 300
 MAX_TIMEOUT_SECONDS = 1800
-LOCK_PATH = Path('/run/lock/ai-chess-arena-runtime-test.lock')
+if os.environ.get('ARENA_RUNTIME_DEPLOYMENT') == 'test-recovery':
+    _test_lock = os.environ.get('ARENA_RUNTIME_EXECUTOR_LOCK_PATH', '').strip()
+    if not _test_lock or not Path(_test_lock).is_absolute() or '..' in Path(_test_lock).parts:
+        raise RuntimeError('test-recovery requires an absolute isolated executor lock path')
+    LOCK_PATH = Path(_test_lock)
+else:
+    LOCK_PATH = Path('/run/lock/ai-chess-arena-runtime-test.lock')
 
 
 def _now() -> str:
