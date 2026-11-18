@@ -185,3 +185,20 @@ systemd policy. Total focused result: **53 passed**.
 This does not close B1: the actual production API process startup/restart/
 shutdown sequence against a disposable database and broker/supervisor service
 is not yet run end-to-end. The production API drop-in remains uninstalled.
+
+### Full regression pass after the integration update (2026-11-18)
+
+On the existing VPS, the complete repository suite completed with **728 passed,
+1 skipped, and 43 subtests passed**. The first full-suite attempt had one
+transient failure in `test_bridge_rejects_wrong_peer_uid`: the client observed
+`BrokenPipeError` while the server rejected the unauthorised peer. The test
+passed immediately when rerun in isolation, and the complete suite then passed
+on a second run. No source change was made for this timing-sensitive result;
+retain it as a flaky-test observation rather than claiming the first run was
+clean.
+
+The actual production API/supervisor end-to-end remains blocked by the absence
+of the supervisor bundle, unit, dedicated identities, and runtime directories
+on this host. Installing those prerequisites would be a deployment change,
+not a harmless test. A fake supervisor IPC test is not equivalent to validating
+systemd privilege separation and the production API shutdown ordering.
