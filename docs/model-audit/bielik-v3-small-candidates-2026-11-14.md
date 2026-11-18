@@ -1,7 +1,7 @@
 # Bielik v3 Small — wstępny audyt kandydatów GGUF
 
-Data przeglądu: 2026-11-14  
-Zakres: wyłącznie publiczne karty modeli i indeksy plików Hugging Face.  
+Data przeglądu: 2026-11-14
+Zakres: wyłącznie publiczne karty modeli i indeksy plików Hugging Face.
 Status obu kandydatów: `review_required`, `license_review=pending`, `technical_readiness=not_evaluated`, `revision_confirmed=false`, `scope_formats=[]`, `admission_status=not_admitted`.
 
 ## Ważne ograniczenia
