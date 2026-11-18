@@ -149,3 +149,28 @@ Inspected the actual supervisor service entrypoint and unit. `runtime_supervisor
 A real systemd manager smoke test ran the repository's `_notify_systemd()` implementation from a disposable transient `Type=notify` unit. systemd observed `ActiveState=active`, `SubState=running`, and the exact `StatusText`; the transient unit then stopped and was unloaded cleanly. This validates the host's notify transport and manager semantics, **not** the complete supervisor daemon readiness path.
 
 The complete daemon cannot yet be started safely on this host without crossing into unapproved installation/provisioning: the immutable root-owned bundle is not installed at `/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz`; the pinned worker is not installed; `/etc/ai-chess-arena/runtime-supervisor.env` and `/var/lib/ai-chess-arena/quarantine` are absent; and the required API broker socket directory `/run/ai-chess-arena-api` is absent. `build_service()` deliberately pins canonical production paths and rejects alternate staging paths. No canonical production paths were created and no artifacts, environment files, worker, or service unit were installed. Therefore B1 remains open pending an approved, fully isolated provisioning plan and full daemon + API integration run.
+
+## Isolated supervisor harness design review (2026-11-18)
+
+A deeper source review confirms that a test-only `build_service()` path cannot safely be implemented by merely relaxing its canonical path checks. The same production assumptions are independently enforced in multiple layers:
+
+- `runtime_supervisor_service.build_service()` pins the supervisor bundle, worker, lease-broker socket, supervisor socket directory, handoff/output roots, root ownership, and exact modes.
+- `RuntimeSupervisorHandlers._build_spec()` and the `start()` argv pin the production worker executable and runtime identity.
+- `SystemdTransientBackend._validate()` independently pins the worker argv, runtime mount layout, read-only project path, and inaccessible handoff root. A caller-supplied alternate path would currently be rejected even if the service builder accepted it.
+- `SocketHandoffSpec` verifies the output root as supervisor-owned `0755`; its job directory/socket policy is separately fixed.
+- The artifact handoff module accepts injected roots, but still enforces owner/group/mode and canonical-path invariants at the filesystem boundary.
+
+Therefore a safe isolated harness needs a coherent, explicit test profile propagated through the service builder, handlers, socket handoff, runtime-unit spec builder, and systemd backend validator. The test profile must be impossible to select from the production unit/environment and must not weaken production defaults. It must also use a distinct systemd unit namespace and a disposable database, broker socket, supervisor socket, handoff root, output root, quarantine root, bundle paths, and worker path. Its allowed paths should be constrained beneath one root-owned, non-symlink staging directory; all directories/files must be created with exact ownership/modes and removed after the drill. The test should run no worker and no model: only daemon readiness, IPC, API startup/recovery, and a synthetic harmless transient-unit stop/recovery are in scope.
+
+The read-only host check reconfirmed: production API active at PID `3417317`; supervisor unit `LoadState=not-found`, `ActiveState=inactive`, `MainPID=0`; supervisor bundle, worker, env file, API broker runtime directory, and API quarantine directory all absent. No canonical production path was created. This review changes no runtime code and does not close B1. It prevents an unsafe partial implementation that would make the service accept staging paths while leaving the lower-level systemd validator pinned to production paths (or vice versa).
+
+### Implementation sequence for the harness
+
+1. Introduce an immutable runtime-path/profile object and pass it explicitly through the service, handlers, socket handoff, runtime-unit builder, and backend validator; retain current production constants as the only production profile.
+2. Add a separate test-profile gate requiring an explicit test-only acknowledgement plus a dedicated staging-root marker; reject any profile whose paths escape the root or overlap production paths.
+3. Give test transient units a separate, strict name prefix and allow only a harmless fixed executable in the harness. Do not make the test profile capable of launching the model worker.
+4. Add tests proving production rejects every staging override, test profile rejects symlinks/path traversal/overlap/wrong ownership, and backend rejects production/test namespace crossover.
+5. Build and root-pin temporary supervisor/worker test artifacts under the isolated root; launch the actual daemon as transient `Type=notify`, verify READY and IPC, then launch the actual API entrypoint against a disposable DB and isolated port/socket set.
+6. Run recovery against one synthetic harmless transient unit, verify broker persistence, cgroup emptiness, API readiness/shutdown, SQLite integrity, and cleanup. Finally verify production PID, DB metadata, service units, and canonical paths are unchanged.
+
+No staging-profile code has been added yet. The next implementation change must preserve this end-to-end boundary rather than bypass individual checks.
