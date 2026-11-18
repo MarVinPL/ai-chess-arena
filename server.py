@@ -30,6 +30,7 @@ from runtime_supervisor import SQLiteRuntimeUnitStore
 from runtime_supervisor_client import RuntimeSupervisorClientRunner
 from runtime_api_worker import RuntimeApiWorker
 from runtime_lease_broker import RuntimeLeaseBrokerServer
+from runtime_process_config import resolve_process_settings
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -48,7 +49,10 @@ def _serve_http_until_shutdown(http_server, shutdown_requested):
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
-DB = ROOT / 'arena.sqlite3'
+DB, HOST, PORT = resolve_process_settings(root=ROOT)
+# Every API-owned SQLite subsystem must use the same explicitly selected DB.
+league.DB = DB
+hf_candidate_downloads.DB_PATH = DB
 LOG_DIR = ROOT / 'logs'
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
@@ -56,7 +60,6 @@ MODEL_RESPONSE_RETENTION_SECONDS = 3 * 24 * 60 * 60
 LIVE_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
-HOST, PORT = '127.0.0.1', 8090
 lock = threading.RLock()
 board = chess.Board()
 moves, timings = [], []
@@ -1973,8 +1976,9 @@ if __name__ == '__main__':
             hf_candidate_runtime.start_background_planner()
             _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
             _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
-            print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
             http_server = ThreadingHTTPServer((HOST, PORT), Handler)
+            bound_host, bound_port = http_server.server_address[:2]
+            print(f'Local AI Chess Arena: http://{bound_host}:{bound_port}', flush=True)
             _serve_http_until_shutdown(http_server, shutdown_requested)
     finally:
         try:
