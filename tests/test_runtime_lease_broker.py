@@ -226,3 +226,73 @@ def test_broker_does_not_unlink_path_it_did_not_bind(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="bind race"):
         server.serve_forever()
     assert path.read_text(encoding="utf-8") == "foreign path"
+
+
+def test_graceful_broker_shutdown_drains_inflight_committed_request_and_restart_reads_lease(tmp_path):
+    store = _store(tmp_path)
+    committed = threading.Event()
+    release_ack = threading.Event()
+    original_persist = store.persist
+
+    def persist_then_pause_ack(record):
+        original_persist(record)
+        committed.set()
+        assert release_ack.wait(3)
+
+    store.persist = persist_then_pause_ack
+    path = tmp_path / "lease-broker.sock"
+    server = RuntimeLeaseBrokerServer(path, store=store, allowed_uid=os.getuid())
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.start()
+    request_result = []
+    record = RuntimeUnitRecord(1, "ai-chess-arena-runtime-1.service", "start_pending")
+
+    def send_persist():
+        try:
+            RuntimeLeaseBrokerClient(path).persist(record)
+            request_result.append("acknowledged")
+        except Exception as exc:
+            request_result.append(type(exc).__name__)
+
+    request_thread = threading.Thread(target=send_persist)
+    try:
+        assert server.ready.wait(2)
+        request_thread.start()
+        assert committed.wait(2)
+        # Stop accepting new work while the in-flight handler is paused after
+        # its SQLite commit but before sending the response.
+        server.shutdown()
+        server_thread.join(0.1)
+        assert server_thread.is_alive()  # server_close drains non-daemon handlers
+        assert store.get(1) == record
+        release_ack.set()
+        request_thread.join(2)
+        server_thread.join(2)
+        assert not request_thread.is_alive()
+        assert not server_thread.is_alive()
+        assert request_result == ["acknowledged"]
+    finally:
+        release_ack.set()
+        if server.ready.is_set():
+            server.shutdown()
+        request_thread.join(2)
+        server_thread.join(2)
+
+    store.persist = original_persist
+    restarted, restarted_thread, client = _start_test_broker(tmp_path, store)
+    try:
+        assert client.get(1) == record
+        assert client.load_recoverable() == (record,)
+    finally:
+        restarted.shutdown()
+        restarted_thread.join(3)
+    assert not restarted_thread.is_alive()
+
+
+def _start_test_broker(tmp_path, store):
+    path = tmp_path / "lease-broker.sock"
+    server = RuntimeLeaseBrokerServer(path, store=store, allowed_uid=os.getuid())
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    assert server.ready.wait(2)
+    return server, thread, RuntimeLeaseBrokerClient(path)
