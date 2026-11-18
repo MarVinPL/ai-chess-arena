@@ -63,3 +63,20 @@ Consequently, the cutover needs a separately tested, API-owned, idempotent schem
 - B5: independent security review and operational recovery drill.
 
 A successful CI run or a passing unit test does not close these gates. The existing source review is not an independent security audit.
+
+## Disposable DB and broker proof (2026-11-18)
+
+Completed on the existing VPS using a private disposable directory under `/var/tmp`; no production DB migration or API restart was performed.
+
+- Created the disposable snapshot with Python SQLite's online `Connection.backup()` API from `/var/lib/ai-chess-arena/arena.sqlite3` while the production API remained active.
+- Snapshot artifact: `arena-disposable.sqlite3`, SHA-256 `16183b65d7704622f6b0ce2bf274f01809edec0603db685448b74f3973482ac8`, size 7,782,400 bytes. The snapshot was kept in a mode-0700 temporary directory; the DB file was set to mode 0600.
+- Before startup initialization, the snapshot had 14 games, 5 tournaments, 6,026 pairings, 57 league models, `integrity_check=ok`, zero foreign-key violations, and `journal_mode=delete`. The tournament statuses were #5/#6 completed and #7/#8/#9 planned; 14 pairings were completed and 6,012 pending.
+- Ran the actual branch `server.db_init()` against the disposable DB with `ARENA_DATABASE_PATH` pinned to that file, followed by `SQLiteRuntimeUnitStore(..., initialize_schema=True)` and `runtime_executor.recover_orphaned_jobs()`. Repeated the same initialization sequence to check idempotence.
+- Result: the runtime lease table and executor tables were created; the 14 games, 5 tournaments, 6,026 pairings, tournament statuses, and pairing status counts were preserved. Both integrity and foreign-key checks passed after the first and repeated initialization.
+- Started the actual `RuntimeLeaseBrokerServer` on a private Unix socket against the disposable DB and exercised the real `RuntimeLeaseBrokerClient`: `persist`, `get`, `load_recoverable`, transitions to `active`, `stop_pending`, and `stopped`, then graceful broker shutdown. The socket was removed by the broker. One synthetic job and its stopped lease remain only in the disposable artifact.
+- Separate WAL-sidecar test: cloned the disposable DB, enabled WAL only on that clone, held a reader transaction open to keep both `-wal` and `-shm` present, and exercised the real API-side SQLite lease store plus broker/client writes and reads. The lease round-trip passed while both sidecars existed; after closing readers and checkpointing, `integrity_check=ok`, no foreign-key errors, and the lease state was readable. This validates the broker/store path under a WAL sidecar scenario; it does **not** change or claim that production uses WAL.
+- Production remained on the same active API process (PID `3417317` at final check), old release `ab4a8cb`, with `TimeoutStopSec=30s`; the supervisor unit remained not installed. The production DB remained in `delete` journal mode with no `-wal`/`-shm` sidecars at final inspection.
+
+### What this proves — and what it does not
+
+This closes the disposable API-schema/idempotence proof and provides a real Unix broker integration result on a disposable DB. It is useful evidence toward B1 and B2, but it does **not** close either gate: no actual systemd supervisor service was installed or started, no supervisor unit recovery/stop was exercised, and the WAL test does not establish a production cutover/rollback procedure. A coordinated backup-restore rollback drill and a real systemd supervisor integration test remain required.
