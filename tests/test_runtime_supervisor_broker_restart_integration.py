@@ -246,3 +246,101 @@ def test_process_loss_after_backend_stop_before_stopped_commit_retries_exact_uni
         broker2.shutdown()
         thread2.join(3)
     assert not thread2.is_alive()
+
+class _FailAfterCommitStore:
+    """Inject broker-side failure after SQLite commits but before its ACK."""
+    def __init__(self, store, *, fail_action, fail_state=None):
+        self.store = store
+        self.fail_action = fail_action
+        self.fail_state = fail_state
+        self.failed = False
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+    def persist(self, record):
+        self.store.persist(record)
+        if self.fail_action == "persist" and not self.failed:
+            self.failed = True
+            raise OSError("simulated broker loss after durable persist")
+
+    def set_state(self, job_id, state, unit_name=None):
+        self.store.set_state(job_id, state, unit_name)
+        if (self.fail_action == "set_state" and state == self.fail_state
+                and not self.failed):
+            self.failed = True
+            raise OSError("simulated broker loss after durable state commit")
+
+
+def test_broker_failure_after_persist_commit_never_starts_backend_and_recovers(tmp_path):
+    job_id = 95
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    store, backend, broker1, thread1, client1 = _restartable_runtime(tmp_path, job_id)
+    broker1.store = _FailAfterCommitStore(store, fail_action="persist")
+    try:
+        supervisor = _supervisor(client1, backend)
+        with pytest.raises(RuntimeLeaseBrokerError, match="rejected request"):
+            supervisor.start(
+                _spec(job_id),
+                ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", str(job_id)),
+            )
+        # SQLite committed start_pending, but broker did not acknowledge it.
+        # Fail-closed behavior means systemd must not be called.
+        assert store.get(job_id).state == "start_pending"
+        assert backend.starts == []
+        assert backend.active == set()
+    finally:
+        broker1.shutdown()
+        thread1.join(3)
+    assert not thread1.is_alive()
+
+    broker2, thread2, client2 = _restart_broker(tmp_path, store)
+    try:
+        recovered = _supervisor(client2, backend).recover()
+        assert recovered == {"stopped_units": [unit], "count": 1}
+        assert backend.stops == [unit]
+        assert backend.active == set()
+        assert store.get(job_id).state == "stopped"
+    finally:
+        broker2.shutdown()
+        thread2.join(3)
+    assert not thread2.is_alive()
+
+
+def test_broker_failure_after_stop_pending_commit_skips_backend_until_recovery(tmp_path):
+    job_id = 96
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    store, backend, broker1, thread1, client1 = _restartable_runtime(tmp_path, job_id)
+    try:
+        supervisor = _supervisor(client1, backend)
+        supervisor.start(
+            _spec(job_id),
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", str(job_id)),
+        )
+        record = client1.get(job_id)
+        broker1.store = _FailAfterCommitStore(
+            store, fail_action="set_state", fail_state="stop_pending"
+        )
+        with pytest.raises(RuntimeLeaseBrokerError, match="rejected request"):
+            supervisor.stop(record)
+        # The broker committed stop_pending but failed before ACK. The
+        # supervisor must not stop systemd until it can prove the transition.
+        assert store.get(job_id).state == "stop_pending"
+        assert backend.active == {unit}
+        assert backend.stops == []
+    finally:
+        broker1.shutdown()
+        thread1.join(3)
+    assert not thread1.is_alive()
+
+    broker2, thread2, client2 = _restart_broker(tmp_path, store)
+    try:
+        recovered = _supervisor(client2, backend).recover()
+        assert recovered == {"stopped_units": [unit], "count": 1}
+        assert backend.stops == [unit]
+        assert backend.active == set()
+        assert store.get(job_id).state == "stopped"
+    finally:
+        broker2.shutdown()
+        thread2.join(3)
+    assert not thread2.is_alive()
