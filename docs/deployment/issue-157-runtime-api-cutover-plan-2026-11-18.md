@@ -345,3 +345,8 @@ The VPS verifier now has a dedicated `--approval-statement` mode. It verifies th
 ## B3 continuation — exact Light-R1 candidate metadata, no download (2026-11-18)
 
 Read-only Hugging Face API metadata confirms repository `360ZhiNao/Light-R1-14B-DS-GGUF`, revision `0d4531e58894e0019d4a9a6aa775eb32098213cb`, file `Light-R1-14B-Q4_0.gguf`, size `8,517,725,312` bytes and upstream LFS SHA-256 `d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa`. The repository tag and model-card metadata declare Apache-2.0, but the pinned revision contains no `LICENSE`/`COPYING` file. The license review therefore remains pending; do not set `verified_permissive`. This is upstream metadata only, not a locally recomputed file hash. No model weights were downloaded, no quarantine artifact or TEST_ONLY grant exists, and inference remains unauthorized. Machine-readable record: `issue-157-model-candidate-metadata-2026-11-18.json`.
+
+
+## B3 correction — Light-R1 artifact is present but runtime-blocked (2026-11-18)
+
+The earlier statements in this plan that no model was downloaded/copied and no quarantine artifact existed are superseded by `issue-157-model-artifact-quarantine-2026-11-18.md`. A pre-existing exact Light-R1 GGUF was found, fully SHA-256-verified against the pinned upstream LFS digest, and reconciled into the quarantine registry. The original transfer provenance is unknown because no matching download job/event exists. The refreshed runtime preflight remains `skipped_blocked`: manual candidate review is missing and RAM is insufficient (14.90 GiB estimated versus 1.63 GiB available). This does not authorize TEST_ONLY, runtime handoff, inference, tournament admission, or production deployment.
