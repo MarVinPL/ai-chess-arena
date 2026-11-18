@@ -39,6 +39,13 @@ def harness(backend, records=None, fail_persist=False):
     def persist(record):
         if fail_persist:
             raise OSError("durable store unavailable")
+        existing = records.get(record.job_id)
+        if existing is not None:
+            if (existing.unit_name == record.unit_name
+                    and existing.state == "start_pending"
+                    and record.state == "start_pending"):
+                return
+            raise RuntimeSupervisorError("duplicate durable lease")
         records[record.job_id] = record
 
     def set_state(job_id, state):
@@ -49,7 +56,11 @@ def harness(backend, records=None, fail_persist=False):
 
     supervisor = RuntimeSupervisor(
         backend=backend, persist=persist, set_state=set_state,
-        load_recoverable=lambda: tuple(records.values()),
+        load_recoverable=lambda: tuple(
+            record for record in records.values()
+            if record.state in {"start_pending", "start_uncertain", "active",
+                                "stop_pending", "recovery_stop_pending"}
+        ),
     )
     return supervisor, records, states
 
@@ -336,3 +347,110 @@ def test_recovery_stop_failure_retains_lease_for_a_later_recovery_attempt():
     assert restarted.recover() == {"stopped_units": [record.unit_name], "count": 1}
     assert records[62].state == "stopped"
     assert backend.stopped == [record.unit_name, record.unit_name]
+
+
+def test_concurrent_duplicate_start_serializes_and_never_starts_same_unit_twice():
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    class BlockingBackend(FakeBackend):
+        def start(self, runtime_spec, argv):
+            entered.set()
+            assert release.wait(2)
+            super().start(runtime_spec, argv)
+
+    backend = BlockingBackend()
+    supervisor, records, _ = harness(backend)
+    argv = ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "63")
+    outcomes = []
+    def invoke():
+        try:
+            outcomes.append(("ok", supervisor.start(spec(63), argv)))
+        except Exception as exc:
+            outcomes.append(("error", exc))
+
+    first = threading.Thread(target=invoke)
+    second = threading.Thread(target=invoke)
+    first.start()
+    assert entered.wait(2)
+    second.start()
+    release.set()
+    first.join(2)
+    second.join(2)
+    assert not first.is_alive() and not second.is_alive()
+    assert len(backend.started) == 1
+    assert records[63].state == "active"
+    assert [kind for kind, _ in outcomes].count("ok") == 1
+    assert [kind for kind, _ in outcomes].count("error") == 1
+
+
+def test_concurrent_stop_requests_call_backend_once_and_keep_terminal_lease():
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    class BlockingBackend(FakeBackend):
+        def stop(self, unit_name):
+            entered.set()
+            assert release.wait(2)
+            super().stop(unit_name)
+
+    backend = BlockingBackend()
+    supervisor, records, _ = harness(backend)
+    unit = supervisor.start(
+        spec(64), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "64")
+    )
+    record = records[64]
+    outcomes = []
+    def invoke():
+        try:
+            supervisor.stop(record)
+            outcomes.append("ok")
+        except Exception:
+            outcomes.append("error")
+
+    first = threading.Thread(target=invoke)
+    second = threading.Thread(target=invoke)
+    first.start()
+    assert entered.wait(2)
+    second.start()
+    release.set()
+    first.join(2)
+    second.join(2)
+    assert not first.is_alive() and not second.is_alive()
+    assert backend.stopped == [unit]
+    assert records[64].state == "stopped"
+    assert sorted(outcomes) == ["error", "ok"]
+
+
+def test_recovery_and_stop_race_cannot_double_stop_same_unit():
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    class BlockingBackend(FakeBackend):
+        def stop(self, unit_name):
+            entered.set()
+            assert release.wait(2)
+            super().stop(unit_name)
+
+    backend = BlockingBackend()
+    supervisor, records, _ = harness(backend)
+    unit = supervisor.start(
+        spec(65), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "65")
+    )
+    record = records[65]
+    recovery_results = []
+    stopper = threading.Thread(target=lambda: supervisor.stop(record))
+    recovery = threading.Thread(target=lambda: recovery_results.append(supervisor.recover()))
+    stopper.start()
+    assert entered.wait(2)
+    recovery.start()
+    release.set()
+    stopper.join(2)
+    recovery.join(2)
+    assert not stopper.is_alive() and not recovery.is_alive()
+    assert backend.stopped == [unit]
+    assert records[65].state == "stopped"
+    assert recovery_results == [{"stopped_units": [], "count": 0}]

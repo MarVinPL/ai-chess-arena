@@ -153,3 +153,82 @@ def test_watchdog_thread_checks_immediately_and_stops_cleanly():
     finally:
         watchdog.stop()
     assert watchdog.last_result == {"checked": 1, "stopped": [7], "failed": []}
+
+
+def test_watchdog_revocation_racing_api_cancellation_stops_exact_unit_once():
+    import threading
+    from runtime_supervisor import RuntimeSupervisor, RuntimeUnitRecord
+
+    job_id = 88
+    unit = f"ai-chess-arena-runtime-{job_id}.service"
+    state = {"record": RuntimeUnitRecord(job_id, unit, "active"), "stops": []}
+    entered = threading.Event()
+    release = threading.Event()
+
+    class DurableLeases:
+        def load_recoverable(self):
+            record = state["record"]
+            return (record,) if record.state in {
+                "start_pending", "start_uncertain", "active", "stop_pending",
+                "recovery_stop_pending",
+            } else ()
+
+    class Backend:
+        def stop(self, requested_unit):
+            entered.set()
+            assert release.wait(2)
+            state["stops"].append(requested_unit)
+
+    leases = DurableLeases()
+    supervisor = RuntimeSupervisor(
+        backend=Backend(),
+        persist=lambda _record: None,
+        set_state=lambda _job, new_state: state.update(
+            record=RuntimeUnitRecord(job_id, unit, new_state)
+        ),
+        load_recoverable=leases.load_recoverable,
+    )
+
+    class TrustedHandlers:
+        def stop(self, requested_job):
+            record = state["record"]
+            supervisor.stop(record)
+            return {"job_id": requested_job, "unit_name": unit,
+                    "lease_state": "stopped"}
+
+    watchdog = RuntimeRevocationWatchdog(
+        authority=Authority({job_id: False}), lease_store=leases,
+        handlers=TrustedHandlers(), interval_seconds=1,
+    )
+    watchdog_errors = []
+    api_errors = []
+    watchdog_thread = threading.Thread(
+        target=lambda: _capture_watchdog(watchdog, watchdog_errors)
+    )
+    watchdog_thread.start()
+    assert entered.wait(2)
+
+    def api_cancel_stop():
+        try:
+            TrustedHandlers().stop(job_id)
+        except Exception as exc:
+            api_errors.append(exc)
+
+    api_thread = threading.Thread(target=api_cancel_stop)
+    api_thread.start()
+    release.set()
+    watchdog_thread.join(2)
+    api_thread.join(2)
+    assert not watchdog_thread.is_alive() and not api_thread.is_alive()
+    assert state["stops"] == [unit]
+    assert state["record"].state == "stopped"
+    assert watchdog.last_result == {"checked": 1, "stopped": [job_id], "failed": []}
+    assert len(api_errors) == 1
+    assert watchdog_errors == []
+
+
+def _capture_watchdog(watchdog, errors):
+    try:
+        watchdog.run_once()
+    except Exception as exc:
+        errors.append(exc)

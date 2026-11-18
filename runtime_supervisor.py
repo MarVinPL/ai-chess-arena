@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -35,6 +36,9 @@ class RuntimeSupervisor:
         self._persist = persist
         self._set_state = set_state
         self._load_recoverable = load_recoverable
+        # The watchdog runs alongside IPC handlers. Serialize lifecycle
+        # transitions so start/stop/recovery cannot race on one durable lease.
+        self._lifecycle_lock = threading.RLock()
 
     @staticmethod
     def _validate(spec: RuntimeUnitSpec, argv: tuple[str, ...]) -> int:
@@ -84,47 +88,50 @@ class RuntimeSupervisor:
     def start(self, spec: RuntimeUnitSpec, argv: tuple[str, ...], *,
               before_start: Callable[[], None] | None = None) -> str:
         """Persist identity first; optionally re-authorize immediately before backend start."""
-        job_id = self._validate(spec, argv)
-        if before_start is not None and not callable(before_start):
-            raise RuntimeSupervisorError("Callback przed startem musi być wywoływalny.")
-        self._persist(RuntimeUnitRecord(job_id, spec.unit_name, "start_pending"))
-        if before_start is not None:
+        with self._lifecycle_lock:
+            job_id = self._validate(spec, argv)
+            if before_start is not None and not callable(before_start):
+                raise RuntimeSupervisorError("Callback przed startem musi być wywoływalny.")
+            self._persist(RuntimeUnitRecord(job_id, spec.unit_name, "start_pending"))
+            if before_start is not None:
+                try:
+                    before_start()
+                except Exception:
+                    # No backend call has happened yet, so this exact lease can be
+                    # marked stopped. If the DB write fails, start_pending remains
+                    # recoverable and no artifact cleanup is performed by caller.
+                    self._set_state(job_id, "stopped")
+                    raise
             try:
-                before_start()
+                self._backend.start(spec, argv)
             except Exception:
-                # No backend call has happened yet, so this exact lease can be
-                # marked stopped. If the DB write fails, start_pending remains
-                # recoverable and no artifact cleanup is performed by caller.
-                self._set_state(job_id, "stopped")
+                self._set_state(job_id, "start_uncertain")
                 raise
-        try:
-            self._backend.start(spec, argv)
-        except Exception:
-            self._set_state(job_id, "start_uncertain")
-            raise
-        self._set_state(job_id, "active")
-        return spec.unit_name
+            self._set_state(job_id, "active")
+            return spec.unit_name
 
     def stop(self, record: RuntimeUnitRecord) -> None:
-        self._validate_record(record)
-        persisted = tuple(self._load_recoverable())
-        if not any(item.job_id == record.job_id and item.unit_name == record.unit_name
-                   for item in persisted):
-            raise RuntimeSupervisorError("Odmowa zatrzymania jednostki bez aktywnej dzierżawy w bazie.")
-        self._set_state(record.job_id, "stop_pending")
-        self._backend.stop(record.unit_name)
-        self._set_state(record.job_id, "stopped")
+        with self._lifecycle_lock:
+            self._validate_record(record)
+            persisted = tuple(self._load_recoverable())
+            if not any(item.job_id == record.job_id and item.unit_name == record.unit_name
+                       for item in persisted):
+                raise RuntimeSupervisorError("Odmowa zatrzymania jednostki bez aktywnej dzierżawy w bazie.")
+            self._set_state(record.job_id, "stop_pending")
+            self._backend.stop(record.unit_name)
+            self._set_state(record.job_id, "stopped")
 
     def recover(self) -> dict:
         """Stop only durable, validated unit names; never enumerate processes."""
-        recovered = []
-        for record in tuple(self._load_recoverable()):
-            self._validate_record(record)
-            self._set_state(record.job_id, "recovery_stop_pending")
-            self._backend.stop(record.unit_name)
-            self._set_state(record.job_id, "stopped")
-            recovered.append(record.unit_name)
-        return {"stopped_units": recovered, "count": len(recovered)}
+        with self._lifecycle_lock:
+            recovered = []
+            for record in tuple(self._load_recoverable()):
+                self._validate_record(record)
+                self._set_state(record.job_id, "recovery_stop_pending")
+                self._backend.stop(record.unit_name)
+                self._set_state(record.job_id, "stopped")
+                recovered.append(record.unit_name)
+            return {"stopped_units": recovered, "count": len(recovered)}
 
     @staticmethod
     def _validate_record(record: RuntimeUnitRecord) -> None:
