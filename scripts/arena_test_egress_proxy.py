@@ -17,15 +17,10 @@ from dataclasses import dataclass
 # Keep exact hostnames. Add a destination only after observing a required
 # redirect from the approved public Hugging Face download flow.
 DEFAULT_ALLOWED_HOSTS = frozenset({
+    # Verified with HEAD requests against the four resolvable pinned artifact URLs on
+    # 2026-11-19: Hub resolve endpoint redirects to this regional Xet CDN.
     "huggingface.co",
-    "cas-server.xethub.hf.co",
-    "cas-server.xethub-eu.hf.co",
-    "transfer.xethub.hf.co",
-    "transfer.xethub-eu.hf.co",
     "us.aws.cdn.hf.co",
-    "us.gcp.cdn.hf.co",
-    "cdn-lfs-us-1.hf.co",
-    "cdn-lfs-eu-1.hf.co",
 })
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", re.I)
 _MAX_HEADER = 8192

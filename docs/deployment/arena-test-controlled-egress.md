@@ -33,19 +33,14 @@ The implementation must use a dedicated, auditable unit/script and uniquely name
 
 ## Hugging Face download destinations
 
-The current official Hub documentation lists these HTTPS destinations for model downloads:
+The built-in allowlist is intentionally limited to two exact DNS names:
 
-- `huggingface.co` — Hub API, metadata, and redirects
-- `cas-server.xethub.hf.co`
-- `cas-server.xethub-eu.hf.co`
-- `transfer.xethub.hf.co`
-- `transfer.xethub-eu.hf.co`
-- `us.aws.cdn.hf.co`
-- `us.gcp.cdn.hf.co`
-- `cdn-lfs-us-1.hf.co`
-- `cdn-lfs-eu-1.hf.co`
+- `huggingface.co` — pinned-revision resolve endpoint
+- `us.aws.cdn.hf.co` — regional Xet CDN destination observed in the signed redirect
 
-Treat this as a starting allowlist, not an immutable guarantee. Before enabling egress, inspect the current machine-readable endpoint list at `https://huggingface.co/.well-known/meta.json` from the host and reconcile it with the official documentation. Add only download endpoints actually required by the selected client and the five approved public repositories. Do not add upload destinations or broad cloud-storage domains. If an additional destination is required, stop and document the evidence before changing the allowlist.
+Evidence collected from the VPS on 2026-11-19: HTTPS HEAD requests to the pinned artifact URLs for candidates 1–4 returned `302` from `huggingface.co` with a redirect to `us.aws.cdn.hf.co`, followed by `200`. No model bytes were downloaded. Candidate 5's supplied pinned URL returned `404`; its repository/revision/file tuple must be reconciled separately before that candidate can be downloaded or tested. The two-host allowlist therefore reflects the observed successful redirect chain, not the complete set of destinations that Hugging Face may use in other regions or for other repositories.
+
+The official machine-readable endpoint list at `https://huggingface.co/.well-known/meta.json` contains additional CDN, Xet, and cloud-storage domains. They are deliberately **not** allowlisted merely because they appear in that list. Do not add `amazonaws.com`, `s3.*`, generic cloud domains, upload endpoints, or unrelated regional endpoints. If a future approved download redirects elsewhere, stop and record the exact pinned URL, redirect hostname, and successful metadata probe before proposing a narrowly scoped allowlist change.
 
 Official reference: [Hugging Face — Downloading models, “Downloading behind a proxy or firewall”](https://huggingface.co/docs/hub/en/models-downloading).
 
@@ -112,7 +107,7 @@ Deployment is a separate owner-approved operation. It requires a maintenance win
 2. Install the proxy script as /usr/local/libexec/arena-test-egress-proxy.py (root:root, mode 0755), the service as /etc/systemd/system/arena-test-egress-proxy.service, the networkd file as /etc/systemd/network/10-arena-test-egress.network, and the nspawn file as /etc/systemd/nspawn/arena-test.nspawn. Install the documentation under /usr/local/share/doc/arena-test/.
 3. Reload systemd and systemd-networkd configuration. Stop only arena-test-container.service, then start the same existing rootfs with its existing transient command; the nspawn configuration adds at-egress on the host and eth1 in the container. Do not recreate the machine or rootfs.
 4. Verify the host interface has only 10.203.181.1/30; configure eth1 inside the running container as 10.203.181.2/30. Do not add a default route or DNS server. Verify only the connected /30 route exists for this link.
-5. Apply scripts/arena_test_egress_firewall.sh apply; inspect the exact IPv4/IPv6 rules and confirm no forwarding path is available.
+5. Apply scripts/arena_test_egress_firewall.sh apply; the script self-rolls back partial setup on failure. Inspect the exact IPv4/IPv6 rules and confirm no forwarding path is available.
 6. Start the proxy service. Confirm it listens only on 10.203.181.1:18765 and runs under a transient DynamicUser identity.
 7. From inside the container, use the proxy explicitly for HTTPS requests (for example, set HTTPS_PROXY=http://10.203.181.1:18765 and HTTP_PROXY=http://10.203.181.1:18765 for the one download process only). Do not persist proxy variables globally. The client should not need DNS because the proxy resolves the destination.
 8. Test one small, non-model HTTPS metadata request first. Verify an approved hostname succeeds and a non-allowlisted hostname, IP literal, alternate port, private address, and direct Internet connection fail. Confirm the container cannot reach other host services.

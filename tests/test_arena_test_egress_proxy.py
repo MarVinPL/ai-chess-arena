@@ -45,6 +45,21 @@ class ConnectRequestTests(unittest.TestCase):
             proxy.parse_connect_request(request(
                 "CONNECT huggingface.co:443 HTTP/1.1", "Authorization: Bearer secret\r\n"))
 
+    def test_allowlist_is_limited_to_observed_huggingface_flow(self):
+        self.assertEqual(proxy.DEFAULT_ALLOWED_HOSTS, frozenset({
+            "huggingface.co", "us.aws.cdn.hf.co"
+        }))
+        parsed = proxy.parse_connect_request(request(
+            "CONNECT us.aws.cdn.hf.co:443 HTTP/1.1"))
+        self.assertEqual(parsed.hostname, "us.aws.cdn.hf.co")
+        for host in (
+            "cas-server.xethub.hf.co", "transfer.xethub.hf.co",
+            "cdn-lfs.hf.co", "s3.us-east-1.amazonaws.com",
+            "example.com",
+        ):
+            with self.subTest(host=host), self.assertRaises(proxy.ProxyRequestError):
+                proxy.parse_connect_request(request(f"CONNECT {host}:443 HTTP/1.1"))
+
     def test_rejects_non_allowlisted_host(self):
         with self.assertRaises(proxy.ProxyRequestError):
             proxy.parse_connect_request(request("CONNECT example.com:443 HTTP/1.1"))
