@@ -1,0 +1,25 @@
+{
+  "input_sha256": "55096dfff15ddd1f7f9394f229593db5d21ece70170ea70bf5777d20a23e4ea6",
+  "license": "CC0-1.0",
+  "model_loaded": false,
+  "network_access": false,
+  "outputs": {
+    "test": {
+      "path": "test.jsonl",
+      "rows": 10,
+      "sha256": "71765ee3365e5fbc761bdc115f3bff8e2d5459e5e86ef2a67600c2095bec5516"
+    },
+    "train": {
+      "path": "train.jsonl",
+      "rows": 80,
+      "sha256": "009d326a7e37b190f7f64e4d39f5b008e61b15c6f170d24442805e4b71a05868"
+    },
+    "validation": {
+      "path": "validation.jsonl",
+      "rows": 10,
+      "sha256": "efba44b6c9a69956fdc6d6a17445b6fb363fc77ad560eca16301b3daafa6b958"
+    }
+  },
+  "purpose": "offline formatting only; no training or inference",
+  "schema_version": 1
+}
