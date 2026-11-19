@@ -31,8 +31,14 @@ remove_family() {
 
 case "$ACTION" in
   apply)
-    ip link show dev "$IFACE" >/dev/null 2>&1 || { echo "$IFACE is not present; refusing" >&2; exit 1; }
-    ip addr show dev "$IFACE" | grep -Fq "$HOST_IP/30" || { echo "$IFACE lacks $HOST_IP/30; refusing" >&2; exit 1; }
+    # Install interface-name rules before the veth is created when possible,
+    # so there is no unfiltered window during container startup. If it already
+    # exists, refuse an unexpected address rather than protecting the wrong link.
+    if ip link show dev "$IFACE" >/dev/null 2>&1; then
+      ip addr show dev "$IFACE" | grep -Fq "$HOST_IP/30" || { echo "$IFACE lacks $HOST_IP/30; refusing" >&2; exit 1; }
+    else
+      echo "$IFACE is absent; preparing interface-specific rules before creation"
+    fi
     for cmd in iptables ip6tables; do
       for chain in "$IN_CHAIN" "$FWD_CHAIN"; do
         if chain_exists "$cmd" "$chain"; then echo "$cmd $chain already exists; inspect/remove first" >&2; exit 1; fi
