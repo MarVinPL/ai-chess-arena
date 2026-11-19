@@ -88,6 +88,18 @@ def save(connection, payload, *, catalog=None, actor='arena'):
     connection.execute('''INSERT INTO hf_candidate_review_events
         (catalog_id,revision,occurred_at,actor,previous_json,new_json) VALUES(?,?,?,?,?,?)''',
         (catalog_id, revision, now, str(actor)[:120], previous[0] if previous else None, encoded))
+    _ensure_proposal_tables(connection)
+    proposal = connection.execute('SELECT id,status FROM hf_candidate_review_proposals WHERE catalog_id=? AND revision=?',
+                                  (catalog_id, revision)).fetchone()
+    if proposal is None:
+        cur = connection.execute('''INSERT INTO hf_candidate_review_proposals
+            (catalog_id,revision,repo_id,submitted_at,status) VALUES(?,?,?,?,?)''',
+            (catalog_id, revision, str(item.get('repo_id') or ''), now, 'pending_review'))
+        _proposal_event(connection, cur.lastrowid, 'submitted', actor, '', None, 'pending_review')
+    else:
+        connection.execute("UPDATE hf_candidate_review_proposals SET submitted_at=?,status='pending_review' WHERE id=?",
+                           (now, proposal[0]))
+        _proposal_event(connection, proposal[0], 'resubmitted', actor, 'Zaktualizowano dowody; ponowny przegląd wymagany.', proposal[1], 'pending_review')
     return {'review': fields, 'reviewed_at': now, 'reviewer': str(actor)[:120],
             'workflow_status': 'review_in_progress',
             'note': 'Zapisano ręczne ustalenia. To nie jest zatwierdzenie licencji ani dopuszczenie modelu do Areny.'}
@@ -107,7 +119,12 @@ def get(connection, catalog_id, revision):
             (catalog_id, revision)).fetchall()
     except Exception:
         events = []
+    _ensure_proposal_tables(connection)
+    proposal = connection.execute('SELECT id,status,submitted_at FROM hf_candidate_review_proposals WHERE catalog_id=? AND revision=?',
+                                   (catalog_id, revision)).fetchone()
     return {'reviewed_at': row[0], 'reviewer': row[1], 'review': json.loads(row[2]),
+            'proposal_id': proposal[0] if proposal else None,
+            'proposal_status': proposal[1] if proposal else 'not_submitted',
             'workflow_status': 'review_in_progress',
             'history': [{'occurred_at': event[0], 'actor': event[1],
                          'previous_review': json.loads(event[2]) if event[2] else None,
@@ -121,3 +138,69 @@ def list_reviews(connection):
         return []
     return [{'catalog_id': row[0], 'revision': row[1], 'reviewed_at': row[2], 'reviewer': row[3]}
             for row in rows]
+
+
+def _ensure_proposal_tables(connection):
+    connection.execute('''CREATE TABLE IF NOT EXISTS hf_candidate_reviews (
+        catalog_id TEXT NOT NULL, revision TEXT NOT NULL, reviewed_at TEXT NOT NULL,
+        reviewer TEXT NOT NULL, review_json TEXT NOT NULL,
+        PRIMARY KEY(catalog_id, revision)
+    )''')
+    connection.execute('''CREATE TABLE IF NOT EXISTS hf_candidate_review_proposals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, catalog_id TEXT NOT NULL, revision TEXT NOT NULL,
+        repo_id TEXT NOT NULL, submitted_at TEXT NOT NULL, status TEXT NOT NULL
+            CHECK(status IN ('pending_review','accepted_into_pr','rejected')),
+        UNIQUE(catalog_id, revision)
+    )''')
+    connection.execute('''CREATE TABLE IF NOT EXISTS hf_candidate_review_proposal_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, proposal_id INTEGER NOT NULL, event TEXT NOT NULL,
+        actor TEXT NOT NULL, occurred_at TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+        previous_status TEXT, new_status TEXT
+    )''')
+
+def _proposal_event(connection, proposal_id, event, actor, reason, previous, new):
+    connection.execute('''INSERT INTO hf_candidate_review_proposal_events
+        (proposal_id,event,actor,occurred_at,reason,previous_status,new_status)
+        VALUES(?,?,?,?,?,?,?)''', (proposal_id, event, str(actor)[:120], _now(),
+        str(reason)[:2000], previous, new))
+
+def list_proposals(connection):
+    _ensure_proposal_tables(connection)
+    rows = connection.execute('''SELECT p.id,p.catalog_id,p.revision,p.repo_id,p.submitted_at,p.status,
+        r.review_json FROM hf_candidate_review_proposals p
+        JOIN hf_candidate_reviews r ON r.catalog_id=p.catalog_id AND r.revision=p.revision
+        ORDER BY CASE p.status WHEN 'pending_review' THEN 0 WHEN 'accepted_into_pr' THEN 1 ELSE 2 END,p.id DESC''').fetchall()
+    result = []
+    for row in rows:
+        item = {'id': row[0], 'catalog_id': row[1], 'revision': row[2], 'repo_id': row[3],
+                'submitted_at': row[4], 'status': row[5], 'review': json.loads(row[6])}
+        events = connection.execute('''SELECT event,actor,occurred_at,reason,previous_status,new_status
+            FROM hf_candidate_review_proposal_events WHERE proposal_id=? ORDER BY id''', (item['id'],)).fetchall()
+        item['history'] = [{'event': e[0], 'actor': e[1], 'occurred_at': e[2],
+                            'reason': e[3], 'previous_status': e[4], 'new_status': e[5]} for e in events]
+        result.append(item)
+    return result
+
+def apply_proposal_action(connection, *, proposal_id, action, catalog=None, actor='arena', reason=''):
+    _ensure_proposal_tables(connection)
+    row = connection.execute('''SELECT id,catalog_id,revision,repo_id,status
+        FROM hf_candidate_review_proposals WHERE id=?''', (int(proposal_id),)).fetchone()
+    if row is None:
+        raise ValueError('Nie znaleziono propozycji kandydata.')
+    _candidate(row[1], row[2], catalog)  # revalidate exact current catalog revision at decision time
+    previous = row[4]
+    if previous != 'pending_review':
+        raise ValueError('Decyzję można wykonać wyłącznie dla propozycji oczekującej na przegląd.')
+    if action == 'accept':
+        new, event, reason = 'accepted_into_pr', 'accepted_into_pr', str(reason).strip()[:2000]
+    elif action == 'reject':
+        reason = str(reason).strip()[:2000]
+        if len(reason) < 3:
+            raise ValueError('Odrzucenie wymaga uzasadnienia (minimum 3 znaki).')
+        new, event = 'rejected', 'rejected'
+    else:
+        raise ValueError('Nieznana akcja propozycji kandydata.')
+    connection.execute('UPDATE hf_candidate_review_proposals SET status=? WHERE id=?', (new, row[0]))
+    _proposal_event(connection, row[0], event, actor, reason, previous, new)
+    return {'proposal_id': row[0], 'catalog_id': row[1], 'revision': row[2], 'status': new,
+            'note': 'Zapisano decyzję workflow. To wyłącznie etap przeglądu/PR; bez admission, allowlisty, pobierania, runtime i rosteru.'}
