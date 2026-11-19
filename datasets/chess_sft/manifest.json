@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "dataset_id": "smollm2-360m-chess-seed-v1",
+  "dataset_path": "datasets/chess_sft/seed.jsonl",
+  "generator": "scripts/build_smol_chess_seed_dataset.py",
+  "generator_version": 1,
+  "source": "self-authored synthetic legal chess positions",
+  "license": "CC0-1.0",
+  "external_sources": [],
+  "model_target": "HuggingFaceTB/SmolLM2-360M-Instruct",
+  "purpose": "format and validator smoke-test only; not sufficient for model training",
+  "rows": 8,
+  "sha256": "219c4fdeadf941b9bc382d4bbd5e3e2b8f53262cf1488d599e524a985fa882d5",
+  "split_counts": {
+    "train": 5,
+    "validation": 1,
+    "test": 2
+  },
+  "deduplication": "exact normalized FEN uniqueness; generator aborts on duplicates",
+  "labels": "best_move is accepted only when python-chess verifies exactly one legal mate-in-one move"
+}

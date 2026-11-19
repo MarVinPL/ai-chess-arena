@@ -63,11 +63,7 @@ def submit(connection, payload, *, allowed_model_ids):
     if fields['technical_readiness'] == 'blocked' and not fields['technical_blockers']:
         raise ValueError('Opisz blokady wykryte w teście technicznym.')
     now = _now()
-    connection.execute('''CREATE TABLE IF NOT EXISTS model_review_submissions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, model_id INTEGER NOT NULL CHECK(model_id > 0),
-        submitted_at TEXT NOT NULL, payload_json TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending_review' CHECK(status IN ('pending_review','accepted_into_pr','rejected'))
-    )''')
+    ensure_schema(connection)
     cur = connection.execute('INSERT INTO model_review_submissions(model_id,submitted_at,payload_json) VALUES(?,?,?)',
                               (model_id, now, json.dumps(fields, ensure_ascii=False, sort_keys=True)))
     return {'submission_id': cur.lastrowid, 'model_id': model_id, 'submitted_at': now,
@@ -91,10 +87,11 @@ def _ensure_review_events(connection):
 
 
 def list_submissions(connection):
+    ensure_schema(connection)
     _ensure_review_events(connection)
     connection.row_factory = __import__('sqlite3').Row
     rows = connection.execute('''SELECT id,model_id,submitted_at,payload_json,status
-        FROM model_review_submissions ORDER BY
+        FROM model_review_submissions WHERE model_id IS NOT NULL ORDER BY
         CASE status WHEN 'pending_review' THEN 0 WHEN 'accepted_into_pr' THEN 1 ELSE 2 END,
         id DESC''').fetchall()
     result = []
@@ -113,11 +110,14 @@ def list_submissions(connection):
 
 def apply_action(connection, *, submission_id, action, actor='arena', reason='', payload=None,
                  allowed_model_ids=()):
+    ensure_schema(connection)
     _ensure_review_events(connection)
     row = connection.execute('''SELECT id,model_id,submitted_at,payload_json,status
         FROM model_review_submissions WHERE id=?''', (int(submission_id),)).fetchone()
     if row is None:
         raise ValueError('Nie znaleziono propozycji audytowej.')
+    if row[1] is None:
+        raise ValueError('Propozycję HF obsługuje wyłącznie akcja z ponowną walidacją katalogu.')
     # SELECT order: id, model_id, submitted_at, payload_json, status.
     # Preserve the exact prior JSON in the append-only event log.
     previous_payload_json = row[3]
@@ -165,3 +165,108 @@ def apply_action(connection, *, submission_id, action, actor='arena', reason='',
         previous_status, new_status, previous_payload_json, new_payload_json))
     return {'submission_id': int(submission_id), 'status': new_status, 'event': event,
             'note': 'Zapisano decyzję przeglądu. Allowlista i lokalne dopuszczenie pozostają bez zmian.'}
+
+
+def ensure_schema(connection):
+    """Ensure the Arena and HF review workflows share one identity-safe queue."""
+    connection.execute("SAVEPOINT review_queue_schema")
+    try:
+        exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_review_submissions'").fetchone()
+        if not exists:
+            connection.execute("CREATE TABLE model_review_submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, model_id INTEGER, catalog_id TEXT, revision TEXT, repo_id TEXT, submitted_at TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending_review' CHECK(status IN ('pending_review','accepted_into_pr','rejected')), CHECK ((model_id IS NOT NULL AND model_id>0 AND catalog_id IS NULL AND revision IS NULL AND repo_id IS NULL) OR (model_id IS NULL AND length(catalog_id)>0 AND length(revision)=40 AND length(repo_id)>0)))")
+        else:
+            info = list(connection.execute('PRAGMA table_info(model_review_submissions)'))
+            cols = {r[1] for r in info}
+            model_not_null = any(r[1] == 'model_id' and r[3] for r in info)
+            if not {'catalog_id','revision','repo_id'}.issubset(cols) or model_not_null:
+                connection.execute('ALTER TABLE model_review_submissions RENAME TO model_review_submissions_legacy')
+                connection.execute("CREATE TABLE model_review_submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, model_id INTEGER, catalog_id TEXT, revision TEXT, repo_id TEXT, submitted_at TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending_review' CHECK(status IN ('pending_review','accepted_into_pr','rejected')), CHECK ((model_id IS NOT NULL AND model_id>0 AND catalog_id IS NULL AND revision IS NULL AND repo_id IS NULL) OR (model_id IS NULL AND length(catalog_id)>0 AND length(revision)=40 AND length(repo_id)>0)))")
+                connection.execute('INSERT INTO model_review_submissions(id,model_id,submitted_at,payload_json,status) SELECT id,model_id,submitted_at,payload_json,status FROM model_review_submissions_legacy')
+                connection.execute('DROP TABLE model_review_submissions_legacy')
+        _ensure_review_events(connection)
+        legacy = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hf_candidate_review_proposals'").fetchone()
+        if legacy:
+            rows = connection.execute('SELECT id,catalog_id,revision,repo_id,submitted_at,status FROM hf_candidate_review_proposals ORDER BY id').fetchall()
+            for old_id,catalog_id,revision,repo_id,submitted_at,status in rows:
+                found = connection.execute('SELECT id FROM model_review_submissions WHERE model_id IS NULL AND catalog_id=? AND revision=? AND repo_id=?', (catalog_id,revision,repo_id)).fetchone()
+                if found:
+                    new_id = found[0]
+                else:
+                    review = connection.execute('SELECT review_json FROM hf_candidate_reviews WHERE catalog_id=? AND revision=?', (catalog_id,revision)).fetchone()
+                    payload_json = review[0] if review else '{}'
+                    id_conflict = connection.execute('SELECT 1 FROM model_review_submissions WHERE id=?', (old_id,)).fetchone()
+                    if id_conflict:
+                        cur = connection.execute('INSERT INTO model_review_submissions(model_id,catalog_id,revision,repo_id,submitted_at,payload_json,status) VALUES(NULL,?,?,?,?,?,?)', (catalog_id,revision,repo_id,submitted_at,payload_json,status))
+                    else:
+                        cur = connection.execute('INSERT INTO model_review_submissions(id,model_id,catalog_id,revision,repo_id,submitted_at,payload_json,status) VALUES(?,NULL,?,?,?,?,?,?)', (old_id,catalog_id,revision,repo_id,submitted_at,payload_json,status))
+                    new_id = cur.lastrowid
+                old_events = connection.execute('SELECT id,event,actor,occurred_at,reason,previous_status,new_status FROM hf_candidate_review_proposal_events WHERE proposal_id=? ORDER BY id', (old_id,)).fetchall()
+                for old_event_id,event,actor,occurred_at,reason,previous_status,new_status in old_events:
+                    if not connection.execute('SELECT 1 FROM model_review_events WHERE submission_id=? AND event=? AND actor=? AND occurred_at=?', (new_id,event,actor,occurred_at)).fetchone():
+                        event_conflict = connection.execute('SELECT 1 FROM model_review_events WHERE id=?', (old_event_id,)).fetchone()
+                        if event_conflict:
+                            connection.execute('INSERT INTO model_review_events(submission_id,event,actor,occurred_at,reason,previous_status,new_status) VALUES(?,?,?,?,?,?,?)', (new_id,event,actor,occurred_at,reason,previous_status,new_status))
+                        else:
+                            connection.execute('INSERT INTO model_review_events(id,submission_id,event,actor,occurred_at,reason,previous_status,new_status) VALUES(?,?,?,?,?,?,?,?)', (old_event_id,new_id,event,actor,occurred_at,reason,previous_status,new_status))
+            connection.execute('DROP TABLE hf_candidate_review_proposal_events')
+            connection.execute('DROP TABLE hf_candidate_review_proposals')
+        connection.execute('RELEASE SAVEPOINT review_queue_schema')
+    except Exception:
+        connection.execute('ROLLBACK TO SAVEPOINT review_queue_schema')
+        connection.execute('RELEASE SAVEPOINT review_queue_schema')
+        raise
+
+
+def submit_hf_candidate(connection, *, catalog_id, revision, repo_id, submitted_at, payload_json, actor='arena'):
+    ensure_schema(connection)
+    row = connection.execute('SELECT id,status FROM model_review_submissions WHERE model_id IS NULL AND catalog_id=? AND revision=? AND repo_id=?', (catalog_id,revision,repo_id)).fetchone()
+    if row:
+        connection.execute("UPDATE model_review_submissions SET submitted_at=?,payload_json=?,status='pending_review' WHERE id=?", (submitted_at,payload_json,row[0]))
+        previous = row[1]
+        event = 'resubmitted'
+        submission_id = row[0]
+    else:
+        cur = connection.execute("INSERT INTO model_review_submissions(model_id,catalog_id,revision,repo_id,submitted_at,payload_json,status) VALUES(NULL,?,?,?,?,?,'pending_review')", (catalog_id,revision,repo_id,submitted_at,payload_json))
+        submission_id = cur.lastrowid
+        previous = None
+        event = 'submitted'
+    connection.execute('INSERT INTO model_review_events(submission_id,event,actor,occurred_at,reason,previous_status,new_status,previous_payload_json,new_payload_json) VALUES(?,?,?,?,?,?,?,?,?)', (submission_id,event,str(actor)[:120],submitted_at,'Zapisano/odświeżono propozycję HF.',previous,'pending_review',None,payload_json))
+    return submission_id
+
+
+def list_hf_candidates(connection):
+    ensure_schema(connection)
+    rows = connection.execute("SELECT id,catalog_id,revision,repo_id,submitted_at,status,payload_json FROM model_review_submissions WHERE model_id IS NULL ORDER BY CASE status WHEN 'pending_review' THEN 0 WHEN 'accepted_into_pr' THEN 1 ELSE 2 END,id DESC").fetchall()
+    result=[]
+    for row in rows:
+        item={'id':row[0],'catalog_id':row[1],'revision':row[2],'repo_id':row[3],'submitted_at':row[4],'status':row[5],'review':json.loads(row[6] or '{}')}
+        events=connection.execute('SELECT event,actor,occurred_at,reason,previous_status,new_status FROM model_review_events WHERE submission_id=? ORDER BY id',(item['id'],)).fetchall()
+        item['history']=[{'event':e[0],'actor':e[1],'occurred_at':e[2],'reason':e[3],'previous_status':e[4],'new_status':e[5]} for e in events]
+        result.append(item)
+    return result
+
+
+def apply_hf_candidate_action(connection, *, submission_id, action, catalog=None, actor='arena', reason=''):
+    ensure_schema(connection)
+    row=connection.execute('SELECT id,catalog_id,revision,repo_id,status,payload_json FROM model_review_submissions WHERE id=? AND model_id IS NULL',(int(submission_id),)).fetchone()
+    if not row:
+        raise ValueError('Nie znaleziono propozycji kandydata HF.')
+    from hf_candidate_reviews import _candidate
+    current = _candidate(row[1],row[2],catalog)
+    if str(current.get('repo_id') or '') != row[3]:
+        raise ValueError('Repozytorium kandydata zmieniło się względem zgłoszenia; decyzja zablokowana.')
+    previous=row[4]
+    if previous!='pending_review':
+        raise ValueError('Decyzję można wykonać wyłącznie dla propozycji oczekującej na przegląd.')
+    if action=='accept':
+        new='accepted_into_pr'; event='accepted_into_pr'; reason=str(reason).strip()[:2000]
+    elif action=='reject':
+        reason=str(reason).strip()[:2000]
+        if len(reason)<3: raise ValueError('Odrzucenie wymaga uzasadnienia (minimum 3 znaki).')
+        new='rejected'; event='rejected'
+    else:
+        raise ValueError('Nieznana akcja propozycji kandydata.')
+    now=_now()
+    connection.execute('UPDATE model_review_submissions SET status=? WHERE id=?',(new,row[0]))
+    connection.execute('INSERT INTO model_review_events(submission_id,event,actor,occurred_at,reason,previous_status,new_status,previous_payload_json,new_payload_json) VALUES(?,?,?,?,?,?,?,?,?)',(row[0],event,str(actor)[:120],now,reason,previous,new,row[5],row[5]))
+    return {'proposal_id':row[0],'submission_id':row[0],'catalog_id':row[1],'revision':row[2],'status':new,'note':'Zapisano decyzję w wspólnej kolejce, bez admission, allowlisty, pobierania, runtime i rosteru.'}

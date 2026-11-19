@@ -1,0 +1,34 @@
+{
+  "dataset_id": "smollm2-360m-chess-synthetic-v2",
+  "dataset_path": "datasets/chess_sft/dataset-v2.jsonl",
+  "engine_reference": null,
+  "external_sources": [],
+  "generator": "scripts/build_smol_chess_dataset_v2.py",
+  "generator_version": 2,
+  "label_policy": "best_move is the unique legal move satisfying task-specific rule; no general engine-optimality claim",
+  "license": "CC0-1.0",
+  "model_target": "HuggingFaceTB/SmolLM2-360M-Instruct",
+  "model_weights_downloaded": false,
+  "network_access": false,
+  "purpose": "small experimental SFT dataset; rule-verified task targets, not engine-optimal chess evaluation",
+  "rows": 100,
+  "schema_version": 2,
+  "sha256": "55096dfff15ddd1f7f9394f229593db5d21ece70170ea70bf5777d20a23e4ea6",
+  "source": "self-authored CC0 synthetic legal positions and deterministic random legal playouts",
+  "split_counts": {
+    "test": 10,
+    "train": 80,
+    "validation": 10
+  },
+  "split_policy": "independent deterministic source-game seeds per split; exact FEN deduplication across all splits",
+  "task_counts": {
+    "endgame_mate_in_one": 8,
+    "promotion_choice": 4,
+    "unique_capture": 24,
+    "unique_castle": 12,
+    "unique_check": 45,
+    "unique_evasion": 7
+  },
+  "training_or_inference_run": false,
+  "validator": "python-chess 1.11.2"
+}
