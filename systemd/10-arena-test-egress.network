@@ -5,4 +5,5 @@ Name=at-egress
 Address=10.203.181.1/30
 IPv6AcceptRA=no
 LinkLocalAddressing=no
-IPForward=no
+IPv4Forwarding=no
+IPv6Forwarding=no
