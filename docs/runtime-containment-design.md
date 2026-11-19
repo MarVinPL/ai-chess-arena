@@ -218,6 +218,10 @@ with systemd. This confirms unit-file syntax acceptance only. It does not
 confirm the effective D-Bus properties returned by `systemctl show`, bind
 mount ordering, namespace behavior, cgroup enforcement, or network isolation.
 
+## Canonical `arena-test` image lifecycle
+
+The canonical VPS test environment is the pre-existing Debian 13 `systemd-nspawn` image at `/var/lib/machines/arena-test`, not an LXC container. Discovery, explicit startup, verification, resource-boundary requirements, and safe shutdown are documented in [`docs/deployment/arena-test-systemd-nspawn.md`](deployment/arena-test-systemd-nspawn.md). A powered-off image is retained for reuse; if it is absent or unverifiable, testing stops rather than creating a replacement or falling back to the host.
+
 ## Disposable systemd-nspawn integration evidence (2026-11-18)
 
 A disposable Debian 13 / systemd 257 container (`arena-test`) was booted with
