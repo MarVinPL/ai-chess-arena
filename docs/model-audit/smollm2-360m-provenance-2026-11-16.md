@@ -511,4 +511,4 @@ The correct fail-closed result remains `review_required`. Do not infer legal cle
 
 ## Execution isolation boundary
 
-Any future runtime verification for this model must follow [`docs/model-execution-isolation-policy.md`](../model-execution-isolation-policy.md): execution and artifact storage are restricted to the already-existing disposable LXC `arena-test`. Host-side model execution is prohibited. If that container is unavailable, do not create a replacement or fall back to the host; leave the result `NOT_VERIFIED`/`SKIPPED_BLOCKED` with evidence.
+Any future runtime verification for this model must follow [`docs/model-execution-isolation-policy.md`](../model-execution-isolation-policy.md): execution and artifact storage are restricted to the already-existing disposable Debian 13 `systemd-nspawn` container `arena-test` at `/var/lib/machines/arena-test`. Host-side model execution is prohibited. If that container is unavailable, do not create a replacement or fall back to the host; leave the result `NOT_VERIFIED`/`SKIPPED_BLOCKED` with evidence.
