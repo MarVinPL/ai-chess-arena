@@ -27,7 +27,7 @@ Plik `tests/test_elimination_chess.py` obejmuje m.in.:
 
 Zmieniono również testy runnera w `tests/test_engine_runner.py`, aby uwzględnić zmianę promptu i walidacji.
 
-**Status weryfikacji (19.11.2026):** pełny zestaw testów repozytorium zakończył się wynikiem **467 passed, 59 subtests passed** (`python -m pytest -q`). Dodatkowo `git diff --check` nie zgłosił błędów. To potwierdza testy automatyczne w lokalnym worktree; nie zastępuje walidacji produkcyjnej.
+**Status weryfikacji (19.11.2026):** pełny zestaw testów repozytorium zakończył się wynikiem **468 passed, 59 subtests passed** (`python -m pytest -q`). Dodatkowo `git diff --check` nie zgłosił błędów. To potwierdza testy automatyczne w lokalnym worktree; nie zastępuje walidacji produkcyjnej.
 
 ## Testy modeli w runtime Areny
 
@@ -87,5 +87,6 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Panel WWW pokazuje teraz nad planszą informację: „Szachy Eliminacyjne” oraz krótkie wyjaśnienie, że zwycięstwo następuje po zbiciu króla, a szach/szach-mat nie kończą partii ani nie blokują ruchów.
 - Dodano test UI potwierdzający obecność i treść tej informacji.
 - Dodano test runnera, który odtwarza dwuruchową historię checkpointu na EliminationBoard, weryfikuje zgodność FEN, wykonuje bicie króla po wznowieniu i sprawdza wynik oraz nagłówek wariantu w PGN.
-- Pełny zestaw: **467 passed, 59 subtests passed**; compileall i git diff --check bez błędów.
-- Nie udało się jeszcze wykonać pełnego turnieju przez działającą usługę Areny: w izolowanym kontenerze arena-test obecnie nie działa usługa serwera Areny (widoczne są tylko podstawowe usługi systemowe). Istniejący /opt/arena-preview to odrębny, wcześniejszy podgląd testowy oparty na standardowych szachach i nie został zmodyfikowany ani użyty jako dowód działania nowego runnera. Produkcja pozostaje nietknięta.
+- Dodano integracyjny test całej pętli turnieju serwera na tymczasowej bazie: preflight, zapis checkpointu, przygotowanie zawodników, runner, bicie króla, zapis wyniku/PGN, zakończenie parowania i usunięcie checkpointu. Runtime inferencji jest w tym teście deterministycznym zamiennikiem, a nie rzeczywistym modelem.
+- Pełny zestaw: **468 passed, 59 subtests passed**; compileall i git diff --check bez błędów.
+- Nie udało się jeszcze wykonać pełnego turnieju z rzeczywistymi modelami przez działającą usługę Areny: w izolowanym kontenerze arena-test obecnie nie działa usługa serwera Areny (widoczne są tylko podstawowe usługi systemowe). Istniejący /opt/arena-preview to odrębny, wcześniejszy podgląd testowy oparty na standardowych szachach i nie został zmodyfikowany ani użyty jako dowód działania nowego runnera. Produkcja pozostaje nietknięta.
