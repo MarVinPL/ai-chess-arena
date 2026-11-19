@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, json, os, re, shutil, signal, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,23 +22,46 @@ import passkey_test
 import tournament_checkpoint
 import arena_auth
 import model_permissions
+import runtime_executor
+from runtime_deployment import resolve_runtime_deployment
+from runtime_startup import recover_runtime_on_startup
+from runtime_supervisor_ipc import supervisor_request
+from runtime_supervisor import SQLiteRuntimeUnitStore
+from runtime_supervisor_client import RuntimeSupervisorClientRunner
+from runtime_api_worker import RuntimeApiWorker
+from runtime_lease_broker import RuntimeLeaseBrokerServer
+from runtime_process_config import (
+    background_jobs_enabled, resolve_log_directory, resolve_process_settings,
+)
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
     return urlsplit(request_target).path
 
 
+def _serve_http_until_shutdown(http_server, shutdown_requested):
+    """Serve threaded HTTP requests with a signal-safe, bounded poll interval."""
+    http_server.timeout = 0.5
+    try:
+        while not shutdown_requested.is_set():
+            http_server.handle_request()
+    finally:
+        http_server.server_close()
+
+
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
-DB = ROOT / 'arena.sqlite3'
-LOG_DIR = ROOT / 'logs'
+DB, HOST, PORT = resolve_process_settings(root=ROOT)
+# Every API-owned SQLite subsystem must use the same explicitly selected DB.
+league.DB = DB
+hf_candidate_downloads.DB_PATH = DB
+LOG_DIR = resolve_log_directory(root=ROOT)
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
 MODEL_RESPONSE_RETENTION_SECONDS = 3 * 24 * 60 * 60
 LIVE_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
-HOST, PORT = '127.0.0.1', 8090
 lock = threading.RLock()
 board = chess.Board()
 moves, timings = [], []
@@ -168,6 +191,7 @@ def active_model():
 
 
 def db_init():
+    DB.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     league.init()
     tournament_checkpoint.ensure_schema(DB)
     with sqlite3.connect(DB) as c:
@@ -1475,6 +1499,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/hf-candidates/runtime-preflight':
             try: self.send_json(hf_candidate_runtime.snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
+        elif path == '/api/hf-candidates/runtime-jobs':
+            try: self.send_json(runtime_executor.snapshot())
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/download-plan':
             try: self.send_json(hf_candidate_downloads.plan_snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
@@ -1678,7 +1705,7 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision','/api/hf-candidates/runtime-enqueue','/api/hf-candidates/runtime-cancel','/api/hf-candidates/runtime-enable','/api/hf-candidates/runtime-batch-create','/api/hf-candidates/runtime-batch-approve','/api/hf-candidates/runtime-batch-revoke'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1690,6 +1717,32 @@ class Handler(BaseHTTPRequestHandler):
                             scope=payload.get('scope'), confirm=payload.get('confirm') is True,
                             reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
                             actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-enqueue':
+                    result = runtime_executor.enqueue(
+                        model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
+                        revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
+                        artifact_key=payload.get('artifact_key'),
+                        permission_request_id=payload.get('permission_request_id'),
+                        timeout_seconds=payload.get('timeout_seconds', runtime_executor.DEFAULT_TIMEOUT_SECONDS),
+                        actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-cancel':
+                    result = runtime_executor.cancel(payload.get('job_id'))
+                elif path == '/api/hf-candidates/runtime-enable':
+                    result = runtime_executor.set_execution_enabled(
+                        enabled=payload.get('enabled'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''))
+                elif path == '/api/hf-candidates/runtime-batch-create':
+                    result = runtime_executor.create_batch(
+                        job_ids=payload.get('job_ids'), actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-batch-approve':
+                    result = runtime_executor.approve_batch(
+                        batch_id=payload.get('batch_id'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''),
+                        approval_seconds=payload.get('approval_seconds', 600))
+                elif path == '/api/hf-candidates/runtime-batch-revoke':
+                    result = runtime_executor.revoke_batch(
+                        batch_id=payload.get('batch_id'), actor=self.authenticated_user(),
+                        reason=payload.get('reason', ''))
                 elif path == '/api/model-permissions/decision':
                     request_id = payload.get('request_id')
                     if isinstance(request_id, bool) or not isinstance(request_id, int):
@@ -1870,10 +1923,96 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
-    threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
-    hf_candidate_queue.start_background_workers()
-    hf_candidate_runtime.start_background_planner()
-    _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
-    _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
-    print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    deployment = resolve_runtime_deployment()
+    lease_broker = None
+    lease_broker_thread = None
+    runtime_api_worker = None
+    shutdown_requested = threading.Event()
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: shutdown_requested.set())
+    previous_sigint = signal.signal(signal.SIGINT, lambda *_: shutdown_requested.set())
+    try:
+        if deployment.supervisor_requested:
+            # The API process owns SQLite schema and writes. The root supervisor
+            # can reach only this fixed, peer-credential-gated lease protocol.
+            lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True, unit_namespace=deployment.unit_namespace)
+            lease_broker = RuntimeLeaseBrokerServer(
+                deployment.lease_broker_socket, store=lease_store,
+                allowed_uid=0, socket_mode=0o660, unit_namespace=deployment.unit_namespace,
+            )
+            lease_broker_thread = threading.Thread(
+                target=lease_broker.serve_forever,
+                daemon=True,
+                name='runtime-lease-broker',
+            )
+            lease_broker_thread.start()
+            if not lease_broker.ready.wait(timeout=5):
+                raise RuntimeError('Runtime lease broker did not become ready.')
+        recovery = recover_runtime_on_startup(
+            deployment=deployment,
+            # The privileged supervisor owns exact-unit recovery and handoff
+            # cleanup. It calls back into the already-ready API lease broker.
+            supervisor_recover=(
+                lambda: supervisor_request(
+                    deployment.supervisor_socket, "recover", None,
+                    timeout_seconds=1800.0,
+                )
+            ),
+            executor_recover=runtime_executor.recover_orphaned_jobs,
+        )
+        executor_recovery = recovery['executor']
+        if executor_recovery['count']:
+            print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
+        # Production-only dispatcher: the profile resolver has already checked
+        # the explicit acknowledgement, systemd backend, canonical paths and
+        # independent execution opt-in. Startup recovery must finish first.
+        runtime_runner = RuntimeSupervisorClientRunner(
+            supervisor_socket=deployment.supervisor_socket,
+        )
+        def cancel_runtime_job_for_shutdown(job_id):
+            # Persist cancellation while the API-owned broker and DB are still
+            # available. The executor's live cancellation predicate observes
+            # this flag and the supervisor revalidates it before unit start.
+            with league.connect() as connection:
+                runtime_executor._init(connection)
+                connection.execute(
+                    "UPDATE runtime_test_jobs SET cancel_requested=1 "
+                    "WHERE id=? AND status IN ('queued','running')",
+                    (job_id,),
+                )
+
+        if deployment.production_requested:
+            runtime_api_worker = RuntimeApiWorker(
+                deployment=deployment, runner=runtime_runner,
+                cancel_active=cancel_runtime_job_for_shutdown,
+            )
+        if not shutdown_requested.is_set():
+            if runtime_api_worker is not None:
+                runtime_api_worker.start()
+            if background_jobs_enabled():
+                threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
+                hf_candidate_queue.start_background_workers()
+                hf_candidate_runtime.start_background_planner()
+            LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+            _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
+            http_server = ThreadingHTTPServer((HOST, PORT), Handler)
+            bound_host, bound_port = http_server.server_address[:2]
+            print(f'Local AI Chess Arena: http://{bound_host}:{bound_port}', flush=True)
+            _serve_http_until_shutdown(http_server, shutdown_requested)
+    finally:
+        try:
+            if runtime_api_worker is not None:
+                # The longest supervisor start request is bounded at 1800s;
+                # exact-unit stop may need up to 120s after cancellation.
+                runtime_api_worker.stop(timeout_seconds=1930)
+        finally:
+            try:
+                if lease_broker is not None:
+                    lease_broker.shutdown()
+            finally:
+                try:
+                    if lease_broker_thread is not None:
+                        lease_broker_thread.join(timeout=5)
+                finally:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+                    signal.signal(signal.SIGINT, previous_sigint)

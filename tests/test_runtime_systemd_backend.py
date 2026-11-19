@@ -1,0 +1,284 @@
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from runtime_systemd import build_runtime_unit_spec
+from runtime_systemd_backend import SystemdBackendError, SystemdTransientBackend
+
+
+def make_spec(*, test_worker_crash=False):
+    return build_runtime_unit_spec(
+        job_id=9, runtime_user="arena-runtime", runtime_group="arena-runtime",
+        artifact_path="/var/lib/arena-handoff/job-9/model.gguf",
+        artifact_mount_path="/run/arena-runtime/job-9/model.gguf",
+        output_dir="/run/arena-runtime/job-9",
+        api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
+        memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
+        runtime_seconds=300, test_worker_crash=test_worker_crash,
+    )
+
+
+class FakeRunner:
+    def __init__(self, show=""):
+        self.calls = []
+        self.show = show
+
+    def __call__(self, argv, timeout):
+        self.calls.append((argv, timeout))
+        if argv[0].endswith("systemctl") and "show" in argv:
+            if "--value" in argv:
+                output = next((line.split("=", 1)[1] for line in self.show.splitlines()
+                               if line.startswith("ControlGroup=")), "")
+            else:
+                output = self.show
+            return SimpleNamespace(returncode=0, stdout=output, stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def test_start_uses_only_exact_transient_unit_and_pinned_bundle_worker():
+    spec = make_spec()
+    expected = SystemdTransientBackend._expected(spec)
+    fake = FakeRunner("".join(f"{k}={v}\n" for k, v in expected.items()))
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+    command = fake.calls[0][0]
+    assert command[:4] == ["/usr/bin/systemd-run", "--system", "--no-block",
+                          "--unit=ai-chess-arena-runtime-9.service"]
+    assert command[-4:] == ["--", "/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"]
+    assert fake.calls[1][0][-1] == "ai-chess-arena-runtime-9.service"
+
+
+def test_start_fails_closed_when_effective_properties_do_not_match():
+    fake = FakeRunner("User=debian\nGroup=debian\n")
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="właściwości"):
+        backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+
+
+def test_start_rejects_worker_outside_root_owned_bundle_before_command():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="przypisanemu zadaniu"):
+        backend.start(make_spec(), ("/home/debian/worker", "--job", "9"))
+    assert fake.calls == []
+
+
+def test_stop_targets_exact_unit_and_checks_cgroup_empty(tmp_path):
+    fake = FakeRunner("LoadState=loaded\nActiveState=active\nControlGroup=\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    backend.stop("ai-chess-arena-runtime-9.service")
+    assert fake.calls[0][0][1] == "show"
+    assert fake.calls[1][0] == ["/usr/bin/systemctl", "stop", "ai-chess-arena-runtime-9.service"]
+    assert fake.calls[2][0][-1] == "ai-chess-arena-runtime-9.service"
+
+
+def test_stop_accepts_transient_unit_already_garbage_collected():
+    fake = FakeRunner("LoadState=not-found\nActiveState=inactive\nControlGroup=\n")
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.stop("ai-chess-arena-runtime-9.service")
+    assert len(fake.calls) == 1
+    assert fake.calls[0][0][1] == "show"
+
+
+def test_stop_accepts_unit_disappearing_between_snapshot_and_stop():
+    class DisappearingRunner:
+        def __init__(self):
+            self.calls = []
+            self.show_count = 0
+        def __call__(self, argv, timeout):
+            self.calls.append(argv)
+            if argv[1] == "show":
+                self.show_count += 1
+                if self.show_count == 1:
+                    output = "LoadState=loaded\nActiveState=active\nControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n"
+                else:
+                    output = "LoadState=not-found\nActiveState=inactive\nControlGroup=\n"
+                return SimpleNamespace(returncode=0, stdout=output, stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr="Unit not loaded")
+    fake = DisappearingRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.stop("ai-chess-arena-runtime-9.service")
+    assert fake.show_count == 2
+    assert fake.calls[1] == ["/usr/bin/systemctl", "stop", "ai-chess-arena-runtime-9.service"]
+
+
+def test_stop_refuses_non_deterministic_or_unrelated_unit_name():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError):
+        backend.stop("sshd.service")
+    assert fake.calls == []
+
+
+def test_stop_refuses_to_mark_unit_stopped_when_cgroup_still_has_processes(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("1234\n", encoding="ascii")
+    (unit_cgroup / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="nadal zawiera procesy"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_refuses_cgroup_with_nested_descendant_even_when_direct_procs_empty(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("", encoding="ascii")
+    (unit_cgroup / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="nadal zawiera procesy"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_fails_closed_when_existing_cgroup_lacks_events_file(tmp_path):
+    unit_cgroup = tmp_path / "system.slice" / "ai-chess-arena-runtime-9.service"
+    unit_cgroup.mkdir(parents=True)
+    (unit_cgroup / "cgroup.procs").write_text("", encoding="ascii")
+    fake = FakeRunner("ControlGroup=/system.slice/ai-chess-arena-runtime-9.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="Nie można jednoznacznie"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_stop_refuses_cgroup_path_outside_system_slice(tmp_path):
+    fake = FakeRunner("ControlGroup=/user.slice/user-1000.slice/example.service\n")
+    backend = SystemdTransientBackend(command_runner=fake, cgroup_root=tmp_path)
+    with pytest.raises(SystemdBackendError, match="ścieżka cgroup"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_systemd_command_failure_is_not_treated_as_success():
+    class FailedRunner:
+        def __call__(self, argv, timeout):
+            return SimpleNamespace(returncode=1, stdout="", stderr="access denied")
+
+    backend = SystemdTransientBackend(command_runner=FailedRunner())
+    with pytest.raises(SystemdBackendError, match="zakończyło się błędem"):
+        backend.stop("ai-chess-arena-runtime-9.service")
+
+
+def test_start_rejects_spec_with_weakened_network_or_filesystem_policy():
+    from dataclasses import replace
+
+    spec = make_spec()
+    props = list(spec.properties)
+    props = [(key, "no" if key == "PrivateNetwork" else value) for key, value in props]
+    weakened = replace(spec, properties=tuple(props))
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="kompletnej polityki"):
+        backend.start(weakened, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+    assert fake.calls == []
+
+
+def test_start_rejects_worker_arguments_not_bound_to_job_id():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="przypisanemu zadaniu"):
+        backend.start(make_spec(), ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "10"))
+    assert fake.calls == []
+
+
+def test_start_accepts_systemd_canonical_property_representations():
+    spec = make_spec()
+    actual = SystemdTransientBackend._expected(spec)
+    actual["RestrictAddressFamilies"] = "AF_INET AF_UNIX"
+    actual["BindReadOnlyPaths"] += ":rbind"
+    actual["CPUQuotaPerSecUSec"] = "1s"
+    actual["RuntimeMaxUSec"] = "5min"
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in actual.items()))
+    backend = SystemdTransientBackend(command_runner=fake)
+    backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+
+
+def test_systemd_timespan_parser_rejects_malformed_values():
+    from runtime_systemd_backend import _timespan_to_usec
+
+    assert _timespan_to_usec("1h 30min 250ms") == 5_400_250_000
+    assert _timespan_to_usec("200ms") == 200_000
+    assert _timespan_to_usec("300000000") == 300_000_000
+    assert _timespan_to_usec("200ms garbage") is None
+
+
+def test_start_fails_closed_when_systemd_accepts_but_unit_process_fails():
+    spec = make_spec()
+    actual = SystemdTransientBackend._expected(spec)
+    actual["ActiveState"] = "failed"
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in actual.items()))
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError, match="ActiveState"):
+        backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"))
+
+
+def test_production_backend_rejects_test_unit_namespace():
+    fake = FakeRunner()
+    backend = SystemdTransientBackend(command_runner=fake)
+    with pytest.raises(SystemdBackendError):
+        backend.stop("ai-chess-arena-runtime-test-910000001.service")
+    assert fake.calls == []
+
+
+def test_recovery_test_backend_accepts_only_test_unit_namespace():
+    fake = FakeRunner("LoadState=not-found\nActiveState=inactive\nControlGroup=\n")
+    backend = SystemdTransientBackend(command_runner=fake, unit_namespace="test-recovery")
+    backend.stop("ai-chess-arena-runtime-test-910000001.service")
+    assert len(fake.calls) == 1
+    with pytest.raises(SystemdBackendError):
+        backend.stop("ai-chess-arena-runtime-910000001.service")
+
+
+def test_recovery_test_backend_validates_and_starts_only_test_namespace():
+    from dataclasses import replace
+
+    base = build_runtime_unit_spec(
+        job_id=910000009, runtime_user="arena-runtime", runtime_group="arena-runtime",
+        artifact_path="/var/lib/arena-handoff/job-910000009/model.gguf",
+        artifact_mount_path="/run/arena-runtime/job-910000009/model.gguf",
+        output_dir="/run/arena-runtime/job-910000009",
+        api_uid=os.getuid(), api_gid=os.getgid(), memory_max_bytes=1024**3,
+        memory_swap_max_bytes=0, cpu_quota_percent=100, tasks_max=8,
+        runtime_seconds=300,
+    )
+    spec = replace(base, unit_name="ai-chess-arena-runtime-test-910000009.service")
+    expected = SystemdTransientBackend._expected(spec)
+    fake = FakeRunner("".join(f"{key}={value}\n" for key, value in expected.items()))
+    backend = SystemdTransientBackend(command_runner=fake, unit_namespace="test-recovery")
+    backend.start(spec, ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "910000009"))
+    assert fake.calls[0][0][3] == "--unit=ai-chess-arena-runtime-test-910000009.service"
+
+
+def test_test_recovery_backend_accepts_only_exact_worker_crash_environment():
+    from dataclasses import replace
+    base = make_spec(test_worker_crash=True)
+    test_spec = replace(base, unit_name="ai-chess-arena-runtime-test-9.service")
+    backend = SystemdTransientBackend(unit_namespace="test-recovery", command_runner=FakeRunner())
+    assert backend._validate(
+        test_spec,
+        ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+    ) == 9
+
+    production_backend = SystemdTransientBackend(command_runner=FakeRunner())
+    with pytest.raises(SystemdBackendError):
+        production_backend._validate(
+            make_spec(test_worker_crash=True),
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+        )
+
+
+def test_test_recovery_backend_rejects_incomplete_worker_crash_environment():
+    from dataclasses import replace
+    from runtime_systemd import RuntimeUnitSpec
+    base = make_spec()
+    props = tuple((key, "ARENA_API_UID=1000 ARENA_API_GID=1000 ARENA_RUNTIME_TEST_CRASH_MODE=SIGKILL_BEFORE_MODEL_EXEC")
+                  if key == "Environment" else (key, value) for key, value in base.properties)
+    test_spec = replace(base, unit_name="ai-chess-arena-runtime-test-9.service", properties=props)
+    backend = SystemdTransientBackend(unit_namespace="test-recovery", command_runner=FakeRunner())
+    with pytest.raises(SystemdBackendError):
+        backend._validate(
+            test_spec,
+            ("/usr/local/lib/ai-chess-arena-runtime/runtime_worker", "--job", "9"),
+        )

@@ -15,7 +15,6 @@ STAGING_DIR = Path('/var/lib/ai-chess-arena/hf-candidate-downloads')
 DB_PATH = Path(__file__).resolve().parent / 'arena.sqlite3'
 APPROVED_ARTIFACTS = {
  ('hf:abenzerps/Apodex-1.1-mini-GGUF','e44e0cbd3151d08a9f5a4cbf19cd44560685de04','Apodex-1.1-mini-IQ1_M.gguf'),
- ('hf:abenzerps/Spark-X2.5-4B-GGUF','5eb255d86a3d0a3db3c589d171f833ef4ff4b00a','Spark-X2.5-4B-Q4_K_M.gguf'),
 }
 MAX_BATCH_FILES = 3
 MAX_BATCH_BYTES = 16 * 1024**3
