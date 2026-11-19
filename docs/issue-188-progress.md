@@ -27,7 +27,7 @@ Plik `tests/test_elimination_chess.py` obejmuje m.in.:
 
 Zmieniono również testy runnera w `tests/test_engine_runner.py`, aby uwzględnić zmianę promptu i walidacji.
 
-**Status weryfikacji (19.11.2026):** pełny zestaw testów repozytorium zakończył się wynikiem **465 passed, 59 subtests passed** (`python -m pytest -q`). Dodatkowo `git diff --check` nie zgłosił błędów. To potwierdza testy automatyczne w lokalnym worktree; nie zastępuje walidacji produkcyjnej.
+**Status weryfikacji (19.11.2026):** pełny zestaw testów repozytorium zakończył się wynikiem **467 passed, 59 subtests passed** (`python -m pytest -q`). Dodatkowo `git diff --check` nie zgłosił błędów. To potwierdza testy automatyczne w lokalnym worktree; nie zastępuje walidacji produkcyjnej.
 
 ## Testy modeli w runtime Areny
 
@@ -68,16 +68,24 @@ Wynik jest pozytywny dla testowanego zachowania promptu: **wszystkie trzy modele
 Ten zapis nie potwierdza jeszcze pełnej integracji wariantu z całym systemem. Przed zamknięciem Issue #188 należy zweryfikować co najmniej:
 
 - wszystkie miejsca tworzenia i odtwarzania planszy, w tym wznowienia/checkpointy;
-- pełny test end-to-end turnieju z modelem i odtworzeniem checkpointu w działającej usłudze;
-- prezentację wyniku i wariantu w panelu WWW oraz eksport PGN z poziomu panelu.
+- pełny test end-to-end turnieju z modelami w działającej usłudze, w tym prezentację wyniku na uruchomionym panelu i eksport PGN z poziomu przeglądarki.
 
-Testy automatyczne obejmują już ruchy, SAN, PGN wariantu (także PGN awaryjny), FEN/checkpoint i walidację API. Nie zastępują jednak testu działającego turnieju ani przeglądu panelu.
+Testy automatyczne obejmują już ruchy, SAN, PGN wariantu (także PGN awaryjny), FEN/checkpoint i walidację API. Dodano także test wznowienia runnera z odtworzoną historią wariantu, po którym model wykonuje bicie króla i kończy partię. Panel WWW otrzymał widoczną informację o zasadach wariantu nad planszą; test UI sprawdza obecność tej informacji. To przegląd kodu i testów źródłowych, nie test uruchomionego panelu ani pełnego turnieju w działającej usłudze.
 
 Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym runtime. Nie zmieniono składu turnieju, zasad dopuszczania ani statusu żadnego zawodnika/modelu. Nie pobierano nowych modeli, nie wdrażano zmian na produkcję i nie restartowano usług produkcyjnych.
 
 ## Stan repozytorium w chwili zapisu
 
 - Gałąź robocza: `feat/issue-188-elimination-engine-20261119`.
-- Zmiany kodu wymienione wyżej były już obecne w tej gałęzi jako prace robocze.
-- Ten commit dokumentuje ich zakres i status; nie jest potwierdzeniem kompletności implementacji.
+- Gałąź zawiera implementację wariantu, test wznowienia po checkpointcie oraz widoczną informację o zasadach nad planszą.
+- Zakres pozostaje niekompletny do czasu przejścia pełnego testu turnieju w działającej usłudze.
 - Wdrożenie i merge do `main` nie są częścią tego zapisu.
+
+
+## Aktualizacja po dalszej weryfikacji (19.11.2026)
+
+- Panel WWW pokazuje teraz nad planszą informację: „Szachy Eliminacyjne” oraz krótkie wyjaśnienie, że zwycięstwo następuje po zbiciu króla, a szach/szach-mat nie kończą partii ani nie blokują ruchów.
+- Dodano test UI potwierdzający obecność i treść tej informacji.
+- Dodano test runnera, który odtwarza dwuruchową historię checkpointu na EliminationBoard, weryfikuje zgodność FEN, wykonuje bicie króla po wznowieniu i sprawdza wynik oraz nagłówek wariantu w PGN.
+- Pełny zestaw: **467 passed, 59 subtests passed**; compileall i git diff --check bez błędów.
+- Nie udało się jeszcze wykonać pełnego turnieju przez działającą usługę Areny: w izolowanym kontenerze arena-test obecnie nie działa usługa serwera Areny (widoczne są tylko podstawowe usługi systemowe). Istniejący /opt/arena-preview to odrębny, wcześniejszy podgląd testowy oparty na standardowych szachach i nie został zmodyfikowany ani użyty jako dowód działania nowego runnera. Produkcja pozostaje nietknięta.

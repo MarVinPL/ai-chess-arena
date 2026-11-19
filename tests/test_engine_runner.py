@@ -65,6 +65,41 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual(result['moves'][0]['uci'], 'e2e8')
         self.assertIn('[Variant "Elimination Chess"]', result['pgn'])
 
+    def test_checkpoint_resume_can_finish_with_king_capture_and_variant_pgn(self):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+
+        initial_fen = '4k2r/8/8/8/8/8/4R3/K7 w - - 0 1'
+        history_board = EliminationBoard(initial_fen)
+        saved_moves = []
+        for ply, uci in enumerate(('a1b1', 'h8g8'), 1):
+            move = chess.Move.from_uci(uci)
+            color = 'white' if history_board.turn else 'black'
+            san = history_board.san(move)
+            history_board.push(move)
+            saved_moves.append({'ply': ply, 'uci': uci, 'san': san, 'color': color,
+                                'model': 'Alpha' if color == 'white' else 'Beta',
+                                'seconds': 0.01, 'fen': history_board.fen()})
+
+        class KingCaptureRuntime:
+            def generate(self, path, current_board, stop_event=None, **kwargs):
+                self.asserted_variant = isinstance(current_board, EliminationBoard)
+                return chess.Move.from_uci('e2e8'), {'seconds': 0.01}
+
+        runtime = KingCaptureRuntime()
+        player = {'name': 'Alpha', 'path': '/tmp/alpha.gguf'}
+        with patch('engine_runner.EliminationBoard', return_value=EliminationBoard(initial_fen)):
+            result = SequentialChessRunner(runtime).play_game(
+                player, {'name': 'Beta', 'path': '/tmp/beta.gguf'},
+                resume_moves=saved_moves, resume_fen=history_board.fen(),
+                resume_move_times=[0.01, 0.01])
+
+        self.assertTrue(runtime.asserted_variant)
+        self.assertEqual(result['status'], 'finished')
+        self.assertEqual(result['result'], '1-0')
+        self.assertEqual([move['uci'] for move in result['moves']], ['a1b1', 'h8g8', 'e2e8'])
+        self.assertIn('[Variant "Elimination Chess"]', result['pgn'])
+
     def test_target_with_draft_is_one_player_configuration(self):
         sequence=['a2a3','e7e2','a3a4','e2e1']
         class PairRuntime:
