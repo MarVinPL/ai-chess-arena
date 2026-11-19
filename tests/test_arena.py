@@ -105,10 +105,22 @@ class ArenaSmokeTests(unittest.TestCase):
 
         payload = captured['payload']
         self.assertEqual(move.uci(), 'e2e8')
+        self.assertEqual(payload['messages'][0]['role'], 'system')
         self.assertIn('Elimination Chess', payload['messages'][0]['content'])
         self.assertIn('do not restrict moves', payload['messages'][0]['content'])
+        self.assertIn('MUST do so', payload['messages'][0]['content'])
+        self.assertIn('NATYCHMIASTOWA WYGRANA', payload['messages'][1]['content'])
+        self.assertIn('e2e8', payload['messages'][1]['content'])
         self.assertIn('grammar', payload)
         self.assertIn('"e2e8"', payload['grammar'])
+
+    def test_failure_pgn_replays_king_capture_with_elimination_variant(self):
+        pgn = server._failure_pgn(
+            'Alpha', 'Beta', [{'uci': 'e2e8'}], '1-0', 'Adjudication',
+            initial_fen='4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        self.assertIn('[Variant "Elimination Chess"]', pgn)
+        self.assertIn('[Result "1-0"]', pgn)
+        self.assertIn('Rxe8', pgn)
 
     def test_server_model_request_rejects_explanatory_text_even_with_uci(self):
         from unittest.mock import patch

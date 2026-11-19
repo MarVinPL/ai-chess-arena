@@ -219,8 +219,9 @@ def _hf_download_planner_loop():
             print(f"HF download planner refresh failed: {exc}", flush=True)
         time.sleep(900)
 
-def _failure_pgn(white_name, black_name, move_records, result, termination):
-    game = chess.pgn.Game()
+def _failure_pgn(white_name, black_name, move_records, result, termination, initial_fen=None):
+    start_board = EliminationBoard(initial_fen) if initial_fen else EliminationBoard()
+    game = chess.pgn.Game.from_board(start_board)
     game.headers['Event'] = 'Local AI Chess Arena'
     game.headers['White'] = white_name
     game.headers['Black'] = black_name
@@ -253,7 +254,7 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
     illegal_attempts = sum(1 for item in attempts
                            if item.get('classification') == 'illegal_uci')
     try:
-        side_to_move = 'white' if chess.Board(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
+        side_to_move = 'white' if EliminationBoard(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
     except (ValueError, TypeError):
         side_to_move = None
     with sqlite3.connect(DB, timeout=10) as db:
@@ -310,20 +311,35 @@ def llm_runtime_available():
 
 def ask_model(model, b):
     legal = [m.uci() for m in b.legal_moves]
+    enemy_king = b.king(not b.turn)
+    king_capture_moves = [m.uci() for m in b.legal_moves
+                          if enemy_king is not None and m.to_square == enemy_king]
+    priority = (
+        f"\nNATYCHMIASTOWA WYGRANA — MUSISZ wybrać bicie króla: {', '.join(king_capture_moves)}\n"
+        f"IMMEDIATE WIN — YOU MUST choose a king capture: {', '.join(king_capture_moves)}\n"
+        if king_capture_moves else ''
+    )
+    system_prompt = (
+        'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
+        'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+        'Jeśli możesz zbić króla przeciwnika w tym ruchu, MUSISZ to zrobić — to natychmiastowa wygrana. '
+        'If you can capture the opposing king on this move, you MUST do so — it is an immediate win. '
+        'Wybierz dokładnie jeden ruch z listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
+        'Zwróć wyłącznie jeden ruch UCI, bez wyjaśnienia. Return exactly one UCI move and no explanation.'
+    )
     prompt = (
-        'You are playing Elimination Chess (Szachy Eliminacyjne). Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
-        'Wybierz dokładnie jeden ruch z listy legalnych ruchów. Select exactly one legal move. '
-        'Zwróć wyłącznie jeden ruch UCI, bez wyjaśnienia. Return exactly one UCI move and no explanation.\n'
+        'Wybierz jeden ruch z listy. Select one move from the list.' + priority + '\n'
         f'FEN: {b.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:'
     )
     payload = json.dumps({
-        'messages': [{'role': 'user', 'content': prompt}],
-        'temperature': 0, 'max_tokens': 24, 'stream': False,
+        'messages': [{'role': 'system', 'content': system_prompt},
+                     {'role': 'user', 'content': prompt}],
+        'temperature': 0, 'max_tokens': 16, 'stream': False,
         'chat_template_kwargs': {'enable_thinking': False},
         'grammar': engine_runner.LlamafileRuntime._uci_grammar(legal),
     }).encode()
     req = urllib.request.Request(LLM, data=payload, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=90) as r:
+    with urllib.request.urlopen(req, timeout=None) as r:
         data = json.loads(r.read().decode())
     content = data['choices'][0]['message'].get('content', '')
     candidate = content.strip().lower()

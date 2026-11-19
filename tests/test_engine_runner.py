@@ -329,6 +329,40 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertNotIn('"e2e5"', grammar)
         self.assertEqual(grammar.count('"'), 40)
 
+    def test_king_capture_priority_is_explicit_in_system_and_move_prompt(self):
+        import json
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+        from engine_runner import LlamafileRuntime
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({'choices': [{'message': {'content': 'e2e8'}}]}).encode()
+
+        requests = []
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response()
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch(
+                    'urllib.request.urlopen', side_effect=fake_urlopen):
+                move, _ = runtime.generate('/tmp/model.gguf', board)
+        finally:
+            runtime.shutdown()
+
+        self.assertEqual(move.uci(), 'e2e8')
+        system_prompt = requests[0]['messages'][0]['content']
+        move_prompt = requests[0]['messages'][1]['content']
+        self.assertIn('MUSISZ to zrobić', system_prompt)
+        self.assertIn('MUST do so', system_prompt)
+        self.assertIn('KING-CAPTURE WIN MOVES', move_prompt)
+        self.assertIn('e2e8', move_prompt)
+
     def test_generate_retries_illegal_move_and_never_accepts_it(self):
         import json
         from unittest.mock import patch

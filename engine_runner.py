@@ -249,18 +249,27 @@ class LlamafileRuntime:
             raise RunnerError('Pozycja nie zawiera legalnych ruchów')
         color = 'white' if board.turn == chess.WHITE else 'black'
         legal_text = ", ".join(legal)
+        enemy_king = board.king(not board.turn)
+        king_capture_moves = [move.uci() for move in allowed_moves
+                              if enemy_king is not None and move.to_square == enemy_king]
+        king_capture_prompt = (
+            f'\nKING-CAPTURE WIN MOVES (choose one): {", ".join(king_capture_moves)}\n'
+            if king_capture_moves else ''
+        )
         anti_loop_note = (' Nie cofaj tej samej figury na poprzednie pole, jeśli masz inną legalną możliwość.'
                           if blocked_reversals else '')
         system_prompt = (
             'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
             'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+            'Jeśli możesz zbić króla przeciwnika w tym ruchu, MUSISZ to zrobić — to natychmiastowa wygrana. '
+            'If you can capture the opposing king on this move, you MUST do so — it is an immediate win. '
             'Wybierz dokładnie jeden ruch z podanej listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
             'Odpowiedź musi być jednym ruchem UCI i niczym więcej. Reply with exactly one UCI move and no explanation. '
             'Do not invent moves. Nie wymyślaj ruchów.'
         )
         initial_prompt = (
             'Wybierz jeden ruch z listy. Select one move from the list.' + anti_loop_note + '\n'
-            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+            + king_capture_prompt + f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
             + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '') + 'MOVE:')
         retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
@@ -349,7 +358,7 @@ class LlamafileRuntime:
                     feedback = ('Twoja poprzednia odpowiedź nie zawierała poprawnego ruchu UCI. '
                                 'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
                 retry_prompt = (f'{feedback}\n'
-                                f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+                                + king_capture_prompt + f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
                                 + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '')
                                 + 'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
                 self._notify('retrying', feedback, model=Path(model_path).name,
