@@ -47,7 +47,8 @@ class ConnectRequestTests(unittest.TestCase):
 
     def test_allowlist_is_limited_to_observed_huggingface_flow(self):
         self.assertEqual(proxy.DEFAULT_ALLOWED_HOSTS, frozenset({
-            "huggingface.co", "us.aws.cdn.hf.co"
+            "huggingface.co", "us.aws.cdn.hf.co",
+            "pypi.org", "files.pythonhosted.org",
         }))
         parsed = proxy.parse_connect_request(request(
             "CONNECT us.aws.cdn.hf.co:443 HTTP/1.1"))
@@ -57,6 +58,20 @@ class ConnectRequestTests(unittest.TestCase):
             "cdn-lfs.hf.co", "s3.us-east-1.amazonaws.com",
             "example.com",
         ):
+            with self.subTest(host=host), self.assertRaises(proxy.ProxyRequestError):
+                proxy.parse_connect_request(request(f"CONNECT {host}:443 HTTP/1.1"))
+
+    def test_allows_exact_pypi_hosts_for_package_installation(self):
+        self.assertTrue({"pypi.org", "files.pythonhosted.org"}.issubset(
+            proxy.DEFAULT_ALLOWED_HOSTS))
+        for host in ("pypi.org", "files.pythonhosted.org"):
+            with self.subTest(host=host):
+                parsed = proxy.parse_connect_request(request(
+                    f"CONNECT {host}:443 HTTP/1.1"))
+                self.assertEqual(parsed.hostname, host)
+
+    def test_rejects_pypi_upload_and_unrelated_hosts(self):
+        for host in ("upload.pypi.org", "pypi.python.org", "example.com"):
             with self.subTest(host=host), self.assertRaises(proxy.ProxyRequestError):
                 proxy.parse_connect_request(request(f"CONNECT {host}:443 HTTP/1.1"))
 

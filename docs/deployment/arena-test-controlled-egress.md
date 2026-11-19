@@ -33,12 +33,19 @@ The implementation must use a dedicated, auditable unit/script and uniquely name
 
 ## Hugging Face download destinations
 
-The built-in allowlist is intentionally limited to two exact DNS names:
+The Hugging Face portion of the built-in allowlist is intentionally limited to two exact DNS names:
 
 - `huggingface.co` — pinned-revision resolve endpoint
 - `us.aws.cdn.hf.co` — regional Xet CDN destination observed in the signed redirect
 
 Evidence collected from the VPS on 2026-11-19: HTTPS HEAD requests to the pinned artifact URLs for candidates 1–4 returned `302` from `huggingface.co` with a redirect to `us.aws.cdn.hf.co`, followed by `200`. No model bytes were downloaded. Candidate 5's supplied pinned URL returned `404`; its repository/revision/file tuple must be reconciled separately before that candidate can be downloaded or tested. The two-host allowlist therefore reflects the observed successful redirect chain, not the complete set of destinations that Hugging Face may use in other regions or for other repositories.
+
+The package-install allowlist is separately limited to two exact PyPI hostnames:
+
+- `pypi.org` — package index and project metadata over HTTPS
+- `files.pythonhosted.org` — package distribution files served by PyPI
+
+These are included only to support a separately approved installation of a CPU-compatible Python GGUF runtime inside `arena-test`. The proxy tunnels TLS without interception and cannot inspect package paths, so this is a hostname-level—not package-name-level—restriction. `upload.pypi.org`, `pypi.python.org`, arbitrary mirrors, GitHub, and all other hosts remain blocked. The PyPI upload hostname is intentionally excluded. Use pip with `--index-url https://pypi.org/simple` and `--only-binary=:all:` for the proposed wheel-only installation; do not enable source builds or extra indexes. This PR does not install anything or authorize a package download. Before an installation window, verify the exact package/version/wheel compatibility and hashes, then enable the proxy only for that separately authorized operation.
 
 The official machine-readable endpoint list at `https://huggingface.co/.well-known/meta.json` contains additional CDN, Xet, and cloud-storage domains. They are deliberately **not** allowlisted merely because they appear in that list. Do not add `amazonaws.com`, `s3.*`, generic cloud domains, upload endpoints, or unrelated regional endpoints. If a future approved download redirects elsewhere, stop and record the exact pinned URL, redirect hostname, and successful metadata probe before proposing a narrowly scoped allowlist change.
 
@@ -53,6 +60,10 @@ Fetched the official `meta.json` endpoint arrays (`hubDomains`, `lfsDomains`, `c
 This is a DNS/TLS reachability inventory only. It does **not** prove that all 23 hosts are required for the five pinned files, nor does it justify widening the proxy allowlist. Only the observed `huggingface.co` → `us.aws.cdn.hf.co` redirect chain for candidates 1–4 is currently evidenced as necessary. The audit used metadata and HEAD requests only; no model data was downloaded.
 
 Official reference: [Hugging Face — Downloading models, “Downloading behind a proxy or firewall”](https://huggingface.co/docs/hub/en/models-downloading).
+
+## PyPI runtime-install destinations
+
+The additional PyPI entries are exactly `pypi.org` and `files.pythonhosted.org`; they do not include upload endpoints or general package mirrors. They are intended for an explicitly authorized, wheel-only `pip` operation. No `pip install`, package download, runtime installation, or inference is performed by this PR.
 
 ## Download controls
 
@@ -102,7 +113,7 @@ This issue does not authorize artifact downloads, runtime installation, inferenc
 
 ## Implementation files in this PR
 
-- scripts/arena_test_egress_proxy.py: standard-library-only CONNECT proxy. It accepts only exact allowlisted DNS names on port 443, resolves names on the host, rejects any non-global result, pins the upstream TCP connection to the validated IP, and relays TLS bytes without interception.
+- scripts/arena_test_egress_proxy.py: standard-library-only CONNECT proxy. It accepts only exact allowlisted DNS names on port 443 (the two evidenced Hugging Face hosts and two PyPI package hosts), resolves names on the host, rejects any non-global result, pins the upstream TCP connection to the validated IP, and relays TLS bytes without interception.
 - systemd/arena-test-egress-proxy.service: unprivileged, hardened service bound to the dedicated host veth address.
 - systemd/10-arena-test-egress.network: static address for only the dedicated host veth.
 - systemd/arena-test.nspawn: adds a second, named veth while retaining private networking.
