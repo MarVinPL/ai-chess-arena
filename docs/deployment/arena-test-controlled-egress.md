@@ -42,6 +42,16 @@ Evidence collected from the VPS on 2026-11-19: HTTPS HEAD requests to the pinned
 
 The official machine-readable endpoint list at `https://huggingface.co/.well-known/meta.json` contains additional CDN, Xet, and cloud-storage domains. They are deliberately **not** allowlisted merely because they appear in that list. Do not add `amazonaws.com`, `s3.*`, generic cloud domains, upload endpoints, or unrelated regional endpoints. If a future approved download redirects elsewhere, stop and record the exact pinned URL, redirect hostname, and successful metadata probe before proposing a narrowly scoped allowlist change.
 
+### DNS and HTTPS endpoint audit (VPS, 2026-11-19)
+
+Fetched the official `meta.json` endpoint arrays (`hubDomains`, `lfsDomains`, `cdnDomains`) and tested all 23 unique hostnames from the VPS. All 23 resolved successfully; every returned A/AAAA address was classified as globally routable. A TLS-verified HTTPS `HEAD /` probe also reached every hostname:
+
+- `hubDomains` (4): all returned HTTP 200.
+- `cdnDomains` (12): all returned HTTP 200.
+- `lfsDomains` (7): the five `hf.co` LFS/Xet hosts returned HTTP 403 at `/`, and the two regional S3 hosts returned HTTP 405 to `HEAD /`. These are application-level responses from reachable HTTPS endpoints, not DNS or TLS failures; probing `/` does not establish authorization or suitability for an artifact transfer.
+
+This is a DNS/TLS reachability inventory only. It does **not** prove that all 23 hosts are required for the five pinned files, nor does it justify widening the proxy allowlist. Only the observed `huggingface.co` → `us.aws.cdn.hf.co` redirect chain for candidates 1–4 is currently evidenced as necessary. The audit used metadata and HEAD requests only; no model data was downloaded.
+
 Official reference: [Hugging Face — Downloading models, “Downloading behind a proxy or firewall”](https://huggingface.co/docs/hub/en/models-downloading).
 
 ## Download controls
