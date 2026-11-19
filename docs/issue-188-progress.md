@@ -7,12 +7,12 @@ Zasady wariantu zostały wcześniej opisane w [PR #187](https://github.com/MarVi
 ## Co zostało przygotowane w kodzie
 
 - Dodano moduł `elimination_chess.py` z klasą `EliminationBoard`, rozszerzającą `chess.Board`.
-- Wariant ma dopuścić bicie króla przeciwnika jako legalny ruch, przy zachowaniu bezpieczeństwa własnego króla.
-- Brak króla jednej ze stron jest traktowany jako koniec partii; zwycięzcą zostaje strona, której król pozostał na planszy.
+- Wariant dopuszcza bicie króla przeciwnika jako legalny ruch. Szach i szach-mat nie ograniczają ruchów ani nie kończą partii; własny król może pozostać pod atakiem.
+- Brak króla jednej ze stron jest traktowany jako koniec partii; zwycięzcą zostaje strona, której król pozostał na planszy. Sam szach-mat i niewystarczający materiał nie kończą partii; pozostałe standardowe warunki remisowe są nadal obsługiwane.
 - Runner korzysta z `EliminationBoard` zamiast standardowego `chess.Board` przy tworzeniu nowej partii.
 - Dodano dwujęzyczny (PL/EN) prompt wyjaśniający zasady Szachów Eliminacyjnych: bicie króla wygrywa, samo szach-mat nie kończy partii, a odpowiedź ma zawierać dokładnie jeden ruch UCI.
 - Ograniczenie gramatyczne UCI jest przekazywane zarówno przy pierwszej próbie, jak i przy ponowieniu odpowiedzi.
-- W trybie ograniczonej gramatyki wyłączono tokeny rozumowania.
+- W trybie ograniczonej gramatyki wyłączono tokeny rozumowania; ustawienie „thinking” może być zapisane jako żądane przez konfigurację modelu, ale rzeczywista inferencja ruchu działa bez tokenów rozumowania.
 - Walidacja odpowiedzi wymaga pełnego dopasowania tekstu do pojedynczego ruchu UCI; tekst objaśniający lub dodatkowa treść nie są wycinane i akceptowane jako poprawny ruch.
 
 ## Przygotowane testy
@@ -20,13 +20,14 @@ Zasady wariantu zostały wcześniej opisane w [PR #187](https://github.com/MarVi
 Plik `tests/test_elimination_chess.py` obejmuje m.in.:
 
 - legalność bicia króla i wynik partii po takim ruchu;
-- odrzucenie bicia króla, jeżeli ruch odsłania własnego króla;
+- dopuszczenie bicia króla także wtedy, gdy własny król pozostaje pod atakiem;
+- kontynuowanie gry po pozycji szach-mat oraz brak automatycznego remisu przy samych królach;
 - brak przedwczesnego zakończenia zwykłej pozycji;
 - odtworzenie pozycji końcowej z FEN bez króla przeciwnika.
 
 Zmieniono również testy runnera w `tests/test_engine_runner.py`, aby uwzględnić zmianę promptu i walidacji.
 
-**Status weryfikacji:** w toku wcześniejszych prac odnotowano wynik 32/32 testów ukierunkowanych na tę zmianę. Nie wykonano ponownego uruchomienia testów podczas dodawania tego dokumentu; wynik należy potwierdzić ponownie przed uznaniem Issue #188 za gotowe do merge.
+**Status weryfikacji (19.11.2026):** pełny zestaw testów repozytorium zakończył się wynikiem **463 passed, 59 subtests passed** (`python -m pytest -q`). Dodatkowo `git diff --check` nie zgłosił błędów. To potwierdza testy automatyczne w lokalnym worktree; nie zastępuje testów modeli ani walidacji produkcyjnej.
 
 ## Ograniczenia i dalsza weryfikacja
 

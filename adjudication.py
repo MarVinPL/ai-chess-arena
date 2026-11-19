@@ -10,6 +10,7 @@ from pathlib import Path
 
 import chess
 import chess.engine
+from elimination_chess import EliminationBoard
 
 MIN_PLIES = 40
 MIN_SCORE_CP = 800
@@ -36,7 +37,7 @@ def adjudicate_failure(fen: str, move_records: list[dict], failed_color: str,
         return _unresolved("insufficient_game_length", plies=len(move_records or []),
                            min_plies=MIN_PLIES)
     try:
-        board = chess.Board()
+        board = EliminationBoard()
         for record in move_records:
             if not isinstance(record, dict):
                 return _unresolved("invalid_move_record")
@@ -44,7 +45,7 @@ def adjudicate_failure(fen: str, move_records: list[dict], failed_color: str,
             if move not in board.legal_moves:
                 return _unresolved("illegal_or_inconsistent_move_history")
             board.push(move)
-        supplied = chess.Board(fen)
+        supplied = EliminationBoard(fen)
         if supplied.fen() != board.fen():
             return _unresolved("fen_history_mismatch")
     except (ValueError, TypeError, AttributeError):

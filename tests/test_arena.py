@@ -84,6 +84,44 @@ class ArenaSmokeTests(unittest.TestCase):
         finally:
             server.engine_runner.LLAMAFILE = original_binary
 
+    def test_server_model_request_uses_elimination_rules_and_uci_grammar(self):
+        import json
+        from unittest.mock import patch
+        board = server.EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"e2e8"}}]}'
+
+        captured = {}
+        def fake_urlopen(request, timeout=None):
+            captured['payload'] = json.loads(request.data.decode())
+            return Response()
+
+        with patch('server.urllib.request.urlopen', side_effect=fake_urlopen):
+            move = server.ask_model('/tmp/model.gguf', board)
+
+        payload = captured['payload']
+        self.assertEqual(move.uci(), 'e2e8')
+        self.assertIn('Elimination Chess', payload['messages'][0]['content'])
+        self.assertIn('do not restrict moves', payload['messages'][0]['content'])
+        self.assertIn('grammar', payload)
+        self.assertIn('"e2e8"', payload['grammar'])
+
+    def test_server_model_request_rejects_explanatory_text_even_with_uci(self):
+        from unittest.mock import patch
+        board = server.EliminationBoard()
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"I choose e2e4"}}]}'
+        with patch('server.urllib.request.urlopen', return_value=Response()):
+            with self.assertRaisesRegex(ValueError, 'nie zwrócił ruchu UCI'):
+                server.ask_model('/tmp/model.gguf', board)
+
     def test_python_chess_legal_start_position(self):
         board = chess.Board()
         self.assertEqual(board.legal_moves.count(), 20)

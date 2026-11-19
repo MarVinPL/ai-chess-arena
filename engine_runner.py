@@ -13,6 +13,7 @@ from typing import Callable
 
 import chess
 import arbiter
+from elimination_chess import EliminationBoard
 
 LLAMAFILE = Path('/home/debian/ai-agent/bin/llamafile')
 API_BASE = 'http://127.0.0.1:8088'
@@ -250,9 +251,15 @@ class LlamafileRuntime:
         legal_text = ", ".join(legal)
         anti_loop_note = (' Nie cofaj tej samej figury na poprzednie pole, jeśli masz inną legalną możliwość.'
                           if blocked_reversals else '')
+        system_prompt = (
+            'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
+            'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+            'Wybierz dokładnie jeden ruch z podanej listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
+            'Odpowiedź musi być jednym ruchem UCI i niczym więcej. Reply with exactly one UCI move and no explanation. '
+            'Do not invent moves. Nie wymyślaj ruchów.'
+        )
         initial_prompt = (
-            'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-            'Zwróć wyłącznie ruch UCI.' + anti_loop_note + '\n'
+            'Wybierz jeden ruch z listy. Select one move from the list.' + anti_loop_note + '\n'
             f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
             + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '') + 'MOVE:')
         retry_prompt = None
@@ -268,13 +275,13 @@ class LlamafileRuntime:
             if attempt and stop_event and stop_event.is_set():
                 raise RunnerError('Turniej zatrzymany przez operatora')
             prompt = initial_prompt if attempt == 0 else retry_prompt
-            payload_data = {'messages': [{'role': 'user', 'content': prompt}],
+            payload_data = {'messages': [{'role': 'system', 'content': system_prompt},
+                                         {'role': 'user', 'content': prompt}],
                             'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
-                            'chat_template_kwargs': {'enable_thinking': bool(enable_thinking and attempt == 0)}}
-            if attempt == 1:
-                # Recovery must emit only the constrained move; disable reasoning
-                # tokens for this attempt so they cannot conflict with the grammar.
-                payload_data['grammar'] = self._uci_grammar(legal)
+                            'chat_template_kwargs': {'enable_thinking': False}}
+            # Constrain both the first answer and the bounded retry to the exact
+            # currently allowed UCI set. Reasoning tokens are disabled for grammar mode.
+            payload_data['grammar'] = self._uci_grammar(legal)
             payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
@@ -297,7 +304,8 @@ class LlamafileRuntime:
                 completion_tokens = None
             if not isinstance(content, str):
                 content = str(content or '')
-            match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
+            candidate_text = content.strip().lower()
+            match = re.fullmatch(r'([a-h][1-8][a-h][1-8][qrbn]?)', candidate_text)
             illegal_uci = None
             blocked_uci = None
             candidate_valid = False
@@ -376,7 +384,7 @@ class SequentialChessRunner:
                   resume_moves: list[dict] | None = None,
                   resume_fen: str | None = None,
                   resume_move_times: list[float] | None = None) -> dict:
-        board = chess.Board()
+        board = EliminationBoard()
         move_records, times, arbiter_events = [], [], []
         # Reconstruct from verified UCI history only; every ply must remain legal.
         for saved in (resume_moves or []):

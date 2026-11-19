@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 import chess, chess.pgn
+from elimination_chess import EliminationBoard
 import league
 import model_store
 import model_allowlist
@@ -40,7 +41,7 @@ LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
 HOST, PORT = '127.0.0.1', 8090
 lock = threading.RLock()
-board = chess.Board()
+board = EliminationBoard()
 moves, timings = [], []
 illegal_moves = 0
 running = False
@@ -310,23 +311,25 @@ def llm_runtime_available():
 def ask_model(model, b):
     legal = [m.uci() for m in b.legal_moves]
     prompt = (
-        'You are playing chess. Select exactly one move from the LEGAL MOVES list. '
-        'Return only the UCI move, with no explanation.\n'
+        'You are playing Elimination Chess (Szachy Eliminacyjne). Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+        'Wybierz dokładnie jeden ruch z listy legalnych ruchów. Select exactly one legal move. '
+        'Zwróć wyłącznie jeden ruch UCI, bez wyjaśnienia. Return exactly one UCI move and no explanation.\n'
         f'FEN: {b.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:'
     )
     payload = json.dumps({
         'messages': [{'role': 'user', 'content': prompt}],
         'temperature': 0, 'max_tokens': 24, 'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False}
+        'chat_template_kwargs': {'enable_thinking': False},
+        'grammar': engine_runner.LlamafileRuntime._uci_grammar(legal),
     }).encode()
     req = urllib.request.Request(LLM, data=payload, headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=90) as r:
         data = json.loads(r.read().decode())
     content = data['choices'][0]['message'].get('content', '')
-    match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-    if not match:
+    candidate = content.strip().lower()
+    if not re.fullmatch(r'[a-h][1-8][a-h][1-8][qrbn]?', candidate):
         raise ValueError('Model nie zwrócił ruchu UCI: ' + repr(content[:120]))
-    move = chess.Move.from_uci(match.group(1))
+    move = chess.Move.from_uci(candidate)
     if move not in b.legal_moves:
         raise ValueError('Model zwrócił nielegalny ruch: ' + move.uci())
     return move
@@ -858,7 +861,7 @@ def tournament_loop(tournament_id):
                 resume_fen = checkpoint.get('fen')
                 game_started = checkpoint.get('game_started') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             else:
-                resume_moves, resume_times, resume_fen = [], [], chess.Board().fen()
+                resume_moves, resume_times, resume_fen = [], [], EliminationBoard().fen()
                 game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                 tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started, [], [], resume_fen))
@@ -1863,7 +1866,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock: running = False; self.send_json(state())
         elif path == '/api/reset':
             with lock:
-                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
+                running = False; board = EliminationBoard(); moves = []; timings = []; illegal_moves = 0
                 started_at = time.time(); last_error = ''; last_move = None
                 self.send_json(state())
         else: self.send_error(404)
