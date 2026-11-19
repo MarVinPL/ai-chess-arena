@@ -203,7 +203,11 @@ button.stop{background:#744b4b;border-color:#986363}
   </section>
   <h4>Wstępny audyt kandydatów Hugging Face</h4>
   <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
-  <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
+  <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><select class="field" id="hf-candidate-status-filter" aria-label="Filtr statusu kandydata"><option value="all">Wszystkie statusy</option><option value="no_audit">Bez audytu</option><option value="needs_review">Po audycie · oczekuje na ręczny przegląd</option><option value="review_in_progress">Ręczny przegląd rozpoczęty</option><option value="inactive">Nieaktywne źródło</option></select><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
+  <h5>Propozycje kandydatów katalogowych — kolejka przeglądu</h5>
+  <p class="notice">Akceptacja przesuwa wyłącznie propozycję do etapu PR. Każda decyzja ponownie sprawdza aktualną rewizję katalogu. Bez admission, allowlisty, pobierania, runtime i rosteru.</p>
+  <div class="formrow"><button type="button" class="secondary" id="hf-review-queue-refresh">Odśwież kolejkę</button><span id="hf-review-queue-status" class="notice" role="status" aria-live="polite">Ładowanie…</span></div>
+  <div id="hf-review-queue" class="moves">Odczytuję propozycje…</div>
   <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
   <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
   <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
@@ -483,12 +487,20 @@ function renderModelStatus(models,storage){
  $('model-status-note').textContent='Rejestr: '+active.length+' aktywnych wpisów. Lokalnie gotowe do uruchomienia: '+ready.length+'. Wpisy skatalogowane bez zweryfikowanej kopii w magazynie areny nie są liczone jako dostępne.';
 }
 const reviewOpen=$('model-review-open');
-if(reviewOpen)reviewOpen.addEventListener('click',()=>{delete $('model-review-form').dataset.editSubmissionId;$('model-review-form').hidden=false;$('model-review-status').textContent='';});
+if(reviewOpen)reviewOpen.addEventListener('click',()=>{clearReviewPreview('');delete $('model-review-form').dataset.editSubmissionId;delete $('model-review-form').dataset.originalProposal;$('model-review-form').hidden=false;$('model-review-status').textContent='';});
 const reviewCancel=$('model-review-cancel');
-if(reviewCancel)reviewCancel.addEventListener('click',()=>{delete $('model-review-form').dataset.editSubmissionId;$('model-review-form').hidden=true;});
+if(reviewCancel)reviewCancel.addEventListener('click',()=>{clearReviewPreview('');delete $('model-review-form').dataset.editSubmissionId;delete $('model-review-form').dataset.originalProposal;$('model-review-form').hidden=true;});
 const reviewForm=$('model-review-form');
 const reviewProposedStatus=$('review-proposed-status');
 const reviewScopeInputs=reviewForm?[...reviewForm.querySelectorAll('input[name=review-scope-format]')]:[];
+let pendingReviewPayload=null;
+function clearReviewPreview(message='Dane zmieniono. Wygeneruj nowe podsumowanie przed zapisem.'){
+ if(!pendingReviewPayload)return;
+ pendingReviewPayload=null;
+ reviewForm.querySelector('[data-review-preview]')?.remove();
+ const submit=reviewForm.querySelector('button[type="submit"]');if(submit){submit.disabled=false;submit.textContent='Pokaż podsumowanie przed zapisem';}
+ if(message)$('model-review-status').textContent=message;
+}
 function syncReviewScopeControls(){
  const blocking=['review_required','blocked'].includes(reviewProposedStatus?.value);
  reviewScopeInputs.forEach(input=>{input.disabled=blocking;if(blocking)input.checked=false;});
@@ -496,16 +508,28 @@ function syncReviewScopeControls(){
  if(hint)hint.textContent=blocking?'Dla statusów „wymaga przeglądu” i „zablokowany” zakres dopuszczenia musi pozostać pusty. Pola zakresu są wyłączone.':'Dla statusów „eligible” i „restricted” wybierz co najmniej jeden zakres: PURE_AI lub AI_ENGINE.';
 }
 if(reviewProposedStatus){reviewProposedStatus.addEventListener('change',syncReviewScopeControls);syncReviewScopeControls();}
-if(reviewForm)reviewForm.addEventListener('submit',async event=>{
- event.preventDefault();
- const proposedStatus=reviewProposedStatus.value;
- const selectedScopes=reviewScopeInputs.filter(input=>input.checked).map(input=>input.value);
- if(['eligible','restricted'].includes(proposedStatus)&&!selectedScopes.length){$('model-review-status').textContent='Nie zapisano propozycji: dla statusu eligible/restricted wybierz co najmniej jeden zakres.';return;}
- if(['review_required','blocked'].includes(proposedStatus)&&selectedScopes.length){$('model-review-status').textContent='Nie zapisano propozycji: status blokujący nie może mieć zakresu dopuszczenia.';return;}
- const button=reviewForm.querySelector('button[type="submit"]');button.disabled=true;
- const payload={model_id:Number($('review-model-id').value),license_id:$('review-license-id').value,license_review:$('review-license-status').value,license_notes:$('review-license-notes').value,proposed_status:proposedStatus,scope_formats:selectedScopes,restrictions:$('review-restrictions').value,obligations:$('review-obligations').value,block_reason:$('review-block-reason').value,technical_readiness:$('review-technical').value,technical_evidence:$('review-technical-evidence').value,technical_blockers:$('review-technical-blockers').value,revision_confirmed:$('review-revision-confirmed').checked,revision_notes:$('review-revision-notes').value};
- try{const editingId=reviewForm.dataset.editSubmissionId;const response=await fetch(editingId?'/api/model-review-submissions/action':'/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(editingId?{submission_id:Number(editingId),action:'revise',proposal:payload,reason:'Poprawiono w panelu'}:payload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);$('model-review-status').textContent=editingId?`Zaktualizowano propozycję #${editingId}; wróciła do kolejki przeglądu.`:`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;delete reviewForm.dataset.editSubmissionId;reviewForm.reset();syncReviewScopeControls();await loadModelReviewSubmissions();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;}finally{button.disabled=false;}
-});
+if(reviewForm){
+ reviewForm.querySelectorAll('input,select,textarea').forEach(field=>{field.addEventListener('input',()=>clearReviewPreview());field.addEventListener('change',()=>clearReviewPreview());});
+ reviewForm.addEventListener('submit',event=>{
+  event.preventDefault();
+  const proposedStatus=reviewProposedStatus.value;
+  const selectedScopes=reviewScopeInputs.filter(input=>input.checked).map(input=>input.value);
+  if(['eligible','restricted'].includes(proposedStatus)&&!selectedScopes.length){$('model-review-status').textContent='Nie zapisano propozycji: dla statusu eligible/restricted wybierz co najmniej jeden zakres.';return;}
+  if(['review_required','blocked'].includes(proposedStatus)&&selectedScopes.length){$('model-review-status').textContent='Nie zapisano propozycji: status blokujący nie może mieć zakresu dopuszczenia.';return;}
+  const payload={model_id:Number($('review-model-id').value),license_id:$('review-license-id').value,license_review:$('review-license-status').value,license_notes:$('review-license-notes').value,proposed_status:proposedStatus,scope_formats:selectedScopes,restrictions:$('review-restrictions').value,obligations:$('review-obligations').value,block_reason:$('review-block-reason').value,technical_readiness:$('review-technical').value,technical_evidence:$('review-technical-evidence').value,technical_blockers:$('review-technical-blockers').value,revision_confirmed:$('review-revision-confirmed').checked,revision_notes:$('review-revision-notes').value};
+  pendingReviewPayload=payload;
+  const original=reviewForm.dataset.originalProposal?JSON.parse(reviewForm.dataset.originalProposal):{};
+  const labels={model_id:'Model',license_id:'Licencja',license_review:'Ocena licencji',license_notes:'Dowody licencji',proposed_status:'Proponowany status',scope_formats:'Zakres',restrictions:'Ograniczenia',obligations:'Obowiązki',block_reason:'Uzasadnienie blokady',technical_readiness:'Gotowość techniczna',technical_evidence:'Dowody techniczne',technical_blockers:'Blokady techniczne',revision_confirmed:'Potwierdzenie rewizji',revision_notes:'Uwagi o rewizji'};
+  const preview=document.createElement('section');preview.dataset.reviewPreview='1';preview.style.cssText='padding:12px;margin:10px 0;border:1px solid #52627a;border-radius:9px';
+  const heading=document.createElement('strong');heading.textContent='Podsumowanie propozycji przed zapisem';preview.appendChild(heading);
+  const intro=document.createElement('p');intro.textContent='Sprawdź wartości oraz różnice względem poprzedniej wersji. Sam podgląd niczego nie zapisuje ani nie dopuszcza modelu.';preview.appendChild(intro);
+  const list=document.createElement('ul');Object.entries(labels).forEach(([key,label])=>{const before=original[key];const after=payload[key];if(reviewForm.dataset.originalProposal&&JSON.stringify(before)===JSON.stringify(after))return;const item=document.createElement('li');const name=document.createElement('strong');name.textContent=label+': ';item.appendChild(name);const value=document.createElement('span');const format=v=>Array.isArray(v)?(v.join(', ')||'—'):(typeof v==='boolean'?(v?'Tak':'Nie'):(String(v??'').trim()||'—'));value.textContent=reviewForm.dataset.originalProposal?'przed: '+format(before)+' → po: '+format(after):format(after);item.appendChild(value);list.appendChild(item);});preview.appendChild(list);
+  const safety=document.createElement('p');safety.className='notice';safety.textContent='Zapis tworzy wyłącznie propozycję audytową. Nie zmienia allowlisty, nie potwierdza licencji i nie uruchamia modelu.';preview.appendChild(safety);
+  const confirm=document.createElement('button');confirm.type='button';confirm.textContent='Potwierdź i zapisz propozycję';
+  confirm.onclick=async()=>{if(!pendingReviewPayload)return;confirm.disabled=true;const submit=reviewForm.querySelector('button[type="submit"]');submit.disabled=true;try{const editingId=reviewForm.dataset.editSubmissionId;const response=await fetch(editingId?'/api/model-review-submissions/action':'/api/model-review-submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(editingId?{submission_id:Number(editingId),action:'revise',proposal:pendingReviewPayload,reason:'Poprawiono w panelu'}:pendingReviewPayload)});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);pendingReviewPayload=null;$('model-review-status').textContent=editingId?`Zaktualizowano propozycję #${editingId}; wróciła do kolejki przeglądu.`:`Zapisano propozycję #${data.submission_id} dla modelu ${data.model_id}. ${data.note}`;delete reviewForm.dataset.editSubmissionId;delete reviewForm.dataset.originalProposal;reviewForm.reset();syncReviewScopeControls();preview.remove();submit.disabled=false;submit.textContent='Pokaż podsumowanie przed zapisem';await loadModelReviewSubmissions();}catch(error){$('model-review-status').textContent='Nie zapisano propozycji: '+error;confirm.disabled=false;submit.disabled=false;}};
+  const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='Wróć do edycji';edit.style.marginLeft='8px';edit.onclick=()=>clearReviewPreview('Wrócono do edycji. Po zmianach ponownie pokaż podsumowanie.');preview.append(confirm,edit);reviewForm.querySelector('[data-review-preview]')?.remove();reviewForm.appendChild(preview);const submit=reviewForm.querySelector('button[type="submit"]');submit.disabled=true;submit.textContent='Podsumowanie gotowe';$('model-review-status').textContent='Przejrzyj podsumowanie. Zapis wymaga osobnego potwierdzenia.';
+ });
+}
 async function loadModelReviewSubmissions(){
  const host=$('model-review-queue');if(!host)return;host.textContent='Pobieram propozycje…';
  try{const r=await fetch('/api/model-review-submissions',{cache:'no-store'});const rows=await r.json();if(!r.ok)throw Error(rows.error||r.status);host.replaceChildren();
@@ -519,7 +543,7 @@ async function loadModelReviewSubmissions(){
    const actions=document.createElement('div');actions.className='formrow';actions.style.marginTop='10px';
    if(item.status==='pending_review'){
     const accept=document.createElement('button');accept.type='button';accept.textContent='Akceptuj do kolejnego etapu';accept.onclick=async()=>{if(!confirm('Przenieść propozycję #'+item.id+' do etapu accepted_into_pr? Allowlista pozostanie bez zmian.'))return;await submitReviewAction(item.id,'accept',{},'')};actions.appendChild(accept);
-    const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='Popraw propozycję';edit.onclick=()=>{const p=item.proposal;$('model-review-form').hidden=false;$('review-model-id').value=String(item.model_id);$('review-license-id').value=p.license_id||'';$('review-license-status').value=p.license_review||'pending';$('review-license-notes').value=p.license_notes||'';$('review-proposed-status').value=p.proposed_status||'review_required';$('review-technical').value=p.technical_readiness||'not_evaluated';$('review-restrictions').value=p.restrictions||'';$('review-obligations').value=p.obligations||'';$('review-block-reason').value=p.block_reason||'';$('review-technical-evidence').value=p.technical_evidence||'';$('review-technical-blockers').value=p.technical_blockers||'';$('review-revision-confirmed').checked=!!p.revision_confirmed;$('review-revision-notes').value=p.revision_notes||'';reviewScopeInputs.forEach(x=>x.checked=(p.scope_formats||[]).includes(x.value));syncReviewScopeControls();reviewForm.dataset.editSubmissionId=String(item.id);$('model-review-status').textContent='Poprawiasz propozycję #'+item.id+'. Zapis ponownie umieści ją w kolejce oczekujących.';reviewForm.scrollIntoView({behavior:'smooth',block:'start'})};actions.appendChild(edit);
+    const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='Popraw propozycję';edit.onclick=()=>{clearReviewPreview('');const p=item.proposal;$('model-review-form').hidden=false;$('review-model-id').value=String(item.model_id);$('review-license-id').value=p.license_id||'';$('review-license-status').value=p.license_review||'pending';$('review-license-notes').value=p.license_notes||'';$('review-proposed-status').value=p.proposed_status||'review_required';$('review-technical').value=p.technical_readiness||'not_evaluated';$('review-restrictions').value=p.restrictions||'';$('review-obligations').value=p.obligations||'';$('review-block-reason').value=p.block_reason||'';$('review-technical-evidence').value=p.technical_evidence||'';$('review-technical-blockers').value=p.technical_blockers||'';$('review-revision-confirmed').checked=!!p.revision_confirmed;$('review-revision-notes').value=p.revision_notes||'';reviewScopeInputs.forEach(x=>x.checked=(p.scope_formats||[]).includes(x.value));syncReviewScopeControls();reviewForm.dataset.editSubmissionId=String(item.id);reviewForm.dataset.originalProposal=JSON.stringify(p);$('model-review-status').textContent='Poprawiasz propozycję #'+item.id+'. Zobaczysz podsumowanie różnic przed zapisem.';reviewForm.scrollIntoView({behavior:'smooth',block:'start'})};actions.appendChild(edit);
     const reject=document.createElement('button');reject.type='button';reject.className='stop';reject.textContent='Odrzuć';reject.onclick=async()=>{const reason=prompt('Uzasadnienie odrzucenia propozycji #'+item.id+':');if(!reason||reason.trim().length<3)return;await submitReviewAction(item.id,'reject',{},reason)};actions.appendChild(reject);
    }
    card.appendChild(actions);host.appendChild(card);
@@ -533,7 +557,13 @@ let hfCandidateItems=[];
 function renderHfCandidates(){
  const host=$('hf-candidate-list');if(!host)return;host.replaceChildren();
  const query=String($('hf-candidate-query')?.value||'').trim().toLowerCase();
- const filtered=hfCandidateItems.filter(x=>!query||[x.display_name,x.repo_id,x.declared_license_tag,x.catalog_id].some(v=>String(v||'').toLowerCase().includes(query)));
+ const statusFilter=String($('hf-candidate-status-filter')?.value||'all');
+ const filtered=hfCandidateItems.filter(x=>{
+  const matchesQuery=!query||[x.display_name,x.repo_id,x.declared_license_tag,x.catalog_id].some(v=>String(v||'').toLowerCase().includes(query));
+  const inactive=!['active','not_checked'].includes(x.source_status);
+  const matchesStatus=statusFilter==='all'||(statusFilter==='no_audit'&&!x.last_audit&&!inactive)||(statusFilter==='needs_review'&&!!x.last_audit&&!x.last_review&&!inactive)||(statusFilter==='review_in_progress'&&!!x.last_review)||(statusFilter==='inactive'&&inactive);
+  return matchesQuery&&matchesStatus;
+ });
  $('hf-candidate-count').textContent='Katalog: '+hfCandidateItems.length+' kandydatów · widoczne: '+Math.min(filtered.length,30)+' / '+filtered.length+'. Audyt uruchamiany osobno dla wybranego wpisu.';
  if(!filtered.length){host.textContent='Brak kandydatów pasujących do wyszukiwania.';return;}
  filtered.slice(0,30).forEach(item=>{
@@ -558,6 +588,7 @@ function renderHfAuditReport(report){
  const summary=document.createElement('p');summary.textContent='Wynik: public_metadata_only · rewizja zgodna: '+(report.revision_matches?'tak':'nie')+' · licencja deklarowana: '+(report.declared_license||'brak')+' · pliki licencji: '+((report.license_files||[]).join(', ')||'brak');host.appendChild(summary);
  const notes=document.createElement('ul');(report.sources||[]).forEach(source=>{const li=document.createElement('li');li.textContent=source;notes.appendChild(li)});host.appendChild(notes);
  const blockers=document.createElement('p');blockers.textContent='Ograniczenia: '+(report.limitations||[]).join(' ');host.appendChild(blockers);
+ const provenance=document.createElement('details');const provenanceSummary=document.createElement('summary');provenanceSummary.textContent='Pochodzenie, pewność i decyzja wymagane dla każdego pola';provenance.appendChild(provenanceSummary);const provenancePre=document.createElement('pre');provenancePre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';provenancePre.textContent=JSON.stringify(report.field_provenance||{},null,2);provenance.appendChild(provenancePre);host.appendChild(provenance);
  const link=document.createElement('a');link.href='https://huggingface.co/'+report.repo_id+'/tree/'+report.pinned_revision;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz przypiętą rewizję Hugging Face';host.appendChild(link);
  const f=report.suggested_form||{};
  if(report.arena_model_id){
@@ -572,7 +603,7 @@ function renderHfAuditReport(report){
   };host.appendChild(fill);
  }else{const note=document.createElement('p');note.textContent='To kandydat katalogowy bez aktywnego model_id w allowliście. Raport zapisano osobno; nie można wysłać go do formularza decyzji admission.';host.appendChild(note)}
  const evidence=document.createElement('details');const summaryEl=document.createElement('summary');summaryEl.textContent='Szczegóły techniczne i odczytane pliki tekstowe';evidence.appendChild(summaryEl);
- const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify({metadata:report.metadata,license_file_texts:report.license_file_texts,readme_excerpt:report.readme_excerpt,suggested_form:f},null,2);evidence.appendChild(pre);host.appendChild(evidence);
+ const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify({metadata:report.metadata,field_provenance:report.field_provenance,license_file_texts:report.license_file_texts,readme_excerpt:report.readme_excerpt,suggested_form:f},null,2);evidence.appendChild(pre);host.appendChild(evidence);
  const reviewHost=document.createElement('section');reviewHost.style.cssText='margin-top:12px;padding:12px;border:1px solid #52627a;border-radius:9px';reviewHost.textContent='Ładuję formularz ręcznej weryfikacji…';host.appendChild(reviewHost);
  loadHfCandidateReview(report,reviewHost);
 }
@@ -598,16 +629,44 @@ function renderHfCandidateReviewForm(report,saved,host){
  const technicalBlockers=makeField('Blokady techniczne',prior.technical_blockers||((report.suggested_form||{}).technical_blockers||''));
  const reviewerNotes=makeField('Uwagi recenzenta',prior.reviewer_notes||'');
  const status=document.createElement('p');status.className='status';status.setAttribute('role','status');status.textContent=saved&&saved.reviewed_at?'Ostatni zapis: '+saved.reviewed_at+' · '+saved.reviewer+' · weryfikacja w toku':'Brak zapisanego ręcznego przeglądu.';host.appendChild(status);
- const save=document.createElement('button');save.type='button';save.textContent='Zapisz ustalenia weryfikacji';save.onclick=async()=>{save.disabled=true;status.textContent='Zapisuję…';const payload={catalog_id:report.catalog_id,revision:report.pinned_revision,license_id:licenseId.value,license_status:licenseStatus.value,license_evidence:licenseEvidence.value,revision_confirmed:revisionConfirmed.checked,revision_notes:revisionNotes.value,technical_readiness:technical.value,technical_evidence:technicalEvidence.value,technical_blockers:technicalBlockers.value,reviewer_notes:reviewerNotes.value};try{const r=await fetch('/api/hf-candidates/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);status.textContent=d.note+' Zapis: '+d.reviewed_at;await loadHfCandidateReview(report,host);loadHfCandidates();}catch(error){status.textContent='Nie zapisano: '+error;}finally{save.disabled=false;}};host.appendChild(save);
+ const preview=document.createElement('section');preview.className='panel';preview.style.cssText='display:none;margin:10px 0;padding:10px;border:1px solid #52627a;border-radius:8px';preview.setAttribute('aria-live','polite');host.appendChild(preview);
+ let pendingPayload=null;
+ const save=document.createElement('button');save.type='button';save.textContent='Pokaż podsumowanie zmian';
+ const confirmSave=document.createElement('button');confirmSave.type='button';confirmSave.textContent='Potwierdź i zapisz ustalenia';confirmSave.disabled=true;confirmSave.style.display='none';confirmSave.style.marginLeft='8px';
+ const fields=[['license_id','Identyfikator licencji'],['license_status','Ocena licencji'],['license_evidence','Źródła i uzasadnienie licencji'],['revision_confirmed','Potwierdzenie rewizji'],['revision_notes','Dowód porównania rewizji'],['technical_readiness','Gotowość techniczna'],['technical_evidence','Dowody testów technicznych'],['technical_blockers','Blokady techniczne'],['reviewer_notes','Uwagi recenzenta']];
+ const currentPayload=()=>({catalog_id:report.catalog_id,revision:report.pinned_revision,license_id:licenseId.value,license_status:licenseStatus.value,license_evidence:licenseEvidence.value,revision_confirmed:revisionConfirmed.checked,revision_notes:revisionNotes.value,technical_readiness:technical.value,technical_evidence:technicalEvidence.value,technical_blockers:technicalBlockers.value,reviewer_notes:reviewerNotes.value});
+ const invalidatePreview=()=>{if(!pendingPayload)return;pendingPayload=null;preview.style.display='none';preview.replaceChildren();confirmSave.disabled=true;confirmSave.style.display='none';status.textContent='Dane zmieniono po podglądzie. Wygeneruj nowe podsumowanie przed zapisem.';};
+ [licenseId,licenseStatus,licenseEvidence,revisionConfirmed,revisionNotes,technical,technicalEvidence,technicalBlockers,reviewerNotes].forEach(field=>{field.addEventListener('input',invalidatePreview);field.addEventListener('change',invalidatePreview);});
+ save.onclick=()=>{const payload=currentPayload();pendingPayload=payload;preview.replaceChildren();const heading=document.createElement('strong');heading.textContent='Podsumowanie zmian przed zapisem';preview.appendChild(heading);const intro=document.createElement('p');intro.textContent='Kandydat: '+report.repo_id+' · rewizja: '+report.pinned_revision+'. Sprawdź każdą zmianę. Zapis pozostaje wyłącznie notatką audytową.';preview.appendChild(intro);const list=document.createElement('ul');let changed=0;fields.forEach(([key,label])=>{const before=prior[key]===undefined?(key==='license_id'?report.declared_license||'':''):prior[key];const after=payload[key];if(JSON.stringify(before)===JSON.stringify(after))return;changed++;const item=document.createElement('li');const name=document.createElement('strong');name.textContent=label+': ';item.appendChild(name);const value=document.createElement('span');const format=v=>typeof v==='boolean'?(v?'Tak':'Nie'):(String(v||'').trim()||'—');value.textContent='przed: '+format(before)+' → po: '+format(after);item.appendChild(value);list.appendChild(item);});if(!changed){const item=document.createElement('li');item.textContent='Brak zmian względem ostatniego zapisu.';list.appendChild(item);}preview.appendChild(list);const safety=document.createElement('p');safety.className='notice';safety.textContent='To nie zatwierdza licencji, nie zmienia allowlisty i nie dopuszcza modelu do turnieju.';preview.appendChild(safety);preview.style.display='block';confirmSave.disabled=false;confirmSave.style.display='inline-block';status.textContent='Podgląd gotowy. Zapis nastąpi dopiero po osobnym potwierdzeniu.';};
+ confirmSave.onclick=async()=>{if(!pendingPayload)return;confirmSave.disabled=true;save.disabled=true;status.textContent='Zapisuję potwierdzone ustalenia…';try{const r=await fetch('/api/hf-candidates/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pendingPayload)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);pendingPayload=null;status.textContent=d.note+' Zapis: '+d.reviewed_at;await loadHfCandidateReview(report,host);loadHfCandidates();loadHfCandidateReviewQueue();}catch(error){status.textContent='Nie zapisano: '+error;confirmSave.disabled=false;}finally{save.disabled=false;}};host.append(save,confirmSave);
  if(saved&&Array.isArray(saved.history)&&saved.history.length){const history=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Historia zapisów ('+saved.history.length+')';history.appendChild(summary);const list=document.createElement('ol');saved.history.forEach(event=>{const li=document.createElement('li');li.textContent=event.occurred_at+' · '+event.actor+' · '+(event.review.license_status||'pending')+' · '+(event.review.technical_readiness||'not_evaluated');list.appendChild(li)});history.appendChild(list);host.appendChild(history);}
  const note=document.createElement('p');note.className='notice';note.textContent='Historia zapisów jest zachowywana dla każdej przypiętej rewizji. Zmiana rewizji wymaga nowego przeglądu.';host.appendChild(note);
 }
+async function loadHfCandidateReviewQueue(){
+ const host=$('hf-review-queue');if(!host)return;host.textContent='Pobieram propozycje…';
+ try{const r=await fetch('/api/hf-candidates/review-queue',{cache:'no-store'});const rows=await r.json();if(!r.ok)throw Error(rows.error||r.status);host.replaceChildren();
+  if(!Array.isArray(rows)||!rows.length){host.textContent='Brak propozycji kandydatów katalogowych.';$('hf-review-queue-status').textContent='0 propozycji';return;}
+  $('hf-review-queue-status').textContent=rows.length+' propozycji';
+  rows.forEach(item=>{const card=document.createElement('article');card.style.cssText='padding:10px;margin:8px 0;border:1px solid #52627a;border-radius:8px;overflow-wrap:anywhere';
+   const title=document.createElement('strong');title.textContent='#'+item.id+' · '+item.repo_id+' · '+item.status;card.appendChild(title);
+   const meta=document.createElement('p');meta.textContent='Rewizja: '+item.revision+' · zgłoszono: '+item.submitted_at+' · licencja: '+(item.review.license_id||'brak')+' ('+(item.review.license_status||'pending')+') · techniczna: '+(item.review.technical_readiness||'not_evaluated');card.appendChild(meta);
+   const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Dowody i pełna propozycja';details.appendChild(summary);const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px';pre.textContent=JSON.stringify(item.review,null,2);details.appendChild(pre);card.appendChild(details);
+   if(item.history?.length){const hist=document.createElement('details');const hs=document.createElement('summary');hs.textContent='Historia decyzji ('+item.history.length+')';hist.appendChild(hs);const ul=document.createElement('ul');item.history.forEach(ev=>{const li=document.createElement('li');li.textContent=ev.event+' · '+ev.actor+' · '+ev.occurred_at+(ev.reason?' · '+ev.reason:'');ul.appendChild(li)});hist.appendChild(ul);card.appendChild(hist)}
+   if(item.status==='pending_review'){const actions=document.createElement('div');actions.className='formrow';const accept=document.createElement('button');accept.type='button';accept.textContent='Akceptuj do etapu PR';accept.onclick=async()=>{if(!confirm('Przenieść propozycję #'+item.id+' do kolejnego etapu PR? Aktualna rewizja zostanie sprawdzona ponownie. Nie nastąpi admission ani pobranie.'))return;await decideHfCandidateProposal(item.id,'accept','')};actions.appendChild(accept);const reject=document.createElement('button');reject.type='button';reject.className='stop';reject.textContent='Odrzuć';reject.onclick=async()=>{const reason=prompt('Uzasadnienie odrzucenia propozycji #'+item.id+':');if(!reason||reason.trim().length<3)return;await decideHfCandidateProposal(item.id,'reject',reason)};actions.appendChild(reject);card.appendChild(actions)}
+   host.appendChild(card);
+  });
+ }catch(e){host.textContent='Nie udało się pobrać kolejki: '+e;$('hf-review-queue-status').textContent='Błąd odczytu'}
+}
+async function decideHfCandidateProposal(id,action,reason){try{const r=await fetch('/api/hf-candidates/review-action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposal_id:id,action,reason})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('hf-review-queue-status').textContent='Propozycja #'+id+': '+d.status+'. '+d.note;await loadHfCandidateReviewQueue()}catch(e){$('hf-review-queue-status').textContent='Nie zapisano decyzji: '+e}}
+$('hf-review-queue-refresh')?.addEventListener('click',loadHfCandidateReviewQueue);
+loadHfCandidateReviewQueue();
 async function loadHfCandidates(){
  const host=$('hf-candidate-list');if(!host)return;host.textContent='Odczytuję katalog…';
  try{const r=await fetch('/api/hf-candidates',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);hfCandidateItems=Array.isArray(d)?d:[];renderHfCandidates();}
  catch(e){host.textContent='Nie udało się odczytać katalogu kandydatów: '+e;}
 }
 $('hf-candidate-query')?.addEventListener('input',renderHfCandidates);
+$('hf-candidate-status-filter')?.addEventListener('change',renderHfCandidates);
 $('hf-candidate-refresh')?.addEventListener('click',loadHfCandidates);
 let hfDownloadSelections=[];
 let hfDownloadInventories={};

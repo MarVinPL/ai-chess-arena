@@ -88,6 +88,9 @@ def save(connection, payload, *, catalog=None, actor='arena'):
     connection.execute('''INSERT INTO hf_candidate_review_events
         (catalog_id,revision,occurred_at,actor,previous_json,new_json) VALUES(?,?,?,?,?,?)''',
         (catalog_id, revision, now, str(actor)[:120], previous[0] if previous else None, encoded))
+    import model_review_submissions
+    model_review_submissions.submit_hf_candidate(connection, catalog_id=catalog_id, revision=revision,
+        repo_id=str(item.get('repo_id') or ''), submitted_at=now, payload_json=encoded, actor=actor)
     return {'review': fields, 'reviewed_at': now, 'reviewer': str(actor)[:120],
             'workflow_status': 'review_in_progress',
             'note': 'Zapisano ręczne ustalenia. To nie jest zatwierdzenie licencji ani dopuszczenie modelu do Areny.'}
@@ -107,7 +110,13 @@ def get(connection, catalog_id, revision):
             (catalog_id, revision)).fetchall()
     except Exception:
         events = []
+    import model_review_submissions
+    proposals = [p for p in model_review_submissions.list_hf_candidates(connection)
+                 if p['catalog_id'] == catalog_id and p['revision'] == revision]
+    proposal = proposals[0] if proposals else None
     return {'reviewed_at': row[0], 'reviewer': row[1], 'review': json.loads(row[2]),
+            'proposal_id': proposal['id'] if proposal else None,
+            'proposal_status': proposal['status'] if proposal else 'not_submitted',
             'workflow_status': 'review_in_progress',
             'history': [{'occurred_at': event[0], 'actor': event[1],
                          'previous_review': json.loads(event[2]) if event[2] else None,
@@ -121,3 +130,25 @@ def list_reviews(connection):
         return []
     return [{'catalog_id': row[0], 'revision': row[1], 'reviewed_at': row[2], 'reviewer': row[3]}
             for row in rows]
+
+
+def _ensure_proposal_tables(connection):
+    """Compatibility hook: proposals now live in model_review_submissions."""
+    import model_review_submissions
+    model_review_submissions.ensure_schema(connection)
+    connection.execute("""CREATE TABLE IF NOT EXISTS hf_candidate_reviews (
+        catalog_id TEXT NOT NULL, revision TEXT NOT NULL, reviewed_at TEXT NOT NULL,
+        reviewer TEXT NOT NULL, review_json TEXT NOT NULL,
+        PRIMARY KEY(catalog_id, revision)
+    )""")
+
+
+def list_proposals(connection):
+    import model_review_submissions
+    return model_review_submissions.list_hf_candidates(connection)
+
+
+def apply_proposal_action(connection, *, proposal_id, action, catalog=None, actor='arena', reason=''):
+    import model_review_submissions
+    return model_review_submissions.apply_hf_candidate_action(connection, submission_id=proposal_id,
+        action=action, catalog=catalog, actor=actor, reason=reason)

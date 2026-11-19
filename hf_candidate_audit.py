@@ -183,6 +183,27 @@ def audit_candidate(catalog_id: str, *, catalog=None, fetcher=None):
             'scope_formats': []
         }
     }
+    # Per-field provenance keeps observed source facts separate from human decisions.
+    report['field_provenance'] = {
+        'arena_model_id': {'value': item.get('arena_model_id'), 'source': 'pinned candidate catalog', 'confidence': 'catalog_observed', 'decision': 'null means catalog-only candidate; do not invent an Arena model ID'},
+        'repo_id': {'value': repo, 'source': f'https://huggingface.co/api/models/{repo}/revision/{revision}', 'confidence': 'source_confirmed', 'decision': 'identity still requires operator review'},
+        'pinned_revision': {'value': revision, 'source': f'https://huggingface.co/{repo}/tree/{revision}', 'confidence': 'manifest_pinned', 'decision': 'human confirmation remains false'},
+        'observed_revision': {'value': observed_revision, 'source': api_url, 'confidence': 'source_confirmed', 'decision': 'SHA equality is not a license or admission approval'},
+        'declared_license': {'value': declared, 'source': 'catalog tag and/or Hugging Face model card', 'confidence': 'declaration_only', 'decision': 'requires human license review; LICENSE text is evidence, not legal interpretation'},
+        'license_id': {'value': report['suggested_form']['license_id'], 'source': 'catalog tag and/or Hugging Face model card', 'confidence': 'declaration_only', 'decision': 'prefill only; must not be treated as independently verified'},
+        'license_notes': {'value': '\n'.join(notes), 'source': 'pinned Hugging Face API metadata, model card and repository file index', 'confidence': 'source_observed', 'decision': 'review source text and complete rights/obligations manually'},
+        'license_review': {'value': report['suggested_form']['license_review'], 'source': None, 'confidence': 'not_determined', 'decision': 'must be decided by an authorized human'},
+        'technical_readiness': {'value': report['suggested_form']['technical_readiness'], 'source': None, 'confidence': 'not_tested', 'decision': 'requires a separate authorized technical test'},
+        'technical_evidence': {'value': report['suggested_form']['technical_evidence'], 'source': api_url, 'confidence': 'source_observed_not_runtime', 'decision': 'cannot support READY or runtime compatibility'},
+        'technical_blockers': {'value': report['suggested_form']['technical_blockers'], 'source': 'missing license file, declaration comparison, gated metadata and no runtime test', 'confidence': 'automatically_derived', 'decision': 'operator must resolve blockers; no automatic readiness transition'},
+        'revision_notes': {'value': report['suggested_form']['revision_notes'], 'source': api_url, 'confidence': 'source_confirmed', 'decision': 'human confirmation remains false'},
+        'block_reason': {'value': report['suggested_form']['block_reason'], 'source': 'fail-closed audit policy and listed blockers', 'confidence': 'automatic_suggestion', 'decision': 'operator may edit; no admission decision'},
+        'restrictions': {'value': report['suggested_form']['restrictions'], 'source': None, 'confidence': 'not_determined', 'decision': 'leave blank until a human identifies verified restrictions'},
+        'obligations': {'value': report['suggested_form']['obligations'], 'source': None, 'confidence': 'not_determined', 'decision': 'leave blank until a human verifies license obligations'},
+        'proposed_status': {'value': report['suggested_form']['proposed_status'], 'source': 'fail-closed audit policy', 'confidence': 'automatic_suggestion', 'decision': 'not an admission decision'},
+        'scope_formats': {'value': report['suggested_form']['scope_formats'], 'source': None, 'confidence': 'not_determined', 'decision': 'must remain empty until separately approved'},
+        'revision_confirmed': {'value': report['suggested_form']['revision_confirmed'], 'source': 'operator decision required', 'confidence': 'not_confirmed', 'decision': 'never set automatically'},
+    }
     return report
 
 
