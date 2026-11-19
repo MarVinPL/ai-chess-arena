@@ -507,3 +507,8 @@ The new upstream issue evidence materially strengthens the conclusion: the publi
 This is a documentation/provenance limitation, not proof that the training data was never released through any private or later channel. No such complete release was established in this audit.
 
 The correct fail-closed result remains `review_required`. Do not infer legal clearance, source-level compliance, or reproducibility from the Apache-2.0 model-card tag alone. No manifest, allowlist, permission, technical-readiness, admission, production, DB, roster, or tournament changes.
+
+
+## Execution isolation boundary
+
+Any future runtime verification for this model must follow [`docs/model-execution-isolation-policy.md`](../model-execution-isolation-policy.md): execution and artifact storage are restricted to the already-existing disposable LXC `arena-test`. Host-side model execution is prohibited. If that container is unavailable, do not create a replacement or fall back to the host; leave the result `NOT_VERIFIED`/`SKIPPED_BLOCKED` with evidence.
