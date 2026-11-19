@@ -21,6 +21,9 @@ DEFAULT_ALLOWED_HOSTS = frozenset({
     # 2026-11-19: Hub resolve endpoint redirects to this regional Xet CDN.
     "huggingface.co",
     "us.aws.cdn.hf.co",
+    # Exact read-only Python package index and distribution hostnames.
+    "pypi.org",
+    "files.pythonhosted.org",
 })
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", re.I)
 _MAX_HEADER = 8192
