@@ -1,6 +1,6 @@
 # SmolLM2-360M — bezpieczny plan eksperymentalnego douczania
 
-Status: **dataset v2 i lokalny pipeline przygotowane; trening/inference niewykonane**
+Status: **ARCHIWUM — część treningowa anulowana decyzją właściciela 2026-11-19; adapter nie został utworzony**
 Issue: #133
 Model bazowy: `HuggingFaceTB/SmolLM2-360M-Instruct`
 Kandydat GGUF w Arenie: `QuantFactory/SmolLM2-360M-Instruct-GGUF`
@@ -27,33 +27,35 @@ Kandydat GGUF w Arenie: `QuantFactory/SmolLM2-360M-Instruct-GGUF`
 - Manifest datasetu: `datasets/chess_sft/manifest-v2.json`.
 - Manifest przygotowanych splitów i ich SHA-256: `datasets/chess_sft/prepared-v2/manifest.json`.
 
-## Pipeline treningu i ewaluacji
+## Zachowany pipeline — tryb archiwalny (bez możliwości wykonania)
 
 - `scripts/preflight_smol_chess_training.py` sprawdza wyłącznie lokalne pliki, dostępny RAM i wolne miejsce. Nie pobiera ani nie ładuje modelu.
-- `scripts/train_smol_chess_lora.py` przygotowano jako CPU-only LoRA, z lokalnym `base-model-dir`, `local_files_only=True`, trybem offline, oddzielnym katalogiem adaptera i stratą liczona na odpowiedzi asystenta. Domyślnie wykonuje wyłącznie dry-run. Trening wymaga dwóch jawnych flag: `--execute --confirm-local-offline-training`.
-- `scripts/evaluate_smol_chess_lora.py` ocenia wyłącznie odłożony split testowy, raportując legalność ruchu, trafność etykiety i czas inferencji. Domyślnie wykonuje wyłącznie dry-run; inference wymaga `--execute --confirm-local-inference`.
+- `scripts/train_smol_chess_lora.py` pozostaje jako dokumentacja prototypu i obsługuje wyłącznie dry-run; próba `--execute` kończy się komunikatem o anulowaniu.
+- `scripts/evaluate_smol_chess_lora.py` pozostaje jako dokumentacja planowanej ewaluacji; obsługuje wyłącznie dry-run, a próba inference jest blokowana, ponieważ adapter nie istnieje.
 - Opcjonalne biblioteki treningowe (`torch`, `transformers`, `peft`) nie są instalowane ani pobierane w ramach tego PR. Skrypty nie pobierają wag bazowych ani nie korzystają z zewnętrznego API.
 - Oryginalne wagi bazowe i kandydat GGUF pozostają nietknięte; adapter jest osobnym artefaktem.
 
-## Aktualny preflight VPS — 2026-11-19
+## Ostateczny preflight i decyzja — 2026-11-19
 
-- Dostępny RAM: `1,608,564,736` B (ok. 1.50 GiB).
-- Wolne miejsce: `1,616,228,352` B (ok. 1.50 GiB).
-- Bez lokalnego snapshotu Transformers: `base-model-dir` nie został podany.
-- Domyślne progi bezpieczeństwa preflight: 8 GiB RAM i 4 GiB wolnego miejsca.
-- Wynik: **BLOCKED** — brak lokalnego snapshotu, RAM poniżej progu i dysk poniżej progu.
-- Nie instalowano runtime treningowego, nie pobierano wag, nie uruchamiano modelu, treningu ani inferencji.
+- Ostatni odczyt: dostępny RAM ok. `1.53 GiB`; wolne miejsce na `/` ok. `21.8 GiB`.
+- Katalog wyjściowy na `/home/debian` usuwał wcześniejszą pozorną blokadę dyskową związaną z ograniczonym `/tmp`.
+- Brak lokalnego snapshotu Transformers oraz RAM poniżej progu bezpieczeństwa 8 GiB.
+- Wynik: **SKIPPED_BLOCKED** dla treningu na obecnym VPS; nie jest to awaria runtime modelu.
+- Decyzją właściciela z 2026-11-19 część treningowa i dalsze próby optymalizacji zostały anulowane. Nie pobierano wag ani bibliotek, nie ładowano modelu i nie uruchamiano treningu/inferencji.
 
 ## Granice i dalsze bramki
 
 1. Dataset v2 jest małym, syntetycznym zbiorem do eksperymentu z instrukcjami i legalnością; nie dowodzi poprawy siły gry ani jakości strategii.
 2. Aby rozszerzyć dane o mat w 2, obronę przed matem i taktykę, potrzebny będzie jawnie wersjonowany silnik referencyjny z parametrami i głębokością. Nie wpisywać takich etykiet na podstawie przypuszczeń.
-3. Przed treningiem wymagany jest kompletny lokalny snapshot Transformers, osobny preflight na środowisku z wystarczającą pamięcią oraz osobna zgoda właściciela na uruchomienie treningu.
-4. Przed ewaluacją wymagane jest osobne potwierdzenie inference. Test odbywa się na identycznym, odłożonym zbiorze testowym dla bazy i adaptera.
+3. Trening LoRA został anulowany; nie wolno go ponawiać w ramach tego zadania.
+4. Adapter: `NOT_CREATED`. Ewaluacja adaptera i porównanie baza–adapter: `NOT_APPLICABLE`.
 5. Wyniki eksperymentu nie zmieniają allowlisty, admission, rosteru ani stanu turniejów.
 6. Bez płatnych API, płatnych GPU, usług chmurowych z naliczaniem opłat ani niejasnych licencyjnie danych.
 7. Chroniony katalog `/home/debian/ai-agent/models`, produkcyjna DB, usługi i turnieje pozostają nietknięte.
 
-## Kryteria wyników
+## Ostateczny zakres po anulowaniu
 
-Raport po osobno zatwierdzonym uruchomieniu ma rozdzielać: legal move rate, task-target accuracy, wyniki według rodzaju zadania, czas inferencji oraz metryki train/validation. Nie wolno przedstawiać trafności etykiet syntetycznych jako siły gry lub rankingu ELO.
+- Dataset v2, manifesty, przygotowane splity i skrypty dry-run pozostają jako archiwalny rezultat prac.
+- Trening LoRA: `CANCELLED_BY_OWNER`. Adapter: `NOT_CREATED`. Ewaluacja adaptera i sparing: `NOT_APPLICABLE`.
+- Zachowany historyczny test bazowego GGUF Q4_K_M jest odrębnym dowodem runtime; nie stanowi dowodu treningu ani poprawy siły gry.
+- Nie zmieniać allowlisty, admission, rosteru ani wyników turniejów na podstawie tego eksperymentu.
