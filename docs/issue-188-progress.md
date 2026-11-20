@@ -172,3 +172,29 @@ Wnioski operacyjne:
 - Wynik: `BLOCKED_NOT_RUN`. Weryfikacja dotyczyła wyłącznie zasobów i obecności artefaktu; nie uruchamiano Q4_K_M, nie pobierano go, nie zmieniano konfiguracji ani procesów środowiska.
 - Dostępna pamięć hosta i limit pamięci jednostki nie dają wystarczającego marginesu, aby uznać próbę za bezpieczną bez dodatkowego pomiaru/planowania pamięci. Nie rekomenduje się ładowania tego modelu na obecnym profilu bez osobnej decyzji i przygotowania bezpiecznego budżetu RAM.
 - Produkcyjna usługa `ai-chess-arena.service`, baza produkcyjna, panel, roster i statusy admission pozostały nietknięte. Nie wykonano wdrożenia ani restartu usług.
+
+
+### Stały budżet zasobów i ponowny odczyt `arena-test` — 20.11.2026
+
+Ustalono, że budżet sprzętowy nie będzie zwiększany. Dalsze prace i dobór modeli muszą mieścić się w istniejącym środowisku; nie zmieniamy RAM, swapu, limitów CPU ani konfiguracji kontenera.
+
+Odczyt hosta `vps-678a1be0`:
+
+- RAM: 3,7 GiB łącznie, około 1,4 GiB dostępne w chwili pomiaru.
+- Swap: 2,0 GiB łącznie, około 894 MiB wolne.
+- Dysk `/`: 40 GiB łącznie, 14 GiB wolne.
+- `arena-test` działa jako transient scope `machine-arena\\x2dtest.scope`; bieżące zużycie pamięci około 82 MiB, historyczny szczyt scope około 1,04 GiB.
+- Efektywne limity bieżącego scope: `memory.max=max`, `memory.high=max`, `memory.swap.max=max`, `cpu.max=max 100000`.
+- Jednostka `systemd-nspawn@arena-test.service` jest obecnie `inactive`. Jej drop-iny deklarują `MemoryMax=1452213043` B (około 1,35 GiB) i `CPUQuota=150%`, ale nie są efektywnymi limitami aktualnie działającego transient scope. Nie wolno traktować ich jako aktywnego limitu kontenera.
+
+Ponowny odczyt katalogu modeli w maszynie potwierdził dokładnie trzy istniejące pliki:
+
+| Artefakt | Rozmiar |
+|---|---:|
+| `SmolLM2-360M-Instruct.Q2_K.gguf` | 218 673 792 B |
+| `qwen2-0_5b-instruct-q4_k_m.gguf` | 397 805 248 B |
+| `qwen2.5-0.5b-instruct-q2_k.gguf` | 415 182 688 B |
+
+Nie znaleziono dodatkowego, niewykorzystanego artefaktu GGUF. Qwen2 Q4_K_M ma status `verified_permissive` i został wcześniej zatwierdzony przez właściciela do dalszej weryfikacji, ale nie zdał jakościowo testów Passkey. Qwen2.5 Q4_K_M (491 400 032 B) nie jest obecny na dysku; SmolLM2 Q4_K_M (271 MB) pozostaje `review_required` z powodu nierozstrzygniętej proweniencji danych treningowych. Żadnego z tych plików nie pobierano.
+
+Wniosek operacyjny: nie ma obecnie kolejnego lokalnego kandydata do testu. Kontynuować można wyłącznie pracę nad promptami, walidacją i testami istniejących artefaktów, bez rozszerzania rosteru, bez zmiany admission, bez pobierania modeli i bez zmian produkcyjnych. Ten odczyt był read-only; nie zmieniano jednostek systemd, cgroup, kontenera, usług ani plików modeli.
