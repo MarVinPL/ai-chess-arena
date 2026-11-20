@@ -121,3 +121,11 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Zbiorczy, zanonimizowany dowód JSON: docs/evidence/issue-188-real-e2e-20261120.json.
 - Testy automatyczne po wymuszeniu natychmiastowego bicia króla: **471 passed, 59 subtests passed**. Nie zmieniano składu turnieju ani statusów zawodników.
 - Żaden proces testowy nie używał produkcyjnego portu 8088/8090 ani produkcyjnej bazy. Porty testowe zostały zwolnione. Usługa produkcyjna pozostała aktywna i nietknięta.
+
+
+### Blokada kryterium pięciu zatwierdzonych kandydatów
+
+- Sprawdzono wersjonowaną allowlistę z gałęzi oraz z origin/main: zawiera 8 wpisów, wszystkie ze statusem review_required; brak wpisów eligible/restricted.
+- Produkcyjna baza SQLite została odczytana wyłącznie w trybie read-only: 0 decyzji admission ze statusem admitted i 0 zdarzeń admitted w historii.
+- W izolowanym kontenerze były dostępne trzy pliki GGUF; wszystkie trzy zostały przetestowane. Nie znaleziono pięciu zatwierdzonych kandydatów, których można bezpiecznie dopisać do wymaganej sekwencji testowej.
+- Nie wybierano modeli z puli review_required ani kwarantanny, nie pobierano dodatkowych plików i nie zmieniano statusów admission. Kryterium pięciu zatwierdzonych kandydatów pozostaje otwarte do czasu jawnych decyzji admission / zatwierdzenia konkretnej listy przez właściciela.
