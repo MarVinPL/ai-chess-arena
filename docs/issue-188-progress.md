@@ -129,3 +129,12 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Produkcyjna baza SQLite została odczytana wyłącznie w trybie read-only: 0 decyzji admission ze statusem admitted i 0 zdarzeń admitted w historii.
 - W izolowanym kontenerze były dostępne trzy pliki GGUF; wszystkie trzy zostały przetestowane. Nie znaleziono pięciu zatwierdzonych kandydatów, których można bezpiecznie dopisać do wymaganej sekwencji testowej.
 - Nie wybierano modeli z puli review_required ani kwarantanny, nie pobierano dodatkowych plików i nie zmieniano statusów admission. Kryterium pięciu zatwierdzonych kandydatów pozostaje otwarte do czasu jawnych decyzji admission / zatwierdzenia konkretnej listy przez właściciela.
+
+### Decyzja właściciela — kandydat nr 2 (20.11.2026)
+
+- Właściciel projektu zatwierdził **kandydata nr 2: Qwen2-0.5B-Instruct (Q4_K_M)** do dalszej weryfikacji w ramach Issue #188.
+- Jest to model już obecny w izolowanym środowisku i wcześniej przetestowany w rzeczywistym runtime llamafile v0.10.6. W dwumeczu round-robin wykonał samodzielnie natychmiastowe bicie króla; w obu partiach zwrócił legalny ruch UCI.
+- Zatwierdzenie dotyczy wyłącznie kontynuowania weryfikacji tego kandydata. **Nie jest decyzją admission, dopuszczeniem do turnieju ani zgodą na wdrożenie.**
+- Nie pobrano nowego modelu, nie zmieniono allowlisty ani statusów admission, nie zmieniono składu turnieju i nie dotknięto produkcji.
+- Pozostałe cztery miejsca wymagane do spełnienia kryterium pięciu zatwierdzonych kandydatów nadal pozostają nierozstrzygnięte.
+
