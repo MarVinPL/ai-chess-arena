@@ -161,3 +161,14 @@ Wnioski operacyjne:
 - Ta ocena nie zmienia statusu manifestu ani admission, nie stanowi zgody na pobranie/uruchomienie, nie zmienia rosteru i nie dotyka produkcji.
 - Następny sensowny krok po osobnej zgodzie właściciela: przygotować Qwen2.5-0.5B Q4_K_M jako kandydata do izolowanego preflight (bez pobierania); równolegle można kontynuować dokumentacyjny przegląd brakujących danych licencyjnych SmolLM2 i Llama 3.2.
 
+
+
+### Preflight zasobów dla Qwen2.5-0.5B-Instruct Q4_K_M (20.11.2026)
+
+- Na hoście odnaleziono właściwą maszynę `arena-test` uruchomioną przez `systemd-nspawn` (Debian 13). Wewnątrz dostępny jest `llamafile v0.10.6`.
+- Odczyt zasobów hosta: RAM 3,7 GiB łącznie, ok. 1,4 GiB dostępne; swap 2 GiB, ok. 0,9 GiB wolne; wolne miejsce na systemowym filesystemie ok. 14 GiB.
+- Konfiguracja jednostki `systemd-nspawn@arena-test.service` raportuje `MemoryMax=1452213043` B (ok. 1,35 GiB) i `CPUQuotaPerSecUSec=1.5` (limit 1,5 CPU). Są to limity konfiguracyjne jednostki, nie pomiar chwilowego zużycia modelu.
+- W katalogu modeli istnieją już artefakty SmolLM2 Q2_K, Qwen2 Q4_K_M oraz Qwen2.5 Q2_K. **Dokładny Qwen2.5-0.5B-Instruct Q4_K_M z manifestu (491 400 032 B, SHA-256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`) nie jest obecny.**
+- Wynik: `BLOCKED_NOT_RUN`. Weryfikacja dotyczyła wyłącznie zasobów i obecności artefaktu; nie uruchamiano Q4_K_M, nie pobierano go, nie zmieniano konfiguracji ani procesów środowiska.
+- Dostępna pamięć hosta i limit pamięci jednostki nie dają wystarczającego marginesu, aby uznać próbę za bezpieczną bez dodatkowego pomiaru/planowania pamięci. Nie rekomenduje się ładowania tego modelu na obecnym profilu bez osobnej decyzji i przygotowania bezpiecznego budżetu RAM.
+- Produkcyjna usługa `ai-chess-arena.service`, baza produkcyjna, panel, roster i statusy admission pozostały nietknięte. Nie wykonano wdrożenia ani restartu usług.
