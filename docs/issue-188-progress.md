@@ -138,3 +138,26 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Nie pobrano nowego modelu, nie zmieniono allowlisty ani statusów admission, nie zmieniono składu turnieju i nie dotknięto produkcji.
 - Pozostałe cztery miejsca wymagane do spełnienia kryterium pięciu zatwierdzonych kandydatów nadal pozostają nierozstrzygnięte.
 
+### Przegląd pozostałych kandydatów z aktywnego manifestu (20.11.2026)
+
+Poprzednia odpowiedź w rozmowie zawierała nieprawidłową shortlistę (m.in. Qwen2.5-1.5B i Spark X2.5), których nie ma w aktywnym manifeście. Nie należy traktować tej listy jako źródła decyzji. Poniższa ocena opiera się na manifests/huggingface-models.json i docs/model-audit/license-review-2026-11-14.md, bez pobierania wag.
+
+| ID manifestu | Kandydat / plik GGUF | Rozmiar pliku | Audyt licencji | Ocena do dalszych testów |
+|---:|---|---:|---|---|
+| 1 | Qwen2.5-0.5B-Instruct Q4_K_M | 491 MB | verified_permissive | Najlepszy następny kandydat techniczno-licencyjny; w środowisku testowym badano już Q2_K, nie dokładny artefakt Q4_K_M z manifestu. Wymaga osobnej zgody właściciela na użycie artefaktu. |
+| 2 | SmolLM2-360M-Instruct Q4_K_M | 271 MB | review_required | Technicznie mały; wcześniej badano Q2_K, nie dokładny Q4_K_M. Blokada licencyjna dotyczy nieprzypiętych snapshotów/subsetów danych treningowych i provenance The Stack. Nie rekomenduję testu przed zamknięciem tej luki lub świadomą decyzją właściciela. |
+| 3 | Qwen2-0.5B-Instruct Q4_K_M | 398 MB | verified_permissive | Kandydat zatwierdzony przez właściciela do dalszej weryfikacji; exact Q4_K_M był już użyty w testach. |
+| 4 | Meta Llama 3.1 8B Instruct Q3_K_S | 3,665 MB | review_required | Nie rekomenduję na obecnym środowisku bez preflight RAM; sam plik ma ok. 3,66 GB. Brak przypiętej rewizji upstream base modelu; obowiązują warunki Meta Llama Community License/AUP. |
+| 5 | Llama 3.2 3B Instruct UD-IQ3_XXS | 1,370 MB | review_required | Potencjalnie jedyny większy kandydat do późniejszego preflight, ale nie przed uzupełnieniem przypiętej rewizji upstream i przeglądem warunków Meta. Nie uruchamiać ani nie pobierać bez osobnej zgody. |
+| 6 | Bielik 11B v3.0 Instruct Q4_K_M | 6,724 MB | verified_restricted | Wykluczony z proponowanej ścieżki: oficjalne warunki Bielik v3 dopuszczają użycie wyłącznie osobom 18+; plik jest też zbyt duży na obecny profil testowy. |
+| 7 | Bielik 7B Instruct v0.1 Q3_K_S | 3,165 MB | verified_restricted | CC BY-NC 4.0 (NonCommercial + atrybucja/oznaczenie zmian); plik jest duży względem środowiska. Nie rekomenduję jako kandydata do tego testu. |
+| 8 | Qwen3.8-27B UD-IQ1_S | 6,192 MB | review_required | Nieodpowiedni do obecnego środowiska; dodatkowe pliki imatrix/mmproj w repozytorium pochodnym nie mają zamkniętego audytu komponentów. |
+
+Wnioski operacyjne:
+- Jedynymi małymi kandydatami z aktywnego manifestu, które nie mają blokady licencyjnej na poziomie audytu, są Qwen2.5-0.5B (ID 1) i Qwen2-0.5B (ID 3). Qwen2 jest już zatwierdzony przez właściciela.
+- SmolLM2 (ID 2) ma niewielki artefakt, ale jego audyt pozostaje otwarty z konkretnych powodów dotyczących źródeł treningowych.
+- Llama 3.2 3B (ID 5) może być rozważany dopiero po uzupełnieniu proweniencji i formalnym sprawdzeniu warunków licencji; nie zakładać, że rozmiar pliku oznacza możliwość bezpiecznego uruchomienia.
+- Nie ma obecnie pięciu kandydatów jednocześnie: zatwierdzonych przez właściciela, z zamkniętymi wymaganiami licencyjnymi i odpowiednich do bezpiecznego testu na istniejącym środowisku. Nie należy sztucznie uzupełniać listy modelami 7B/8B/11B/27B.
+- Ta ocena nie zmienia statusu manifestu ani admission, nie stanowi zgody na pobranie/uruchomienie, nie zmienia rosteru i nie dotyka produkcji.
+- Następny sensowny krok po osobnej zgodzie właściciela: przygotować Qwen2.5-0.5B Q4_K_M jako kandydata do izolowanego preflight (bez pobierania); równolegle można kontynuować dokumentacyjny przegląd brakujących danych licencyjnych SmolLM2 i Llama 3.2.
+
