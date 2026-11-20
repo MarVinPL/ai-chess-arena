@@ -25,15 +25,17 @@
         {
           "path": "docs/model-audit/license-review-2026-11-14.md",
           "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
+        },
+        {
+          "path": "docs/evidence/model-technical-evaluation-2026-11-20.md",
+          "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
         }
       ],
-      "reviewed_at": "2026-11-14",
+      "reviewed_at": "2026-11-20",
       "restrictions": [],
       "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
-      "technical_readiness": "not_evaluated",
-      "technical_blockers": [
-        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
-      ]
+      "technical_readiness": "ready",
+      "technical_blockers": []
     },
     {
       "model_id": 2,
@@ -57,12 +59,12 @@
           "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
         }
       ],
-      "reviewed_at": "2026-11-14",
+      "reviewed_at": "2026-11-20",
       "restrictions": [],
-      "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
+      "block_reason": "Audyt źródeł treningowych SmolLM2-360M pozostaje otwarty: publiczne źródła nie przypinają dokładnych snapshotów i sample-level provenance, szczególnie dla Stack-Edu/The Stack v2.",
       "technical_readiness": "not_evaluated",
       "technical_blockers": [
-        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
+        "The manifest pins SmolLM2-360M-Instruct.Q4_K_M.gguf at revision 25eef036a8d245a5a188b1b45d4b240a39bc9f24; the local Q2_K artifact was tested at a different revision and cannot establish readiness for the pinned Q4_K_M artifact."
       ]
     },
     {
@@ -85,15 +87,17 @@
         {
           "path": "docs/model-audit/license-review-2026-11-14.md",
           "revision": "198f08841147e5196a6a69bd0053690fb1fd3857"
+        },
+        {
+          "path": "docs/evidence/model-technical-evaluation-2026-11-20.md",
+          "revision": "198f08841147e5196a6a69bd0053690fb1fd3857"
         }
       ],
       "reviewed_at": "2026-11-14",
       "restrictions": [],
       "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
-      "technical_readiness": "not_evaluated",
-      "technical_blockers": [
-        "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
-      ]
+      "technical_readiness": "ready",
+      "technical_blockers": []
     },
     {
       "model_id": 4,

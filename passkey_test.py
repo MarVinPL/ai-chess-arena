@@ -3,6 +3,18 @@ from __future__ import annotations
 import hashlib, json, random, time, urllib.request
 
 LLM = "http://127.0.0.1:8088/v1/chat/completions"
+PASSKEY_SYSTEM_PROMPT = (
+    "Jesteś egzaminowanym asystentem technicznym. Odpowiadaj po polsku, chyba że pytanie wyraźnie prosi o inny język. "
+    "Najpierw podaj bezpośrednią odpowiedź, potem krótko ją uzasadnij. "
+    "Pisz prostym, precyzyjnym językiem; objaśnij skrót lub termin techniczny przy pierwszym użyciu. "
+    "Używaj krótkich akapitów albo listy kroków, gdy opisujesz procedurę. "
+    "Oddzielaj fakty od założeń. Nie wymyślaj nazw ustawień, zachowania przeglądarek, gwarancji ani szczegółów implementacji. "
+    "Jeśli czegoś nie da się ustalić na podstawie pytania lub powszechnie znanych zasad, powiedz wprost, czego nie wiesz. "
+    "Odpowiadaj na wszystkie części pytania, ale nie dodawaj niepowiązanych dygresji. "
+    "Dla pytań o bezpieczeństwo wskaż najważniejsze ryzyko i praktyczne zabezpieczenie. "
+    "Nie ujawniaj ukrytego rozumowania; przedstawiaj wyłącznie zwięzłe uzasadnienie i wnioski."
+)
+
 QUESTIONS = (
     "Jak działa Passkey? Wyjaśnij kryptografię klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.",
     "Użytkownik rejestruje Passkey na Androidzie w Chrome i w Telegramie. Wyjaśnij znaczenie RP ID, origin, WebAuthn i możliwe problemy przeglądarki wbudowanej.",
@@ -29,14 +41,18 @@ def questions_for_tournament(known_question_fingerprints, random_check_done=Fals
     return [(0,chooser.choice(QUESTIONS))]
 
 
-def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None, enable_thinking=False, temperature=0.0, max_tokens=None):
+def ask_passkey_question(runtime, model_path, question, stop_event=None, draft_model_path=None, enable_thinking=False, temperature=0.0, max_tokens=None, system_prompt=PASSKEY_SYSTEM_PROMPT):
     if draft_model_path:
         runtime.ensure_loaded(model_path, draft_model_path)
     else:
         runtime.ensure_loaded(model_path)
     if stop_event and stop_event.is_set():
         return {"status": "stopped", "answer": "", "seconds": None}
-    payload=json.dumps({"messages":[{"role":"user","content":question}],"temperature":float(temperature),"max_tokens":int(max_tokens or (1800 if enable_thinking else 900)),"stream":False,"chat_template_kwargs":{"enable_thinking":bool(enable_thinking)}}).encode()
+    messages=[]
+    if system_prompt:
+        messages.append({"role":"system", "content":str(system_prompt)})
+    messages.append({"role":"user", "content":question})
+    payload=json.dumps({"messages":messages,"temperature":float(temperature),"max_tokens":int(max_tokens or (1800 if enable_thinking else 900)),"stream":False,"chat_template_kwargs":{"enable_thinking":bool(enable_thinking)}}).encode()
     req=urllib.request.Request(LLM,data=payload,headers={"Content-Type":"application/json"})
     started=time.monotonic()
     # Intentionally no timeout: measure response duration, never fail on elapsed time.

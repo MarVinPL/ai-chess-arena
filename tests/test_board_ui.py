@@ -18,6 +18,12 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('id="black" class="player-badge player-badge--black"', HTML)
         self.assertIn('id="board" class="board" role="img"', HTML)
 
+    def test_elimination_chess_rules_are_visible_above_the_board(self):
+        self.assertIn('id="variant-rules"', HTML)
+        self.assertIn('Szachy Eliminacyjne', HTML)
+        self.assertIn('zbije króla przeciwnika', HTML)
+        self.assertIn('Szach i szach-mat nie kończą partii', HTML)
+
     def test_coordinates_are_rendered_for_all_board_squares(self):
         self.assertIn('data-file="${String.fromCharCode(97+c)}"', HTML)
         self.assertIn('data-rank="${8-r}"', HTML)

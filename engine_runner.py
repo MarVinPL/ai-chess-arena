@@ -13,6 +13,7 @@ from typing import Callable
 
 import chess
 import arbiter
+from elimination_chess import EliminationBoard
 
 LLAMAFILE = Path('/home/debian/ai-agent/bin/llamafile')
 API_BASE = 'http://127.0.0.1:8088'
@@ -248,12 +249,27 @@ class LlamafileRuntime:
             raise RunnerError('Pozycja nie zawiera legalnych ruchów')
         color = 'white' if board.turn == chess.WHITE else 'black'
         legal_text = ", ".join(legal)
+        enemy_king = board.king(not board.turn)
+        king_capture_moves = [move.uci() for move in allowed_moves
+                              if enemy_king is not None and move.to_square == enemy_king]
+        king_capture_prompt = (
+            f'\nKING-CAPTURE WIN MOVES (choose one): {", ".join(king_capture_moves)}\n'
+            if king_capture_moves else ''
+        )
         anti_loop_note = (' Nie cofaj tej samej figury na poprzednie pole, jeśli masz inną legalną możliwość.'
                           if blocked_reversals else '')
+        system_prompt = (
+            'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
+            'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+            'Jeśli możesz zbić króla przeciwnika w tym ruchu, MUSISZ to zrobić — to natychmiastowa wygrana. '
+            'If you can capture the opposing king on this move, you MUST do so — it is an immediate win. '
+            'Wybierz dokładnie jeden ruch z podanej listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
+            'Odpowiedź musi być jednym ruchem UCI i niczym więcej. Reply with exactly one UCI move and no explanation. '
+            'Do not invent moves. Nie wymyślaj ruchów.'
+        )
         initial_prompt = (
-            'Jesteś graczem szachowym. Wybierz dokładnie jeden ruch z listy LEGAL MOVES. '
-            'Zwróć wyłącznie ruch UCI.' + anti_loop_note + '\n'
-            f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+            'Wybierz jeden ruch z listy. Select one move from the list.' + anti_loop_note + '\n'
+            + king_capture_prompt + f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
             + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '') + 'MOVE:')
         retry_prompt = None
         self._notify('generating', 'Model generuje propozycję ruchu', model=Path(model_path).name, color=color, fen=board.fen(), legal_moves=legal, response=None)
@@ -268,13 +284,13 @@ class LlamafileRuntime:
             if attempt and stop_event and stop_event.is_set():
                 raise RunnerError('Turniej zatrzymany przez operatora')
             prompt = initial_prompt if attempt == 0 else retry_prompt
-            payload_data = {'messages': [{'role': 'user', 'content': prompt}],
+            payload_data = {'messages': [{'role': 'system', 'content': system_prompt},
+                                         {'role': 'user', 'content': prompt}],
                             'temperature': float(temperature), 'max_tokens': int(max_tokens), 'stream': False,
-                            'chat_template_kwargs': {'enable_thinking': bool(enable_thinking and attempt == 0)}}
-            if attempt == 1:
-                # Recovery must emit only the constrained move; disable reasoning
-                # tokens for this attempt so they cannot conflict with the grammar.
-                payload_data['grammar'] = self._uci_grammar(legal)
+                            'chat_template_kwargs': {'enable_thinking': False}}
+            # Constrain both the first answer and the bounded retry to the exact
+            # currently allowed UCI set. Reasoning tokens are disabled for grammar mode.
+            payload_data['grammar'] = self._uci_grammar(legal)
             payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
@@ -297,7 +313,8 @@ class LlamafileRuntime:
                 completion_tokens = None
             if not isinstance(content, str):
                 content = str(content or '')
-            match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
+            candidate_text = content.strip().lower()
+            match = re.fullmatch(r'([a-h][1-8][a-h][1-8][qrbn]?)', candidate_text)
             illegal_uci = None
             blocked_uci = None
             candidate_valid = False
@@ -341,7 +358,7 @@ class LlamafileRuntime:
                     feedback = ('Twoja poprzednia odpowiedź nie zawierała poprawnego ruchu UCI. '
                                 'Zwróć teraz dokładnie jeden legalny ruch z poniższej listy.')
                 retry_prompt = (f'{feedback}\n'
-                                f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
+                                + king_capture_prompt + f'FEN: {board.fen()}\nLEGAL MOVES: {legal_text}\n'
                                 + (arbiter.intervention_prompt(arbiter_signal) if arbiter_signal else '')
                                 + 'Nie dodawaj wyjaśnień ani słowa UCI. Odpowiedź musi być jednym z tokenów z listy.\nMOVE:')
                 self._notify('retrying', feedback, model=Path(model_path).name,
@@ -376,7 +393,7 @@ class SequentialChessRunner:
                   resume_moves: list[dict] | None = None,
                   resume_fen: str | None = None,
                   resume_move_times: list[float] | None = None) -> dict:
-        board = chess.Board()
+        board = EliminationBoard()
         move_records, times, arbiter_events = [], [], []
         # Reconstruct from verified UCI history only; every ply must remain legal.
         for saved in (resume_moves or []):
@@ -437,6 +454,16 @@ class SequentialChessRunner:
                     move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
                     if stop_event and stop_event.is_set():
                         raise RunnerError('Turniej zatrzymany przez operatora')
+                    # Immediate king capture is a game rule, not a model preference.
+                    # Retain the model proposal for audit, but never miss a forced win.
+                    winning_captures = board.winning_king_capture_moves()
+                    if winning_captures and move not in winning_captures:
+                        proposed_move = move
+                        move = winning_captures[0]
+                        meta = dict(meta)
+                        meta['model_proposed_uci'] = proposed_move.uci()
+                        meta['move_override'] = 'forced_king_capture'
+                        meta['move_override_reason'] = 'Immediate legal king capture takes priority'
                 except RunnerError:
                     raise
                 except Exception as runtime_error:
@@ -466,6 +493,9 @@ class SequentialChessRunner:
                       'budget_observations': meta.get('budget_observations', []),
                       'uci': move.uci(), 'san': san, 'piece': piece_symbol,
                       'seconds': meta['seconds'], 'fen': board.fen(),
+                      'model_proposed_uci': meta.get('model_proposed_uci'),
+                      'move_override': meta.get('move_override'),
+                      'move_override_reason': meta.get('move_override_reason'),
                       'arbiter_intervention': bool(meta.get('arbiter_intervention')),
                       'arbiter_signal': meta.get('arbiter_signal'),
                       'arbiter_response': meta.get('arbiter_response')}

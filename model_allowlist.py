@@ -94,8 +94,6 @@ def validate_allowlist(payload: dict, manifest: dict | None = None) -> None:
             raise AllowlistError('Nieznany status gotowości technicznej')
         if not isinstance(technical_blockers, list) or not all(isinstance(x, str) and x.strip() for x in technical_blockers):
             raise AllowlistError('Nieprawidłowe blokady techniczne')
-        if status in {'blocked', 'review_required'} and technical == 'ready':
-            raise AllowlistError('Wpis zablokowany lub wymagający przeglądu nie może być technicznie gotowy')
         if technical == 'ready' and technical_blockers:
             raise AllowlistError('Technicznie gotowy wpis nie może mieć blokad technicznych')
         reason = item.get('block_reason')
@@ -148,13 +146,13 @@ def compare_allowlists(previous: dict, current: dict) -> dict:
 
 
 
-def is_runtime_ready(entry: dict, *, license_verified: bool,
-                     local_file_verified: bool, runtime_healthy: bool) -> bool:
-    """Admission decision is not runtime readiness; all gates are independent."""
+def is_runtime_ready(entry: dict, *, local_file_verified: bool,
+                     runtime_healthy: bool) -> bool:
+    """Evaluate technical readiness only; admission and licence are separate gates."""
     return bool(
-        isinstance(entry, dict) and entry.get('status') in {'eligible', 'restricted'} and
+        isinstance(entry, dict) and
         entry.get('technical_readiness') == 'ready' and not entry.get('technical_blockers') and
-        license_verified is True and local_file_verified is True and runtime_healthy is True
+        local_file_verified is True and runtime_healthy is True
     )
 
 

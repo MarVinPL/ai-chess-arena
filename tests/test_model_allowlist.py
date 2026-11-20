@@ -23,10 +23,26 @@ class ModelAllowlistTests(unittest.TestCase):
         for item in self.allowlist['models']:
             self.assertEqual(item['admission_scope'], [])
             self.assertTrue(item['license_requirements']['license_verified_required'])
-            self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
+            if item['model_id'] in {1, 3}:
+                self.assertEqual(item['technical_readiness'], 'ready')
+                self.assertEqual(item['technical_blockers'], [])
+            else:
+                self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
             self.assertIn(item['status'], {'review_required', 'blocked'})
         self.assertEqual([x['model_id'] for x in self.allowlist['models']], list(range(1, 9)))
         self.assertFalse({9, 10} & {x['model_id'] for x in self.allowlist['models']})
+
+    def test_qwen25_local_q2_artifact_is_pinned_and_technically_ready_but_not_admitted(self):
+        manifest_item = next(x for x in self.manifest['models'] if x['model_id'] == 1)
+        allowlist_item = next(x for x in self.allowlist['models'] if x['model_id'] == 1)
+        self.assertEqual(manifest_item['filename'], 'qwen2.5-0.5b-instruct-q2_k.gguf')
+        self.assertEqual(manifest_item['size_bytes'], 415182688)
+        self.assertEqual(manifest_item['sha256'], '9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8')
+        self.assertEqual(manifest_item['revision'], '9217f5db79a29953eb74d5343926648285ec7e67')
+        self.assertEqual(allowlist_item['technical_readiness'], 'ready')
+        self.assertEqual(allowlist_item['technical_blockers'], [])
+        self.assertEqual(allowlist_item['status'], 'review_required')
+        self.assertEqual(allowlist_item['admission_scope'], [])
 
     def test_revision_mismatch_is_rejected(self):
         broken = copy.deepcopy(self.allowlist)
@@ -110,15 +126,26 @@ class ModelAllowlistTests(unittest.TestCase):
         candidate['status'] = 'eligible'
         candidate['admission_scope'] = ['PURE_AI']
         candidate['block_reason'] = None
+        candidate['technical_readiness'] = 'not_evaluated'
+        candidate['technical_blockers'] = ['Technical evaluation pending.']
         validate_allowlist({**self.allowlist, 'models': [candidate] + self.allowlist['models'][1:]}, self.manifest)
-        self.assertFalse(is_runtime_ready(candidate, license_verified=True,
-                                          local_file_verified=True, runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(candidate, local_file_verified=True,
+                                          runtime_healthy=True))
         candidate['technical_readiness'] = 'ready'
         candidate['technical_blockers'] = []
-        self.assertTrue(is_runtime_ready(candidate, license_verified=True,
-                                         local_file_verified=True, runtime_healthy=True))
-        self.assertFalse(is_runtime_ready(candidate, license_verified=False,
-                                          local_file_verified=True, runtime_healthy=True))
+        self.assertTrue(is_runtime_ready(candidate, local_file_verified=True,
+                                         runtime_healthy=True))
+        # Technical readiness remains independent of admission status and licence review.
+        review_required = copy.deepcopy(candidate)
+        review_required['status'] = 'review_required'
+        review_required['admission_scope'] = []
+        review_required['block_reason'] = 'Owner admission decision pending.'
+        self.assertTrue(is_runtime_ready(review_required, local_file_verified=True,
+                                         runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(review_required, local_file_verified=False,
+                                          runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(review_required, local_file_verified=True,
+                                          runtime_healthy=False))
 
     def test_tournament_admission_requires_allowlist_license_and_exact_version(self):
         candidate = copy.deepcopy(self.allowlist['models'][0])

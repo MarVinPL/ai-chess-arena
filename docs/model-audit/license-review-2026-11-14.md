@@ -10,7 +10,7 @@ Nie pobierano wag GGUF, nie uruchamiano inferencji, nie zmieniano produkcyjnej b
 
 | ID | Model / artefakt | Status audytu | Ustalenie |
 |---:|---|---|---|
-| 1 | Qwen2.5-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Oficjalny pinned README i LICENSE są dostępne w tej samej rewizji; LFS SHA-256 dokładnego GGUF zgadza się z rejestrem, a przypięta licencja modelu bazowego również wskazuje Apache-2.0. |
+| 1 | Qwen2.5-0.5B-Instruct Q2_K GGUF | `verified_permissive` | Wybrany lokalny Q2_K istnieje w tej samej przypiętej rewizji repozytorium; SHA-256 i rozmiar odpowiadają metadanym pliku. Oficjalny README, LICENSE i przypięta licencja modelu bazowego wskazują Apache-2.0. |
 | 2 | SmolLM2-360M-Instruct Q4_K_M GGUF | `review_required` | Licencja wagi i SHA-256 są potwierdzone; źródła treningowe mają różne warunki, a dokładne rewizje i podzbiór DCLM nie są przypięte w karcie modelu. |
 | 3 | Qwen2-0.5B-Instruct Q4_K_M GGUF | `verified_permissive` | Pinned README identyfikuje model bazowy i deklaruje Apache-2.0; dokładna przypięta rewizja oficjalnego upstream zawiera pełny tekst Apache License 2.0. |
 | 4 | Meta Llama 3.1 8B Instruct Q3_K_S GGUF | `review_required` | Licencja Meta i AUP są znane, a SHA-256 GGUF jest zgodny; brak jednak przypiętej rewizji upstream base modelu w źródłowej karcie GGUF. |
@@ -38,19 +38,20 @@ Brak pliku dataset w repozytorium kwantyzacji nie jest dowodem, że prawa do dan
 
 ## Szczegółowe dowody
 
-### 1. Qwen2.5-0.5B-Instruct Q4_K_M
+### 1. Qwen2.5-0.5B-Instruct Q2_K
 
 - Repozytorium GGUF: `Qwen/Qwen2.5-0.5B-Instruct-GGUF`.
 - Przypięta rewizja repozytorium: `9217f5db79a29953eb74d5343926648285ec7e67`.
-- Plik: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491,400,032 B.
-- SHA-256 z manifestu i metadanych LFS: `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`; wartość jest zgodna z artefaktem w przypiętej rewizji.
+- Plik: `qwen2.5-0.5b-instruct-q2_k.gguf`, 415,182,688 B.
+- SHA-256 z metadanych pliku: `9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8`; wartość i rozmiar odpowiadają lokalnemu artefaktowi. Oficjalne drzewo repozytorium dla przypiętej rewizji zawiera ten plik.
 - Pinned README z tej samej rewizji identyfikuje oficjalny model bazowy `Qwen/Qwen2.5-0.5B-Instruct`, opisuje oficjalne wydanie GGUF i deklaruje Apache-2.0.
 - Repozytorium GGUF zawiera w tej rewizji pełny plik LICENSE Apache 2.0. Oficjalny model bazowy ma przypiętą rewizję `7ae557604adf67be50417f59c2c2f167def9a775` i również zawiera pełny tekst Apache-2.0.
-- Wniosek: `verified_permissive` dla dokładnego GGUF i wskazanego zakresu licencji. Apache 2.0 wymaga m.in. zachowania kopii licencji, informacji o zmianach oraz odpowiednich notice/attribution przy redystrybucji. Status audytu nie jest zgodą właściciela projektu na pobranie ani uruchomienie.
+- Wniosek: `verified_permissive` dla dokładnego Q2_K GGUF i wskazanego zakresu licencji. Wariant Q4_K_M nie jest już artefaktem wybranym w manifeście. Apache 2.0 wymaga m.in. zachowania kopii licencji, informacji o zmianach oraz odpowiednich notice/attribution przy redystrybucji. Status audytu nie jest zgodą właściciela projektu na pobranie ani uruchomienie.
 
 Źródła:
 - Pinned GGUF README: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/README.md
 - Pinned GGUF LICENSE: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE
+- Pinned Q2_K GGUF file: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q2_k.gguf
 - Pinned upstream base-model LICENSE: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/7ae557604adf67be50417f59c2c2f167def9a775/LICENSE
 
 ### 2. SmolLM2-360M-Instruct Q4_K_M
@@ -165,3 +166,33 @@ Warunki Meta nie są Apache-2.0 ani bezwarunkową licencją permissive. Audyt od
 ## Zastrzeżenie
 
 To techniczny przegląd publicznych warunków i dowodów, nie porada prawna. W razie komercyjnej dystrybucji, udostępniania wag lub niejasności co do warunków bazowych potrzebna jest odrębna decyzja właściciela projektu i — w razie potrzeby — konsultacja prawna.
+
+## Addendum — SmolLM2-360M exact training recipe review (2026-11-20)
+
+The earlier review relied too heavily on the generic model-card summary. The primary SmolLM2 paper has a separate section for the smaller 360M/135M models and is more specific than the generic card:
+
+- SmolLM2-360M uses a 4T-token, single-stage training recipe. The paper says DCLM was filtered with the FineWeb-Edu classifier, with score-0 samples removed and score-1/2 samples downsampled.
+- The paper identifies Stack-Edu, InfiMM-WebMath, FineMath and Cosmopedia as additional training sources for these smaller models.
+- For the instruct model, the paper describes a filtered SmolTalk subset suitable for smaller models and DPO using UltraFeedback.
+- The pinned 360M Instruct card identifies Apache-2.0 for the model artifact and links the SmolTalk dataset; the Smol-SmolTalk card states that new datasets are Apache-2.0 while existing public datasets retain their original licences.
+
+The source dataset cards clarify important obligations:
+
+- FineMath is ODC-By 1.0 and its use is also subject to Common Crawl terms.
+- Stack-Edu is a filtered dataset from The Stack v2. Its card says it contains SWHIDs rather than file contents and points to The Stack v2 licensing. The Stack v2 terms require compliance with each underlying file's original licence and relevant attribution, require training to follow Software Heritage principles, and describe dataset updates/removal requests.
+- Cosmopedia v0.1 declares Apache-2.0, but its card describes seed samples from multiple external sources; the model training paper does not identify the exact Cosmopedia snapshot/config used for the 360M run.
+- Smol-SmolTalk declares Apache-2.0 for new datasets, but existing public datasets in its mixture retain their own licences.
+
+This materially improves the source inventory, but it does **not** establish the exact immutable revisions/configs and sample-level provenance used in the training run. In particular, the public paper and dataset cards do not identify the precise DCLM filtering snapshot, exact Stack-Edu/Software Heritage identifiers consumed, FineMath/InfiMM-WebMath configs and snapshots, or the full source-by-source composition of the filtered Smol-SmolTalk and UltraFeedback inputs for this exact model checkpoint. The Stack v2 file-level licence and attribution obligations cannot be verified for the model's consumed sample set without that provenance.
+
+**Disposition remains `review_required`.** This is not a finding that the model is impermissible; it is a finding that the publicly available evidence is not sufficiently granular to close the training-data provenance review. The GGUF weights' Apache-2.0 evidence remains separate from rights in the training corpus. No model download, inference, admission or production change is authorized by this addendum.
+
+Sources:
+
+- SmolLM2 paper, especially the 135M/360M training section: https://openreview.net/attachment?id=3JiCl2A14H&name=pdf
+- Pinned SmolLM2-360M-Instruct model card: https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md
+- Stack-Edu dataset card: https://huggingface.co/datasets/HuggingFaceTB/stack-edu
+- The Stack v2 terms and provenance description: https://huggingface.co/datasets/bigcode/the-stack-v2-train-full-ids
+- FineMath dataset card and ODC-By/Common Crawl terms: https://huggingface.co/datasets/HuggingFaceTB/finemath
+- Cosmopedia dataset card: https://huggingface.co/datasets/HuggingFaceTB/cosmopedia
+- Smol-SmolTalk dataset card: https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk
