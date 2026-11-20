@@ -47,14 +47,14 @@
       "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
       "license": "apache-2.0",
       "license_review_status": "review_required",
-      "license_notes": "The selected GGUF weight has Apache-2.0 evidence and its SHA-256/size match the pinned derived revision. The pinned SmolLM2 source card names FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen as training sources, but does not pin exact dataset revisions or identify the exact DCLM subset. FineWeb-Edu is ODC-By 1.0 and subject to CommonCrawl terms; DCLM-Baseline is tagged CC-BY-4.0 but its card describes research-baseline use; The Stack requires compliance with each source file's original license and attribution plus current-version/hosting terms; Synth-APIGen declares Apache-2.0. Because the actual dataset snapshots/subsets and The Stack per-file provenance used for this model are not identified, the combined entry remains review_required.",
-      "license_evidence": "Pinned GGUF README, pinned SmolLM2 source model card, and official dataset cards/terms for the named training sources",
+      "license_notes": "The exact GGUF weights have Apache-2.0 evidence and their SHA-256/size match the pinned derived revision. The SmolLM2 paper gives a specific 360M recipe: DCLM filtered with the FineWeb-Edu classifier, Stack-Edu, InfiMM-WebMath, FineMath and Cosmopedia; the instruct variant uses filtered Smol-SmolTalk and UltraFeedback. The source dataset cards disclose ODC-By/Common Crawl terms for FineMath, per-file original licences and attribution for The Stack v2/Stack-Edu, and inherited licences for public Smol-SmolTalk components. Exact consumed snapshots, configs and sample-level provenance are not pinned for this checkpoint; review remains required.",
+      "license_evidence": "Pinned GGUF README and Apache-2.0 licence; pinned SmolLM2-360M-Instruct card; primary SmolLM2 paper; official Stack-Edu, The Stack v2, FineMath, Cosmopedia and Smol-SmolTalk dataset cards; see 2026-11-20 audit addendum",
       "license_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/blob/25eef036a8d245a5a188b1b45d4b240a39bc9f24/README.md",
       "download_url": "https://huggingface.co/QuantFactory/SmolLM2-360M-Instruct-GGUF/resolve/25eef036a8d245a5a188b1b45d4b240a39bc9f24/SmolLM2-360M-Instruct.Q4_K_M.gguf",
       "license_terms_url": "https://www.apache.org/licenses/LICENSE-2.0",
       "license_audit": {
         "status": "review_required",
-        "reviewed_at": "2026-11-14",
+        "reviewed_at": "2026-11-20",
         "reviewed_revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
         "report": "docs/model-audit/license-review-2026-11-14.md",
         "evidence": [
@@ -66,10 +66,16 @@
           "https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0",
           "https://huggingface.co/datasets/bigcode/the-stack",
           "https://www.bigcode-project.org/docs/about/the-stack/",
-          "https://huggingface.co/datasets/argilla/Synth-APIGen-v0.1"
+          "https://huggingface.co/datasets/argilla/Synth-APIGen-v0.1",
+          "https://openreview.net/attachment?id=3JiCl2A14H&name=pdf",
+          "https://huggingface.co/datasets/HuggingFaceTB/stack-edu",
+          "https://huggingface.co/datasets/bigcode/the-stack-v2-train-full-ids",
+          "https://huggingface.co/datasets/HuggingFaceTB/finemath",
+          "https://huggingface.co/datasets/HuggingFaceTB/cosmopedia",
+          "https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk"
         ],
-        "summary": "The selected GGUF weight has Apache-2.0 evidence and its SHA-256/size match the pinned derived revision. The pinned SmolLM2 source card names FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen as training sources, but does not pin exact dataset revisions or identify the exact DCLM subset. FineWeb-Edu is ODC-By 1.0 and subject to CommonCrawl terms; DCLM-Baseline is tagged CC-BY-4.0 but its card describes research-baseline use; The Stack requires compliance with each source file's original license and attribution plus current-version/hosting terms; Synth-APIGen declares Apache-2.0. Because the actual dataset snapshots/subsets and The Stack per-file provenance used for this model are not identified, the combined entry remains review_required.",
-        "component_review": "No standalone tokenizer/code/dataset files in the pinned derived GGUF tree. The pinned upstream SmolLM2 card lists FineWeb-Edu, DCLM, The Stack and Argilla Synth-APIGen. Official dataset cards/terms were checked: FineWeb-Edu ODC-By 1.0 + CommonCrawl ToU; DCLM-Baseline CC-BY-4.0 with research-baseline framing (not proven to be the exact DCLM subset used); The Stack has per-source-file licenses/attribution and ongoing version/hosting terms; Synth-APIGen Apache-2.0. Exact training dataset revisions/subsets are not pinned, so this component review cannot close the entry."
+        "summary": "GGUF weights are Apache-2.0, but the separate 360M training-data review remains open. The primary paper identifies DCLM filtered with FineWeb-Edu, Stack-Edu, InfiMM-WebMath, FineMath, Cosmopedia, filtered Smol-SmolTalk and UltraFeedback. Dataset cards reveal ODC-By/Common Crawl conditions for FineMath, file-level original licences and attribution obligations for Stack-Edu/The Stack v2, and inherited licences for existing public Smol-SmolTalk data. Exact consumed dataset revisions/configs and sample-level provenance are not pinned to this checkpoint. Status remains review_required; see the 2026-11-20 audit addendum.",
+        "component_review": "SmolLM2-360M-specific paper recipe: DCLM filtered with FineWeb-Edu classifier; Stack-Edu; InfiMM-WebMath; FineMath; Cosmopedia. Instruct post-training: filtered Smol-SmolTalk and UltraFeedback. FineMath is ODC-By 1.0 plus Common Crawl terms; Stack-Edu points to The Stack v2 where each file retains original licence/attribution and Software Heritage update principles apply; Smol-SmolTalk new datasets are Apache-2.0 while existing public components retain original licences. The exact snapshots/configs/sample IDs consumed for this checkpoint are not available in the public model card/paper evidence; review remains required."
       }
     },
     {

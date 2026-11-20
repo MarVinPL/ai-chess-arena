@@ -165,3 +165,33 @@ Warunki Meta nie są Apache-2.0 ani bezwarunkową licencją permissive. Audyt od
 ## Zastrzeżenie
 
 To techniczny przegląd publicznych warunków i dowodów, nie porada prawna. W razie komercyjnej dystrybucji, udostępniania wag lub niejasności co do warunków bazowych potrzebna jest odrębna decyzja właściciela projektu i — w razie potrzeby — konsultacja prawna.
+
+## Addendum — SmolLM2-360M exact training recipe review (2026-11-20)
+
+The earlier review relied too heavily on the generic model-card summary. The primary SmolLM2 paper has a separate section for the smaller 360M/135M models and is more specific than the generic card:
+
+- SmolLM2-360M uses a 4T-token, single-stage training recipe. The paper says DCLM was filtered with the FineWeb-Edu classifier, with score-0 samples removed and score-1/2 samples downsampled.
+- The paper identifies Stack-Edu, InfiMM-WebMath, FineMath and Cosmopedia as additional training sources for these smaller models.
+- For the instruct model, the paper describes a filtered SmolTalk subset suitable for smaller models and DPO using UltraFeedback.
+- The pinned 360M Instruct card identifies Apache-2.0 for the model artifact and links the SmolTalk dataset; the Smol-SmolTalk card states that new datasets are Apache-2.0 while existing public datasets retain their original licences.
+
+The source dataset cards clarify important obligations:
+
+- FineMath is ODC-By 1.0 and its use is also subject to Common Crawl terms.
+- Stack-Edu is a filtered dataset from The Stack v2. Its card says it contains SWHIDs rather than file contents and points to The Stack v2 licensing. The Stack v2 terms require compliance with each underlying file's original licence and relevant attribution, require training to follow Software Heritage principles, and describe dataset updates/removal requests.
+- Cosmopedia v0.1 declares Apache-2.0, but its card describes seed samples from multiple external sources; the model training paper does not identify the exact Cosmopedia snapshot/config used for the 360M run.
+- Smol-SmolTalk declares Apache-2.0 for new datasets, but existing public datasets in its mixture retain their own licences.
+
+This materially improves the source inventory, but it does **not** establish the exact immutable revisions/configs and sample-level provenance used in the training run. In particular, the public paper and dataset cards do not identify the precise DCLM filtering snapshot, exact Stack-Edu/Software Heritage identifiers consumed, FineMath/InfiMM-WebMath configs and snapshots, or the full source-by-source composition of the filtered Smol-SmolTalk and UltraFeedback inputs for this exact model checkpoint. The Stack v2 file-level licence and attribution obligations cannot be verified for the model's consumed sample set without that provenance.
+
+**Disposition remains `review_required`.** This is not a finding that the model is impermissible; it is a finding that the publicly available evidence is not sufficiently granular to close the training-data provenance review. The GGUF weights' Apache-2.0 evidence remains separate from rights in the training corpus. No model download, inference, admission or production change is authorized by this addendum.
+
+Sources:
+
+- SmolLM2 paper, especially the 135M/360M training section: https://openreview.net/attachment?id=3JiCl2A14H&name=pdf
+- Pinned SmolLM2-360M-Instruct model card: https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/blob/a10cc1512eabd3dde888204e902eca88bddb4951/README.md
+- Stack-Edu dataset card: https://huggingface.co/datasets/HuggingFaceTB/stack-edu
+- The Stack v2 terms and provenance description: https://huggingface.co/datasets/bigcode/the-stack-v2-train-full-ids
+- FineMath dataset card and ODC-By/Common Crawl terms: https://huggingface.co/datasets/HuggingFaceTB/finemath
+- Cosmopedia dataset card: https://huggingface.co/datasets/HuggingFaceTB/cosmopedia
+- Smol-SmolTalk dataset card: https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk

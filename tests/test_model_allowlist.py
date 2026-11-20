@@ -23,7 +23,11 @@ class ModelAllowlistTests(unittest.TestCase):
         for item in self.allowlist['models']:
             self.assertEqual(item['admission_scope'], [])
             self.assertTrue(item['license_requirements']['license_verified_required'])
-            self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
+            if item['model_id'] == 3:
+                self.assertEqual(item['technical_readiness'], 'ready')
+                self.assertEqual(item['technical_blockers'], [])
+            else:
+                self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
             self.assertIn(item['status'], {'review_required', 'blocked'})
         self.assertEqual([x['model_id'] for x in self.allowlist['models']], list(range(1, 9)))
         self.assertFalse({9, 10} & {x['model_id'] for x in self.allowlist['models']})
@@ -111,14 +115,23 @@ class ModelAllowlistTests(unittest.TestCase):
         candidate['admission_scope'] = ['PURE_AI']
         candidate['block_reason'] = None
         validate_allowlist({**self.allowlist, 'models': [candidate] + self.allowlist['models'][1:]}, self.manifest)
-        self.assertFalse(is_runtime_ready(candidate, license_verified=True,
-                                          local_file_verified=True, runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(candidate, local_file_verified=True,
+                                          runtime_healthy=True))
         candidate['technical_readiness'] = 'ready'
         candidate['technical_blockers'] = []
-        self.assertTrue(is_runtime_ready(candidate, license_verified=True,
-                                         local_file_verified=True, runtime_healthy=True))
-        self.assertFalse(is_runtime_ready(candidate, license_verified=False,
-                                          local_file_verified=True, runtime_healthy=True))
+        self.assertTrue(is_runtime_ready(candidate, local_file_verified=True,
+                                         runtime_healthy=True))
+        # Technical readiness remains independent of admission status and licence review.
+        review_required = copy.deepcopy(candidate)
+        review_required['status'] = 'review_required'
+        review_required['admission_scope'] = []
+        review_required['block_reason'] = 'Owner admission decision pending.'
+        self.assertTrue(is_runtime_ready(review_required, local_file_verified=True,
+                                         runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(review_required, local_file_verified=False,
+                                          runtime_healthy=True))
+        self.assertFalse(is_runtime_ready(review_required, local_file_verified=True,
+                                          runtime_healthy=False))
 
     def test_tournament_admission_requires_allowlist_license_and_exact_version(self):
         candidate = copy.deepcopy(self.allowlist['models'][0])
