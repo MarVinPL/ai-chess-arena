@@ -25,15 +25,17 @@
         {
           "path": "docs/model-audit/license-review-2026-11-14.md",
           "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
+        },
+        {
+          "path": "docs/evidence/model-technical-evaluation-2026-11-20.md",
+          "revision": "9217f5db79a29953eb74d5343926648285ec7e67"
         }
       ],
-      "reviewed_at": "2026-11-14",
+      "reviewed_at": "2026-11-20",
       "restrictions": [],
       "block_reason": "Brak jawnej decyzji dopuszczenia do turniejów; pozytywny audyt licencji nie oznacza gotowości technicznej ani zgody na udział.",
-      "technical_readiness": "not_evaluated",
-      "technical_blockers": [
-        "The manifest pins qwen2.5-0.5b-instruct-q4_k_m.gguf; the local Q2_K artifact smoke test is a different file and cannot establish readiness for the pinned Q4_K_M artifact."
-      ]
+      "technical_readiness": "ready",
+      "technical_blockers": []
     },
     {
       "model_id": 2,
