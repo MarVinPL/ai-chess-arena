@@ -198,3 +198,22 @@ Ponowny odczyt katalogu modeli w maszynie potwierdził dokładnie trzy istnieją
 Nie znaleziono dodatkowego, niewykorzystanego artefaktu GGUF. Qwen2 Q4_K_M ma status `verified_permissive` i został wcześniej zatwierdzony przez właściciela do dalszej weryfikacji, ale nie zdał jakościowo testów Passkey. Qwen2.5 Q4_K_M (491 400 032 B) nie jest obecny na dysku; SmolLM2 Q4_K_M (271 MB) pozostaje `review_required` z powodu nierozstrzygniętej proweniencji danych treningowych. Żadnego z tych plików nie pobierano.
 
 Wniosek operacyjny: nie ma obecnie kolejnego lokalnego kandydata do testu. Kontynuować można wyłącznie pracę nad promptami, walidacją i testami istniejących artefaktów, bez rozszerzania rosteru, bez zmiany admission, bez pobierania modeli i bez zmian produkcyjnych. Ten odczyt był read-only; nie zmieniano jednostek systemd, cgroup, kontenera, usług ani plików modeli.
+
+
+### Czytelniejszy prompt odpowiedzi Passkey — 20.11.2026
+
+Wprowadzono niewielką zmianę promptu w `passkey_test.py`; nie jest to fine-tuning ani trening wag modelu. Każde pytanie Passkey otrzymuje teraz osobną wiadomość systemową, która instruuje model, aby:
+
+- odpowiadał po polsku, chyba że pytanie wymaga innego języka;
+- zaczynał od bezpośredniej odpowiedzi i dopiero potem krótko ją uzasadniał;
+- używał prostego, precyzyjnego języka i objaśniał skróty przy pierwszym użyciu;
+- stosował krótkie akapity lub listę kroków przy opisie procedury;
+- oddzielał fakty od założeń i nie wymyślał ustawień ani zachowania przeglądarek;
+- jawnie wskazywał niepewność, zamiast zgadywać;
+- odpowiadał na wszystkie części pytania bez dygresji oraz wskazywał główne ryzyko i zabezpieczenie w tematach bezpieczeństwa.
+
+Dodano test sprawdzający, czy wiadomość systemowa jest przekazywana do API przed pytaniem użytkownika. Lokalna kontrola składni oraz test żądania z atrapą odpowiedzi przeszły poprawnie. Nie jest to jednak pełny test zestawu repozytorium ani test rzeczywistych modeli.
+
+**Status testu A/B na modelach: NOT_RUN.** Odczyt środowiska wykazał, że na porcie 8088 nie działa runtime llamafile i nie ma uruchomionego procesu inferencji. Nie uruchamiałem modelu ani nie startowałem nowej usługi w tej sesji. Trzy istniejące modele pozostają jedynymi kandydatami do kolejnego testu; należy porównać odpowiedzi na tych samych trzech pytaniach przed i po zmianie promptu, sekwencyjnie, z zapisem pełnych odpowiedzi, czasu i oceny według wspólnej rubryki (poprawność techniczna, kompletność, zrozumiałość, brak zmyśleń). Nie zmieniać pytań w trakcie porównania.
+
+Zmiana nie wpływa na prompty ruchów szachowych, zasady wariantu, roster, admission ani produkcję. Nie pobrano modeli i nie zmieniano limitów zasobów.
