@@ -77,6 +77,11 @@ class PasskeyTestTests(unittest.TestCase):
         self.assertTrue(captured['payload']['chat_template_kwargs']['enable_thinking'])
         self.assertEqual(captured['payload']['temperature'],0.25)
         self.assertEqual(captured['payload']['max_tokens'],1800)
+        messages=captured['payload']['messages']
+        self.assertEqual(messages[0]['role'],'system')
+        self.assertIn('prostym, precyzyjnym językiem',messages[0]['content'])
+        self.assertIn('Nie wymyślaj',messages[0]['content'])
+        self.assertEqual(messages[1],{'role':'user','content':'Pytanie'})
 
     def test_default_mode_keeps_thinking_disabled(self):
         runtime=FakeRuntime()
