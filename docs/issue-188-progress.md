@@ -106,4 +106,18 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Dodano testy jednostkowe dla listy ruchów wygrywających, nadpisania propozycji modelu w runnerze oraz legacy ask_model.
 - Pełny zestaw testów po zmianach: **471 passed, 59 subtests passed**. Dodatkowo compileall i git diff --check bez błędów.
 - Usługa produkcyjna ai-chess-arena.service została sprawdzona wyłącznie odczytowo. Działa z osobnego katalogu wydania ai-chess-arena-live-ab4a8cb; nie została zatrzymana, zrestartowana ani zmodyfikowana. Testy uruchomiono w izolowanym kontenerze, a produkcyjna baza, panel i skład turnieju pozostały nietknięte.
-- Pełny serwerowy cykl turnieju nadal jest pokryty testem integracyjnym na tymczasowej bazie z deterministycznym runtime; nie wykonano jeszcze całego cyklu serwera z prawdziwymi modelami i przeglądarkowym WWW. Nie należy traktować tego jako walidacji produkcyjnej.
+- Dodatkowo 20.11 wykonano pełny, izolowany cykl serwera turniejowego z rzeczywistym Qwen2.5 i Qwen2 na tymczasowej bazie SQLite, z osobnym portem 18765: preflight → zapis checkpointu → przygotowanie zawodników → inferencja → nadpisanie propozycji e2e7 na wymuszone e2e8 → zapis partii/PGN → zamknięcie parowania i turnieju → usunięcie checkpointu. Turniej i parowanie zakończyły się statusem completed; wynik 1-0; runtime został zamknięty. Test obejmował jedno parowanie dwóch zawodników, nie pełny wieloparowy turniej.
+- Panel WWW uruchomiono dodatkowo na izolowanym HTTP serverze z tymczasową bazą. Chromium headless wyrenderował stronę, informację o wariancie i dokładnie 64 pola planszy. Endpointy listy partii, szczegółów, pojedynczego PGN i eksportu PGN zwróciły poprawny wynik oraz nagłówek Elimination Chess i ruch Rxe8.
+- Weryfikacja HTTP/Chromium była odizolowana; nie była testem przeglądarkowego panelu produkcyjnego. Nie należy traktować jej jako walidacji produkcyjnej.
+
+
+### Dowód rzeczywistego cyklu turnieju i panelu — 20.11.2026
+
+- Rzeczywisty model Qwen2.5 0.5B Q2_K w pętli serwera zaproponował e2e7; runner zatwierdził e2e8 / Rxe8. Zapis ruchu zachował oba pola: model_proposed_uci=e2e7 oraz move_override=forced_king_capture.
+- Tymczasowa baza potwierdziła: tournament_status=completed, pairing_status=completed, result=1-0, move_count=1, PGN z wariantem i biciem króla, checkpoint_count_after_finish=0. Runtime nie miał załadowanego modelu po zakończeniu.
+- Zarejestrowana sekwencja zdarzeń serwera obejmowała starting, game_prepare, game_ready, game_running, model_loading, model_ready, generating, move_generated, move_played, game_finished i completed.
+- Chromium headless: HTTP 200, informacja „Szachy Eliminacyjne” obecna, 64 pola planszy wyrenderowane.
+- Izolowane endpointy HTTP: /api/games, /api/games/1, /api/games/1/pgn i /api/export/pgn zwróciły oczekiwane dane, wariant PGN i Rxe8.
+- Zbiorczy, zanonimizowany dowód JSON: docs/evidence/issue-188-real-e2e-20261120.json.
+- Testy automatyczne po wymuszeniu natychmiastowego bicia króla: **471 passed, 59 subtests passed**. Nie zmieniano składu turnieju ani statusów zawodników.
+- Żaden proces testowy nie używał produkcyjnego portu 8088/8090 ani produkcyjnej bazy. Porty testowe zostały zwolnione. Usługa produkcyjna pozostała aktywna i nietknięta.
