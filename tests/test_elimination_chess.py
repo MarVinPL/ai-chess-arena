@@ -6,6 +6,10 @@ from elimination_chess import EliminationBoard
 
 
 class EliminationBoardTests(unittest.TestCase):
+    def test_winning_king_capture_moves_are_exposed(self):
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        self.assertEqual([move.uci() for move in board.winning_king_capture_moves()], ['e2e8'])
+
     def test_opposing_king_can_be_captured_as_a_legal_move(self):
         board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
         move = chess.Move.from_uci('e2e8')

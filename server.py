@@ -348,6 +348,10 @@ def ask_model(model, b):
     move = chess.Move.from_uci(candidate)
     if move not in b.legal_moves:
         raise ValueError('Model zwrócił nielegalny ruch: ' + move.uci())
+    if isinstance(b, EliminationBoard):
+        winning_captures = b.winning_king_capture_moves()
+        if winning_captures and move not in winning_captures:
+            return winning_captures[0]
     return move
 
 

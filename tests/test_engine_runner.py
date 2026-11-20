@@ -19,7 +19,7 @@ class EngineRunnerTests(unittest.TestCase):
     def play_capture_game(self, runtime, white, black, **kwargs):
         from unittest.mock import patch
         from elimination_chess import EliminationBoard
-        start = EliminationBoard('4k3/4r3/8/8/8/8/R7/4K3 w - - 0 1')
+        start = EliminationBoard('4k3/4r3/8/8/8/8/R3P3/4K3 w - - 0 1')
         with patch('engine_runner.EliminationBoard', return_value=start):
             return SequentialChessRunner(runtime).play_game(white, black, **kwargs)
 
@@ -44,6 +44,27 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual([m['model'] for m in result['moves']], ['Alpha', 'Beta', 'Alpha', 'Beta'])
         self.assertIn('[White "Alpha"]', result['pgn'])
         self.assertIn('[Black "Beta"]', result['pgn'])
+
+    def test_runner_overrides_nonwinning_model_move_when_king_capture_is_available(self):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        class OverlookingRuntime:
+            def generate(self, path, current_board, stop_event=None, **kwargs):
+                return chess.Move.from_uci('e2e7'), {'seconds': 0.5, 'response': 'e2e7'}
+
+        with patch('engine_runner.EliminationBoard', return_value=board):
+            result = SequentialChessRunner(OverlookingRuntime()).play_game(
+                {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
+                {'name': 'Beta', 'path': '/tmp/beta.gguf'})
+
+        self.assertEqual(result['status'], 'finished')
+        self.assertEqual(result['result'], '1-0')
+        self.assertEqual(result['moves'][0]['uci'], 'e2e8')
+        self.assertEqual(result['moves'][0]['model_proposed_uci'], 'e2e7')
+        self.assertEqual(result['moves'][0]['move_override'], 'forced_king_capture')
+        self.assertIn('Rxe8', result['pgn'])
 
     def test_runner_finishes_only_after_a_king_capture_and_exports_variant_pgn(self):
         from unittest.mock import patch

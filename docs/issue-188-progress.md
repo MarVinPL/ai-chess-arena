@@ -90,3 +90,20 @@ Przeprowadzono testy trzech już dostępnych artefaktów modeli w izolowanym run
 - Dodano integracyjny test całej pętli turnieju serwera na tymczasowej bazie: preflight, zapis checkpointu, przygotowanie zawodników, runner, bicie króla, zapis wyniku/PGN, zakończenie parowania i usunięcie checkpointu. Runtime inferencji jest w tym teście deterministycznym zamiennikiem, a nie rzeczywistym modelem.
 - Pełny zestaw: **468 passed, 59 subtests passed**; compileall i git diff --check bez błędów.
 - Nie udało się jeszcze wykonać pełnego turnieju z rzeczywistymi modelami przez działającą usługę Areny: w izolowanym kontenerze arena-test obecnie nie działa usługa serwera Areny (widoczne są tylko podstawowe usługi systemowe). Istniejący /opt/arena-preview to odrębny, wcześniejszy podgląd testowy oparty na standardowych szachach i nie został zmodyfikowany ani użyty jako dowód działania nowego runnera. Produkcja pozostaje nietknięta.
+
+
+## Aktualizacja po testach z rzeczywistymi modelami i egzekwowaniu reguły (20.11.2026)
+
+- Ponownie uruchomiono aktualną gałąź na istniejących artefaktach w izolowanym kontenerze arena-test, z llamafile v0.10.6, 2 wątkami CPU i kontekstem 2048. Nie pobierano modeli.
+- W pozycji z dostępnym natychmiastowym biciem króla surowe odpowiedzi modeli były następujące:
+  - SmolLM2 360M Q2_K: e2e8 / Rxe8, król zbity, wynik 1-0 (41,14 s).
+  - Qwen2 0.5B Q4_K_M: e2e8 / Rxe8, król zbity, wynik 1-0 (6,62 s).
+  - Qwen2.5 0.5B Q2_K: e2e7 / Re7+, król niezbity, brak wyniku końcowego (35,90 s).
+- Powtórny test pozycji po Fool's Mate potwierdził, że Qwen2 wybrał legalny ruch f1g2, a partia pozostała aktywna (game_over=false, 19 legalnych ruchów przed odpowiedzią).
+- Wynik Qwen2.5 dowiódł, że nawet mocniejszy prompt nie gwarantuje wymuszenia natychmiastowego zwycięstwa. Dlatego regułę przeniesiono z samej instrukcji modelu do egzekwowania w logice runnera: model nadal generuje propozycję, ale jeśli dostępne jest legalne bicie króla i model go nie wybierze, runner zatwierdza pierwsze dostępne bicie króla. Propozycja modelu i powód nadpisania są zapisywane w rekordzie ruchu (model_proposed_uci, move_override, move_override_reason).
+- Tę samą regułę zastosowano w legacy server.ask_model, aby pojedyncza partia i runner turniejowy zachowywały się identycznie.
+- Potwierdzenie na rzeczywistym Qwen2.5 w SequentialChessRunner: model zaproponował e2e7, runner zatwierdził e2e8 / Rxe8, partia zakończyła się wynikiem 1-0, terminacją VARIANT_LOSS, a PGN zawiera nagłówek wariantu. Czas inferencji: 35,46 s.
+- Dodano testy jednostkowe dla listy ruchów wygrywających, nadpisania propozycji modelu w runnerze oraz legacy ask_model.
+- Pełny zestaw testów po zmianach: **471 passed, 59 subtests passed**. Dodatkowo compileall i git diff --check bez błędów.
+- Usługa produkcyjna ai-chess-arena.service została sprawdzona wyłącznie odczytowo. Działa z osobnego katalogu wydania ai-chess-arena-live-ab4a8cb; nie została zatrzymana, zrestartowana ani zmodyfikowana. Testy uruchomiono w izolowanym kontenerze, a produkcyjna baza, panel i skład turnieju pozostały nietknięte.
+- Pełny serwerowy cykl turnieju nadal jest pokryty testem integracyjnym na tymczasowej bazie z deterministycznym runtime; nie wykonano jeszcze całego cyklu serwera z prawdziwymi modelami i przeglądarkowym WWW. Nie należy traktować tego jako walidacji produkcyjnej.

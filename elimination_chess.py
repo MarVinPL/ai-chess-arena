@@ -17,6 +17,15 @@ class EliminationBoard(chess.Board):
     uci_variant = "chess-elimination"
     aliases = ["Elimination Chess", "Szachy Eliminacyjne"]
 
+    def winning_king_capture_moves(self) -> list[chess.Move]:
+        """Return legal moves that immediately capture the opposing king."""
+        if self.is_variant_end():
+            return []
+        enemy_king = self.king(not self.turn)
+        if enemy_king is None:
+            return []
+        return [move for move in self.legal_moves if move.to_square == enemy_king]
+
     def is_variant_end(self) -> bool:
         return self.king(chess.WHITE) is None or self.king(chess.BLACK) is None
 

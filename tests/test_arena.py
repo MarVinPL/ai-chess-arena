@@ -114,6 +114,23 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertIn('grammar', payload)
         self.assertIn('"e2e8"', payload['grammar'])
 
+    def test_legacy_ask_model_enforces_available_king_capture(self):
+        import json
+        from unittest.mock import patch
+        import server
+        from elimination_chess import EliminationBoard
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({'choices': [{'message': {'content': 'e2e7'}}]}).encode()
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        with patch('urllib.request.urlopen', return_value=Response()):
+            move = server.ask_model({'name': 'Alpha'}, board)
+        self.assertEqual(move.uci(), 'e2e8')
+
     def test_failure_pgn_replays_king_capture_with_elimination_variant(self):
         pgn = server._failure_pgn(
             'Alpha', 'Beta', [{'uci': 'e2e8'}], '1-0', 'Adjudication',

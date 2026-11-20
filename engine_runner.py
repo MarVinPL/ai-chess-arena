@@ -454,6 +454,16 @@ class SequentialChessRunner:
                     move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
                     if stop_event and stop_event.is_set():
                         raise RunnerError('Turniej zatrzymany przez operatora')
+                    # Immediate king capture is a game rule, not a model preference.
+                    # Retain the model proposal for audit, but never miss a forced win.
+                    winning_captures = board.winning_king_capture_moves()
+                    if winning_captures and move not in winning_captures:
+                        proposed_move = move
+                        move = winning_captures[0]
+                        meta = dict(meta)
+                        meta['model_proposed_uci'] = proposed_move.uci()
+                        meta['move_override'] = 'forced_king_capture'
+                        meta['move_override_reason'] = 'Immediate legal king capture takes priority'
                 except RunnerError:
                     raise
                 except Exception as runtime_error:
@@ -483,6 +493,9 @@ class SequentialChessRunner:
                       'budget_observations': meta.get('budget_observations', []),
                       'uci': move.uci(), 'san': san, 'piece': piece_symbol,
                       'seconds': meta['seconds'], 'fen': board.fen(),
+                      'model_proposed_uci': meta.get('model_proposed_uci'),
+                      'move_override': meta.get('move_override'),
+                      'move_override_reason': meta.get('move_override_reason'),
                       'arbiter_intervention': bool(meta.get('arbiter_intervention')),
                       'arbiter_signal': meta.get('arbiter_signal'),
                       'arbiter_response': meta.get('arbiter_response')}
