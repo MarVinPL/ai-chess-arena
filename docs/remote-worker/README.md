@@ -35,3 +35,17 @@ worker executable, remote model transfer, scheduling, or production deployment y
 
 Run `PYTHONPATH=. python -m unittest tests.test_remote_worker_protocol` with
 `python-chess` installed. All components are free/open-source.
+
+## Cross-platform GUI draft (2026-11-21)
+
+`remote_worker_gui/index.html` is an accessible, responsive, Polish-language
+**offline GUI mockup** suitable for embedding in a future Tauri WebView on
+Linux, macOS and Windows. It exposes connection/pairing fields, local CPU/RAM/GPU
+preferences and a status dashboard. The resource sliders are interactive, but
+**Pair / Start / Pause / Stop / Disconnect are intentionally disabled** until a
+real authenticated transport and worker lifecycle exist. No external scripts,
+network calls, telemetry, model download or filesystem access are performed.
+
+The preferred future packaging is Tauri + Rust, but Rust/Cargo are not yet
+installed on the test VPS, and no native app has been compiled or verified.
+Do not treat the HTML mockup as a working agent.
