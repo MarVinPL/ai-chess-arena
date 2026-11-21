@@ -80,3 +80,16 @@ The preceding mismatch paragraph documents the *previous* state before the manif
 | Nimzo-Indian | `c3e2` | PASS | 32.3021 s |
 
 All three responses were legal UCI moves on the first attempt without truncation or retry. This is **not** a full chess game. Model ID 2 is now `technical_readiness=ready`, with no technical blockers. Its `status=review_required`, `admission_scope=[]` and unresolved training-data provenance audit remain unchanged. No tournament admission is granted.
+
+## Real-model opening and checkpoint verification — 2026-11-21
+
+A **bounded four-ply opening**, not a completed chess game, ran from the standard initial position using the existing `SequentialChessRunner` and two real GGUF models in the isolated `arena-test` container. The host transient unit `arena-opening-checkpoint-20261121` enforced `MemoryMax=1200M`, `CPUQuota=150%`, and `RuntimeMaxSec=900`. No model download, admission, tournament roster, or production change was performed.
+
+| Ply | Model | UCI | SAN |
+|---|---|---|---|
+| 1 | Qwen2-0.5B-Instruct (white) | `b1c3` | `Nc3` |
+| 2 | SmolLM2-360M-Instruct (black) | `b8c6` | `Nc6` |
+| 3 | Qwen2-0.5B-Instruct (white) | `c3d5` | `Nd5` |
+| 4 | SmolLM2-360M-Instruct (black) | `c6e5` | `Ne5` |
+
+After four legal half-moves, the runner's `stop_event` was set, and it returned `status=stopped` normally. The checkpoint was written atomically after each move to an isolated test path, then copied into `docs/evidence/issue-188-opening-checkpoint-20261121.json`. Independent replay from the initial position verified all four UCI moves, SAN strings and intermediate FENs; the final FEN matches the checkpoint. Host journal reports successful unit deactivation and a 699.2 MiB memory peak. This validates short-run checkpoint persistence but **does not yet prove resumption in a separate live-model process or a completed full game**.
