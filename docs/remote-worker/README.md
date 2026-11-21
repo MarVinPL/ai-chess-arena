@@ -32,3 +32,16 @@ def test_local_status_bridge_is_read_only():
 The desktop GUI now queries the local Rust `worker_status` command through the
 Tauri IPC bridge and renders disconnected state; this does not establish a VPS
 connection. Browser-only preview reports that the native backend is unavailable.
+
+### Pairing coordinator prototype (not exposed over network)
+
+`remote_worker_pairing.py` implements in-memory, single-use 8-character pairing
+codes (5-minute default expiry), explicit approval, short-lived bearer tokens
+(1-hour default), and revocation. Tokens and codes are stored only as HMAC
+hashes. Each worker has at most one pending code; incorrect worker IDs are
+limited to five attempts per code. This is **not yet an authenticated API**:
+`approve` and `revoke` must only be called after integrating administrator
+identity and authorization on the VPS. No network listener is provided; no
+worker is paired and no inference is enabled by this module. Before production:
+use durable transactional state across restarts, TLS/WSS transport, per-source
+rate limiting, replay resistance, authenticated admin actions, and audit logs.
