@@ -40,7 +40,7 @@
     {
       "model_id": 2,
       "repo_id": "QuantFactory/SmolLM2-360M-Instruct-GGUF",
-      "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24",
+      "revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac",
       "status": "review_required",
       "admission_scope": [],
       "license_requirements": {
@@ -52,20 +52,18 @@
       "evidence": [
         {
           "path": "manifests/huggingface-models.json",
-          "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
+          "revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac"
         },
         {
           "path": "docs/model-audit/license-review-2026-11-14.md",
-          "revision": "25eef036a8d245a5a188b1b45d4b240a39bc9f24"
+          "revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac"
         }
       ],
-      "reviewed_at": "2026-11-20",
+      "reviewed_at": "2026-11-21",
       "restrictions": [],
       "block_reason": "Audyt źródeł treningowych SmolLM2-360M pozostaje otwarty: publiczne źródła nie przypinają dokładnych snapshotów i sample-level provenance, szczególnie dla Stack-Edu/The Stack v2.",
-      "technical_readiness": "not_evaluated",
-      "technical_blockers": [
-        "The manifest pins SmolLM2-360M-Instruct.Q4_K_M.gguf at revision 25eef036a8d245a5a188b1b45d4b240a39bc9f24; the local Q2_K artifact was tested at a different revision and cannot establish readiness for the pinned Q4_K_M artifact."
-      ]
+      "technical_readiness": "ready",
+      "technical_blockers": []
     },
     {
       "model_id": 3,

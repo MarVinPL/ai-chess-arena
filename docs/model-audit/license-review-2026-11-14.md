@@ -196,3 +196,7 @@ Sources:
 - FineMath dataset card and ODC-By/Common Crawl terms: https://huggingface.co/datasets/HuggingFaceTB/finemath
 - Cosmopedia dataset card: https://huggingface.co/datasets/HuggingFaceTB/cosmopedia
 - Smol-SmolTalk dataset card: https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk
+
+### 2026-11-21 — SmolLM2 local artifact correction (technical only)
+
+The locally installed `SmolLM2-360M-Instruct.Q2_K.gguf` (218673792 bytes; SHA-256 `d13c8b95c170f16175bbd4e28ba4bd8d23647039ac63be20d1eb0a26598fbdd3`) matches the official QuantFactory repository tree at revision `10ac3ac5c618d6cdbe76c2845747feed4b5d71ac`. The manifest now pins this exact Q2_K artifact instead of the earlier Q4_K_M revision. Three isolated legal-UCI inference tests passed (see `docs/evidence/model-technical-evaluation-2026-11-20.md`). This does **not** resolve the separate training-data provenance/licence review, which remains `review_required`; no admission is authorized.

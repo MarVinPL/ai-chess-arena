@@ -23,7 +23,7 @@ class ModelAllowlistTests(unittest.TestCase):
         for item in self.allowlist['models']:
             self.assertEqual(item['admission_scope'], [])
             self.assertTrue(item['license_requirements']['license_verified_required'])
-            if item['model_id'] in {1, 3}:
+            if item['model_id'] in {1, 2, 3}:
                 self.assertEqual(item['technical_readiness'], 'ready')
                 self.assertEqual(item['technical_blockers'], [])
             else:
@@ -39,6 +39,18 @@ class ModelAllowlistTests(unittest.TestCase):
         self.assertEqual(manifest_item['size_bytes'], 415182688)
         self.assertEqual(manifest_item['sha256'], '9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8')
         self.assertEqual(manifest_item['revision'], '9217f5db79a29953eb74d5343926648285ec7e67')
+        self.assertEqual(allowlist_item['technical_readiness'], 'ready')
+        self.assertEqual(allowlist_item['technical_blockers'], [])
+        self.assertEqual(allowlist_item['status'], 'review_required')
+        self.assertEqual(allowlist_item['admission_scope'], [])
+
+    def test_smollm2_local_q2_artifact_is_pinned_and_technically_ready_but_not_admitted(self):
+        manifest_item = next(x for x in self.manifest['models'] if x['model_id'] == 2)
+        allowlist_item = next(x for x in self.allowlist['models'] if x['model_id'] == 2)
+        self.assertEqual(manifest_item['filename'], 'SmolLM2-360M-Instruct.Q2_K.gguf')
+        self.assertEqual(manifest_item['size_bytes'], 218673792)
+        self.assertEqual(manifest_item['sha256'], 'd13c8b95c170f16175bbd4e28ba4bd8d23647039ac63be20d1eb0a26598fbdd3')
+        self.assertEqual(manifest_item['revision'], '10ac3ac5c618d6cdbe76c2845747feed4b5d71ac')
         self.assertEqual(allowlist_item['technical_readiness'], 'ready')
         self.assertEqual(allowlist_item['technical_blockers'], [])
         self.assertEqual(allowlist_item['status'], 'review_required')
