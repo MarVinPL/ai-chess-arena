@@ -59,3 +59,19 @@ memory; no secrets are persisted. This is a **local coordinator building block**
 not a deployable authentication endpoint. Admin authorization for approval,
 rate limiting, persistent audit, TLS/WSS, worker-side GUI bindings, inference,
 crash recovery and integration with tournament checkpoints remain to be built.
+
+## Tauri 2 desktop shell (prototype)
+
+`remote_worker_gui/src-tauri/` now contains the initial Tauri 2/Rust desktop
+shell, a local-only `worker_status` command, minimal window capability and a
+CSP prohibiting outgoing network connections. It is deliberately **not** a
+functional distributed worker: pairing, credential storage, backend inference,
+resource enforcement and scheduling must be implemented and security-reviewed
+before the disabled GUI actions can be enabled.
+
+To compile locally once Rust, Node and the Tauri 2 platform prerequisites are
+installed, run `cd remote_worker_gui && npm install && npm run dev`. Do not
+install tools or incur paid developer-signing costs without approval. Linux
+WebKitGTK system packages and macOS signing/notarization requirements depend on
+platform. `bundle.active=false` intentionally avoids claiming release-ready
+installers. The VPS currently lacks Cargo, so no native build is claimed.
