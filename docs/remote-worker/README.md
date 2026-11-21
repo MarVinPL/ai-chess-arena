@@ -45,3 +45,17 @@ identity and authorization on the VPS. No network listener is provided; no
 worker is paired and no inference is enabled by this module. Before production:
 use durable transactional state across restarts, TLS/WSS transport, per-source
 rate limiting, replay resistance, authenticated admin actions, and audit logs.
+
+### Decision: token-based onboarding (2026-11-21)
+
+The user selected a simpler workflow: administrator issues a worker token; the
+volunteer pastes the token once. The desktop app may remember it using the OS
+credential store (Windows Credential Manager, macOS Keychain, Linux Secret
+Service), never plaintext configuration, browser localStorage, or logs. Token
+input is masked. Disconnect must delete locally stored credentials; the VPS
+must support revocation and expiry. The existing pairing registry is legacy
+prototype code and is **not** the selected onboarding workflow.
+
+**Not implemented yet:** token storage, token issuance, TLS connection and
+revocation API. GUI controls remain disabled until these are integrated and
+tested. No secrets are currently saved by the app.

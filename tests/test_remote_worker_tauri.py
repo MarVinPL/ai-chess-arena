@@ -28,3 +28,13 @@ def test_local_status_bridge_is_read_only():
     assert "invoke('worker_status')" in html
     assert "invoke('pair')" not in html
     assert "invoke('start')" not in html
+
+
+def test_token_onboarding_does_not_persist_plaintext():
+    html = (ROOT / 'public' / 'index.html').read_text()
+    assert 'Token dostępu' in html
+    assert 'id="code" type="password"' in html
+    assert 'id="rememberToken"' in html
+    assert 'localStorage' not in html
+    assert 'sessionStorage' not in html
+    assert 'id="pair" disabled' in html
