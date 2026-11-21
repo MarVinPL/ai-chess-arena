@@ -49,3 +49,13 @@ network calls, telemetry, model download or filesystem access are performed.
 The preferred future packaging is Tauri + Rust, but Rust/Cargo are not yet
 installed on the test VPS, and no native app has been compiled or verified.
 Do not treat the HTML mockup as a working agent.
+
+## In-memory session prototype
+
+`remote_worker_sessions.py` now provides one-time pairing codes (5-minute TTL),
+worker tokens (1-hour TTL), revocation, job expiry, correlation, board-state
+fencing and single-acceptance result checks. Tokens and codes are hashed in
+memory; no secrets are persisted. This is a **local coordinator building block**,
+not a deployable authentication endpoint. Admin authorization for approval,
+rate limiting, persistent audit, TLS/WSS, worker-side GUI bindings, inference,
+crash recovery and integration with tournament checkpoints remain to be built.
