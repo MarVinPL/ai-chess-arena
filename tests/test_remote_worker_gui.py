@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-HTML = Path(__file__).resolve().parents[1] / 'remote_worker_gui' / 'index.html'
+HTML = Path(__file__).resolve().parents[1] / 'remote_worker_gui' / 'public' / 'index.html'
 
 
 class WorkerGuiTests(unittest.TestCase):

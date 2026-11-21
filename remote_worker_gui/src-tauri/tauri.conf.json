@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "pl.marvin.aichessarena.worker",
   "build": {
-    "frontendDist": ".."
+    "frontendDist": "../public"
   },
   "app": {
     "windows": [

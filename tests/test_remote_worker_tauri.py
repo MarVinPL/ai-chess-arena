@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'remote_worker_gui'
 def test_tauri_scaffold_configuration():
     cfg = json.loads((ROOT / 'src-tauri' / 'tauri.conf.json').read_text())
     caps = json.loads((ROOT / 'src-tauri' / 'capabilities' / 'default.json').read_text())
-    assert cfg['build']['frontendDist'] == '..'
+    assert cfg['build']['frontendDist'] == '../public'
     assert cfg['app']['security']['csp'].find("connect-src 'none'") != -1
     assert cfg['bundle']['active'] is False
     assert caps['permissions'] == ['core:default']

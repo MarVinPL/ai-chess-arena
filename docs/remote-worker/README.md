@@ -38,7 +38,7 @@ Run `PYTHONPATH=. python -m unittest tests.test_remote_worker_protocol` with
 
 ## Cross-platform GUI draft (2026-11-21)
 
-`remote_worker_gui/index.html` is an accessible, responsive, Polish-language
+`remote_worker_gui/public/index.html` is an accessible, responsive, Polish-language
 **offline GUI mockup** suitable for embedding in a future Tauri WebView on
 Linux, macOS and Windows. It exposes connection/pairing fields, local CPU/RAM/GPU
 preferences and a status dashboard. The resource sliders are interactive, but
