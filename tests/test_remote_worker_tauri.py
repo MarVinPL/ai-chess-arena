@@ -19,3 +19,12 @@ def test_no_remote_commands_enabled():
     assert 'worker_status' in code
     assert 'std::process::Command' not in code
     assert 'reqwest' not in code
+
+
+def test_local_status_bridge_is_read_only():
+    cfg = json.loads((ROOT / 'src-tauri' / 'tauri.conf.json').read_text())
+    html = (ROOT / 'public' / 'index.html').read_text()
+    assert cfg['app']['withGlobalTauri'] is True
+    assert "invoke('worker_status')" in html
+    assert "invoke('pair')" not in html
+    assert "invoke('start')" not in html
