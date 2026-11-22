@@ -69,11 +69,12 @@ jobs:
           set -euo pipefail
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           test -s "$apk"
-          apksigner verify --verbose "$apk"
-          sha256sum "$apk" | tee apk-sha256.txt
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$signer"
+          "$signer" verify --verbose "$apk"
           mkdir -p dist
           cp "$apk" dist/ai-chess-arena-worker-arm64-debug.apk
-          cp apk-sha256.txt dist/
+          (cd dist && sha256sum ai-chess-arena-worker-arm64-debug.apk > SHA256SUMS)
       - uses: actions/upload-artifact@v6
         with:
           name: ai-chess-arena-worker-arm64-debug
