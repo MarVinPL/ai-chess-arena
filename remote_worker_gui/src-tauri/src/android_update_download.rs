@@ -8,7 +8,24 @@ use reqwest::{redirect, Client, Url};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+static DOWNLOAD_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+struct DownloadSlot;
+impl DownloadSlot {
+    fn acquire() -> Result<Self, String> {
+        DOWNLOAD_IN_PROGRESS.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "Inne pobieranie aktualizacji już trwa".to_owned())?;
+        Ok(Self)
+    }
+}
+impl Drop for DownloadSlot {
+    fn drop(&mut self) {
+        DOWNLOAD_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
 use tauri::{Emitter, Manager};
 
 fn official_asset_redirect(url: &Url) -> bool {
@@ -112,11 +129,31 @@ pub(crate) async fn stage_candidate(
     candidate: ApkCandidate,
     tag: &str,
 ) -> Result<(), String> {
+    let _download_slot = DownloadSlot::acquire()?;
     let root = app.path().app_cache_dir()
         .map_err(|_| "Brak prywatnego katalogu aktualizacji")?
         .join("worker-apk-updates");
     fs::create_dir_all(&root).map_err(|_| "Nie można przygotować katalogu APK")?;
     let target = root.join(format!("{tag}.apk"));
+    // A previously verified download is reusable; corrupted or stale cache
+    // is removed before retry. A symlink is never accepted as a staged APK.
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        let existing_valid = metadata.file_type().is_file()
+            && fs::File::open(&target)
+                .ok().and_then(|mut f| verify_apk_stream(&mut f, &candidate).ok())
+                == Some(true);
+        if existing_valid { return Ok(()); }
+        if !metadata.file_type().is_file() {
+            return Err("Nieprawidłowy typ pliku APK w pamięci podręcznej".into());
+        }
+        fs::remove_file(&target).map_err(|_| "Nie można usunąć uszkodzonego APK")?;
+    }
+    // Only one transfer can run within this process; a leftover .partial
+    // after a previous process crash can be safely removed before retry.
+    let partial = target.with_extension("apk.partial");
+    if partial.exists() {
+        fs::remove_file(&partial).map_err(|_| "Nie można wyczyścić przerwanego pobierania")?;
+    }
     let client = download_client()?;
     download_apk_to_private_dir(&client, &candidate, &target, |received, total| {
         let _ = app.emit("worker-apk-download-progress",
