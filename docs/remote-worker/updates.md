@@ -221,3 +221,13 @@ Illegal or mismatched moves roll back acknowledgement and checkpoint changes.
 This does **not** yet establish a durable job-to-pairing/FEN assignment record;
 that mapping, full checkpoint metadata integrity, and live runner dispatch
 must be completed before enabling remote chess execution.
+
+### Durable job-to-position binding (prototype)
+
+`remote_worker_job_binding.py` provides `BoundWorkerResults.assign_bound()`:
+it atomically reserves the worker and records the tournament ID, pairing ID,
+checkpoint SHA-256 and FEN in SQLite. `apply_bound()` rechecks the binding and
+checkpoint inside the same transaction as chess move validation, checkpoint
+update and result acknowledgement. Restart replay and stale-position tests
+pass. This is coordinator-side code only; it is **not** wired to the live
+`SequentialChessRunner` or its job dispatch. Production remains NO-GO.
