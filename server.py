@@ -588,12 +588,30 @@ def tournament_preflight(tournament_id):
     with league.connect() as connection:
         tournament = connection.execute('SELECT format FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
     tournament_format = tournament['format'] if tournament else ''
-    # The runner starts Llamafile only after this preflight succeeds.
-    # Requiring /health here would deadlock the lazy-start lifecycle.
-    runtime_available = llm_runtime_available()
+    # The VPS needs Llamafile only for local model execution. Explicitly
+    # selected phone mode requires a freshly ready on-device model for every
+    # entrant instead. No silent fallback to the VPS runner.
+    phone_mode = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+    if phone_mode:
+        from remote_worker_inference_delivery import WorkerInferenceDelivery
+        phone_delivery = WorkerInferenceDelivery(DB)
+        runtime_available = True
+    else:
+        # The local runner starts Llamafile only after preflight succeeds.
+        # Requiring /health here would deadlock the lazy-start lifecycle.
+        runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
+        if phone_mode:
+            try:
+                model = _version_record(entry['version_id'])
+                sha = model.get('sha256')
+                if phone_delivery.find_ready_worker(sha) is None:
+                    raise ValueError('no ready matching phone')
+            except (KeyError, TypeError, ValueError, sqlite3.Error):
+                reasons.append('brak gotowego telefonu z wymaganym lokalnym modelem')
+                runtime_available = False
         if allowlist_error is not None:
             reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
         else:
@@ -603,7 +621,7 @@ def tournament_preflight(tournament_id):
                 license_name=entry.get('license'),
                 license_verified=entry.get('license_verified') is True,
                 tournament_format=tournament_format))
-        if not runtime_available:
+        if not phone_mode and not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
         entry['download_on_demand'] = bool(
