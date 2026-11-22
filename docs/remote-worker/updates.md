@@ -450,3 +450,11 @@ an ephemeral loopback port. It checks invalid token rejection, authenticated
 legal move intake, duplicate rejection, durable result staging, and graceful
 SIGTERM exit. The process is always cleaned up after the test. This does not
 install or enable the systemd unit and does not touch production data.
+
+### Automated systemd unit verification
+
+`tests/test_remote_worker_systemd_template.py` copies the proposed unit to a
+temporary `.service` file and runs `systemd-analyze verify`, then checks the
+independent gateway entrypoint and restart, resource, loopback and hardening
+settings. This is a syntax/static policy test, **not** a systemd-managed
+runtime test. No unit was installed, enabled or started on the VPS.
