@@ -589,3 +589,12 @@ trying to acquire a second `flock` on a different file descriptor would fail
 against the server's own lock. Direct invocations without the startup owner
 still acquire their own scoped lock. A regression test checks this distinction.
 No remote mode is enabled by this change.
+
+### Restart job visibility regression
+
+`tests/test_remote_worker_restart_job_visibility.py` verifies that coordinator
+startup reconciliation invalidates both in-flight and previously idle worker
+claims. Previously retrievable jobs become unavailable, readiness checks fail
+closed, and new assignments to unknown workers are rejected until explicit
+reconciliation. This is an isolated temporary-database test, not a production
+restart or automatic worker recovery mechanism.
