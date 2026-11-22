@@ -302,3 +302,40 @@ def test_checkpoint_corruption_blocks_resume_and_does_not_delete_hold(tmp_path):
     with pytest.raises(ValueError, match="Corrupted"):
         WorkerUpdatePause(db, clock=lambda: now[0]).read_resume_checkpoint(WORKER)
     assert jobs.validate_update_hold(WORKER, hold)
+
+
+def test_orphaned_resume_checkpoint_still_blocks_all_assignments(tmp_path):
+    from remote_worker_job_registry import WorkerJobRegistry
+    db = tmp_path / "orphan.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    checkpoint, verifier = _stopped_checkpoint()
+    token = "1" * 64
+    pause.finalize_verified_pause(
+        WORKER, JOB, request_id, hold_token=token, checkpoint=checkpoint,
+        worker_stopped_verified=True, checkpoint_verifier=verifier
+    )
+    jobs.release_update_hold(WORKER, token)
+    # Even if a stale administrator mistakenly removes the pause request,
+    # a checkpointed interrupted job must not disappear from scheduling.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM worker_update_pause_requests WHERE worker_id=?",
+                     (WORKER,))
+        conn.execute(
+            "UPDATE worker_job_safety SET state='idle_confirmed',updated_at=? "
+            "WHERE worker_id=?", (now[0], WORKER)
+        )
+    assert jobs.update_safety_snapshot(WORKER) == ("unknown", None)
+    with pytest.raises(ValueError, match="resume checkpoint"):
+        jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+    with pytest.raises(ValueError, match="resume checkpoint"):
+        WorkerJobRegistry(db, clock=lambda: now[0]).record_assignment(
+            WORKER, "job_87654321", deadline=now[0] + 60
+        )
+    with pytest.raises(ValueError, match="resume checkpoint"):
+        jobs.reserve_update(WORKER)
+    assert pause.read_resume_checkpoint(WORKER)["checkpoint"] == checkpoint
