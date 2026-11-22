@@ -58,9 +58,9 @@ jobs:
       windows: ${{ steps.select.outputs.windows }}
       android: ${{ steps.select.outputs.android }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             shared:
@@ -105,8 +105,8 @@ jobs:
       run:
         working-directory: remote_worker_gui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
@@ -128,7 +128,7 @@ jobs:
           test -s src-tauri/target/release/ai-chess-arena-worker
           cp src-tauri/target/release/ai-chess-arena-worker dist/ai-chess-arena-worker-linux
           (cd dist && sha256sum ai-chess-arena-worker-linux > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: worker-linux-unsigned
@@ -145,8 +145,8 @@ jobs:
       run:
         working-directory: remote_worker_gui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
@@ -169,7 +169,7 @@ jobs:
           Copy-Item $source dist/ai-chess-arena-worker-windows.exe
           $hash = (Get-FileHash dist/ai-chess-arena-worker-windows.exe -Algorithm SHA256).Hash
           "$hash  ai-chess-arena-worker-windows.exe" | Set-Content dist/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: worker-windows-unsigned
@@ -193,7 +193,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Keep only the newest successful main artifact per built platform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
