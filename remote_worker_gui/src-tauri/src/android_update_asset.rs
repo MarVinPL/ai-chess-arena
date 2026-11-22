@@ -124,7 +124,8 @@ mod tests {
     #[test]
     fn rejects_ambiguous_missing_or_outsize_assets() {
         let mut data = release();
-        data["assets"].as_array_mut().unwrap().push(data["assets"][0].clone());
+        let duplicate = data["assets"][0].clone();
+        data["assets"].as_array_mut().unwrap().push(duplicate);
         assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
         let mut data = release();
         data["assets"] = json!([]);
