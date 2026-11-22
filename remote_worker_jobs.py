@@ -43,6 +43,13 @@ class DurableWorkerJobs:
                 checkpoint_sha256 TEXT NOT NULL,
                 created_at REAL NOT NULL
             )''')
+            # Only a previously idle, explicitly released update reservation
+            # can produce this one-time recovery proof. An UNKNOWN worker
+            # without it must never re-enroll as idle after a crash.
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_idle_update_recovery (
+                worker_id TEXT PRIMARY KEY,
+                released_at REAL NOT NULL
+            )''')
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -115,6 +122,10 @@ class DurableWorkerJobs:
                 row[2] is not None
             ) or not (0 <= now - row[3] <= 30):
                 raise ValueError('Worker idle is not freshly confirmed')
+            db.execute(
+                'DELETE FROM worker_idle_update_recovery WHERE worker_id=?',
+                (worker_id,),
+            )
             db.execute('''INSERT INTO worker_update_holds
                 (worker_id,hold_token,created_at,expires_at) VALUES (?,?,?,?)''',
                 (worker_id, token, now, now + ttl_seconds))
@@ -167,13 +178,40 @@ class DurableWorkerJobs:
                                 WHERE worker_id=?''', (worker_id,)).fetchone()
             if not row or not secrets.compare_digest(row[0], token):
                 raise ValueError('Wrong update reservation')
+            worker = db.execute(
+                'SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            pause = db.execute(
+                'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            resume = db.execute(
+                'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
             db.execute('DELETE FROM worker_update_holds WHERE worker_id=?',
                        (worker_id,))
+            db.execute(
+                'DELETE FROM worker_idle_update_recovery WHERE worker_id=?',
+                (worker_id,),
+            )
+            now = self.clock()
+            if worker == ('idle_confirmed', None, None) and not pause and not resume:
+                # A genuine idle update has no interrupted inference to
+                # recover. The original exact hold-token release is trusted;
+                # the next authenticated on-phone readiness may consume this
+                # bounded proof ONCE to clear UNKNOWN after OS installation.
+                db.execute(
+                    'INSERT INTO worker_idle_update_recovery VALUES (?,?)',
+                    (worker_id, now),
+                )
             # Releasing the hold is NOT proof that the app came back online.
-            # Force reconciliation before this worker may accept new jobs.
+            # Even a verified idle update becomes UNKNOWN until its one-time
+            # recovery evidence and on-phone local model are both checked.
             db.execute('''UPDATE worker_job_safety SET state='unknown',
                           job_id=NULL,deadline=NULL,updated_at=?
-                          WHERE worker_id=?''', (self.clock(), worker_id))
+                          WHERE worker_id=?''', (now, worker_id))
 
     def assign(self, worker_id, job_id, *, timeout_seconds):
         """Called only by coordinator after assignment is durably accepted."""
