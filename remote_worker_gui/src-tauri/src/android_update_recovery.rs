@@ -63,7 +63,7 @@ pub(crate) fn save_pending(record: &PendingHold) -> Result<(), String> {
     let serialized = serde_json::to_string(record)
         .map_err(|_| "Nie można przygotować zapisu rezerwacji".to_string())?;
     entry()?.set_password(&serialized)
-        .map_err(|_| "Nie można trwale zapisać tokenu rezerwacji".into())?;
+        .map_err(|_| "Nie można trwale zapisać tokenu rezerwacji".to_string())?;
     // Verify persistent read-back before allowing the network reservation.
     if load_pending()?.as_ref() != Some(record) {
         return Err("Nie potwierdzono trwałego zapisu rezerwacji".into());
