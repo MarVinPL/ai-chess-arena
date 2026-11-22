@@ -504,6 +504,31 @@ async fn install_downloaded_worker_apk(
     }
 }
 
+/// Read OS install callback only for the journaled session. This does not
+/// release the coordinator hold or claim an installed update.
+#[tauri::command]
+fn inspect_android_install_result() -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Wynik instalatora jest dostępny tylko na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let journal = android_update_install_journal::load()?
+            .ok_or("Brak oczekującej instalacji Android")?;
+        let status = android_update_package_installer::read_session_result(journal.session_id)?;
+        // Android PackageInstaller status values:
+        // 0 success; -1 pending user action; 1 failure; other positives failure.
+        // Never report installed just because STATUS_SUCCESS was received.
+        Ok(match status {
+            None => "no_callback",
+            Some(-1) => "awaiting_user_consent",
+            Some(0) => "os_success_unverified",
+            Some(_) => "os_failed_or_cancelled",
+        })
+    }
+}
+
 /// Reconcile after restart using actual installed package version and signer.
 /// No timeout, absent session or UI label is ever evidence of success.
 #[tauri::command]
@@ -635,7 +660,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
