@@ -874,3 +874,33 @@ Status `awaiting_executor` należy interpretować jako
 `awaiting_local_engine`, a nie gotowość innego serwera.
 Nie włączać `Wznów` na podstawie samego checkpointu, bo to
 fałszywie oznaczałoby rozpoczęcie obliczeń.
+
+
+## 2026-11-22 — podgląd szachownicy wyłącznie z Areny
+
+W aplikacji na telefonie znajduje się szachownica widoczna tylko wtedy,
+gdy Arena przypisała do danego Workera rzeczywiście aktywny job. Telefon
+**nie prowadzi gry ani checkpointów**: endpoint
+`POST /api/remote-workers/board-view` czyta autorytatywny `get_live()`
+i aktualny zapis przydziału koordynatora. Dla `active=true` wymagane
+są jednocześnie: poprawny token maszyny, świeży `nonce`, bieżąca
+dzierżawa `worker_job_safety` w stanie `running`, brak blokady
+aktualizacji/pauzy/wznowienia oraz jawne, identyczne `worker_id`
+i `job_id` w danych partii. Dodatkowo sprawdzane są aktualność
+zdarzenia (do 30 s) i poprawna pozycja szachowa FEN.
+Bez tego serwer zwraca wyłącznie `active=false`, nie zwraca FEN
+z publicznego `/api/live` innej partii.
+
+Tauri uzyskuje odczyt przez zaufany, natywny HTTPS z tokenem trzymanym
+poza JS. Frontend **tylko renderuje** FEN z Areny, modele i ostatni
+ruch, co 5 sekund przy widocznym oknie. Nie zapisuje partii,
+nie wyznacza ruchów i nie tworzy drugiej kopii checkpointu.
+
+**Ograniczenie integracyjne:** obecny protokół remote Workera
+nie posiada jeszcze wykonującego inferencję job dispatchera, który
+wiązałby zdarzenia `set_live()` z realnym `worker_id` i `job_id`.
+Dlatego nawet poprawnie działający endpoint pokazuje
+`active=false`, dopóki lokalne obliczenia Workera nie zostaną
+rzeczywiście podłączone do centralnego harmonogramu. Sam podgląd
+szachownicy nie oznacza uruchomionej inferencji. Do odbioru wymagane
+są testy CI i urządzenia.
