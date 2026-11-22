@@ -788,3 +788,42 @@ nie czyni APK aktualizacją, jeżeli numer wersji Androida nie wzrósł.
 Docelowe stabilne wydanie może mieć nazwę `ai-chess-arena-worker-vX.Y.Z-arm64.apk`
 w osobnym zatwierdzonym workflow publikacji. Nazwa zbiorczego artefaktu
 GitHub Actions pozostaje bez zmian dla zgodności ze starszymi odwołaniami.
+
+
+## 2026-11-22 — połączenie aplikacji z systemowym instalatorem Androida
+
+W PR #197 dodano docelową ścieżkę **ręcznie potwierdzanej instalacji**
+dla najnowszego stabilnego `worker-vX.Y.Z`. Po pobraniu i zweryfikowaniu
+APK użytkownik ma przycisk `Zainstaluj aktualizację` w GUI. Natywna
+komenda Tauri `install_downloaded_worker_apk` ponownie sprawdza
+oficjalne metadane wydania, sumę SHA-256, pakiet, certyfikat i rosnący
+`versionCode`, uzyskuje uwierzytelniony stan koordynatora oraz trwałą
+rezerwację, tworzy sesję Android `PackageInstaller`, kopiuje bajty,
+zapisuje prywatny dziennik sesji/wersji i wywołuje `Session.commit()`.
+Systemowy `BroadcastReceiver` o `exported=false` obsługuje
+`STATUS_PENDING_USER_ACTION` i uruchamia interfejs potwierdzenia
+instalacji Androida. Odbiornik jest kopiowany do wygenerowanego projektu
+Android w workflow przy `android init`; wymagane uprawnienie
+`REQUEST_INSTALL_PACKAGES` także trafia do manifestu.
+
+Po kolejnym uruchomieniu `reconcile_installed_worker_update` czyta
+rzeczywisty `versionCode` i certyfikat z Android `PackageManager`.
+Dopiero dopasowanie do prywatnego dziennika umożliwia uwierzytelnione
+zwolnienie rezerwacji. Osobny odczyt callbacku OS jest informacyjny
+i nie stanowi sam w sobie dowodu zainstalowania APK.
+
+**Ograniczenia, których NIE wolno przedstawiać jako ukończone:**
+- Dostęp do `PackageInstaller` jest jeszcze zależny od autentycznego
+  potwierdzenia `idle_confirmed`. Nie ma połączenia natywnego Android
+  Workera z prawdziwą inferencją: aktualizacja podczas aktywnej partii
+  nie może jeszcze zagwarantować STOP i fencing dzierżawy.
+- `Wznów` wymaga połączenia z zaufanym dispatcherem zadania i
+  rzeczywistego wznowienia inference; sam zapis checkpointu istnieje.
+- Błąd/anulowanie instalacji nadal wymaga trwałej ścieżki
+  uzgodnienia sesji z koordynatorem.
+- Android CI i test na fizycznym Androidzie są warunkami odbioru.
+  Kompilacja nie dowodzi jeszcze udanej instalacji użytkownika.
+
+Przy podpisywaniu używać wyłącznie oryginalnego certyfikatu z
+GitHub Secrets; nie generować nowego. Napis `preN` w nazwie APK
+nie zmienia Android `versionCode`.
