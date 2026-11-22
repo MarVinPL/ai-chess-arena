@@ -130,7 +130,7 @@ mod tests {
             assert_eq!(check_platform_apk_identity(&record(100), &candidate),
                        IdentityCheck::InvalidSigner);
         }
-        for digest in ["", "x", "A".repeat(64).as_str(), "0".repeat(63).as_str()] {
+        for digest in ["".to_owned(), "x".to_owned(), "A".repeat(64), "0".repeat(63)] {
             let mut candidate = record(101);
             candidate.certificate_sha256 = digest.into();
             assert_eq!(check_platform_apk_identity(&record(100), &candidate),
