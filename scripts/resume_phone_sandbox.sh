@@ -23,7 +23,7 @@ runuser -u debian -- git -C "$repo" fetch --no-tags origin main
 [[ -L $link && -f $db && -d $stage && ! -e $unit_file && ! -e $caddy_file ]] || { echo 'Unexpected partial deployment state' >&2; exit 2; }
 work=$(readlink -f -- "$link")
 [[ $work == /home/debian/ai-chess-arena-phone-e2e-* && -f $work/remote_worker_phone_sandbox.py ]] || { echo 'Unexpected test worktree' >&2; exit 2; }
-[[ $(runuser -u debian -- git -C "$work" rev-parse HEAD) == "$sha" ]] || { echo 'Worktree is not exact main' >&2; exit 2; }
+[[ $(runuser -u debian -- git -C "$work" rev-parse HEAD) == 358164beda866c05e34ac20af9a4450f320219c0 ]] || { echo 'Unexpected original staging worktree' >&2; exit 2; }
 [[ $(stat -c %a "$stage") == 700 && $(stat -c %a "$db") == 600 ]] || { echo 'Unsafe staging permissions' >&2; exit 2; }
 uid=$(id -u "$test_user")
 [[ $(stat -c %u "$db") == "$uid" && $(stat -c %u "$stage") == "$uid" ]] || { echo 'Unexpected staging owner' >&2; exit 2; }
