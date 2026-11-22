@@ -398,11 +398,16 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
     assert "invoke('inspect_android_install_sessions')" in ui
     assert "Brak widocznej sesji: to NIE potwierdza zakończenia instalacji" in ui
     executable = '\n'.join(line for line in source.splitlines() if not line.lstrip().startswith('//'))
-    # The new native staging helper can create/open an uncommitted session,
-    # but the public Tauri bridge still cannot commit or start installation.
+    # Installation is now a gated native Tauri command; Android owns consent.
     assert 'stage_verified_apk_session' in source
-    assert 'stage_verified_apk_session' not in lib
-    for unsafe_action in ('"commit"', 'abandonSession', 'startActivity'):
+    assert 'commit_staged_session' in source
+    assert 'install_downloaded_worker_apk' in lib
+    assert 'android_update_recovery::load_pending()?.is_some()' in lib
+    assert 'android_update_coordinator::reserve_update' in lib
+    assert 'android_update_install_journal::save(&journal)' in lib
+    assert 'commit_staged_session(session_id)' in lib
+    assert executable.index('"createSession"') < executable.index('"commit"')
+    for unsafe_action in ('abandonSession', 'startActivity'):
         assert unsafe_action not in executable
     assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
 
