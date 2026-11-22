@@ -9,8 +9,9 @@ FINGERPRINT = "3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12"
 
 def test_only_main_android_build_receives_explicit_secrets():
     text = CALLER.read_text(encoding="utf-8")
-    pr = text.split("  android:\n", 1)[1].split("  android_signed:\n", 1)[0]
-    main = text.split("  android_signed:\n", 1)[1]
+    # Anchor job blocks to a newline: filter YAML has a nested android: key.
+    pr = text.split("\n  android:\n", 1)[1].split("\n  android_signed:\n", 1)[0]
+    main = text.split("\n  android_signed:\n", 1)[1]
     assert "github.event_name == 'pull_request'" in pr
     assert "secrets:" not in pr
     assert "github.event_name == 'push'" in main
