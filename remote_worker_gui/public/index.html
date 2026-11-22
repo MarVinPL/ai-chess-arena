@@ -112,7 +112,9 @@ downloadApkButton.addEventListener('click',async()=>{
   apkStatus.textContent='APK pobrany. Sprawdzanie certyfikatu i wersji przez Android…';
   const identity=await invoke('verify_downloaded_worker_apk');
   apkStatus.textContent=identity?.verified===true
-   ?'APK: podpis, nazwa pakietu i versionCode zgodne z zainstalowanym Workerem. Instalacja nadal wyłączona: oczekiwanie na potwierdzenie idle koordynatora.'
+   ?(identity.installer_permission===true
+     ?'APK: certyfikat, pakiet i versionCode zgodne. Android dopuszcza zgłoszenie instalacji, ale instalator jest nadal wyłączony do czasu rezerwacji koordynatora i zgody użytkownika.'
+     :'APK: certyfikat, pakiet i versionCode zgodne, ale Android nie udzielił aplikacji uprawnienia do żądania instalacji APK. Instalacja wyłączona.')
    :'APK odrzucony: certyfikat, pakiet lub wersja nie spełniają warunków. Instalacja wyłączona.';
  }catch(_){
   apkStatus.textContent='Nie udało się bezpiecznie pobrać APK. Żadna instalacja nie została uruchomiona.';
