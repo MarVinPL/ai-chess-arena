@@ -114,3 +114,30 @@ GitHub Actions to kontrola buildu, **nie kontrola kandydata na telefonie**.
   Latest/Pre-release na aktualnej gałęzi Workera.
 - Sprawdzić wynik GitHub CI **konkretnego HEAD** po integracji z aktualnym
   Workerem. PR #197 pozostaje draft do spełnienia tych kryteriów.
+
+## 2026-11-22 — dowód faktycznego podłączenia filtra release → UI
+
+`check_worker_release` (komenda Tauri wywoływana przez GUI) teraz
+**rzeczywiście wywołuje**
+`android_update_asset::select_apk_candidate(data, tag)`
+dla najwyższego stabilnego wydania. Pole odpowiedzi
+`apk_asset_available` jest `true` tylko dla nowszej wersji z
+jednoznacznym plikiem APK ARM64 spełniającym ograniczenia metadanych.
+Gdy brak wydania/kandydata, wartość jest `false`.
+
+Widok `public/index.html` używa tego pola, aby wyświetlić, czy
+kwalifikujący się APK jest w wydaniu. Wynik to wyłącznie **status
+metadanych**, a nie dowód sprawdzonego certyfikatu APK ani gotowej
+instalacji. Pobieranie i instalacja nadal są zablokowane.
+
+Dodatkowo odpowiedź GitHub Releases ma twardy limit 1 MiB przed
+dekodowaniem JSON, obejmujący również serwer niepodający Content-Length.
+Regresyjny test `test_native_release_checker_actually_uses_candidate_gate_and_displays_result`
+sprawdza połączenie: komenda Tauri → selektor APK → odpowiedź → UI.
+To kontrola integracji kodu, nie test systemowy Android 16.
+
+**Audyt Issue #196 aktualizujemy tylko w zakresie**: `select_apk_candidate`
+nie jest już niewywoływany; jednak `verify_apk_stream` **wciąż**
+nie jest podłączony do rzeczywiście pobranego pliku. Pobieranie,
+postęp, podpis APK, `packageName`, `versionCode`, trwałe idle i
+systemowy instalator nadal **NOT IMPLEMENTED/NO-GO**.
