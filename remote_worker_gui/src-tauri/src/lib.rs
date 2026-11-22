@@ -147,8 +147,9 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
 }
 
 // Fail closed: a missing coordinator confirmation is not an idle worker.
-// This gate is advisory until the scheduler transport reports verified state.
-#[cfg(test)]
+// The scheduler transport must provide an authenticated, fresh idle state.
+
+#[allow(dead_code)] // Running is reserved for authenticated scheduler state integration.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum VerifiedTaskState {
     IdleConfirmed,
@@ -156,14 +157,35 @@ enum VerifiedTaskState {
     Unknown,
 }
 
-#[cfg(test)]
 fn may_install_update(state: VerifiedTaskState, signature_verified: bool, newer_version: bool) -> bool {
     state == VerifiedTaskState::IdleConfirmed && signature_verified && newer_version
 }
 
+#[derive(Serialize)]
+struct UpdateReadiness {
+    can_install: bool,
+    reason: &'static str,
+}
+
+// Explicitly report blocked state until BOTH verified coordinator idle and
+// cryptographically verified update artifacts are integrated. Never infer idle
+// from a disconnected worker or from the read-only GitHub release listing.
+#[tauri::command]
+fn update_installation_readiness() -> UpdateReadiness {
+    let can_install = may_install_update(VerifiedTaskState::Unknown, false, false);
+    UpdateReadiness {
+        can_install,
+        reason: "Instalacja niedostępna: brak potwierdzenia bezczynności i podpisanej aktualizacji",
+    }
+}
+
 #[cfg(test)]
 mod version_tests {
-    use super::{numeric_version, may_install_update, VerifiedTaskState};
+    use super::{numeric_version, may_install_update, update_installation_readiness, VerifiedTaskState};
+    #[test]
+    fn gui_never_offers_installation_before_integrations() {
+        assert!(!update_installation_readiness().can_install);
+    }
     #[test]
     fn update_installation_requires_verified_idle_and_signature() {
         assert!(may_install_update(VerifiedTaskState::IdleConfirmed, true, true));
@@ -193,7 +215,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

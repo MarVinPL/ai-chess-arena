@@ -17,7 +17,7 @@
 - Preserve token credentials and user preferences across normal updates; test migration before release. Provide release notes, current version, progress and actionable error states.
 - Rate-limit periodic checks and avoid update checks in the hot path of inference. No paid hosting or update service is required.
 
-The Rust prototype includes a **test-only fail-closed installation gate** (`may_install_update`) and unit tests. It cannot install updates; no scheduler-verified idle signal or signature verifier is connected yet.
+The Rust prototype includes a **fail-closed installation gate** (`may_install_update`) with unit tests and a read-only `update_installation_readiness` Tauri command. This command always returns `can_install=false` until authenticated scheduler idle state and signature verification are integrated. It cannot install updates; no scheduler-verified idle signal or signature verifier is connected yet.
 
 ## Acceptance tests before enabling
 
