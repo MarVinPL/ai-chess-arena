@@ -77,10 +77,13 @@ def test_native_release_checker_actually_uses_candidate_gate_and_displays_result
     assert "apk_asset_available: bool" in lib
     assert "let apk_asset_available = latest > installed" in release_command
     assert "apk_asset_available: false" in release_command
-    assert "bounded GitHub metadata" in release_command
-    assert "MAX_RELEASE_JSON: usize = 1024 * 1024" in release_command
-    assert "if chunk.len() > MAX_RELEASE_JSON - body.len()" in release_command
-    assert "serde_json::from_slice(&body)" in release_command
+    fetch_start = lib.index("async fn fetch_worker_releases()")
+    fetch_end = lib.index("async fn check_worker_release()", fetch_start)
+    fetch = lib[fetch_start:fetch_end]
+    assert "bounded GitHub metadata" in fetch
+    assert "MAX_RELEASE_JSON: usize = 1024 * 1024" in fetch
+    assert "if chunk.len() > MAX_RELEASE_JSON - body.len()" in fetch
+    assert "serde_json::from_slice(&body)" in fetch
     assert "info.apk_asset_available===true" in ui
     assert "Brak kwalifikującego się pliku APK ARM64" in ui
     assert "Instalacja pozostaje wyłączona." in ui
@@ -88,7 +91,6 @@ def test_native_release_checker_actually_uses_candidate_gate_and_displays_result
     assert "invoke('install_update')" not in ui
     assert "invoke('check_worker_release')" in ui
     assert "invoke('download_update')" not in ui
-    assert "invoke('install_update')" not in ui
 
 
 def test_download_is_real_native_command_with_private_verified_staging():
