@@ -12,6 +12,11 @@
 //! Android platform implementation can validate rotation independently.
 
 pub(crate) const WORKER_PACKAGE_ID: &str = "pl.marvin.aichessarena.worker";
+// Fingerprint of the existing main-branch Android signing key, not a new key.
+// CI verifies this same fingerprint against WORKER_ANDROID_DEBUG_KEYSTORE_B64.
+// NEVER use this pinned value as a replacement for OS PackageManager validation.
+pub(crate) const WORKER_SIGNING_CERT_SHA256: &str =
+    "3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlatformApkIdentity {
@@ -63,7 +68,11 @@ pub(crate) fn check_platform_apk_identity(
         !valid_sha256_fingerprint(&candidate.certificate_sha256) {
         return IdentityCheck::InvalidSigner;
     }
-    if installed.certificate_sha256 != candidate.certificate_sha256 {
+    // The installed certificate AND the staged certificate must match the
+    // established Worker release key. Two matching attacker certificates are
+    // not enough; reject even if they agree with each other.
+    if installed.certificate_sha256 != WORKER_SIGNING_CERT_SHA256 ||
+        candidate.certificate_sha256 != WORKER_SIGNING_CERT_SHA256 {
         return IdentityCheck::SigningCertificateMismatch;
     }
     IdentityCheck::Verified
@@ -77,7 +86,7 @@ mod tests {
         PlatformApkIdentity {
             package_name: WORKER_PACKAGE_ID.to_owned(),
             long_version_code: version,
-            certificate_sha256: "a".repeat(64),
+            certificate_sha256: WORKER_SIGNING_CERT_SHA256.to_owned(),
             platform_signing_verified: true,
             current_signer_count: 1,
         }
@@ -136,6 +145,24 @@ mod tests {
             assert_eq!(check_platform_apk_identity(&record(100), &candidate),
                        IdentityCheck::InvalidSigner);
         }
+    }
+
+    #[test]
+    fn rejects_two_matching_but_untrusted_certificates() {
+        let mut installed = record(100);
+        installed.certificate_sha256 = "a".repeat(64);
+        let mut candidate = record(101);
+        candidate.certificate_sha256 = "a".repeat(64);
+        assert_eq!(check_platform_apk_identity(&installed, &candidate),
+                   IdentityCheck::SigningCertificateMismatch);
+    }
+
+    #[test]
+    fn rejects_when_only_installed_certificate_differs_from_pinned_key() {
+        let mut installed = record(100);
+        installed.certificate_sha256 = "b".repeat(64);
+        assert_eq!(check_platform_apk_identity(&installed, &record(101)),
+                   IdentityCheck::SigningCertificateMismatch);
     }
 
     #[test]
