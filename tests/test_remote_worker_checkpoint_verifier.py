@@ -97,3 +97,32 @@ def test_chess_verifier_is_usable_as_coordinator_pause_gate(tmp_path):
         worker_ready_verified=True, resume_accepted_verified=True,
         checkpoint_verifier=verify_chess_checkpoint,
     )["state"] == "running"
+
+
+def test_interrupted_game_resumes_from_last_legal_move_or_restarts():
+    from remote_worker_checkpoint_verifier import choose_interrupted_game_checkpoint
+    saved = checkpoint(("e2e4", "e7e5", "g1f3"))
+    decision = choose_interrupted_game_checkpoint(JOB, saved)
+    assert decision["resume_mode"] == "resume"
+    assert decision["payload"]["moves_uci"] == ["e2e4", "e7e5", "g1f3"]
+    # No checkpoint -> replay THIS game from initial setup.
+    assert choose_interrupted_game_checkpoint(JOB, None) == {
+        "schema_version": 1, "job_id": JOB, "resume_mode": "restart", "payload": {}
+    }
+    damaged = checkpoint()
+    damaged["payload"]["current_fen"] = chess.STARTING_FEN
+    assert choose_interrupted_game_checkpoint(JOB, damaged)["resume_mode"] == "restart"
+    wrong_job = checkpoint()
+    wrong_job["job_id"] = "job_87654321"
+    assert choose_interrupted_game_checkpoint(JOB, wrong_job)["resume_mode"] == "restart"
+    assert choose_interrupted_game_checkpoint(JOB, {"inflight_model_reply": "e2e4"})["resume_mode"] == "restart"
+    with pytest.raises(ValueError, match="job ID"):
+        choose_interrupted_game_checkpoint("bad", saved)
+
+
+def test_interrupted_game_selection_does_not_mutate_previous_results():
+    from remote_worker_checkpoint_verifier import choose_interrupted_game_checkpoint
+    original = checkpoint()
+    selected = choose_interrupted_game_checkpoint(JOB, original)
+    selected["payload"]["moves_uci"].append("b8c6")
+    assert original["payload"]["moves_uci"] == ["e2e4", "e7e5", "g1f3"]
