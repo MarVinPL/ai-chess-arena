@@ -64,16 +64,36 @@ class WorkerInferenceDelivery:
             ).fetchone():
                 return "blocked"
             row = db.execute(
-                "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                "SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
-            if row is not None and row != ("idle_confirmed", None):
-                # An UNKNOWN, FAILED or RUNNING lease is NOT made idle just
-                # because the phone claims that a model is loaded. The old
-                # job must first be reconciled by Arena.
+            if row == ("unknown", None, None):
+                recovery = db.execute(
+                    "SELECT released_at FROM worker_idle_update_recovery WHERE worker_id=?",
+                    (worker_id,),
+                ).fetchone()
+                if not recovery or not (0 <= now - recovery[0] <= 86400):
+                    # Unknown crash state or expired proof: never take over
+                    # another job merely because the phone claims readiness.
+                    return "blocked"
+                restored = db.execute(
+                    """UPDATE worker_job_safety SET state='idle_confirmed',
+                    updated_at=? WHERE worker_id=? AND state='unknown'
+                    AND job_id IS NULL AND deadline IS NULL""",
+                    (now, worker_id),
+                )
+                if restored.rowcount != 1:
+                    raise ValueError("Worker state changed during idle-update recovery")
+                db.execute(
+                    "DELETE FROM worker_idle_update_recovery WHERE worker_id=?",
+                    (worker_id,),
+                )
+            elif row is not None and row != ("idle_confirmed", None, None):
+                # A running job, UNKNOWN with another job, or crash without
+                # the verified update receipt must NOT become idle.
                 return "blocked"
-            if row is None:
-                # Fresh authenticated Worker: no previous Arena job exists.
+            elif row is None:
+                # First authenticated registration with no previous lease.
                 db.execute(
                     """INSERT INTO worker_job_safety
                     (worker_id,job_id,state,deadline,updated_at)
@@ -83,7 +103,8 @@ class WorkerInferenceDelivery:
             else:
                 db.execute(
                     """UPDATE worker_job_safety SET updated_at=?
-                    WHERE worker_id=? AND state='idle_confirmed' AND job_id IS NULL""",
+                    WHERE worker_id=? AND state='idle_confirmed' AND job_id IS NULL
+                    AND deadline IS NULL""",
                     (now, worker_id),
                 )
             db.execute(
