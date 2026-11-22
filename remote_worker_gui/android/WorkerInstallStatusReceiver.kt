@@ -22,7 +22,7 @@ class WorkerInstallStatusReceiver : BroadcastReceiver() {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putInt("session_id", session)
             .putInt("installer_status", status)
-            .apply()
+            .commit()
 
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             @Suppress("DEPRECATION")
