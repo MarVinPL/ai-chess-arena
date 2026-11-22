@@ -14,6 +14,7 @@ mod android_update_package_manager;
 mod android_update_package_installer;
 mod android_update_coordinator;
 mod android_update_recovery;
+mod android_update_install_journal;
 #[allow(dead_code)]
 mod android_update_install_state;
 
@@ -427,6 +428,116 @@ async fn verify_downloaded_worker_apk(app: tauri::AppHandle) -> Result<WorkerApk
     }
 }
 
+/// Start a genuine OS PackageInstaller transaction. No path, digest or
+/// signing certificate is accepted from JavaScript. On active jobs, refuse
+/// installation until the real executor has fenced the previous lease.
+#[tauri::command]
+async fn install_downloaded_worker_apk(
+    app: tauri::AppHandle, server: String, worker_id: String,
+) -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, server, worker_id);
+        Err("Instalacja APK jest dostępna wyłącznie na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        use android_update_identity::IdentityCheck;
+        if android_update_recovery::load_pending()?.is_some()
+            || android_update_install_journal::load()?.is_some() {
+            return Err("Wcześniejsza instalacja wymaga uzgodnienia".into());
+        }
+        // Never turn a failed/unknown coordinator response into an idle state.
+        // The server's reserve transaction rechecks state atomically.
+        let state = check_update_safety(server.clone(), worker_id.clone()).await?;
+        if state != "idle_confirmed" {
+            return Err("Najpierw bezpiecznie przerwij zadanie Workera; brak potwierdzenia STOP".into());
+        }
+        let releases = fetch_worker_releases().await?;
+        let (_, tag, release) = newest_worker_release(&releases)
+            .ok_or("Brak aktualizacji Workera")?;
+        let candidate = android_update_asset::select_apk_candidate(release, tag)
+            .ok_or("Nie ma jednoznacznego, podpisanego APK ARM64")?;
+        let apk = app.path().app_cache_dir()
+            .map_err(|_| "Brak katalogu aktualizacji")?
+            .join("worker-apk-updates").join(format!("{tag}.apk"));
+        let metadata = std::fs::symlink_metadata(&apk)
+            .map_err(|_| "Najpierw pobierz APK")?;
+        if !metadata.file_type().is_file() || metadata.len() != candidate.size {
+            return Err("Nieprawidłowy pobrany APK".into());
+        }
+        let mut file = std::fs::File::open(&apk)
+            .map_err(|_| "Nie można ponownie odczytać APK")?;
+        if !android_update_asset::verify_apk_stream(&mut file, &candidate)
+            .map_err(|_| "Nie można zweryfikować SHA-256")? {
+            return Err("Niezgodny SHA-256 pobranego APK".into());
+        }
+        drop(file);
+        let (identity, previous, target) =
+            android_update_package_manager::inspect_staged_worker_apk_details(&apk)?;
+        if identity != IdentityCheck::Verified {
+            return Err("Podpis, nazwa pakietu lub versionCode APK nie zgadzają się".into());
+        }
+        if !android_update_package_manager::can_request_package_installation()? {
+            return Err("Zezwól Android Workerowi na instalowanie aplikacji w ustawieniach systemu".into());
+        }
+        let machine_token = token_entry()?.get_password()
+            .map_err(|_| "Brak tokenu Workera".to_string())?;
+        // reserve_update journals the random hold before any network request.
+        // The coordinator rejects running jobs and blocks further assignments.
+        android_update_coordinator::reserve_update(&server, &worker_id, &machine_token).await?;
+        let session_id = android_update_package_installer::stage_verified_apk_session(
+            &apk, true, true, &candidate.expected_sha256,
+        )?;
+        let journal = android_update_install_journal::PendingInstall {
+            session_id,
+            previous_version_code: previous,
+            target_version_code: target,
+            apk_sha256: candidate.expected_sha256,
+        };
+        android_update_install_journal::save(&journal)?;
+        // Success here means submitted to Android, NOT installed.
+        // Consent is handled by the non-exported Kotlin receiver.
+        android_update_package_installer::commit_staged_session(session_id)?;
+        Ok("submitted")
+    }
+}
+
+/// Reconcile after restart using actual installed package version and signer.
+/// No timeout, absent session or UI label is ever evidence of success.
+#[tauri::command]
+async fn reconcile_installed_worker_update() -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Weryfikacja instalacji jest dostępna tylko na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let journal = match android_update_install_journal::load()? {
+            Some(journal) => journal,
+            None => return Ok("no_pending_install"),
+        };
+        let pending = android_update_recovery::load_pending()?
+            .ok_or("Nie ma rezerwacji koordynatora dla instalacji")?;
+        let installed = android_update_package_manager::inspect_installed_worker_identity()?;
+        if !android_update_identity::installed_update_matches_journal(
+            &installed, journal.previous_version_code, journal.target_version_code,
+        ) {
+            return Ok("not_confirmed");
+        }
+        let machine_token = token_entry()?.get_password()
+            .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+        android_update_coordinator::release_update(
+            &pending.server, &pending.worker_id, &machine_token,
+        ).await?;
+        android_update_install_journal::clear_confirmed(&journal)?;
+        // The coordinator returns UNKNOWN. A real worker resume dispatcher
+        // must independently reconcile its checkpoint and lease.
+        Ok("installed_confirmed")
+    }
+}
+
 // Fail closed: a missing coordinator confirmation is not an idle worker.
 // The scheduler transport must provide an authenticated, fresh idle state.
 
@@ -524,7 +635,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
