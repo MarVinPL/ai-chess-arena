@@ -160,6 +160,9 @@ pub(crate) fn stage_verified_apk_session(
                     JValue::Long(meta.len() as i64)])
                 .map_err(jni_error)?.l().map_err(jni_error)?;
             let copy_result = (|| -> Result<(), String> {
+                // Re-open the private regular file only, never a supplied URI.
+                // The caller's identity check and the digest below are both
+                // mandatory before this uncommitted session can be trusted.
                 let mut file = std::fs::File::open(apk)
                     .map_err(|_| "Nie można odczytać zweryfikowanego APK")?;
                 let mut buffer = [0u8; 64 * 1024];
