@@ -175,3 +175,22 @@ systemowego instalatora z potwierdzeniem. **Issue #196 pozostaje NO-GO**.
 Starsze wpisy w tej dokumentacji odzwierciedlają stan historyczny na
 podanym commicie; w aktualnym kodzie dostępne jest pobieranie do
 prywatnej pamięci, ale **nie aktualizacja z instalacją**.
+
+### Uzupełnienie: retry, równoległe pobieranie i kontrola CI
+
+Dla etapu pobierania obowiązuje pojedynczy transfer w obrębie procesu
+(`DownloadSlot` z atomowym zamkiem, zwalnianym przez `Drop`).
+Przy ponownej próbie zachowany plik z cache jest przed użyciem
+ponownie weryfikowany strumieniowo pod względem rozmiaru i SHA-256;
+zły regularny plik cache jest usuwany, a niedokończony `.partial`
+z poprzedniego procesu można usunąć przed pobraniem. Symlink pod
+docelową nazwą APK nie jest akceptowany. Dodano test Rust blokady
+równoległych pobrań i statyczny test ścieżki GUI → Tauri → staging.
+
+Na czas przeglądu PR #197 oba workflowy dopuszczają także PR
+celujący w `feat/issue-194-worker-defaults`, ponieważ jest to obecna
+baza tego stacked PR. **Przed integracją do main usunąć tę tymczasową
+gałąź z filtrów workflowów.** Nie traktować samego wpisu filtra
+jako zakończonego CI: obecny odczyt przebiegów PR na HEAD nie
+potwierdza Python/Rust/Android PASS. Dopiero rzeczywisty wynik
+kompilacji i testy Android 16 mogą zatwierdzić tę funkcję.
