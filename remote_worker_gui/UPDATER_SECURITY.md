@@ -619,3 +619,23 @@ dodano systemowej instalacji APK ani przyznawania zgody na nią.
 Żeby ukończyć całość, trzeba podłączyć działający silnik zadań,
 jego sprawdzony checkpoint i idempotentny protokół STOP/RESUME;
 sam odczyt po HTTPS nie jest wystarczającym dowodem.
+
+## 2026-11-22 — domenowa kontrola checkpointu szachowego
+
+`remote_worker_checkpoint_verifier.verify_chess_checkpoint` jest
+rzeczywistym walidatorem domenowym do wykorzystania przez zaufany
+koordynator podczas `finalize_verified_pause` i
+`reconcile_resume`. W trybie `resume` wymaga schematu 1,
+`job_id`, standardowej początkowej pozycji, listy UCI ograniczonej
+do 1024 półruchów i dokładnej zgodności wynikowego FEN z pozycją
+odtworzoną przez `python-chess`. Odrzuca nielegalne ruchy,
+dodatkowe pola, błędną pozycję, nadmiarowe dane oraz
+`restart` próbujący przemycić niezweryfikowany postęp.
+Przy `restart` dopuszcza tylko pusty payload.
+
+Test integracyjny uruchamia walidator w transakcjach pauzy i
+wznowienia. Nie jest to dowód tożsamości urządzenia ani
+zakończenia inference; wymóg wiarygodnego STOP i ACK pozostaje
+osobny. Istniejący prototyp Workera nie ma jeszcze podłączonego
+wykonawcy/modelu, dlatego ten kod nie rozpoczyna automatycznej
+instalacji ani faktycznych rozgrywek na telefonie.
