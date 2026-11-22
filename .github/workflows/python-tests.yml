@@ -1,5 +1,7 @@
 name: Python test suite
 
+runs-on: self-hosted
+
 on:
   pull_request:
     # Temporary integration target for stacked updater PR #197; remove before main.
