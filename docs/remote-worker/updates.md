@@ -352,3 +352,19 @@ cover invalid/revoked credentials, foreign jobs, illegal moves and duplicates.
 No HTTP route is exposed by this module. TLS, request-size and rate limits,
 network authorization, production runner integration and operator-approved
 reconciliation remain outstanding. **NO-GO production.**
+
+### Opt-in loopback HTTP intake prototype
+
+`remote_worker_http_ingest.py` provides a standalone, **non-autostarting**
+HTTP adapter for authenticated result intake. `create_loopback_server()`
+binds only to `127.0.0.1`; requests must use the internal result path,
+`application/json`, an explicit body length of at most 2048 bytes, and a
+rate-limited peer. Errors do not reveal token or job validity. An integration
+test starts a temporary loopback server, submits a valid legal move, rejects
+invalid credentials and duplicate submissions, checks body size and rate
+limits, then shuts down the listener. No route is added to `server.py`.
+
+**NO-GO production:** reverse-proxy TLS/access restrictions, authenticated
+worker enrollment and delivery, multi-process rate limiting, server runner
+integration, and restart reconciliation still require review. This listener
+must not be exposed to a public interface.
