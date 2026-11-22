@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -313,6 +313,51 @@ pub(crate) fn verify_pause_poll_reply(
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// Transmit a proposed local-model chess move to Arena. A returned ACK means
+/// Arena durably RECEIVED it, not that the tournament applied a chess move.
+/// No JS command exposes this method until the on-device GGUF engine exists.
+#[allow(dead_code)]
+pub(crate) async fn submit_my_inference_move(
+    base: &str, worker_id: &str, machine_token: &str,
+    job_id: &str, uci: &str,
+) -> Result<&'static str, String> {
+    if !valid_worker_id(worker_id) || !valid_worker_id(job_id)
+        || machine_token.is_empty() {
+        return Err("Nieprawidłowa tożsamość wyniku inferencji".into());
+    }
+    if !(4..=5).contains(&uci.len())
+        || !uci.is_ascii()
+        || !uci.bytes().all(|b|
+            matches!(b, b'a'..=b'h' | b'1'..=b'8' | b'q' | b'r' | b'b' | b'n')) {
+        return Err("Nieprawidłowa składnia UCI".into());
+    }
+    let endpoint = coordinator_endpoint(base, "job-result")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+            "result": {"version": 1, "job_id": job_id, "uci": uci},
+        }))
+        .send().await.map_err(|_| "Nie udało się przesłać wyniku do Areny")?;
+    if !response.status().is_success() {
+        return Err("Arena odrzuciła nielegalny lub nieaktualny ruch".into());
+    }
+    let body: Value = response.json().await
+        .map_err(|_| "Nieprawidłowe potwierdzenie wyniku".to_owned())?;
+    if body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())
+        || body.get("job_id").and_then(Value::as_str) != Some(job_id) {
+        return Err("Nieautoryzowane potwierdzenie wyniku".into());
+    }
+    match body.get("state").and_then(Value::as_str) {
+        Some("received_not_applied") => Ok("received_not_applied"),
+        Some("already_received") => Ok("already_received"),
+        _ => Err("Nieznany status wyniku".into()),
     }
 }
 
