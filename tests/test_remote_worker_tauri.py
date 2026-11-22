@@ -49,7 +49,11 @@ def test_token_onboarding_does_not_persist_plaintext():
 def test_native_token_storage_never_exposes_secret():
     rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
     html = (ROOT / 'public' / 'index.html').read_text()
-    assert 'keyring::Entry::new' in rust
+    assert '.plugin(tauri_plugin_keyring_store::init())' in rust
+    assert 'app.keyring().store.set_password' in rust
+    assert 'app.keyring().store.delete' in rust
+    assert 'read_saved_worker_token(app).await?' in rust
+    assert 'keyring::Entry::new' not in rust
     assert 'store_worker_token' in rust
     assert 'has_saved_worker_token' in rust
     assert 'forget_worker_token' in rust
@@ -58,3 +62,16 @@ def test_native_token_storage_never_exposes_secret():
     assert 'localStorage.setItem(token' not in html
     assert 'localStorage.setItem(field.value' not in html
     assert 'sessionStorage' not in html
+
+
+def test_android_uses_native_keystore_with_no_plaintext_fallback():
+    cargo = (ROOT / 'src-tauri' / 'Cargo.toml').read_text()
+    rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
+    capabilities = json.loads((ROOT / 'src-tauri' / 'capabilities' / 'default.json').read_text())
+    assert 'tauri-plugin-keyring-store = { version = "=0.3.2", default-features = false }' in cargo
+    assert 'keyring = { version = "3.6"' not in cargo
+    assert 'get_password(TOKEN_ACCOUNT)' in rust
+    assert 'has_saved_worker_token(app: tauri::AppHandle) -> Result<bool, String>' in rust
+    assert 'spawn_blocking' in rust
+    # Only our backend commands see the token. Do not grant JS broad plugin IPC.
+    assert 'keyring-store:default' not in capabilities['permissions']
