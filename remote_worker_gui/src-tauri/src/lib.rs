@@ -554,6 +554,16 @@ async fn execute_phone_inference_once(
         ).await?;
         let state = assignment.get("state").and_then(serde_json::Value::as_str)
             .ok_or("Brak stanu przydziału Areny")?;
+        if state == "none" {
+            // Only an actually reachable on-phone llama.cpp instance with a
+            // SHA-formatted model alias may advertise readiness. This alias
+            // is NOT cryptographic GGUF byte verification.
+            let model_alias = android_local_llama::probe_local_model_alias().await?;
+            let ready = android_update_coordinator::announce_phone_ready(
+                &server, &worker_id, &token, &model_alias,
+            ).await?;
+            return Ok(serde_json::json!({"state": ready}));
+        }
         if state != "assigned" {
             return Ok(serde_json::json!({"state": state}));
         }
