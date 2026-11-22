@@ -32,10 +32,10 @@ def endpoint(tmp_path, monkeypatch):
     thread = threading.Thread(target=http.serve_forever, daemon=True)
     thread.start()
     try:
-        def post(payload):
+        def post(payload, *, route="update-safety"):
             data = json.dumps(payload).encode("utf-8")
             request = urllib.request.Request(
-                f"http://127.0.0.1:{http.server_port}/api/remote-workers/update-safety",
+                f"http://127.0.0.1:{http.server_port}/api/remote-workers/{route}",
                 data=data,
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -134,3 +134,76 @@ def test_nonce_is_validated_and_not_reflected_on_auth_failure(endpoint):
     assert status == 200
     assert response["nonce"] == alternate
     assert response["install_allowed"] is False
+
+
+def test_authenticated_reservation_blocks_assignments_until_explicit_release(endpoint):
+    db, token, post = endpoint
+    now = time.time()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
+            (WORKER_ID, now),
+        )
+    status, reserved = post(request_data(token), route="update-reserve")
+    assert status == 200
+    assert reserved["authenticated"] is True
+    assert reserved["nonce"] == NONCE
+    assert reserved["install_allowed"] is False
+    assert reserved["state"] == "reserved"
+    hold_token = reserved["hold_token"]
+    assert len(hold_token) == 64
+
+    from remote_worker_jobs import DurableWorkerJobs
+    jobs = DurableWorkerJobs(db)
+    assert jobs.validate_update_hold(WORKER_ID, hold_token)
+    with pytest.raises(ValueError, match="reserved"):
+        jobs.assign(WORKER_ID, "job_12345678", timeout_seconds=30)
+
+    # A second reservation fails and must not disturb the first.
+    second_status, second = post(request_data(token), route="update-reserve")
+    assert second_status == 409
+    assert "hold_token" not in second
+    assert jobs.validate_update_hold(WORKER_ID, hold_token)
+
+    # A forged token cannot unlock assignments.
+    status, rejected = post({
+        **request_data(token), "hold_token": "0" * 64
+        if hold_token != "0" * 64 else "1" * 64
+    }, route="update-release")
+    assert status == 409
+    assert rejected.get("released") is not True
+    assert jobs.validate_update_hold(WORKER_ID, hold_token)
+
+    status, released = post({
+        **request_data(token), "hold_token": hold_token
+    }, route="update-release")
+    assert status == 200
+    assert released["released"] is True
+    assert released["state"] == "unknown"
+    assert released["install_allowed"] is False
+    assert not jobs.validate_update_hold(WORKER_ID, hold_token)
+    assert jobs.state(WORKER_ID) == "unknown"
+    with pytest.raises(ValueError):
+        jobs.assign(WORKER_ID, "job_12345678", timeout_seconds=30)
+
+
+def test_reservation_requires_machine_auth_and_fresh_idle(endpoint):
+    db, token, post = endpoint
+    status, reply = post(request_data(token), route="update-reserve")
+    assert status == 409
+    assert "hold_token" not in reply
+    status, reply = post(request_data("bad-token"), route="update-reserve")
+    assert status == 401
+    assert "hold_token" not in reply
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
+            (WORKER_ID, time.time() - 40),
+        )
+    status, reply = post(request_data(token), route="update-reserve")
+    assert status == 409
+    assert "hold_token" not in reply
+    status, reply = post(request_data(token, nonce="not-a-nonce"),
+                         route="update-reserve")
+    assert status == 409
+    assert "hold_token" not in reply
