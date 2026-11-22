@@ -144,13 +144,17 @@ def test_authenticated_reservation_blocks_assignments_until_explicit_release(end
             "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
             (WORKER_ID, now),
         )
-    status, reserved = post(request_data(token), route="update-reserve")
+    expected_hold = "b" * 64
+    status, reserved = post({
+        **request_data(token), "hold_token": expected_hold
+    }, route="update-reserve")
     assert status == 200
     assert reserved["authenticated"] is True
     assert reserved["nonce"] == NONCE
     assert reserved["install_allowed"] is False
     assert reserved["state"] == "reserved"
     hold_token = reserved["hold_token"]
+    assert hold_token == expected_hold
     assert len(hold_token) == 64
 
     from remote_worker_jobs import DurableWorkerJobs
@@ -160,7 +164,9 @@ def test_authenticated_reservation_blocks_assignments_until_explicit_release(end
         jobs.assign(WORKER_ID, "job_12345678", timeout_seconds=30)
 
     # A second reservation fails and must not disturb the first.
-    second_status, second = post(request_data(token), route="update-reserve")
+    second_status, second = post({
+        **request_data(token), "hold_token": "c" * 64
+    }, route="update-reserve")
     assert second_status == 409
     assert "hold_token" not in second
     assert jobs.validate_update_hold(WORKER_ID, hold_token)
@@ -189,10 +195,14 @@ def test_authenticated_reservation_blocks_assignments_until_explicit_release(end
 
 def test_reservation_requires_machine_auth_and_fresh_idle(endpoint):
     db, token, post = endpoint
-    status, reply = post(request_data(token), route="update-reserve")
+    status, reply = post({
+        **request_data(token), "hold_token": "b" * 64
+    }, route="update-reserve")
     assert status == 409
     assert "hold_token" not in reply
-    status, reply = post(request_data("bad-token"), route="update-reserve")
+    status, reply = post({
+        **request_data("bad-token"), "hold_token": "b" * 64
+    }, route="update-reserve")
     assert status == 401
     assert "hold_token" not in reply
     with sqlite3.connect(db) as conn:
@@ -200,10 +210,30 @@ def test_reservation_requires_machine_auth_and_fresh_idle(endpoint):
             "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
             (WORKER_ID, time.time() - 40),
         )
-    status, reply = post(request_data(token), route="update-reserve")
+    status, reply = post({
+        **request_data(token), "hold_token": "b" * 64
+    }, route="update-reserve")
     assert status == 409
     assert "hold_token" not in reply
-    status, reply = post(request_data(token, nonce="not-a-nonce"),
-                         route="update-reserve")
+    status, reply = post({
+        **request_data(token, nonce="not-a-nonce"), "hold_token": "b" * 64
+    }, route="update-reserve")
     assert status == 409
     assert "hold_token" not in reply
+
+
+def test_reservation_rejects_absent_or_invalid_client_journal_secret(endpoint):
+    db, token, post = endpoint
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
+            (WORKER_ID, time.time()),
+        )
+    for proposed in (None, "", "x" * 64, "0" * 63, "A" * 64):
+        status, reply = post({
+            **request_data(token), "hold_token": proposed
+        }, route="update-reserve")
+        assert status == 409
+        assert "hold_token" not in reply
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM worker_update_holds").fetchone()[0] == 0
