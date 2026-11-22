@@ -1,0 +1,5 @@
+# Issue #276. Isolated one-shot Android Worker E2E over Caddy TLS.
+# Never replace the production arena domain/route.
+arena-worker-test.148-113-182-137.sslip.io {
+    reverse_proxy 127.0.0.1:8789
+}
