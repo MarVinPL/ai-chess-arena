@@ -1,8 +1,4 @@
-"""Local, auditable model-registry admission decisions.
-
-This registry is deliberately separate from the versioned tournament allowlist:
-its decisions never make a model tournament-ready or start model execution.
-"""
+"""Auditable SQLite model admission decisions, the sole allowlist authority."""
 from __future__ import annotations
 
 import json
@@ -11,7 +7,6 @@ import time
 from pathlib import Path
 
 import model_allowlist
-from model_manifest import load_manifest
 
 ACTOR = 'arena'
 ELIGIBLE_LICENSE_STATES = {'verified_permissive', 'verified_restricted'}
@@ -21,59 +16,73 @@ def _now() -> str:
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
-def evaluate_candidates(*, allowlist=None, manifest=None):
-    """Return allowlist entries with fail-closed admission blockers."""
-    allowlist = allowlist if allowlist is not None else model_allowlist.load_allowlist()
-    manifest = manifest if manifest is not None else load_manifest()
-    manifest_by_id = {item['model_id']: item for item in manifest['models']}
+def evaluate_candidates(*, connection: sqlite3.Connection | None = None,
+                        allowlist=None, manifest=None):
+    """Evaluate exact stored decisions. The production path reads SQLite only.
+
+    Explicit fixture injection is retained for isolated regression tests.
+    """
+    if allowlist is None:
+        if connection is None:
+            raise ValueError('Wymagane połączenie z bazą SQLite')
+        entries = model_allowlist.load_allowlist(connection)['models']
+        return [{
+            'model_id': item['model_id'], 'repo_id': item['repo_id'],
+            'revision': item['revision'], 'status': item['status'],
+            'admission_scope': item.get('admission_scope', []),
+            'license': (item.get('license_requirements') or {}).get('manifest_license'),
+            'technical_readiness': item.get('technical_readiness'),
+            'restrictions': item.get('restrictions', []),
+            'license_requirements': item.get('license_requirements', {}),
+            'block_reason': item.get('block_reason'),
+            'technical_blockers': item.get('technical_blockers', []),
+            'blockers': [item['block_reason']] if item.get('block_reason') else (
+                [] if item.get('status') in {'eligible', 'restricted'}
+                else ['Model nie ma aktualnej decyzji dopuszczenia.']),
+            'eligible': bool(item.get('status') in {'eligible', 'restricted'}
+                             and not item.get('block_reason')),
+            'display_name': item.get('display_name') or item['repo_id'].rsplit('/', 1)[-1],
+        } for item in entries]
+
+    # Historical unit-test contract; never used by the service.
+    manifest_by_id = {x['model_id']: x for x in (manifest or {}).get('models', [])}
     candidates = []
-    for entry in allowlist['models']:
+    for entry in allowlist.get('models', []):
         source = manifest_by_id.get(entry['model_id'])
         blockers = []
         if source is None:
-            blockers.append('Brak wpisu w kompletnym manifeście modeli.')
+            blockers.append('Brak wersji modelu w danych testowych.')
         else:
-            if source.get('repo_id') != entry.get('repo_id') or source.get('revision') != entry.get('revision'):
-                blockers.append('Repozytorium lub rewizja nie zgadza się z manifestem.')
+            if (source.get('repo_id'), source.get('revision')) != (entry.get('repo_id'), entry.get('revision')):
+                blockers.append('Repozytorium lub rewizja nie zgadza się z wersją modelu.')
             if not all(source.get(key) for key in ('filename', 'sha256', 'size_bytes')):
-                blockers.append('Manifest nie zawiera kompletnego targetu GGUF.')
-            if (source.get('license_review_status') not in ELIGIBLE_LICENSE_STATES
-                    and not model_allowlist.is_owner_admitted(entry, source)):
-                blockers.append('Audyt licencji nie ma pozytywnego statusu.')
-            if source.get('license_review_status') != (entry.get('license_requirements') or {}).get('manifest_audit_status'):
-                blockers.append('Status audytu licencji nie zgadza się z allowlistą.')
+                blockers.append('Brak kompletnego pliku GGUF.')
+            if source.get('license_review_status') not in ELIGIBLE_LICENSE_STATES:
+                blockers.append('Licencja bez zatwierdzenia.')
         if entry.get('status') not in {'eligible', 'restricted'}:
-            blockers.append('Wpis allowlisty nie ma statusu eligible ani restricted.')
+            blockers.append('Model bez decyzji dopuszczenia.')
         if not entry.get('admission_scope'):
-            blockers.append('Nie określono jawnego zakresu dopuszczenia.')
-        license_info = entry.get('license_requirements') or {}
-        if license_info.get('license_verified_required') is not True:
-            blockers.append('Brak wymogu niezależnego zatwierdzenia licencji.')
-        if not isinstance(license_info.get('manifest_license'), str) or not license_info['manifest_license']:
-            blockers.append('Brak identyfikatora licencji w allowliście.')
-        # Do not re-test explicitly owner-admitted versions merely to record
-        # the registry decision; do not fabricate a positive runtime result.
-        if not model_allowlist.is_owner_admitted(entry, source) and (
-                entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers')):
-            blockers.append('Gotowość techniczna nie jest pozytywna lub istnieją blokady.')
+            blockers.append('Brak zakresu dopuszczenia.')
+        if entry.get('technical_readiness') != 'ready':
+            blockers.append('Brak zatwierdzenia technicznego w fixture.')
         if entry.get('block_reason'):
-            blockers.append('Wpis zawiera blokadę lub nierozstrzygnięte uzasadnienie blokujące.')
+            blockers.append(str(entry['block_reason']))
         candidates.append({
             'model_id': entry['model_id'], 'repo_id': entry['repo_id'],
             'revision': entry['revision'], 'status': entry['status'],
             'admission_scope': entry.get('admission_scope', []),
-            'license': license_info.get('manifest_license'),
+            'license': (entry.get('license_requirements') or {}).get('manifest_license'),
             'technical_readiness': entry.get('technical_readiness'),
             'block_reason': entry.get('block_reason'),
             'technical_blockers': entry.get('technical_blockers', []),
             'blockers': blockers, 'eligible': not blockers,
-            'display_name': (source or {}).get('repo_id', entry['repo_id']).rsplit('/', 1)[-1],
+            'display_name': entry['repo_id'].rsplit('/', 1)[-1],
         })
     return candidates
 
 
 def list_decisions(connection: sqlite3.Connection, *, allowlist=None, manifest=None):
-    candidates = evaluate_candidates(allowlist=allowlist, manifest=manifest)
+    candidates = evaluate_candidates(connection=connection, allowlist=allowlist, manifest=manifest)
     current = {row['model_id']: dict(row) for row in connection.execute(
         'SELECT model_id,status,actor,decided_at,reason,repo_id,revision FROM model_admission_decisions'
     )}
@@ -106,7 +115,7 @@ def apply_decision(connection: sqlite3.Connection, *, model_id: int, action: str
     if actor != ACTOR:
         raise ValueError('Nieprawidłowy aktor audytu.')
     candidates = {item['model_id']: item for item in evaluate_candidates(
-        allowlist=allowlist, manifest=manifest)}
+        connection=connection, allowlist=allowlist, manifest=manifest)}
     candidate = candidates.get(model_id)
     if candidate is None:
         raise ValueError('Model nie znajduje się na jawnej allowliście.')
