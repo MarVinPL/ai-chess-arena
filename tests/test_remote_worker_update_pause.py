@@ -339,3 +339,103 @@ def test_orphaned_resume_checkpoint_still_blocks_all_assignments(tmp_path):
     with pytest.raises(ValueError, match="resume checkpoint"):
         jobs.reserve_update(WORKER)
     assert pause.read_resume_checkpoint(WORKER)["checkpoint"] == checkpoint
+
+
+def _prepared_resume(tmp_path):
+    db = tmp_path / "resume.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    checkpoint, verifier = _stopped_checkpoint()
+    token = "2" * 64
+    final = pause.finalize_verified_pause(
+        WORKER, JOB, request_id, hold_token=token, checkpoint=checkpoint,
+        worker_stopped_verified=True, checkpoint_verifier=verifier
+    )
+    return jobs, pause, now, request_id, token, final["sha256"], verifier
+
+
+def test_reconcile_resume_rejects_active_hold_and_replays(tmp_path):
+    jobs, pause, now, request_id, token, digest, verifier = _prepared_resume(tmp_path)
+    params = dict(checkpoint_sha256=digest, timeout_seconds=180,
+                  worker_ready_verified=True, resume_accepted_verified=True,
+                  checkpoint_verifier=verifier)
+    with pytest.raises(ValueError, match="reserved"):
+        pause.reconcile_resume(WORKER, JOB, request_id, **params)
+    assert pause.read_resume_checkpoint(WORKER) is not None
+    jobs.release_update_hold(WORKER, token)
+    result = pause.reconcile_resume(WORKER, JOB, request_id, **params)
+    assert result == {"worker_id": WORKER, "job_id": JOB, "state": "running"}
+    assert jobs.state(WORKER) == "running"
+    assert pause.pending(WORKER) is None
+    assert pause.read_resume_checkpoint(WORKER) is None
+    with pytest.raises(ValueError, match="consumed"):
+        pause.reconcile_resume(WORKER, JOB, request_id, **params)
+    with pytest.raises(ValueError, match="confirmed idle"):
+        jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+
+
+def test_resume_ack_and_checkpoint_are_mandatory(tmp_path):
+    jobs, pause, now, request_id, token, digest, verifier = _prepared_resume(tmp_path)
+    jobs.release_update_hold(WORKER, token)
+    params = dict(checkpoint_sha256=digest, timeout_seconds=180,
+                  worker_ready_verified=True, resume_accepted_verified=True,
+                  checkpoint_verifier=verifier)
+    for change, pattern in [
+        ({"worker_ready_verified": False}, "acceptance"),
+        ({"resume_accepted_verified": False}, "acceptance"),
+        ({"checkpoint_verifier": lambda _: False}, "rejected"),
+        ({"checkpoint_sha256": "0" * 64}, "mismatch"),
+        ({"timeout_seconds": 0}, "lease"),
+    ]:
+        with pytest.raises(ValueError, match=pattern):
+            pause.reconcile_resume(WORKER, JOB, request_id, **(params | change))
+    with pytest.raises(ValueError, match="mismatch"):
+        pause.reconcile_resume(WORKER, "job_87654321", request_id, **params)
+    assert jobs.state(WORKER) == "unknown"
+    assert pause.read_resume_checkpoint(WORKER) is not None
+    assert pause.pending(WORKER)["phase"] == "acknowledged"
+
+
+def test_resume_integrity_and_restart_preserved_until_trusted_ack(tmp_path):
+    jobs, pause, now, request_id, token, digest, verifier = _prepared_resume(tmp_path)
+    jobs.release_update_hold(WORKER, token)
+    recovered = WorkerUpdatePause(pause.path, clock=lambda: now[0])
+    assert recovered.read_resume_checkpoint(WORKER)["sha256"] == digest
+    with sqlite3.connect(pause.path) as db:
+        db.execute(
+            "UPDATE worker_update_resume SET checkpoint_json='{}' WHERE worker_id=?",
+            (WORKER,)
+        )
+    with pytest.raises(ValueError, match="Corrupted"):
+        recovered.reconcile_resume(
+            WORKER, JOB, request_id, checkpoint_sha256=digest, timeout_seconds=180,
+            worker_ready_verified=True, resume_accepted_verified=True,
+            checkpoint_verifier=verifier
+        )
+    assert jobs.state(WORKER) == "unknown"
+    assert recovered.pending(WORKER)["phase"] == "acknowledged"
+
+
+def test_two_resume_dispatchers_cannot_consume_same_checkpoint(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    jobs, pause, now, request_id, token, digest, verifier = _prepared_resume(tmp_path)
+    jobs.release_update_hold(WORKER, token)
+    def dispatch(_):
+        worker = WorkerUpdatePause(pause.path, clock=lambda: now[0])
+        try:
+            worker.reconcile_resume(
+                WORKER, JOB, request_id, checkpoint_sha256=digest, timeout_seconds=180,
+                worker_ready_verified=True, resume_accepted_verified=True,
+                checkpoint_verifier=verifier
+            )
+            return "resumed"
+        except ValueError:
+            return "rejected"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(dispatch, (1, 2)))
+    assert sorted(results) == ["rejected", "resumed"]
+    assert jobs.state(WORKER) == "running"
