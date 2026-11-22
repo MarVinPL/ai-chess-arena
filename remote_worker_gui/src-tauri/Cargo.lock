@@ -21,7 +21,9 @@ dependencies = [
 name = "ai-chess-arena-worker"
 version = "0.1.0"
 dependencies = [
+ "jni",
  "keyring",
+ "ndk-context",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
