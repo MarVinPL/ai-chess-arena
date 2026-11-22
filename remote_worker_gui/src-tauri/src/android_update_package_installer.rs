@@ -88,6 +88,111 @@ pub(crate) fn observe_own_session() -> Result<SessionObservation, String> {
     })
 }
 
+
+/* Native PackageInstaller staging. This is deliberately internal: the
+ * caller must have checked the downloaded bytes and the installed + staged
+ * certificates, package and versionCode immediately beforehand. The session
+ * remains uncommitted until a durable Android status receiver exists.
+ */
+#[allow(dead_code)]
+pub(crate) fn stage_verified_apk_session(
+    apk: &std::path::Path,
+    verified_identity: bool,
+    coordinator_reserved: bool,
+) -> Result<i32, String> {
+    use std::io::Read;
+    use jni::objects::JValue;
+
+    if !verified_identity || !coordinator_reserved {
+        return Err("Brak zweryfikowanego podpisu lub rezerwacji aktualizacji".into());
+    }
+    let meta = std::fs::symlink_metadata(apk)
+        .map_err(|_| "Brak pobranego APK")?;
+    if !apk.is_absolute() || !meta.file_type().is_file()
+        || !(1024..=200 * 1024 * 1024).contains(&meta.len()) {
+        return Err("Nieprawidłowy plik APK do instalacji".into());
+    }
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(jni_error)?;
+    let mut env = vm.attach_current_thread().map_err(jni_error)?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let pm = env.call_method(&context, "getPackageManager",
+        "()Landroid/content/pm/PackageManager;", &[])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    let allowed = env.call_method(&pm, "canRequestPackageInstalls", "()Z", &[])
+        .map_err(jni_error)?.z().map_err(jni_error)?;
+    if !allowed { return Err("Android nie zezwolił na instalację aplikacji".into()); }
+    let installer = env.call_method(&pm, "getPackageInstaller",
+        "()Landroid/content/pm/PackageInstaller;", &[])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    if installer.is_null() { return Err("Brak Android PackageInstaller".into()); }
+    if observe_own_session()? != SessionObservation::NoVisibleSession {
+        return Err("Wcześniejsza sesja Android wymaga uzgodnienia".into());
+    }
+    let params = env.new_object("android/content/pm/PackageInstaller$SessionParams", "(I)V",
+        &[JValue::Int(1)]).map_err(jni_error)?;
+    let package_name = env.new_string(WORKER_PACKAGE_ID).map_err(jni_error)?;
+    env.call_method(&params, "setAppPackageName",
+        "(Ljava/lang/String;)V", &[JValue::Object(package_name.as_ref())])
+        .map_err(jni_error)?;
+    let id = env.call_method(&installer, "createSession",
+        "(Landroid/content/pm/PackageInstaller$SessionParams;)I",
+        &[JValue::Object(&params)]).map_err(jni_error)?.i().map_err(jni_error)?;
+    if id < 0 { return Err("Android zwrócił nieprawidłową sesję".into()); }
+
+    // On error abandon only our newly-created, uncommitted session. The
+    // coordinator hold remains untouched for explicit reconciliation.
+    let result = (|| -> Result<(), String> {
+        let session = env.call_method(&installer, "openSession",
+            "(I)Landroid/content/pm/PackageInstaller$Session;",
+            &[JValue::Int(id)]).map_err(jni_error)?.l().map_err(jni_error)?;
+        let result = (|| -> Result<(), String> {
+            let entry = env.new_string("base.apk").map_err(jni_error)?;
+            let stream = env.call_method(&session, "openWrite",
+                "(Ljava/lang/String;JJ)Ljava/io/OutputStream;",
+                &[JValue::Object(entry.as_ref()), JValue::Long(0),
+                    JValue::Long(meta.len() as i64)])
+                .map_err(jni_error)?.l().map_err(jni_error)?;
+            let copy_result = (|| -> Result<(), String> {
+                let mut file = std::fs::File::open(apk)
+                    .map_err(|_| "Nie można odczytać zweryfikowanego APK")?;
+                let mut buffer = [0u8; 64 * 1024];
+                let mut written = 0u64;
+                loop {
+                    let count = file.read(&mut buffer)
+                        .map_err(|_| "Nie można odczytać APK")?;
+                    if count == 0 { break; }
+                    written = written.checked_add(count as u64)
+                        .ok_or("Nieprawidłowy rozmiar APK")?;
+                    if written > meta.len() { return Err("APK zmienił rozmiar".into()); }
+                    let bytes = env.byte_array_from_slice(&buffer[..count])
+                        .map_err(jni_error)?;
+                    env.call_method(&stream, "write", "([BII)V",
+                        &[JValue::Object(bytes.as_ref()), JValue::Int(0),
+                            JValue::Int(count as i32)]).map_err(jni_error)?;
+                }
+                if written != meta.len() { return Err("APK jest niekompletny".into()); }
+                env.call_method(&session, "fsync", "(Ljava/io/OutputStream;)V",
+                    &[JValue::Object(&stream)]).map_err(jni_error)?;
+                Ok(())
+            })();
+            let _ = env.call_method(&stream, "close", "()V", &[]);
+            copy_result
+        })();
+        let _ = env.call_method(&session, "close", "()V", &[]);
+        result
+    })();
+    if result.is_err() {
+        if let Ok(session) = env.call_method(&installer, "openSession",
+            "(I)Landroid/content/pm/PackageInstaller$Session;",
+            &[JValue::Int(id)]).and_then(|v| v.l()) {
+            let _ = env.call_method(&session, "abandon", "()V", &[]);
+            let _ = env.call_method(&session, "close", "()V", &[]);
+        }
+    }
+    result.map(|()| id)
+}
+
 pub(crate) fn observation_is_terminal(_observation: SessionObservation) -> bool {
     // Even "no visible session" cannot prove success or safe cancellation.
     false
