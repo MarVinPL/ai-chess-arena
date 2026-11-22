@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -313,6 +313,44 @@ pub(crate) fn verify_pause_poll_reply(
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// Read-only resume readiness. A checkpoint on the coordinator is not proof
+/// that this Android app has accepted or started inference. All network
+/// metadata is validated against the machine token + nonce.
+#[allow(dead_code)]
+pub(crate) async fn fetch_resume_status(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<&'static str, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak tożsamości Workera do wznowienia".into());
+    }
+    let endpoint = coordinator_endpoint(base, "update-resume-status")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+        }))
+        .send().await.map_err(|_| "Brak odpowiedzi koordynatora wznowienia")?;
+    if !response.status().is_success() {
+        return Err("Koordynator odmówił sprawdzenia wznowienia".into());
+    }
+    let value: Value = response.json().await
+        .map_err(|_| "Nieprawidłowa odpowiedź wznowienia".to_owned())?;
+    if value.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || value.get("source").and_then(Value::as_str) != Some("coordinator")
+        || value.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || value.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())
+        || value.get("resume_available").and_then(Value::as_bool) != Some(false) {
+        return Err("Niepotwierdzona gotowość Workera do wznowienia".into());
+    }
+    match value.get("state").and_then(Value::as_str) {
+        Some("no_checkpoint") => Ok("no_checkpoint"),
+        Some("waiting_update_reconciliation") => Ok("waiting_update_reconciliation"),
+        Some("blocked") => Ok("blocked"),
+        Some("awaiting_executor") => Ok("awaiting_executor"),
+        _ => Err("Nieznany stan gotowości do wznowienia".into()),
     }
 }
 
