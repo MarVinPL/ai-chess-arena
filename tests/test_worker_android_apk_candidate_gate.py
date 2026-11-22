@@ -213,3 +213,18 @@ def test_coordinator_idle_requires_authenticated_recent_nonce_bound_evidence():
         assert f"fn {scenario}()" in source
     # Despite read-only idle checks, installation is never automatically enabled.
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+
+
+def test_android_installer_permission_is_read_only_and_fails_closed():
+    lib = LIB.read_text(encoding="utf-8")
+    bridge = (ROOT / "remote_worker_gui/src-tauri/src/android_update_package_manager.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert "fn can_request_package_installation()" in bridge
+    assert 'canRequestPackageInstalls' in bridge
+    assert "installer_permission: bool" in lib
+    assert "can_request_package_installation().unwrap_or(false)" in lib
+    assert "identity.installer_permission===true" in ui
+    assert "Android nie udzielił aplikacji uprawnienia" in ui
+    # Neither permission nor a valid APK identity can unlock installation.
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+    assert "session.commit" not in bridge
