@@ -261,3 +261,13 @@ local runner and `publish_move` callback. There is no authenticated network
 transport, live dispatch, durable worker re-confirmation, or production
 replay coordinator. The bridge must not be enabled alongside the existing
 checkpoint writer for the same game without a single-writer integration.
+
+### Fail-closed transport interruption
+
+The offline bridge now records the in-flight job ID **before** calling its
+injected inference transport. A transport exception cannot silently erase the
+job identity or allow a second task through the same bridge. Regression tests
+confirm that the durable worker reservation remains running, the checkpoint
+is unchanged, and restart marks the worker unknown. There is still no
+production-grade authenticated worker reconciliation; this does not enable
+remote dispatch.

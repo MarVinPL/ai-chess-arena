@@ -57,3 +57,31 @@ def test_complete_chess_game_with_durable_remote_bridge_and_restart(tmp_path):
     final = tournament_checkpoint.load(path, 1)
     assert [m['uci'] for m in final['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4']
     assert len(resumed_bridge.journal.pending()) == 0
+
+
+def test_transport_failure_keeps_worker_reserved_and_bridge_blocked(tmp_path):
+    import pytest
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    initial = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game',
+               'pairing': {'id': 7}, 'moves': [], 'move_times': [],
+               'fen': chess.Board().fen(), 'side_to_move': 'white'}
+    tournament_checkpoint.save(path, 1, initial)
+
+    def broken(job, board, player):
+        raise ConnectionError('worker disconnected')
+
+    bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', broken, clock=lambda: 100)
+    with pytest.raises(ConnectionError, match='disconnected'):
+        bridge.provide(chess.Board(), {'name': 'White'}, None, {})
+    assert bridge.inflight is not None
+    assert DurableWorkerJobs(path, clock=lambda: 100).state('worker_12345678') == 'running'
+    with pytest.raises(RuntimeError, match='Previous move not committed'):
+        bridge.provide(chess.Board(), {'name': 'White'}, None, {})
+    assert tournament_checkpoint.load(path, 1) == initial
+    bridge.journal.recover_after_restart()
+    assert DurableWorkerJobs(path, clock=lambda: 110).state('worker_12345678') == 'unknown'

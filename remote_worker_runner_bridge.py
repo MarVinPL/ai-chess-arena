@@ -35,10 +35,12 @@ class RemoteRunnerBridge:
         self.journal.assign_bound(self.worker_id, job_id, tournament_id=self.tournament_id,
                                   pairing_id=self.pairing_id, expected_sha256=digest, timeout_seconds=600)
         job = {'version': 1, 'job_id': job_id, 'fen': board.fen()}
+        # Preserve the in-flight identity even if transport or validation fails.
+        # The worker remains busy/unknown until explicitly reconciled.
+        self.inflight = job_id
         result = self.infer(job, board.copy(stack=True), player)
         move = validate_result(result, job, board)
         self.journal.stage_validated(self.worker_id, job_id, result)
-        self.inflight = job_id
         return move, {'seconds': 0.1}
 
     def publish(self, record):
