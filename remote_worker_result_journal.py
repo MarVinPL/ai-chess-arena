@@ -82,7 +82,29 @@ class WorkerResultJournal(DurableWorkerJobs):
         """Checkpoint CAS + result acknowledgement; no live scheduler dispatch."""
         from tournament_checkpoint import save_in_transaction
         def apply(db, _worker_id, result):
-            if result.get('job_id') != job_id:
-                raise ValueError('Result job mismatch')
+            import chess
+            import hashlib
+            from remote_worker_protocol import validate_result
+            row = db.execute('SELECT payload_json,sha256 FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,)).fetchone()
+            if row is None or row[1] != expected_sha256 or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+                raise ValueError('Checkpoint changed or corrupted')
+            previous = json.loads(row[0])
+            if previous.get('phase') != 'game' or checkpoint.get('phase') != 'game':
+                raise ValueError('Not an active game checkpoint')
+            if previous.get('pairing') != checkpoint.get('pairing') or previous.get('tournament_id') != tournament_id:
+                raise ValueError('Pairing mismatch')
+            old_moves = previous.get('moves')
+            new_moves = checkpoint.get('moves')
+            if not isinstance(old_moves, list) or not isinstance(new_moves, list) or len(new_moves) != len(old_moves) + 1 or new_moves[:-1] != old_moves:
+                raise ValueError('Checkpoint must append exactly one move')
+            board = chess.Board(previous['fen'])
+            if not board.is_valid():
+                raise ValueError('Invalid source board')
+            move = validate_result(result, {'job_id': job_id}, board)
+            if new_moves[-1].get('uci') != move.uci():
+                raise ValueError('Move does not match validated result')
+            board.push(move)
+            if checkpoint.get('fen') != board.fen() or checkpoint.get('side_to_move') != ('white' if board.turn else 'black'):
+                raise ValueError('Resulting board mismatch')
             save_in_transaction(db, tournament_id, checkpoint, expected_sha256=expected_sha256)
         return self.apply_atomically(job_id, apply)

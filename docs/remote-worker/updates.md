@@ -211,3 +211,13 @@ validate pairing ownership, or attach to `SequentialChessRunner.publish_move`.
 The live tournament runner still uses its original checkpoint save path.
 Production remote chess execution remains disabled until the runner dispatch,
 board validation, crash recovery and replay ownership are integrated and tested.
+
+### Chess move verification at checkpoint application
+
+Before applying a staged result, the adapter now checks the original
+checkpoint hash, active game phase, unchanged pairing, exact one-move append,
+legal UCI against the original FEN, and the resulting FEN/side-to-move.
+Illegal or mismatched moves roll back acknowledgement and checkpoint changes.
+This does **not** yet establish a durable job-to-pairing/FEN assignment record;
+that mapping, full checkpoint metadata integrity, and live runner dispatch
+must be completed before enabling remote chess execution.
