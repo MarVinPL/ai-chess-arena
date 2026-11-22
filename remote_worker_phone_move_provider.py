@@ -41,8 +41,12 @@ class ArenaPhoneMoveProvider:
         self.timeout_seconds = timeout_seconds
         self.on_assignment = on_assignment
         self.on_heartbeat = on_heartbeat
+        # In-memory receipt awaiting the ONLY authoritative Arena checkpoint.
+        self.pending_result = None
 
     def __call__(self, board: chess.Board, player: dict, stop_event, kwargs: dict):
+        if self.pending_result is not None:
+            raise PhoneMoveUnavailable("Previous phone move has no committed Arena checkpoint")
         if not isinstance(board, chess.Board) or not board.is_valid():
             raise PhoneMoveUnavailable("Invalid Arena board for phone inference")
         if not isinstance(player, dict) or not isinstance(kwargs, dict):
@@ -86,13 +90,13 @@ class ArenaPhoneMoveProvider:
             except ValueError as exc:
                 raise PhoneMoveUnavailable("Remote result lease invalid") from exc
             if uci is not None:
-                # This operation validates the exact assigned FEN, commits
-                # acceptance in Arena, then the owning runner pushes/checkpoints.
-                move = self.delivery.finalize_arena_result(
-                    self.worker_id, job_id, uci,
-                )
+                # Do not release the phone here. The Arena runner must first
+                # build the move record, then atomically commit its checkpoint
+                # together with the remote result and lease release.
+                move = chess.Move.from_uci(uci)
                 if move not in board.legal_moves:
                     raise PhoneMoveUnavailable("Arena rejected illegal phone UCI")
+                self.pending_result = (self.worker_id, job_id, uci)
                 return move, {
                     "seconds": max(0.0, min(3600.0, self.clock() - started)),
                     "runtime": "android-local-llama-cpp",
@@ -103,6 +107,20 @@ class ArenaPhoneMoveProvider:
                 self.on_heartbeat(self.worker_id, job_id, board.fen(), player)
                 next_heartbeat = self.clock() + 10
             self.sleep(self.poll_seconds)
+
+    def commit_checkpoint_for_record(self, tournament_id, checkpoint, record):
+        """Called ONLY by Arena's checkpoint writer after a move is prepared."""
+        pending = self.pending_result
+        if pending is None or not isinstance(record, dict) or (
+            record.get("uci") != pending[2]
+        ):
+            raise PhoneMoveUnavailable("No matching remote UCI for Arena checkpoint")
+        move = self.delivery.finalize_arena_result(
+            pending[0], pending[1], pending[2],
+            tournament_id=tournament_id, checkpoint=checkpoint,
+        )
+        self.pending_result = None
+        return move
 
 
 class ArenaPhonePoolProvider:
@@ -120,6 +138,17 @@ class ArenaPhonePoolProvider:
         self.clock = clock
         self.sleep = sleep
         self.timeout_seconds = timeout_seconds
+        self.active_provider = None
+
+    def commit_checkpoint_for_record(self, tournament_id, checkpoint, record):
+        """Single-owner Arena checkpoint acknowledgement, not a phone write."""
+        if self.active_provider is None:
+            raise PhoneMoveUnavailable("No phone result pending Arena checkpoint")
+        move = self.active_provider.commit_checkpoint_for_record(
+            tournament_id, checkpoint, record,
+        )
+        self.active_provider = None
+        return move
 
     def __call__(self, board: chess.Board, player: dict, stop_event, kwargs: dict):
         if not isinstance(player, dict):
@@ -139,4 +168,12 @@ class ArenaPhonePoolProvider:
             on_assignment=self.on_assignment,
             on_heartbeat=self.on_heartbeat,
         )
-        return provider(board, player, stop_event, kwargs)
+        if self.active_provider is not None:
+            raise PhoneMoveUnavailable("Previous remote move not checkpointed by Arena")
+        self.active_provider = provider
+        try:
+            return provider(board, player, stop_event, kwargs)
+        except BaseException:
+            # The durable remote lease remains fenced for reconciliation.
+            self.active_provider = None
+            raise
