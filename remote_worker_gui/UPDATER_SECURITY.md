@@ -688,3 +688,32 @@ przycisku. W razie niepewnego stanu instalatora/rezerwacji zachować blokadę
 To jest **docelowy prosty UX, a nie zrealizowane wznowienie** w aktualnym
 PR #197. Certyfikat podpisujący pozostaje ten sam z istniejącego GitHub
 Secret, bez nowego klucza lub płatnych integracji.
+
+
+## 2026-11-22 — aktualizacja niezależnie od bieżącego stanu zadania
+
+Decyzja nadrzędna: **użytkownik może zainicjować aktualizację przy idle,
+w trakcie partii albo przy stanie wymagającym zatrzymania Workera**.
+Nie wolno odmawiać samego *rozpoczęcia procedury* tylko dlatego,
+że Worker wykonuje zadanie. Nie trzeba czekać na naturalny koniec
+partii ani na nowy checkpoint. Stan `Running` nie jest jednak
+dowodem bezpiecznego zakończenia procesu i nie uprawnia do wywołania
+`PackageInstaller` podczas aktywnej inferencji.
+
+Nowy stan polityki Rust `InterruptedAndFenced` pozwala na instalację
+po rzeczywistym zatrzymaniu wykonawcy, unieważnieniu poprzedniej
+dzierżawy i przygotowaniu do ręcznego wznowienia ostatniej partii
+(z ostatniego poprawnego checkpointu albo od początku). To **nie** jest
+`idle_confirmed`, a sam stan nie może być zadeklarowany przez JS,
+niezweryfikowany HTTP ani niezależny licznik. Instalacja wymaga nadal
+prawdziwego dowodu takiego zatrzymania, sprawdzonej tożsamości i SHA-256
+APK, certyfikatu istniejącego GitHub Secret, zgody systemu Android,
+niezmienionego hold koordynatora oraz odbiornika wyniku instalacji.
+
+Docelowy UX to: **Aktualizuj → potwierdzenie Androida → Wznów**.
+Po aktualizacji nie wznawiamy partii automatycznie; przycisk `Wznów`
+pozostaje nieaktywny, jeśli nie ma bezpiecznego jednorazowego
+przydziału po aktualizacji. W aktualnym kodzie `update_installation_readiness`
+wciąż zwraca odmowę, ponieważ nie istnieje działające powiązanie
+PackageInstaller/callback z wykonawcą. Nie deklarować gotowości instalacji
+na podstawie samego rozszerzenia enuma i unit testów.
