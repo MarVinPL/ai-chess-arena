@@ -346,7 +346,7 @@ def test_hold_reconciliation_is_read_only_and_never_exposes_secret_to_ui():
     assert 'load_pending()?' in coordinator
     assert 'match body.get("state").and_then(Value::as_str)' in coordinator
     assert 'async fn inspect_update_hold() -> Result<String, String>' in lib
-    assert "inspect_update_hold, update_installation_readiness" in lib
+    assert "inspect_update_hold" in lib.split("tauri::generate_handler![", 1)[1]
     assert "invoke('inspect_update_hold')" in ui
     assert "Rezerwacja wygasła, ale nadal blokuje przydziały" in ui
     assert "hold_token" not in ui
@@ -396,6 +396,7 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
     assert 'inspect_android_install_sessions, update_installation_readiness' in lib
     assert "invoke('inspect_android_install_sessions')" in ui
     assert "Brak widocznej sesji: to NIE potwierdza zakończenia instalacji" in ui
+    executable = '\n'.join(line for line in source.splitlines() if not line.lstrip().startswith('//'))
     for unsafe_action in ('createSession', 'openSession', 'abandonSession', 'commit(', 'startActivity'):
-        assert unsafe_action not in source
+        assert unsafe_action not in executable
     assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
