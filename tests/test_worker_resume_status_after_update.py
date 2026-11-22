@@ -15,6 +15,59 @@ def test_no_checkpoint_does_not_enable_resume(tmp_path):
     assert state == {"state": "no_checkpoint", "resume_available": False}
 
 
+def test_saved_checkpoint_never_becomes_runnable_without_executor(tmp_path):
+    import hashlib
+    import json
+    pause = WorkerUpdatePause(tmp_path / "jobs.sqlite")
+    payload = {
+        "schema_version": 1,
+        "job_id": "job_12345678",
+        "resume_mode": "restart",
+        "payload": {},
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                     separators=(",", ":"), allow_nan=False)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    with pause.jobs._db() as db:
+        db.execute(
+            "INSERT INTO worker_update_resume VALUES (?,?,?,?,?,?)",
+            ("worker_12345678", "job_12345678", "a" * 32, raw, digest, 1000),
+        )
+        db.execute(
+            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+            ("worker_12345678", "job_12345678", "a" * 32,
+             "acknowledged", 1000, 1000),
+        )
+        db.execute(
+            "INSERT INTO worker_job_safety VALUES (?,?,?,?,?)",
+            ("worker_12345678", None, "unknown", None, 1000),
+        )
+        db.execute(
+            "INSERT INTO worker_update_holds VALUES (?,?,?,?)",
+            ("worker_12345678", "b" * 64, 1000, 1300),
+        )
+    status = pause.resume_status("worker_12345678")
+    assert status["state"] == "waiting_update_reconciliation"
+    assert status["resume_available"] is False
+    assert status["checkpoint_sha256"] == digest
+    assert "checkpoint" not in status
+    assert "request_id" not in status
+    with pause.jobs._db() as db:
+        db.execute("DELETE FROM worker_update_holds WHERE worker_id=?",
+                   ("worker_12345678",))
+    status = pause.resume_status("worker_12345678")
+    assert status["state"] == "awaiting_executor"
+    assert status["resume_available"] is False
+    with pause.jobs._db() as db:
+        db.execute(
+            "UPDATE worker_job_safety SET state='idle_confirmed' WHERE worker_id=?",
+            ("worker_12345678",),
+        )
+    status = pause.resume_status("worker_12345678")
+    assert status["state"] == "blocked"
+    assert status["resume_available"] is False
+
+
 def test_machine_authenticated_resume_status_has_no_unsafe_dispatch():
     section = SERVER.split("if path == '/api/remote-workers/update-resume-status':", 1)[1].split(
         "if path == '/api/remote-workers/update-pause-poll':", 1
