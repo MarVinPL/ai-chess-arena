@@ -690,3 +690,11 @@ A staged move after restart is not consumed if its source checkpoint changed:
 CAS rejects replay, leaves the staged journal entry intact, retains unknown
 worker state, and reports a manual checkpoint conflict. No automatic retry or
 new job assignment is performed.
+
+### Android APK build preflight
+
+Added `docs/remote-worker/android-apk-build.md` and a read-only Android build
+prerequisite checker. On the current VPS, Node/npm/Rust are available, while
+JDK, Android SDK and NDK are not yet detected. No APK was built or signed.
+The planned Tauri Android port must replace desktop-only credential storage
+with Android Keystore integration before distributing any worker credentials.
