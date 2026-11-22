@@ -536,3 +536,31 @@ Dodano test, który celowo usuwa wpis pauzy i sztucznie ustawia stare
 odmawiają przydziału, a zapis checkpointu przetrwał. Ostateczne
 wznowienie wymaga osobnego zaufanego protokołu dispatcher–Worker,
 kontroli wersji i idempotencji wyników.
+
+## 2026-11-22 — jednorazowe uzgodnienie wznowienia po aktualizacji
+
+Wewnętrzna metoda `WorkerUpdatePause.reconcile_resume` umożliwia
+zaufanemu dispatcherowi dopięcie wznowienia w jednej transakcji
+SQLite (`BEGIN IMMEDIATE`, `synchronous=FULL`).
+
+Warunki: zakończona i zwolniona blokada instalacji, zgodne
+`worker_id`/`job_id`/`request_id`/`checkpoint_sha256`,
+nienaruszony checkpoint oraz jego ponowna weryfikacja domenowa,
+uzgodniony stan `unknown` Workera, aktualny ACK gotowości
+i **potwierdzenie przyjęcia dokładnie tego zadania do wznowienia**
+przez rzeczywistego Workera. Dopiero wtedy w jednej transakcji
+powstaje dzierżawa `running` dla **tego samego job_id** i usuwane są
+zapisy `worker_update_resume` oraz pauzy. Ponowne wykonanie tej
+operacji lub wyścig dwóch dispatcherów odrzuca drugi zapis.
+Nieznany lub zepsuty checkpoint zachowuje blokadę.
+
+**To API domenowe, jeszcze nie pełna obsługa sieciowa.** Ani Android
+Worker, ani koordynator nie wystawiają jeszcze działającego protokołu
+akceptacji resume/STOP/checkpoint; nie dodano automatycznego wywołania
+tej metody ani ścieżki publicznego HTTP. Dowody gotowości muszą być
+otrzymane z zaufanego transportu i zweryfikowane, nie należy
+przekazywać do metody surowych flag z żądania klienta.
+Po awarii między zaakceptowaniem zadania przez urządzenie a zapisem
+koordynatora konieczne będzie rozstrzygnięcie identyfikatora
+przyjęcia (idempotentny protokół), zanim automatyczne wznowienie
+zostanie włączone.
