@@ -872,13 +872,34 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
 
-        # Remote execution is not enabled in the production scheduler yet.
-        # Explicit selection prevents accidental activation and never constructs
-        # a second checkpoint writer alongside the local tournament runner.
+        # Optional phone-only inference uses the SAME Arena-owned sequential
+        # runner and checkpoint writer. No remote fallback after assignment,
+        # and no code path enables this without operator opt-in.
         from remote_worker_runner_selection import select_game_runner
+        phone_inference_enabled = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+        phone_move_provider = None
+        if phone_inference_enabled:
+            from remote_worker_phone_move_provider import ArenaPhonePoolProvider
+
+            def report_phone_assignment(worker_id, job_id, fen, player):
+                # Arena controls the FEN and worker association: this event
+                # powers the Android read-only board, NOT local phone state.
+                set_live(
+                    'generating', 'Model oblicza ruch na telefonie',
+                    worker_id=worker_id, job_id=job_id, fen=fen,
+                    model=player.get('name'), white=runtime_context.get('white'),
+                    black=runtime_context.get('black'),
+                    pairing_id=pairing['id'],
+                )
+
+            phone_move_provider = ArenaPhonePoolProvider(
+                DB, on_assignment=report_phone_assignment,
+            )
         game_runner = select_game_runner(
             'local',
-            local_factory=lambda: engine_runner.SequentialChessRunner(tournament_runtime),
+            local_factory=lambda: engine_runner.SequentialChessRunner(
+                tournament_runtime, move_provider=phone_move_provider,
+            ),
         )
         while True:
             if tournament_stop_event.is_set():
