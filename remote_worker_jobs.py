@@ -90,6 +90,27 @@ class DurableWorkerJobs:
         return bool(row and secrets.compare_digest(row[0], token)
                     and self.clock() < row[1])
 
+    def inspect_update_hold(self, worker_id, token):
+        """Read-only recovery evidence for the original, journaled token.
+
+        'absent' does NOT prove that Android PackageInstaller has finished.
+        'expired' remains a durable assignment block, not an auto-release.
+        A different token is rejected without disclosing reservation details.
+        """
+        self._id(worker_id)
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            raise ValueError('Invalid update reservation capability')
+        with self._db() as db:
+            row = db.execute(
+                'SELECT hold_token,expires_at FROM worker_update_holds WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+        if row is None:
+            return 'absent'
+        if not secrets.compare_digest(row[0], token):
+            raise ValueError('Update reservation mismatch')
+        return 'active' if self.clock() < row[1] else 'expired'
+
     def release_update_hold(self, worker_id, token):
         """Explicit coordinator release. Only the exact token clears a hold.
 
