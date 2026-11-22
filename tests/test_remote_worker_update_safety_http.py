@@ -237,3 +237,58 @@ def test_reservation_rejects_absent_or_invalid_client_journal_secret(endpoint):
         assert "hold_token" not in reply
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT count(*) FROM worker_update_holds").fetchone()[0] == 0
+
+
+def test_authenticated_hold_status_survives_expiry_without_releasing(endpoint):
+    db, token, post = endpoint
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)",
+            (WORKER_ID, time.time()),
+        )
+    hold_token = "a" * 64
+    status, reply = post({
+        **request_data(token), "hold_token": hold_token
+    }, route="update-reserve")
+    assert status == 200
+    assert reply["hold_token"] == hold_token
+    request = {**request_data(token), "hold_token": hold_token}
+    status, found = post(request, route="update-hold-status")
+    assert status == 200
+    assert found["state"] == "active"
+    assert found["authenticated"] is True
+    assert found["source"] == "coordinator"
+    assert found["worker_id"] == WORKER_ID
+    assert found["nonce"] == NONCE
+    assert found["install_allowed"] is False
+    assert "hold_token" not in found
+
+    status, bad = post({
+        **request_data(token), "hold_token": "b" * 64
+    }, route="update-hold-status")
+    assert status == 409
+    assert "state" not in bad
+    status, bad = post({
+        **request_data("invalid-token"), "hold_token": hold_token
+    }, route="update-hold-status")
+    assert status == 401
+    assert "state" not in bad
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE worker_update_holds SET expires_at=? WHERE worker_id=?",
+            (time.time() - 1, WORKER_ID)
+        )
+    status, expired = post(request, route="update-hold-status")
+    assert status == 200
+    assert expired["state"] == "expired"
+    assert expired["install_allowed"] is False
+    from remote_worker_jobs import DurableWorkerJobs
+    with pytest.raises(ValueError, match="reserved"):
+        DurableWorkerJobs(db).assign(WORKER_ID, "job_12345678", timeout_seconds=30)
+
+    status, released = post(request, route="update-release")
+    assert status == 200 and released["released"] is True
+    status, absent = post(request, route="update-hold-status")
+    assert status == 200 and absent["state"] == "absent"
+    assert absent["install_allowed"] is False
