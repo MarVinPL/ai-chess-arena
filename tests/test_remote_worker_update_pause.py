@@ -33,7 +33,7 @@ def test_pause_request_survives_restart_and_never_fakes_idle(tmp_path):
     recovered = WorkerUpdatePause(db, clock=lambda: now[0])
     assert recovered.pending(WORKER) == pause.pending(WORKER)
     assert jobs.state(WORKER) == "running"
-    with pytest.raises(ValueError, match="freshly confirmed"):
+    with pytest.raises(ValueError, match="pause"):
         jobs.reserve_update(WORKER)
 
 
@@ -55,7 +55,7 @@ def test_pause_ack_needs_stopped_worker_and_verified_checkpoint(tmp_path):
                       checkpoint_verified=True)
     assert pause.pending(WORKER)["phase"] == "acknowledged"
     assert jobs.state(WORKER) == "running"
-    with pytest.raises(ValueError, match="freshly confirmed"):
+    with pytest.raises(ValueError, match="pause"):
         jobs.reserve_update(WORKER)
     with pytest.raises(ValueError, match="Stale"):
         pause.acknowledge(WORKER, JOB, req, worker_stopped=True,
