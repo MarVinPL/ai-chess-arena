@@ -242,3 +242,33 @@ idle koordynatora oraz systemowy instalator z zgodą użytkownika.
 Nawet pozytywne `PackageManager` oraz SHA-256 nie pozwalają
 pominąć późniejszej kontroli Android PackageInstaller. **NO-GO
 dla instalacji i zamknięcia Issue #196**.
+
+## 2026-11-22 — kontrakt świeżego idle koordynatora (fail closed)
+
+`check_update_safety` przesyła losowy 128-bitowy `nonce` (RNG systemu)
+do istniejącego autoryzowanego endpointu HTTPS
+`/api/remote-workers/update-safety`, wraz z `worker_id` i tokenem.
+Odpowiedź `idle_confirmed` jest akceptowana jako **status odczytu**
+dopiero, gdy JSON równocześnie zawiera:
+
+- `state="idle_confirmed"`, `authenticated=true`,
+  `source="coordinator"`, `active_tasks=0`;
+- dokładny `worker_id` z zapytania i ten sam `nonce`;
+- `checked_at_unix_ms` z wiekiem najwyżej 30 sekund, z tolerancją
+  przesunięcia zegara w przyszłość najwyżej 5 sekund.
+
+Brak pól, niezgodny nonce, uruchomione zadania, przeterminowana
+odpowiedź, błąd RNG/HTTPS → `unknown`/błąd, nigdy `idle_confirmed`.
+Istniejący backend może **jeszcze nie implementować tego kontraktu**:
+to świadomie oznacza `unknown` i wymaga osobnego, udokumentowanego
+podłączenia trwałego rejestru zadań po stronie koordynatora. Nie
+wolno interpretować braku danych jako zgody na instalację.
+
+**Ważne:** nawet poprawny status odczytu NIE otwiera instalatora:
+`update_installation_readiness` nadal wymusza `can_install=false`.
+Do instalacji potrzebny będzie ponowny nonce-bound odczyt bezpośrednio
+przed Android PackageInstaller, a także kontrola podpisu APK i
+świadoma zgoda użytkownika.
+
+Komponent używa bezpłatnego `getrandom=0.2.17` już istniejącego w
+Cargo.lock, bez nowych usług i bez udostępniania sekretu podpisującego.
