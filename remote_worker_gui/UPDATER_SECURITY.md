@@ -272,3 +272,30 @@ przed Android PackageInstaller, a także kontrola podpisu APK i
 
 Komponent używa bezpłatnego `getrandom=0.2.17` już istniejącego w
 Cargo.lock, bez nowych usług i bez udostępniania sekretu podpisującego.
+
+## 2026-11-22 — serwerowa rezerwacja aktualizacji i zwolnienie
+
+Koordynator obsługuje teraz dwa **oddzielne** endpointy HTTPS z
+uwierzytelnieniem istniejącym tokenem Workera i losowym `nonce`:
+
+- `POST /api/remote-workers/update-reserve` przyjmuje `worker_id`,
+  `token`, `nonce`. Rezerwuje przez `BEGIN IMMEDIATE` jedynie
+  świeży `idle_confirmed` i zwraca jednorazowy 256-bitowy
+  `hold_token` oraz `expires_at_unix_ms`. Odpowiedź zawsze zawiera
+  `install_allowed=false`.
+- `POST /api/remote-workers/update-release` przyjmuje dodatkowo
+  `hold_token`. Usuwa rezerwację tylko przy dokładnym dopasowaniu
+  sekretu i przestawia stan Workera na `unknown`: wymagane będzie
+  ponowne zaufane uzgodnienie stanu przed przyszłym zadaniem.
+
+Rezerwacje nie są automatycznie zwalniane przy upływie TTL ani po
+restarcie. Zaufany koordynator może je zwolnić oryginalnym tokenem
+również po wygaśnięciu TTL, ale nie może na tej podstawie uznać
+Workera za gotowego do zadań. Brak tokenu lub błędny token ⇒ brak zmian.
+
+**NIE PODŁĄCZONO jeszcze wywołania rezerwacji do interfejsu Workera.**
+Uruchamianie rezerwacji bez gotowego procesu instalacji mogłoby
+pozostawić trwale zablokowane przydziały. Następny krok to
+orkiestracja po stronie aplikacji bezpośrednio przed wywołaniem
+systemowego instalatora, obsługa anulowania i wznowienia po
+restarcie. Endpoint nie jest dowodem gotowego instalatora.
