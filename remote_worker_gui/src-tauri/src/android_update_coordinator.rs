@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -313,6 +313,79 @@ pub(crate) fn verify_pause_poll_reply(
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// Read a pre-assigned inference job. This is transport only: an Android
+/// local GGUF runtime must validate model bytes and accept the job before
+/// inference can start. JS never receives the machine token or model paths.
+#[allow(dead_code)]
+pub(crate) async fn fetch_my_inference_job(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<Value, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let endpoint = coordinator_endpoint(base, "job-poll")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+        }))
+        .send().await.map_err(|_| "Brak połączenia z kolejką Areny")?;
+    if !response.status().is_success() {
+        return Err("Arena odmówiła odczytu zadania".into());
+    }
+    let body: Value = response.json().await
+        .map_err(|_| "Nieprawidłowa odpowiedź zadania".to_owned())?;
+    if body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
+        return Err("Odpowiedź zadania nie należy do tego telefonu".into());
+    }
+    match body.get("state").and_then(Value::as_str) {
+        Some("none" | "blocked" | "expired") => {
+            if body.get("job").is_some() {
+                return Err("Nieaktywna kolejka ujawnia obce zadanie".into());
+            }
+            Ok(serde_json::json!({
+                "state": body.get("state").and_then(Value::as_str).unwrap_or("blocked")
+            }))
+        }
+        Some("assigned") => {
+            let job = body.get("job").and_then(Value::as_object)
+                .ok_or("Brak zatwierdzonego zadania".to_owned())?;
+            if job.len() != 6 {
+                return Err("Niezgodny format zadania".into());
+            }
+            let version = job.get("version").and_then(Value::as_u64)
+                .ok_or("Brak wersji protokołu".to_owned())?;
+            let job_id = job.get("job_id").and_then(Value::as_str)
+                .ok_or("Brak ID zadania".to_owned())?;
+            let fen = job.get("fen").and_then(Value::as_str)
+                .ok_or("Brak FEN".to_owned())?;
+            let digest = job.get("model_sha256").and_then(Value::as_str)
+                .ok_or("Brak SHA-256 modelu".to_owned())?;
+            let max_tokens = job.get("max_tokens").and_then(Value::as_u64)
+                .ok_or("Brak limitu tokenów".to_owned())?;
+            let timeout = job.get("timeout_seconds").and_then(Value::as_u64)
+                .ok_or("Brak limitu czasu".to_owned())?;
+            if version != 1 || !valid_worker_id(job_id)
+                || fen.len() > 120 || fen.split(' ').count() != 6
+                || !fen.bytes().all(|b| b.is_ascii_alphanumeric()
+                    || matches!(b, b'/' | b' ' | b'-'))
+                || digest.len() != 64 || !digest.bytes().all(|b|
+                    b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || !(1..=1024).contains(&max_tokens)
+                || !(1..=600).contains(&timeout) {
+                return Err("Arena przysłała nieprawidłowe zadanie".into());
+            }
+            Ok(serde_json::json!({
+                "state": "assigned", "job": job,
+            }))
+        }
+        _ => Err("Nieznany stan zadania".into()),
     }
 }
 
