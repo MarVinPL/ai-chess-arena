@@ -36,6 +36,11 @@ fn forget_worker_token() -> Result<(), String> {
 }
 
 
+#[tauri::command]
+fn worker_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[derive(Serialize)]
 struct WorkerStatus {
     connected: bool,
@@ -146,7 +151,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
