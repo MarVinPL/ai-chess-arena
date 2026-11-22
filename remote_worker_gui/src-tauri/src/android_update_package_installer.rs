@@ -1,5 +1,5 @@
-//! Read-only Android PackageInstaller session inventory.
-//! No Session.create(), commit(), abandon(), intent or package installation.
+//! Android PackageInstaller session inventory and uncommitted APK staging.
+//! No Session.commit(), intent or package installation.
 //! Sessions can disappear after completion; absence is NEVER success or
 //! evidence that the coordinator hold may be cleared.
 
@@ -99,12 +99,18 @@ pub(crate) fn stage_verified_apk_session(
     apk: &std::path::Path,
     verified_identity: bool,
     coordinator_reserved: bool,
+    expected_sha256: &str,
 ) -> Result<i32, String> {
     use std::io::Read;
     use jni::objects::JValue;
+    use sha2::{Digest, Sha256};
 
     if !verified_identity || !coordinator_reserved {
         return Err("Brak zweryfikowanego podpisu lub rezerwacji aktualizacji".into());
+    }
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|c|
+        c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return Err("Nieprawidłowy SHA-256 APK".into());
     }
     let meta = std::fs::symlink_metadata(apk)
         .map_err(|_| "Brak pobranego APK")?;
@@ -158,6 +164,7 @@ pub(crate) fn stage_verified_apk_session(
                     .map_err(|_| "Nie można odczytać zweryfikowanego APK")?;
                 let mut buffer = [0u8; 64 * 1024];
                 let mut written = 0u64;
+                let mut digest = Sha256::new();
                 loop {
                     let count = file.read(&mut buffer)
                         .map_err(|_| "Nie można odczytać APK")?;
@@ -165,6 +172,7 @@ pub(crate) fn stage_verified_apk_session(
                     written = written.checked_add(count as u64)
                         .ok_or("Nieprawidłowy rozmiar APK")?;
                     if written > meta.len() { return Err("APK zmienił rozmiar".into()); }
+                    digest.update(&buffer[..count]);
                     let bytes = env.byte_array_from_slice(&buffer[..count])
                         .map_err(jni_error)?;
                     env.call_method(&stream, "write", "([BII)V",
@@ -172,6 +180,9 @@ pub(crate) fn stage_verified_apk_session(
                             JValue::Int(count as i32)]).map_err(jni_error)?;
                 }
                 if written != meta.len() { return Err("APK jest niekompletny".into()); }
+                if format!("{:x}", digest.finalize()) != expected_sha256 {
+                    return Err("APK zmienił zawartość podczas przekazania Androidowi".into());
+                }
                 env.call_method(&session, "fsync", "(Ljava/io/OutputStream;)V",
                     &[JValue::Object(&stream)]).map_err(jni_error)?;
                 Ok(())
