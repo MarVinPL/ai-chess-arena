@@ -146,9 +146,33 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
     Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes })
 }
 
+// Fail closed: a missing coordinator confirmation is not an idle worker.
+// This gate is advisory until the scheduler transport reports verified state.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum VerifiedTaskState {
+    IdleConfirmed,
+    Running,
+    Unknown,
+}
+
+#[cfg(test)]
+fn may_install_update(state: VerifiedTaskState, signature_verified: bool, newer_version: bool) -> bool {
+    state == VerifiedTaskState::IdleConfirmed && signature_verified && newer_version
+}
+
 #[cfg(test)]
 mod version_tests {
-    use super::numeric_version;
+    use super::{numeric_version, may_install_update, VerifiedTaskState};
+    #[test]
+    fn update_installation_requires_verified_idle_and_signature() {
+        assert!(may_install_update(VerifiedTaskState::IdleConfirmed, true, true));
+        for state in [VerifiedTaskState::Running, VerifiedTaskState::Unknown] {
+            assert!(!may_install_update(state, true, true));
+        }
+        assert!(!may_install_update(VerifiedTaskState::IdleConfirmed, false, true));
+        assert!(!may_install_update(VerifiedTaskState::IdleConfirmed, true, false));
+    }
     #[test]
     fn compares_numeric_versions_without_lexical_ordering() {
         assert!(numeric_version("v1.10.0") > numeric_version("1.9.9"));

@@ -17,6 +17,8 @@
 - Preserve token credentials and user preferences across normal updates; test migration before release. Provide release notes, current version, progress and actionable error states.
 - Rate-limit periodic checks and avoid update checks in the hot path of inference. No paid hosting or update service is required.
 
+The Rust prototype includes a **test-only fail-closed installation gate** (`may_install_update`) and unit tests. It cannot install updates; no scheduler-verified idle signal or signature verifier is connected yet.
+
 ## Acceptance tests before enabling
 
 1. Valid signed newer release is discovered; user can choose install/defer.
