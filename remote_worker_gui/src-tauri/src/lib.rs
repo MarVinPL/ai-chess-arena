@@ -454,6 +454,9 @@ async fn install_downloaded_worker_apk(
             || android_update_install_journal::load()?.is_some() {
             return Err("Wcześniejsza instalacja wymaga uzgodnienia".into());
         }
+        if android_local_llama::generation_active() {
+            return Err("Telefon aktualnie oblicza ruch — instalacja APK zablokowana".into());
+        }
         // Never turn a failed/unknown coordinator response into an idle state.
         // The server's reserve transaction rechecks state atomically.
         let state = check_update_safety(server.clone(), worker_id.clone()).await?;
@@ -527,6 +530,31 @@ async fn poll_my_inference_job(
     ).await
 }
 
+/// Refuse new or completed inference when Arena has asked for STOP.
+/// This is a negative safety gate, NOT STOP/ACK: the Arena remains owner of
+/// the checkpoint and keeps the execution lease fenced until reconciliation.
+#[cfg(target_os = "android")]
+async fn check_phone_stop_gate(
+    server: &str, worker_id: &str, token: &str, job_id: &str,
+) -> Result<(), String> {
+    use android_update_coordinator::StopInstruction;
+    match android_update_coordinator::poll_pause_instruction(
+        server, worker_id, token,
+    ).await? {
+        StopInstruction::None => Ok(()),
+        StopInstruction::StopCheckpoint { job_id: requested, .. } => {
+            if requested != job_id {
+                Err("Polecenie STOP dotyczy innego zadania — blokada".into())
+            } else {
+                Err("Arena zażądała STOP. Telefon nie wyśle ruchu; wymagane uzgodnienie checkpointu przez Arenę".into())
+            }
+        }
+        StopInstruction::AwaitReconciliation | StopInstruction::Blocked => {
+            Err("Arena blokuje inferencję do uzgodnienia zatrzymania".into())
+        }
+    }
+}
+
 /// Execute exactly one Arena-assigned move on THIS Android device, using a
 /// local llama.cpp service (for example in Termux). No VPS inference, no game
 /// state or checkpoint writes on the phone. The local llama-server model
@@ -571,7 +599,11 @@ async fn execute_phone_inference_once(
             .ok_or("Brak zadania obliczeń")?;
         let job_id = job.get("job_id").and_then(serde_json::Value::as_str)
             .ok_or("Brak identyfikatora zadania")?;
+        // STOP and missing coordinator connectivity both fail closed. This
+        // request does not ACK the pause nor release its lease.
+        check_phone_stop_gate(&server, &worker_id, &token, job_id).await?;
         let uci = android_local_llama::infer_local_uci(job).await?;
+        check_phone_stop_gate(&server, &worker_id, &token, job_id).await?;
         // This check is also performed atomically by the coordinator result
         // endpoint. It guards against APK installation while generating.
         if android_update_recovery::load_pending()?.is_some()
