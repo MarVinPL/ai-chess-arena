@@ -265,3 +265,32 @@ def test_ready_endpoint_is_machine_authenticated_not_an_assignment():
     assert "'nonce': nonce" in section
     assert "async fn announce_phone_ready(" in coordinator
     assert 'model_sha256.len() != 64' in coordinator
+
+
+def test_unknown_or_failed_worker_lease_cannot_be_rearmed_by_phone_ready(tmp_path):
+    path, delivery = setup(tmp_path)
+    for state in ("unknown", "failed"):
+        with sqlite3.connect(path) as db:
+            db.execute(
+                "UPDATE worker_job_safety SET state=?,job_id=NULL WHERE worker_id=?",
+                (state, WORKER),
+            )
+        assert delivery.register_local_ready(WORKER, JOB["model_sha256"]) == "blocked"
+        with sqlite3.connect(path) as db:
+            assert db.execute(
+                "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                (WORKER,),
+            ).fetchone() == (state, None)
+        with pytest.raises(ValueError):
+            delivery.assign_from_arena(WORKER, JOB)
+
+
+def test_first_authenticated_ready_registration_is_idle_not_running(tmp_path):
+    path = tmp_path / "empty.sqlite"
+    delivery = WorkerInferenceDelivery(path, clock=lambda: 1000.0)
+    assert delivery.register_local_ready(WORKER, JOB["model_sha256"]) == "ready"
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("idle_confirmed", None)
