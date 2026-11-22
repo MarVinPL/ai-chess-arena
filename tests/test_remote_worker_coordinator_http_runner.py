@@ -11,6 +11,8 @@ from remote_worker_coordinator_transport import StagedResultTransport
 from remote_worker_http_ingest import create_loopback_server
 from remote_worker_runner_bridge import RemoteRunnerBridge
 from remote_worker_tokens import WorkerTokenStore
+from remote_worker_heartbeat import WorkerHeartbeatStore
+from remote_worker_job_binding import BoundWorkerResults
 from test_remote_worker_job_binding import setup_game
 
 
@@ -23,6 +25,8 @@ def test_runner_dispatches_bound_job_via_http_pull_and_commits_once(tmp_path):
     path, _, _, _ = setup_game(tmp_path)
     worker_id = 'worker_12345678'
     token = WorkerTokenStore(path).issue(worker_id, ttl_seconds=600)
+    with BoundWorkerResults(path)._db() as db:
+        db.execute("INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,0)", (worker_id,))
     server = create_loopback_server(path)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -57,7 +61,9 @@ def test_runner_dispatches_bound_job_via_http_pull_and_commits_once(tmp_path):
             return transport.wait(job, board, player, timeout=3)
         finally:
             thread.join(timeout=3)
-    bridge = RemoteRunnerBridge(path, 1, 7, worker_id, infer)
+    assert post('heartbeat', credentials)[0] == 202
+    assert WorkerHeartbeatStore(path).recent(worker_id)
+    bridge = RemoteRunnerBridge(path, 1, 7, worker_id, infer, require_fresh_heartbeat=True)
     class StopAfterMove:
         stopped = False
         def is_set(self):

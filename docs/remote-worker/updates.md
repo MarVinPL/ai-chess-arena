@@ -648,3 +648,12 @@ and binds its checkpoint. Missing heartbeat schema fails closed. Concurrent
 reservation regression confirms only one assignment succeeds. The flag is
 opt-in to preserve existing offline integration tests; production dispatch is
 not enabled. Heartbeat alone still does not attest execution capacity.
+
+### Heartbeat-gated end-to-end remote move
+
+`RemoteRunnerBridge` now accepts an opt-in `require_fresh_heartbeat` flag
+and forwards it to the transactional bound-job reservation. The isolated
+HTTP runner integration test sends an authenticated heartbeat, confirms
+durable idle state, reserves the job, retrieves it over loopback HTTP,
+submits the move, and commits the checkpoint exactly once. Production
+`server.py` still selects the local runner; this is not a deployment.

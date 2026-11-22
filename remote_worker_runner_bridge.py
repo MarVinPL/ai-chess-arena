@@ -12,7 +12,7 @@ from remote_worker_protocol import validate_result
 
 
 class RemoteRunnerBridge:
-    def __init__(self, db_path, tournament_id, pairing_id, worker_id, infer, *, clock=None):
+    def __init__(self, db_path, tournament_id, pairing_id, worker_id, infer, *, clock=None, require_fresh_heartbeat=False):
         self.journal = BoundWorkerResults(db_path, clock=clock)
         self.db_path = db_path
         self.tournament_id = tournament_id
@@ -20,6 +20,7 @@ class RemoteRunnerBridge:
         self.worker_id = worker_id
         self.infer = infer  # offline test transport: (job, board, player) -> result
         self.inflight = None
+        self.require_fresh_heartbeat = require_fresh_heartbeat
 
     def provide(self, board, player, stop_event, kwargs):
         if self.inflight is not None:
@@ -33,7 +34,8 @@ class RemoteRunnerBridge:
             digest = db.execute('SELECT sha256 FROM tournament_checkpoints WHERE tournament_id=?', (self.tournament_id,)).fetchone()[0]
         job_id = 'job_' + secrets.token_hex(12)
         self.journal.assign_bound(self.worker_id, job_id, tournament_id=self.tournament_id,
-                                  pairing_id=self.pairing_id, expected_sha256=digest, timeout_seconds=600)
+                                  pairing_id=self.pairing_id, expected_sha256=digest, timeout_seconds=600,
+                                  require_fresh_heartbeat=self.require_fresh_heartbeat)
         job = {'version': 1, 'job_id': job_id, 'fen': board.fen()}
         # Preserve the in-flight identity even if transport or validation fails.
         # The worker remains busy/unknown until explicitly reconciled.
