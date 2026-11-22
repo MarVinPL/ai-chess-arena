@@ -46,3 +46,21 @@ def test_rust_unit_cases_reject_url_tampering_ambiguous_assets_and_downgrade_can
     assert "fn rejects_prereleases_missing_flags_and_malformed_worker_tags()" in gate
     assert "crate::numeric_version(version)?" in gate
     assert 'release.get("prerelease")?.as_bool()?' in gate
+
+
+def test_apk_stream_verification_is_bounded_and_fail_closed():
+    gate = GATE.read_text(encoding="utf-8")
+    manifest = (ROOT / "remote_worker_gui/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    lock = (ROOT / "remote_worker_gui/src-tauri/Cargo.lock").read_text(encoding="utf-8")
+    assert 'sha2 = "=0.10.9"' in manifest
+    assert '"sha2 0.10.9"' in lock
+    assert "pub(crate) fn verify_apk_stream<R: Read>(" in gate
+    assert "Sha256::new()" in gate
+    assert "let mut buffer = [0u8; 64 * 1024]" in gate
+    assert "if bytes_read > candidate.size { return Ok(false); }" in gate
+    assert "if bytes_read != candidate.size { return Ok(false); }" in gate
+    assert "Ok(actual == candidate.expected_sha256)" in gate
+    assert "fn streaming_digest_checks_exact_size_and_bytes()" in gate
+    assert "fn streaming_digest_fails_closed_for_bad_metadata_and_read_errors()" in gate
+    assert "This is only an integrity check, NOT APK certificate validation" in gate
+    assert "download_and_install" not in gate
