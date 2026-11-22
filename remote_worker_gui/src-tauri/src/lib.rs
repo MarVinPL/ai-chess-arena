@@ -2,6 +2,8 @@
 // verified APK bytes, signing certificate, package and coordinator idle checks.
 #[allow(dead_code)]
 mod android_update_asset;
+#[allow(dead_code)]
+mod android_update_download;
 
 use serde::Serialize;
 use std::time::Duration;
@@ -160,9 +162,9 @@ fn newest_worker_release(releases: &[serde_json::Value]) -> Option<([u64; 3], &s
         .max_by_key(|(version, _, _)| *version)
 }
 
-#[tauri::command]
-async fn check_worker_release() -> Result<ReleaseInfo, String> {
-    let current = env!("CARGO_PKG_VERSION").to_string();
+// The same bounded GitHub fetch is used for display and download decisions.
+// JavaScript cannot provide a release URL, asset digest or destination path.
+async fn fetch_worker_releases() -> Result<Vec<serde_json::Value>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(8))
@@ -189,8 +191,15 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
     let data: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
+    Ok(releases.clone())
+}
+
+#[tauri::command]
+async fn check_worker_release() -> Result<ReleaseInfo, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let releases = fetch_worker_releases().await?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
-    let candidate = newest_worker_release(releases);
+    let candidate = newest_worker_release(&releases);
     let Some((latest, tag, data)) = candidate else {
         return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None, apk_asset_available: false });
     };
@@ -206,6 +215,29 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
     let apk_asset_available = latest > installed
         && android_update_asset::select_apk_candidate(data, tag).is_some();
     Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes, apk_asset_available })
+}
+
+// Only Android may stage a private APK. Re-query the trusted release feed
+// server-side rather than accepting a URL or digest from JavaScript.
+#[tauri::command]
+async fn download_worker_apk(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Pobieranie APK jest dostępne wyłącznie na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let current = numeric_version(env!("CARGO_PKG_VERSION"))
+            .ok_or("Nieprawidłowa wersja Workera")?;
+        let releases = fetch_worker_releases().await?;
+        let (latest, tag, release) = newest_worker_release(&releases)
+            .ok_or("Brak stabilnego wydania Workera")?;
+        if latest <= current { return Err("Brak nowszej wersji".into()); }
+        let candidate = android_update_asset::select_apk_candidate(release, tag)
+            .ok_or("Brak bezpiecznego pliku APK ARM64 w wydaniu")?;
+        android_update_download::stage_candidate(&app, candidate, tag).await
+    }
 }
 
 // Fail closed: a missing coordinator confirmation is not an idle worker.
@@ -297,7 +329,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, check_update_safety, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, check_update_safety, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
