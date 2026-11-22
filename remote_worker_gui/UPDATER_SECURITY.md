@@ -399,3 +399,37 @@ natywnego odbiornika statusów ani przycisku „Instaluj”. Należy
 zintegrować odbiornik OS, trwały identyfikator sesji, odzyskiwanie
 wyniku po restarcie, a dopiero potem podłączyć do koordynatora.
 `update_installation_readiness` nadal `can_install=false`.
+
+## Decyzja użytkownika 2026-11-22 — aktualizacja może przerwać zadanie
+
+Nie należy uzależniać aktualizacji Android Workera od naturalnego końca
+długiego obliczenia. Zamiast tego koordynator może wstrzymać aktywne
+zadanie, gdy:
+
+1. Wstrzyma nowe przydziały oraz poleci Workerowi przerwać inference.
+2. Uzyska i trwale zatwierdzi **ostatni spójny checkpoint** zadania, wraz
+   z identyfikatorem zadania oraz pozycją postępu; odpowiedź modelu w locie
+   nie może zostać uznana za zatwierdzony wynik.
+3. Potwierdzi, że Worker rzeczywiście przestał wykonywać obliczenia,
+   i atomowo zapisze pauzę / możliwość wznowienia w rejestrze zadań.
+4. Dopiero w tym momencie dopuści rezerwację aktualizacji. Instalację
+   prowadzi Android za zgodą użytkownika, ze sprawdzonym podpisem APK.
+5. Po restarcie uzgodni wersję aplikacji i wynik instalatora, zdejmie
+   blokadę i ponownie przydzieli zadanie. Wznowienie jest od ostatniego
+   zweryfikowanego checkpointu; gdy tego typu zadanie nie wspiera
+   wznowienia, wykonuje się je **od początku**, bez podwójnego zapisu
+   wyniku i bez kasowania wcześniej ukończonych zadań.
+
+Arena ma już trwałe checkpointy turnieju i partii
+(`docs/tournament-checkpoints.md`, Issue #98), łącznie z odrzucaniem
+odpowiedzi inference trwającej podczas stop i ponownym rozpoczęciem
+od ostatniego legalnego ruchu. **Zdalny Worker w tej gałęzi jest jednak
+nadal prototypem bez połączonego wykonawcy zadań**, więc nie należy
+traktować samego wpisu `idle_confirmed` w SQLite jako dowodu trwałej
+pauzy. Wymaga to podłączenia prawdziwego stop/checkpoint/ack i
+wznowienia do koordynatora. Do tego czasu fail-closed pozostaje
+obowiązujące, a instalator nadal wyłączony.
+
+W szczególności nie wolno "upraszczać" aktualizacji przez zakończenie
+running job w bazie bez potwierdzenia zatrzymania Workera i zapisu
+checkpointu. Sam timeout lub odłączenie urządzenia nie wystarczają.
