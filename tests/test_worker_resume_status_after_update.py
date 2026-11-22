@@ -56,7 +56,7 @@ def test_saved_checkpoint_never_becomes_runnable_without_executor(tmp_path):
         db.execute("DELETE FROM worker_update_holds WHERE worker_id=?",
                    ("worker_12345678",))
     status = pause.resume_status("worker_12345678")
-    assert status["state"] == "awaiting_executor"
+    assert status["state"] == "awaiting_local_engine"
     assert status["resume_available"] is False
     with pause.jobs._db() as db:
         db.execute(
