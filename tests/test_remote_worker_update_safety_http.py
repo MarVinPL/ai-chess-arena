@@ -14,6 +14,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 import remote_worker_tokens
+import remote_worker_job_registry
 import server
 
 
@@ -26,6 +27,7 @@ def endpoint(tmp_path, monkeypatch):
     db = tmp_path / "worker-safety.sqlite3"
     monkeypatch.setattr(server, "DB", db)
     token = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID, ttl_seconds=3600)
+    remote_worker_job_registry.WorkerJobRegistry(db)
     http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     thread = threading.Thread(target=http.serve_forever, daemon=True)
     thread.start()
