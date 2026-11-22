@@ -113,3 +113,11 @@ SQLite table. Legacy `remote_worker_job_state` rows are ignored rather than
 migrated as trusted idle assertions. Server startup performs one canonical
 recovery. This does not create a production scheduler or reconcile in-flight
 remote jobs; installation remains disabled.
+
+Security review: mixed API/scheduler concurrent assignments serialize through
+SQLite and allow only one claim; recovery rejects late terminal results.
+Regression tests cover both. **Remaining blocker:** simultaneous coordinator
+processes are not fenced by an ownership epoch or exclusive process lease.
+A second coordinator boot could invalidate another coordinator's active work.
+Do not enable remote execution or updater installation until process ownership,
+job reconciliation and durable result commit are designed and tested.

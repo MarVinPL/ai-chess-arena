@@ -129,3 +129,40 @@ def test_legacy_idle_state_is_never_trusted(tmp_path):
     assert api.state('worker_12345678') == 'unknown'
     with pytest.raises(ValueError):
         api.record_terminal('worker_12345678', 'job_12345678')
+
+
+def test_cross_api_concurrent_assignments_are_serialized(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'jobs.sqlite'
+    worker = 'worker_12345678'
+    jobs = DurableWorkerJobs(path, clock=lambda: 100)
+    jobs.assign(worker, 'job_00000000', timeout_seconds=90)
+    jobs.complete(worker, 'job_00000000')
+
+    def assign(i):
+        try:
+            if i % 2:
+                WorkerJobRegistry(path, clock=lambda: 100).record_assignment(
+                    worker, f'job_{i:08d}', deadline=190)
+            else:
+                DurableWorkerJobs(path, clock=lambda: 100).assign(
+                    worker, f'job_{i:08d}', timeout_seconds=90)
+            return True
+        except ValueError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        assert list(pool.map(assign, range(12))).count(True) == 1
+    assert jobs.state(worker) == 'running'
+
+
+def test_recovery_prevents_late_completion(tmp_path):
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'jobs.sqlite'
+    jobs = DurableWorkerJobs(path, clock=lambda: 100)
+    jobs.assign('worker_12345678', 'job_12345678', timeout_seconds=90)
+    WorkerJobRegistry(path, clock=lambda: 100).recover_after_restart()
+    with pytest.raises(ValueError):
+        jobs.complete('worker_12345678', 'job_12345678')
+    assert WorkerJobRegistry(path, clock=lambda: 100).state('worker_12345678') == 'unknown'
