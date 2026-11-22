@@ -187,3 +187,29 @@ def test_android_packagemanager_verifies_real_downloaded_apk_before_reporting_su
     assert "Instalacja nadal wyłączona" in ui
     assert "install_update" not in bridge
     assert "PackageInstaller" not in bridge
+
+
+def test_coordinator_idle_requires_authenticated_recent_nonce_bound_evidence():
+    lib = LIB.read_text(encoding="utf-8")
+    source = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    manifest = (ROOT / "remote_worker_gui/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    lock = (ROOT / "remote_worker_gui/src-tauri/Cargo.lock").read_text(encoding="utf-8")
+    assert "mod android_update_coordinator;" in lib
+    assert 'getrandom = "=0.2.17"' in manifest
+    assert '"getrandom 0.2.17"' in lock
+    start = lib.index("async fn check_update_safety(")
+    end = lib.index("// Read-only release discovery", start)
+    command = lib[start:end]
+    assert 'android_update_coordinator::random_nonce()?' in command
+    assert '"worker_id": worker_id, "token": token, "nonce": nonce' in command
+    assert 'fresh_authenticated_idle(&data, &worker_id, &nonce, now)' in command
+    assert "MAX_IDLE_AGE_MS: u64 = 30_000" in source
+    assert "MAX_FUTURE_SKEW_MS: u64 = 5_000" in source
+    assert 'getrandom::getrandom(&mut bytes)' in source
+    for field in ("authenticated", "source", "worker_id", "nonce", "active_tasks", "checked_at_unix_ms"):
+        assert f'response.get("{field}")' in source
+    for scenario in ("rejects_replay_stale_future_wrong_worker_and_tasks",
+                     "rejects_legacy_or_incomplete_server_answers"):
+        assert f"fn {scenario}()" in source
+    # Despite read-only idle checks, installation is never automatically enabled.
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
