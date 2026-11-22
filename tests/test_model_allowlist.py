@@ -21,12 +21,29 @@ class ModelAllowlistTests(unittest.TestCase):
         validate_allowlist(self.allowlist, self.manifest)
         self.assertEqual(len(self.allowlist['models']), len(self.manifest['models']))
         for item in self.allowlist['models']:
-            self.assertEqual(item['admission_scope'], [])
+            self.assertEqual(item['admission_scope'], ['PURE_AI'])
+            self.assertEqual(item['owner_admission'], 'issue-259-2026-11-22')
             self.assertTrue(item['license_requirements']['license_verified_required'])
-            self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
-            self.assertIn(item['status'], {'review_required', 'blocked'})
+            self.assertEqual(item['technical_readiness'], 'not_evaluated')
+            self.assertIn(item['status'], {'eligible', 'restricted'})
+            self.assertIsNone(item['block_reason'])
         self.assertEqual([x['model_id'] for x in self.allowlist['models']], list(range(1, 9)))
         self.assertFalse({9, 10} & {x['model_id'] for x in self.allowlist['models']})
+
+    def test_owner_decision_is_restricted_to_exact_pinned_revisions(self):
+        for field, value in (('revision', '0' * 40),
+                             ('repo_id', 'wrong/model'),
+                             ('owner_admission', 'unapproved-override')):
+            broken = copy.deepcopy(self.allowlist)
+            broken['models'][1][field] = value
+            with self.subTest(field=field), self.assertRaises(AllowlistError):
+                validate_allowlist(broken, self.manifest)
+
+    def test_qualified_manifest_audit_status_is_preserved(self):
+        self.assertEqual(self.manifest['models'][1]['license_review_status'], 'review_required')
+        self.assertEqual(self.allowlist['models'][1]['technical_readiness'], 'not_evaluated')
+        self.assertEqual(self.allowlist['models'][5]['status'], 'restricted')
+        self.assertTrue(any('18' in restriction for restriction in self.allowlist['models'][5]['restrictions']))
 
     def test_revision_mismatch_is_rejected(self):
         broken = copy.deepcopy(self.allowlist)
@@ -68,7 +85,8 @@ class ModelAllowlistTests(unittest.TestCase):
     def test_unreviewed_model_cannot_be_marked_eligible_or_restricted(self):
         for status in ('eligible', 'restricted'):
             broken = copy.deepcopy(self.allowlist)
-            item = broken['models'][1]  # SmolLM2 remains review_required.
+            item = broken['models'][1]  # Manifest review_required cannot be promoted without owner decision.
+            item.pop('owner_admission')
             item['status'] = status
             item['admission_scope'] = ['PURE_AI']
             item['block_reason'] = None
@@ -101,6 +119,7 @@ class ModelAllowlistTests(unittest.TestCase):
         withdrawn = copy.deepcopy(self.allowlist)
         item = withdrawn['models'][0]
         item['status'] = 'blocked'
+        item.pop('owner_admission')
         item['admission_scope'] = []
         item['block_reason'] = 'Wycofano decyzję; wymaga ponownego przeglądu.'
         validate_allowlist(withdrawn, self.manifest)
@@ -131,8 +150,13 @@ class ModelAllowlistTests(unittest.TestCase):
         self.assertEqual(tournament_admission_blockers(candidate, **args), [])
         self.assertTrue(tournament_admission_blockers(
             {**candidate, 'status': 'review_required', 'admission_scope': []}, **args))
+        # Explicit owner admission skips the *repeat pre-qualification* test.
+        self.assertEqual(tournament_admission_blockers(
+            {**candidate, 'technical_readiness': 'not_evaluated',
+             'technical_blockers': ['No recent runtime test']}, **args), [])
         self.assertTrue(tournament_admission_blockers(
-            {**candidate, 'technical_readiness': 'not_evaluated'}, **args))
+            {**candidate, 'owner_admission': None,
+             'technical_readiness': 'not_evaluated'}, **args))
         self.assertTrue(tournament_admission_blockers(
             candidate, **{**args, 'revision': '0' * 40}))
         self.assertTrue(tournament_admission_blockers(
