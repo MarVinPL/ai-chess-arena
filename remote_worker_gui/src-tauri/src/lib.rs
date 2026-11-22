@@ -8,6 +8,8 @@ mod android_update_download;
 // Never expose this as a claim that a staged APK is ready for installation.
 #[allow(dead_code)]
 mod android_update_identity;
+#[cfg(target_os = "android")]
+mod android_update_package_manager;
 
 use serde::Serialize;
 use std::time::Duration;
@@ -244,6 +246,62 @@ async fn download_worker_apk(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+#[derive(Serialize)]
+struct WorkerApkIdentityResult {
+    verified: bool,
+    reason: &'static str,
+}
+
+// Read-only post-download verification. All inputs are re-derived in Rust
+// from the official release feed; neither the APK path nor fingerprint comes
+// from JavaScript. Even a verified result never authorizes installation.
+#[tauri::command]
+async fn verify_downloaded_worker_apk(app: tauri::AppHandle) -> Result<WorkerApkIdentityResult, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Sprawdzanie APK jest dostępne wyłącznie na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        let installed = numeric_version(env!("CARGO_PKG_VERSION"))
+            .ok_or("Nieprawidłowa wersja aplikacji")?;
+        let releases = fetch_worker_releases().await?;
+        let (latest, tag, release) = newest_worker_release(&releases)
+            .ok_or("Brak stabilnego wydania Workera")?;
+        if latest <= installed { return Err("Brak nowszej aktualizacji".into()); }
+        let candidate = android_update_asset::select_apk_candidate(release, tag)
+            .ok_or("Brak kwalifikującego się APK")?;
+        let apk = app.path().app_cache_dir()
+            .map_err(|_| "Brak katalogu APK")?
+            .join("worker-apk-updates")
+            .join(format!("{tag}.apk"));
+        let metadata = std::fs::symlink_metadata(&apk)
+            .map_err(|_| "APK nie został jeszcze pobrany")?;
+        if !metadata.file_type().is_file() || metadata.len() != candidate.size {
+            return Err("Nieprawidłowy plik APK".into());
+        }
+        let mut file = std::fs::File::open(&apk)
+            .map_err(|_| "Nie można sprawdzić pobranego APK")?;
+        if !android_update_asset::verify_apk_stream(&mut file, &candidate)
+            .map_err(|_| "Błąd weryfikacji SHA-256")? {
+            return Err("APK nie przeszedł kontroli integralności".into());
+        }
+        drop(file);
+        let identity = android_update_package_manager::inspect_staged_worker_apk(&apk)?;
+        let verified = identity == android_update_identity::IdentityCheck::Verified;
+        Ok(WorkerApkIdentityResult {
+            verified,
+            reason: if verified {
+                "Podpis, pakiet i versionCode zgodne; instalacja nadal wyłączona"
+            } else {
+                "Certyfikat, pakiet lub versionCode APK nie spełnia wymagań"
+            },
+        })
+    }
+}
+
 // Fail closed: a missing coordinator confirmation is not an idle worker.
 // The scheduler transport must provide an authenticated, fresh idle state.
 
@@ -333,7 +391,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, check_update_safety, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
