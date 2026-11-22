@@ -60,6 +60,30 @@ Offline tests with a synthetic HTTP client or a Tauri Rust unit test **cannot
 prove that an Android device executed model inference**. No live Arena service,
 Caddy config or Android installation has been changed as part of this stage.
 
+### Android Worker update channels — Issue #243
+
+Android Worker now offers two explicit read-only GitHub release channels:
+**Latest** (default) shows stable published Worker releases with tag
+worker-vX.Y.Z and prerelease=false. **Pre-release** shows published test
+releases (worker-vX.Y.Z-test.N or worker-vX.Y.Z-rc.N) with prerelease=true.
+Server releases and LoRA adapter assets are not considered Worker releases.
+
+Channel choice is stored locally under the key
+arena-worker-release-channel-v1. No token is stored in localStorage.
+Changing channel explicitly checks GitHub; startup-only automatic
+metadata checks remain opt-in and limited to once per 24 hours per channel.
+Only the exact official GitHub Worker release page is linked.
+
+The published worker-v0.1.0-test.1 prerelease uses the same base version
+(0.1.0 and Android versionCode 1000) as the already installed debug APK.
+It must be listed on the test channel, but must not be represented as a
+newer Android version. Installation remains manual and requires signing
+compatibility.
+
+Neither channel initiates APK download or installation, runs inference
+or changes task state. The existing fail-closed install readiness gate
+still requires verified idle-state, signature and version checks.
+
 ## Development history and component notes
 
 The desktop GUI now queries the local Rust `worker_status` command through the
