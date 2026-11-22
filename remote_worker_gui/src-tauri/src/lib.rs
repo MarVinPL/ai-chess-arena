@@ -10,6 +10,8 @@ mod android_update_download;
 mod android_update_identity;
 #[cfg(target_os = "android")]
 mod android_update_package_manager;
+#[cfg(target_os = "android")]
+mod android_update_package_installer;
 mod android_update_coordinator;
 mod android_update_recovery;
 #[allow(dead_code)]
@@ -73,6 +75,34 @@ async fn inspect_update_hold() -> Result<String, String> {
         .map_err(|_| "Brak oryginalnego tokenu Workera".to_string())?;
     let status = android_update_coordinator::inspect_pending_update(&machine_token).await?;
     Ok(status.to_owned())
+}
+
+/// Read-only OS session inventory. Requires an existing private hold journal;
+/// no install session creation, commits or automatic coordinator release.
+#[tauri::command]
+fn inspect_android_install_sessions() -> Result<&'static str, String> {
+    if android_update_recovery::load_pending()?.is_none() {
+        return Err("Brak oczekującej rezerwacji aktualizacji".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Stan instalatora jest dostępny tylko na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        use android_update_package_installer::SessionObservation as S;
+        let observation = android_update_package_installer::observe_own_session()?;
+        // No observation is a confirmed terminal installation result.
+        if android_update_package_installer::observation_is_terminal(observation) {
+            return Err("Brak wiarygodnego wyniku systemowego".into());
+        }
+        Ok(match observation {
+            S::NoVisibleSession => "not_visible",
+            S::Uncommitted => "uncommitted",
+            S::CommittedOrAwaitingConsent => "committed_or_pending",
+            S::Ambiguous => "ambiguous",
+        })
+    }
 }
 
 fn token_entry() -> Result<keyring::Entry, String> {
@@ -464,7 +494,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
