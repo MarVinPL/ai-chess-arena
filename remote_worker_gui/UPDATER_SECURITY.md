@@ -564,3 +564,33 @@ Po awarii między zaakceptowaniem zadania przez urządzenie a zapisem
 koordynatora konieczne będzie rozstrzygnięcie identyfikatora
 przyjęcia (idempotentny protokół), zanim automatyczne wznowienie
 zostanie włączone.
+
+## 2026-11-22 — uwierzytelniony kanał odczytu poleceń STOP
+
+Koordynator udostępnia `POST /api/remote-workers/update-pause-poll`
+tylko po uwierzytelnieniu oryginalnym tokenem maszyny i
+sprawdzeniu losowego nonce (32 małe znaki hex). Endpoint niczego
+nie zmienia: odpowiedź zawiera `instruction.action` równe
+`none`, `stop_checkpoint` (`job_id` i niezmienny
+`request_id`), `await_reconciliation` albo `blocked`.
+Polecenie STOP jest zwracane tylko wtedy, gdy nadal istnieje
+`requested` i aktywna zgodna dzierżawa tego samego zadania.
+Wielokrotny odczyt zwraca to samo `request_id`: wykonawca
+powinien potraktować je idempotentnie. W razie niezgodności stanu
+lub upływu dzierżawy nie otrzymuje nowego polecenia, a blokada
+pauzy pozostaje w bazie. Każda odpowiedź ma
+`install_allowed=false`.
+
+Natywny Rust ma niewystawioną do webview funkcję
+`poll_pause_instruction`, która stosuje HTTPS, brak przekierowań,
+token maszyny, losowe nonce i ścisłą walidację każdej odpowiedzi.
+Nie przyjmuje dowolnych poleceń, nie wstrzymuje obliczeń samodzielnie,
+nie generuje ACK i nie uruchamia instalatora.
+
+**To początek transportu polecenia od koordynatora do Workera.**
+Nadal trzeba podłączyć aktywne odpytywanie przez rzeczywistego
+wykonawcę, weryfikowany trwały checkpoint i transport jego ACK.
+Nie należy wywoływać `finalize_verified_pause` na podstawie
+samego pollingu. Testy HTTP i Rust obejmują nonce, tożsamość,
+powtarzalność polecenia, wygasłą dzierżawę oraz fałszywe twierdzenia
+klienta o zakończonym STOP.
