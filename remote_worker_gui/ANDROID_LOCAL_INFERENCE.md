@@ -46,3 +46,26 @@ Przy ustawieniu ARENA_PHONE_INFERENCE_ENABLED=1 preflight Areny wymaga świeżeg
 Arena wylicza pełną, posortowaną listę legalnych ruchów UCI dla własnego FEN i dołącza ją do zadania w protokole v2. Telefon **nie wylicza legalnych ruchów ani nie utrzymuje szachownicy**: lokalny llama.cpp dostaje listę w promptcie i ograniczenie GBNF dopuszczające dokładnie jeden ruch z tej listy. Po generacji aplikacja sprawdza, czy UCI rzeczywiście jest na liście, a Arena niezależnie sprawdza legalność względem własnego FEN przed przyjęciem wyniku. Starsze zadania v1 nadal pozostają akceptowane na poziomie protokołu; nowe przydziały Areny korzystają z v2. Wyniki pozostają w istniejącym formacie v1.
 
 Lista musi być kompletną, kanoniczną listą legalnych ruchów z Areny. Usunięte ruchy, nieprawidłowa kolejność, duplikaty lub niespójny FEN powodują odrzucenie zadania, a nie wygenerowanie alternatywnej pozycji w APK.
+
+
+## Atomowe zatwierdzanie ruchu i checkpointu przez Arenę
+
+Po odebraniu UCI od telefonu Arena **nie zwalnia od razu** przypisanego
+Workera. Ruch jest sprawdzany względem FEN i przechowywany w trwałej skrzynce
+wyników. Dopiero po przygotowaniu kolejnej pozycji przez serwerowy
+`SequentialChessRunner` Arena, w **jednej transakcji SQLite IMMEDIATE**:
+
+1. porównuje aktualny checkpoint z FEN, parą oraz historią poprzedniego ruchu;
+2. zapisuje nowy checkpoint za pomocą `tournament_checkpoint.save_in_transaction`;
+3. usuwa zatwierdzony wynik i przydział oraz ustawia Workera jako `idle_confirmed`.
+
+Jeżeli nastąpi awaria lub zapis checkpointu się nie powiedzie, wszystkie
+te zmiany są wycofywane razem. Arena zachowuje poprzedni checkpoint oraz
+wynik UCI, a Worker pozostaje w stanie `running`, wymagając uzgodnienia
+przed kolejnym zadaniem. Telefon nadal nie przechowuje checkpointu ani nie
+prowadzi własnej partii.
+
+Testy obejmują przerwanie transakcji po przygotowaniu zapisu,
+niezgodny FEN, błędną parę, rozbieżny ruch i integrację z prawdziwym
+serwerowym runnerem partii. Test symuluje wynik telefonu w Pythonie:
+**nie jest** dowodem działania modelu GGUF na fizycznym urządzeniu.
