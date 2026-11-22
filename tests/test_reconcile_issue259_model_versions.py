@@ -61,7 +61,8 @@ class ReconcileIssue259Tests(unittest.TestCase):
         before = self.db.read_bytes()
         report = migration.run(self.db)
         self.assertFalse(report["apply"])
-        self.assertEqual(report["selected_ids"], [1,2,3,4,5,7,8])
+        self.assertEqual(report["selected_ids"], [1,2])
+        self.assertEqual(len(report["changed_version_ids"]), 2)
         self.assertEqual(report["age_restricted_model_6"], "not_activated")
         self.assertIsNone(report["backup"])
         self.assertEqual(self.db.read_bytes(), before)
@@ -75,8 +76,8 @@ class ReconcileIssue259Tests(unittest.TestCase):
         with sqlite3.connect(self.db) as c:
             for entry in self.expected:
                 row = c.execute("SELECT source,license_verified,metadata_json FROM model_versions WHERE id=?",(entry["model_id"],)).fetchone()
-                if entry["model_id"] == 6:
-                    self.assertEqual(row[1],0)
+                if entry["model_id"] not in (1,2):
+                    self.assertEqual(row[1],1 if entry["model_id"] == 3 else 0)
                     self.assertNotIn("owner_admission",json.loads(row[2]))
                     continue
                 self.assertEqual(row[1],1)
@@ -89,7 +90,7 @@ class ReconcileIssue259Tests(unittest.TestCase):
 
     def test_wrong_hash_aborts_without_changes(self):
         with sqlite3.connect(self.db) as c:
-            c.execute("UPDATE model_versions SET sha256=? WHERE id=7", ("0"*64,))
+            c.execute("UPDATE model_versions SET sha256=? WHERE id=2", ("0"*64,))
         with self.assertRaisesRegex(ValueError,"sha256"):
             migration.run(self.db,apply=True,backup_dir=Path(self.tmp.name) / "backups")
         self.assertFalse((Path(self.tmp.name)/"backups").exists())
