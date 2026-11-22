@@ -43,7 +43,7 @@ class DurableWorkerJobs:
                       (worker_id,)).fetchone():
             raise ValueError('Worker reserved for update; assignment blocked')
 
-    def reserve_update(self, worker_id, *, ttl_seconds=300):
+    def reserve_update(self, worker_id, *, ttl_seconds=300, hold_token=None):
         """Atomically reserve a recently confirmed idle worker for update.
 
         Only a coordinator-controlled call may invoke this method. The token
@@ -54,7 +54,16 @@ class DurableWorkerJobs:
         if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= 900:
             raise ValueError('Invalid update hold TTL')
         now = self.clock()
-        token = secrets.token_hex(32)
+        # Android journals its CSPRNG-generated hold token securely BEFORE
+        # calling the coordinator, so a lost response cannot orphan the hold.
+        # Legacy trusted callers may still let the server generate the token.
+        if hold_token is None:
+            token = secrets.token_hex(32)
+        elif (not isinstance(hold_token, str) or
+              not re.fullmatch(r'[0-9a-f]{64}', hold_token)):
+            raise ValueError('Invalid client-generated update hold token')
+        else:
+            token = hold_token
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
