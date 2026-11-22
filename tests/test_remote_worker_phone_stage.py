@@ -213,3 +213,23 @@ def test_stage_forbids_prod_db_in_http_server():
     content = inspect.getsource(serve)
     assert '/var/lib/ai-chess-arena/arena.sqlite3' in content
     assert 'Staging directory is not private' in content
+
+
+def test_ready_started_before_operator_arm_is_not_dispatched(stage):
+    db, _, token, send = stage
+    auth = credentials(token)
+    code, ready = send("/api/remote-workers/ready", {
+        **auth, "model_sha256": SHA,
+    })
+    assert code == 200 and ready["state"] == "ready"
+    before_arm = time.time()
+    arm_stage(db)
+    engine = PhoneStage(db)
+    engine.on_ready(ready, request_started=before_arm)
+    assert status_stage(db)["phase"] == "armed"
+    assert engine.live == {}
+    code, ready_again = send("/api/remote-workers/ready", {
+        **auth, "model_sha256": SHA,
+    })
+    assert code == 200 and ready_again["state"] == "ready"
+    wait_state(db, "assigned")

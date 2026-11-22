@@ -154,15 +154,19 @@ class PhoneStage:
         self.lock = threading.RLock()
         self.live: dict = {}
 
-    def on_ready(self, response):
+    def on_ready(self, response, *, request_started: float):
         if response.get("state") != "ready" or response.get("authenticated") is not True:
             return
         with self.lock:
             with _open_db(self.db) as db:
                 state = db.execute(
-                    "SELECT phase,worker_id,expected_sha FROM stage_control WHERE id=1"
+                    "SELECT phase,worker_id,expected_sha,changed_at FROM stage_control WHERE id=1"
                 ).fetchone()
-            if not state or state[0] != "armed" or state[1] != response.get("worker_id"):
+            # Only a request started after the explicit operator arm may
+            # create a job, not a late response from an earlier /ready.
+            if (not state or state[0] != "armed"
+                or state[1] != response.get("worker_id")
+                or request_started < state[3]):
                 return
             worker_id, expected_sha = state[1], state[2]
             delivery = WorkerInferenceDelivery(self.db)
@@ -266,6 +270,7 @@ class StageHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "service": "isolated-phone-e2e"})
 
     def do_POST(self):
+        request_started = time.time()
         path = urlsplit(self.path).path
         stage: PhoneStage = self.server.stage
         if path == "/api/remote-workers/authenticate":
@@ -293,7 +298,7 @@ class StageHandler(BaseHTTPRequestHandler):
         handle_phone_request(self, path, stage.db, dict(stage.live))
         if self.last_response_code == 200:
             if path.endswith("/ready"):
-                stage.on_ready(self.last_response)
+                stage.on_ready(self.last_response, request_started=request_started)
             if path.endswith("/job-result"):
                 stage.on_result(self.last_response)
 
