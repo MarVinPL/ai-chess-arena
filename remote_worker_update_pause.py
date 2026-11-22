@@ -267,6 +267,43 @@ class WorkerUpdatePause:
         return {"job_id": job_id, "request_id": request_id,
                 "checkpoint": checkpoint, "sha256": digest}
 
+    def resume_status(self, worker_id):
+        """Read-only coordinator status for the post-install Resume UI.
+
+        Never exposes checkpoint payload, request ID or hold capability.
+        A verified checkpoint without a dispatcher is NOT runnable; this
+        remains blocked until actual inference acceptance is wired.
+        """
+        self.jobs._id(worker_id)
+        saved = self.read_resume_checkpoint(worker_id)
+        if saved is None:
+            return {"state": "no_checkpoint", "resume_available": False}
+        with self.jobs._db() as db:
+            worker = db.execute(
+                "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            hold = db.execute(
+                "SELECT 1 FROM worker_update_holds WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            pause = db.execute(
+                "SELECT phase FROM worker_update_pause_requests WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+        if hold:
+            state = "waiting_update_reconciliation"
+        elif worker != ("unknown", None) or pause != ("acknowledged",):
+            state = "blocked"
+        else:
+            state = "awaiting_executor"
+        return {
+            "state": state,
+            "resume_available": False,
+            "job_id": saved["job_id"],
+            "checkpoint_sha256": saved["sha256"],
+        }
+
     def reconcile_resume(self, worker_id, job_id, request_id, *,
                          checkpoint_sha256, timeout_seconds,
                          worker_ready_verified, resume_accepted_verified,
