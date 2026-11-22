@@ -18,7 +18,7 @@ class DurableWorkerJobs:
             db.execute('''CREATE TABLE IF NOT EXISTS worker_job_safety (
                 worker_id TEXT PRIMARY KEY, job_id TEXT, state TEXT NOT NULL
                 CHECK(state IN ('running','idle_confirmed','unknown')),
-                deadline INTEGER, updated_at INTEGER NOT NULL)''')
+                deadline REAL, updated_at REAL NOT NULL)''')
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -36,7 +36,7 @@ class DurableWorkerJobs:
         self._id(job_id)
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 86400:
             raise ValueError('Invalid timeout')
-        now = int(self.clock())
+        now = self.clock()
         with self._db() as db:
             # Serialize read-check-write across independent coordinator processes.
             db.execute('BEGIN IMMEDIATE')
@@ -52,7 +52,7 @@ class DurableWorkerJobs:
         """Only after coordinator validates and commits terminal result."""
         self._id(worker_id)
         self._id(job_id)
-        now = int(self.clock())
+        now = self.clock()
         with self._db() as db:
             result = db.execute('''UPDATE worker_job_safety SET job_id=NULL,
                 state='idle_confirmed',deadline=NULL,updated_at=?
@@ -67,7 +67,7 @@ class DurableWorkerJobs:
             row = db.execute('SELECT state,deadline FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
         if not row:
             return 'unknown'
-        if row[0] == 'running' and (row[1] is None or row[1] <= int(self.clock())):
+        if row[0] == 'running' and (row[1] is None or row[1] <= self.clock()):
             return 'unknown'
         return row[0]
 
@@ -80,7 +80,7 @@ class DurableWorkerJobs:
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute("""UPDATE worker_job_safety SET state='unknown',
-                job_id=NULL, deadline=NULL, updated_at=?""", (int(self.clock()),))
+                job_id=NULL, deadline=NULL, updated_at=?""", (self.clock(),))
 
     def invalidate(self, worker_id):
         """Coordinator restart/revocation/uncertain state: never infer idle."""
@@ -88,4 +88,4 @@ class DurableWorkerJobs:
         with self._db() as db:
             db.execute('''INSERT INTO worker_job_safety VALUES (?,NULL,'unknown',NULL,?)
                 ON CONFLICT(worker_id) DO UPDATE SET job_id=NULL,state='unknown',
-                deadline=NULL,updated_at=excluded.updated_at''', (worker_id, int(self.clock())))
+                deadline=NULL,updated_at=excluded.updated_at''', (worker_id, self.clock()))

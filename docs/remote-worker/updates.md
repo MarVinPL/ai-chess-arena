@@ -130,3 +130,11 @@ single-coordinator ownership. A second coordinator process restarting while
 another serves traffic could invalidate live claims; no distributed lease or
 leader election is implemented. Keep remote job dispatch disabled until
 single-writer process ownership and reconciliation are designed and tested.
+
+Concurrency audit: `BEGIN IMMEDIATE` serializes competing assignments and
+terminal writes to the canonical SQLite table. Fractional lease deadlines are
+preserved without integer rounding. **Remaining NO-GO:** concurrent server
+processes have no leader election/fencing epoch; one process restarting can
+invalidate another process's live assignments. Run a single coordinator until
+process ownership/fencing and real job reconciliation are implemented. The
+current HTTP endpoint still denies update installation.

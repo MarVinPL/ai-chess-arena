@@ -205,3 +205,14 @@ def test_restart_rejects_late_result_from_previous_coordinator(tmp_path):
     with pytest.raises(ValueError):
         jobs.complete('worker_12345678', 'job_12345678')
     assert WorkerJobRegistry(path, clock=lambda: 110).state('worker_12345678') == 'unknown'
+
+
+def test_fractional_deadline_never_rounds_into_extra_lease(tmp_path):
+    now = [100.25]
+    registry = WorkerJobRegistry(tmp_path / 'fractional.sqlite', clock=lambda: now[0])
+    registry.record_assignment('worker_12345678', 'job_12345678', deadline=100.75)
+    assert registry.state('worker_12345678') == 'running'
+    now[0] = 100.76
+    assert registry.state('worker_12345678') == 'unknown'
+    with pytest.raises(ValueError):
+        registry.record_terminal('worker_12345678', 'job_12345678')

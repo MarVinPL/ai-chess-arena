@@ -20,12 +20,28 @@ class WorkerJobRegistry(DurableWorkerJobs):
         if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
             raise ValueError('Invalid deadline')
         remaining = deadline - self.clock()
-        # The canonical registry accepts integer lease durations only.
-        # Round down to avoid extending the requested deadline.
         import math
-        if not math.isfinite(remaining) or not 1 <= remaining <= 86400:
+        if not math.isfinite(remaining) or not 0 < remaining <= 86400:
             raise ValueError('Invalid deadline')
-        self.assign(worker_id, job_id, timeout_seconds=int(remaining))
+        # Preserve the precise absolute deadline; rounding lease durations
+        # could reject short valid leases or extend them past expiry.
+        self._validate_deadline_assignment(worker_id, job_id, deadline)
+
+    def _validate_deadline_assignment(self, worker_id, job_id, deadline):
+        self._id(worker_id)
+        self._id(job_id)
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
+            if row and row[0] != 'idle_confirmed':
+                raise ValueError('Worker has unresolved job state')
+            now = self.clock()
+            if deadline <= now:
+                raise ValueError('Expired deadline')
+            db.execute("""INSERT INTO worker_job_safety VALUES (?,?,'running',?,?)
+                ON CONFLICT(worker_id) DO UPDATE SET job_id=excluded.job_id,
+                state='running',deadline=excluded.deadline,updated_at=excluded.updated_at""",
+                (worker_id, job_id, deadline, now))
 
     def record_terminal(self, worker_id: str, job_id: str):
         self.complete(worker_id, job_id)
