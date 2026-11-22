@@ -292,3 +292,85 @@ def test_authenticated_hold_status_survives_expiry_without_releasing(endpoint):
     status, absent = post(request, route="update-hold-status")
     assert status == 200 and absent["state"] == "absent"
     assert absent["install_allowed"] is False
+
+
+def test_worker_poll_stop_instruction_is_authenticated_idempotent_and_read_only(endpoint):
+    from remote_worker_update_pause import WorkerUpdatePause
+    from remote_worker_jobs import DurableWorkerJobs
+    db, machine_token, post = endpoint
+    registry = DurableWorkerJobs(db)
+    pause = WorkerUpdatePause(db)
+    status, none = post(request_data(machine_token), route="update-pause-poll")
+    assert status == 200
+    assert none["instruction"] == {"action": "none"}
+    assert none["install_allowed"] is False
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,?,'running',?,?)",
+            (WORKER_ID, "job_12345678", time.time() + 300, time.time()),
+        )
+    request_id = pause.request(WORKER_ID, "job_12345678")
+    for _ in range(3):
+        status, received = post(request_data(machine_token), route="update-pause-poll")
+        assert status == 200
+        assert received["authenticated"] is True
+        assert received["source"] == "coordinator"
+        assert received["worker_id"] == WORKER_ID
+        assert received["nonce"] == NONCE
+        assert received["instruction"] == {
+            "action": "stop_checkpoint",
+            "job_id": "job_12345678", "request_id": request_id,
+        }
+        assert received["install_allowed"] is False
+    assert registry.state(WORKER_ID) == "running"
+    assert pause.pending(WORKER_ID)["phase"] == "requested"
+    # A forged client claim is never accepted as checkpoint evidence.
+    _, received = post({
+        **request_data(machine_token), "worker_stopped": True,
+        "checkpoint_verified": True, "resume_accepted_verified": True,
+    }, route="update-pause-poll")
+    assert received["instruction"]["action"] == "stop_checkpoint"
+    assert pause.pending(WORKER_ID)["phase"] == "requested"
+    with pytest.raises(ValueError, match="pause"):
+        registry.reserve_update(WORKER_ID)
+
+    pause.acknowledge(
+        WORKER_ID, "job_12345678", request_id,
+        worker_stopped=True, checkpoint_verified=True,
+    )
+    _, received = post(request_data(machine_token), route="update-pause-poll")
+    assert received["instruction"] == {"action": "await_reconciliation"}
+    assert registry.state(WORKER_ID) == "running"
+
+
+def test_worker_poll_rejects_bad_auth_nonce_and_stale_job(endpoint):
+    from remote_worker_update_pause import WorkerUpdatePause
+    db, machine_token, post = endpoint
+    status, response = post(request_data("wrong-machine-token"), route="update-pause-poll")
+    assert status == 401 and "instruction" not in response
+    for nonce in (None, "", "f" * 33, "F" * 32):
+        status, response = post(
+            request_data(machine_token, nonce=nonce), route="update-pause-poll"
+        )
+        assert status == 400 and "instruction" not in response
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO worker_job_safety VALUES (?,?,'running',?,?)",
+            (WORKER_ID, "job_12345678", time.time() + 300, time.time()),
+        )
+    pause = WorkerUpdatePause(db)
+    pause.request(WORKER_ID, "job_12345678")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE worker_job_safety SET deadline=? WHERE worker_id=?",
+            (time.time() - 1, WORKER_ID)
+        )
+    status, response = post(request_data(machine_token), route="update-pause-poll")
+    assert status == 200
+    assert response["instruction"] == {"action": "blocked"}
+    assert response["install_allowed"] is False
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT phase FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER_ID,)
+        ).fetchone()[0] == "requested"
