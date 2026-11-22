@@ -350,3 +350,22 @@ więc NIE jest jeszcze dozwolone uruchamianie aktualizacji z GUI.
 
 Nie wymaga żadnej płatnej usługi i **nie modyfikuje certyfikatu** z
 `WORKER_ANDROID_DEBUG_KEYSTORE_B64`.
+
+## 2026-11-22 — jawny status odzyskiwania po ponownym uruchomieniu
+
+Dodano wyłącznie odczytową komendę Tauri `update_recovery_status`.
+Sprawdza osobny wpis keyring rezerwacji, ale udostępnia interfejsowi
+**tylko** `pending`, `blocked` i ogólny polski komunikat — bez
+`hold_token`, adresu serwera i `worker_id`. Po starcie widok
+„Aktualizacje aplikacji” pokazuje ten stan. Jeżeli rezerwacja oczekuje
+lub odczyt magazynu się nie udał, widok blokuje „Zapisz token” i
+„Usuń zapisany token”; natywny Rust niezależnie wymusza tę samą
+blokadę w `store_worker_token` i `forget_worker_token`, żeby
+ominięcie GUI nie spowodowało utraty uwierzytelnienia potrzebnego
+do uwolnienia koordynatora.
+
+To **nie jest automatyczne zwolnienie rezerwacji ani jej uzgodnienie
+z Android PackageInstaller**. W stanie niepewnym rezerwacja pozostaje
+zablokowana. Przed umożliwieniem instalacji niezbędny jest test
+systemowego magazynu na fizycznym Android 16, trwała obsługa wyniku
+systemowej instalacji i niezależne uzgodnienie koordynatora.
