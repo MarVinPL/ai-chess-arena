@@ -38,3 +38,16 @@ bez login_url. W przypadku błędów po restarcie przywrócić poprzedni
 worktree i drop-in.
 
 Szczegóły tokenu nie mogą trafić do logów, testów ani PR.
+
+## Wdrożenie kontrolowane i rollback
+
+Wersjonowany skrypt scripts/deploy_worker_phone_api_gateway.sh
+wymaga dokładnego SHA scalonego main oraz prawa administratora.
+--preflight wykonuje wyłącznie kontrole read-only: zweryfikowane źródło
+main, aktywna usługa, brak aktywnych turniejów, lease, hold i checkpointów
+Workera. --deploy dodatkowo tworzy osobny worktree z tego SHA,
+linkuje istniejącą bazę i magazyn modeli, konfiguruje dedykowany drop-in
+systemd, restartuje usługę i testuje, że błędny token Workera jest
+odrzucany przez API, a nie przez login webowy. Niepowodzenie usuwa
+nowy drop-in i restartuje poprzednią konfigurację. Telefoniczny dispatcher
+pozostaje wyłączony przez niezależną flagę.
