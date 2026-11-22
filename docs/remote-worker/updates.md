@@ -79,3 +79,10 @@ Review finding: a terminal acknowledgement arriving after its assignment
 lease expired must not restore `idle_confirmed`. `WorkerJobRegistry.record_terminal`
 now requires an unexpired deadline; expired work remains `unknown` pending
 explicit coordinator reconciliation. Covered by regression test.
+
+The isolated startup-block integration tests in
+`tests/test_remote_worker_server_boot.py` execute the real `server.py` startup
+statements against a temporary SQLite database with stubbed background
+services and HTTP listener. They verify recovery occurs before accepting
+traffic and a recovery failure aborts startup. They do not restart the
+production systemd unit or exercise the complete server process.
