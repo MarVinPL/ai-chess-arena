@@ -43,6 +43,26 @@ class RemoteRunnerBridge:
         self.journal.stage_validated(self.worker_id, job_id, result)
         return move, {'seconds': 0.1}
 
+    def replay_staged(self, job_id, record):
+        """Recover a staged result after coordinator restart, without redispatch.
+
+        Caller supplies the move record reconstructed from the validated result.
+        `apply_bound` verifies its UCI, FEN, ply and checkpoint CAS before commit.
+        No worker-idle claim is inferred by replaying a result.
+        """
+        self.journal._id(job_id)
+        pending = {item[0]: item for item in self.journal.pending()}
+        if job_id not in pending or pending[job_id][1] != self.worker_id:
+            raise ValueError('No staged result owned by worker')
+        if self.inflight is not None:
+            raise RuntimeError('Bridge already has an in-flight move')
+        self.inflight = job_id
+        try:
+            self.publish(record)
+        except Exception:
+            self.inflight = None
+            raise
+
     def publish(self, record):
         if self.inflight is None:
             raise RuntimeError('No staged result for move')

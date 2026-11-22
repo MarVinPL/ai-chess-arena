@@ -308,3 +308,13 @@ verifies the underlying evidence**. This method must remain inaccessible to
 worker-controlled HTTP requests and is not production-ready. A real operator
 approval flow, fresh worker challenge/response and auditable evidence are
 required before enabling it.
+
+### Crash replay of staged move without re-dispatch
+
+`RemoteRunnerBridge.replay_staged()` can commit a journaled pending result
+following coordinator restart, using a coordinator-reconstructed move record.
+It reuses the durable binding, legal-move checks and checkpoint compare-and-swap.
+Replay never marks a worker idle: after restart its safety state remains
+`unknown`, and subsequent assignments remain blocked pending independent
+reconciliation. Duplicate replay is rejected. This is an offline recovery
+primitive, not a network recovery endpoint or automatic production resume.

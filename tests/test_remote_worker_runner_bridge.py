@@ -108,3 +108,32 @@ def test_transport_failure_does_not_release_worker_or_advance_checkpoint(tmp_pat
     assert bridge.inflight is not None
     assert bridge.journal.state('worker_12345678') == 'running'
     assert tournament_checkpoint.load(path, 1) == original
+
+
+def test_restart_replays_staged_result_without_worker_idle_claim(tmp_path):
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    board = chess.Board()
+    original = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game',
+                'pairing': {'id': 7}, 'moves': [], 'move_times': [],
+                'fen': board.fen(), 'side_to_move': 'white'}
+    digest = tournament_checkpoint.save(path, 1, original)['sha256']
+    bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', lambda *args: None, clock=lambda: 100)
+    job = 'job_12345678'
+    bridge.journal.assign_bound(bridge.worker_id, job, tournament_id=1,
+                                pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    bridge.journal.stage_validated(bridge.worker_id, job, {'version': 1, 'job_id': job, 'uci': 'e2e4'})
+    bridge.journal.recover_after_restart()
+    resumed = RemoteRunnerBridge(path, 1, 7, bridge.worker_id, lambda *args: None, clock=lambda: 110)
+    board.push_uci('e2e4')
+    record = {'uci': 'e2e4', 'ply': 1, 'color': 'white', 'fen': board.fen(), 'seconds': 0.1}
+    resumed.replay_staged(job, record)
+    assert len(tournament_checkpoint.load(path, 1)['moves']) == 1
+    assert resumed.journal.state(bridge.worker_id) == 'unknown'
+    assert resumed.journal.pending() == []
+    import pytest
+    with pytest.raises(ValueError, match='No staged result'):
+        resumed.replay_staged(job, record)
