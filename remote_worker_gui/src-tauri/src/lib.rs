@@ -77,6 +77,28 @@ async fn inspect_update_hold() -> Result<String, String> {
     Ok(status.to_owned())
 }
 
+/// Query authenticated coordinator stop instructions through native HTTPS.
+/// This is real network transport, but the Worker still has NO inference
+/// executor. Never claim a STOP/ACK or authorize an install from this poll.
+#[tauri::command]
+async fn poll_worker_update_pause(server: String, worker_id: String) -> Result<&'static str, String> {
+    // A local unresolved update journal wins over any newly reported status.
+    if android_update_recovery::load_pending()?.is_some() {
+        return Err("Trwa uzgadnianie poprzedniej aktualizacji".into());
+    }
+    let token = token_entry()?.get_password()
+        .map_err(|_| "Brak zapisanego tokenu Workera".to_string())?;
+    use android_update_coordinator::StopInstruction;
+    match android_update_coordinator::poll_pause_instruction(
+        &server, &worker_id, &token,
+    ).await? {
+        StopInstruction::None => Ok("none"),
+        StopInstruction::StopCheckpoint { .. } => Ok("stop_checkpoint"),
+        StopInstruction::AwaitReconciliation => Ok("await_reconciliation"),
+        StopInstruction::Blocked => Ok("blocked"),
+    }
+}
+
 /// Read-only OS session inventory. Requires an existing private hold journal;
 /// no install session creation, commits or automatic coordinator release.
 #[tauri::command]
@@ -494,7 +516,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
