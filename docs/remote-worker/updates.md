@@ -503,3 +503,16 @@ coordinator-side test adapter only: `server.py` still uses local inference,
 there is no automatic production scheduling, no network worker executor,
 and no deployed gateway. Before production use, the bridge must avoid
 restaging an already staged result and acquire single-writer ownership.
+
+### Offline runner ↔ HTTP worker integration
+
+`tests/test_remote_worker_coordinator_http_runner.py` runs the real
+`SequentialChessRunner` through the coordinator-owned `RemoteRunnerBridge`.
+A simulated worker polls the actual loopback gateway for its assigned job,
+submits `e2e4` through authenticated HTTP, and the coordinator waits for the
+staged result before atomically committing one move to the tournament
+checkpoint. Local inference is explicitly prohibited by the test runtime.
+This is an isolated proof of the coordinator/worker boundary, **not** a
+production `server.py` dispatch integration, an external TLS deployment, or
+a real LLM worker execution. Production single-writer ownership and restart
+reconciliation still require implementation/review.
