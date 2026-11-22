@@ -504,6 +504,23 @@ async fn install_downloaded_worker_apk(
     }
 }
 
+/// Inspect only the job that Arena has atomically assigned to this phone.
+/// This does not run inference, claim a lease or mutate Arena's chess state.
+#[tauri::command]
+async fn poll_my_inference_job(
+    server: String, worker_id: String,
+) -> Result<serde_json::Value, String> {
+    if android_update_recovery::load_pending()?.is_some()
+        || android_update_install_journal::load()?.is_some() {
+        return Ok(serde_json::json!({"state": "blocked"}));
+    }
+    let machine_token = token_entry()?.get_password()
+        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    android_update_coordinator::fetch_my_inference_job(
+        &server, &worker_id, &machine_token,
+    ).await
+}
+
 /// Arena is the sole owner of the chessboard and checkpoint.
 #[tauri::command]
 async fn get_my_worker_board(
@@ -707,7 +724,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
