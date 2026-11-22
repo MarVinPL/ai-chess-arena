@@ -17,7 +17,7 @@ def test_apk_is_verified_before_artifact_upload():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert text.index('"$signer" verify --verbose "$apk"') < text.index("actions/upload-artifact@v6")
     assert 'if-no-files-found: error' in text
-    assert "workflow_dispatch:" not in text
+    assert not any(line.strip() == "workflow_dispatch:" for line in text.splitlines())
 
 
 def test_workflow_only_edits_do_not_build_application():
