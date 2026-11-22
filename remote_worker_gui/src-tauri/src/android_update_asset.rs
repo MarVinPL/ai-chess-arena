@@ -5,6 +5,8 @@
 
 use reqwest::Url;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::io::{self, Read};
 
 const MAX_APK_BYTES: u64 = 200 * 1024 * 1024;
 const MIN_APK_BYTES: u64 = 1024;
@@ -86,6 +88,43 @@ pub(crate) fn select_apk_candidate(release: &Value, expected_tag: &str)
     Some(candidate)
 }
 
+
+/// Verify already-opened, privately staged APK bytes without buffering the
+/// whole file. This is only an integrity check, NOT APK certificate validation
+/// or authorization to install. The future Android staging layer must open a
+/// private regular file and independently verify its signature/version.
+pub(crate) fn verify_apk_stream<R: Read>(
+    reader: &mut R,
+    candidate: &ApkCandidate,
+) -> io::Result<bool> {
+    if !(MIN_APK_BYTES..=MAX_APK_BYTES).contains(&candidate.size)
+        || candidate.expected_sha256.len() != 64
+        || !candidate.expected_sha256.bytes().all(|c|
+            c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return Ok(false);
+    }
+
+    let mut sha = Sha256::new();
+    let mut bytes_read = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        // Read up to the remaining declared size + one byte, so an oversized
+        // response is rejected before hashing more than the allowed budget.
+        let capacity = buffer.len().min(
+            (candidate.size - bytes_read).saturating_add(1) as usize,
+        );
+        let count = reader.read(&mut buffer[..capacity])?;
+        if count == 0 { break; }
+        bytes_read += count as u64;
+        if bytes_read > candidate.size { return Ok(false); }
+        sha.update(&buffer[..count]);
+    }
+    if bytes_read != candidate.size { return Ok(false); }
+    let digest = sha.finalize();
+    let actual = format!("{digest:x}");
+    Ok(actual == candidate.expected_sha256)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +144,48 @@ mod tests {
                     "https://github.com/MarVinPL/ai-chess-arena/releases/download/worker-v1.2.3/ai-chess-arena-worker-aarch64.apk"
             }]
         })
+    }
+
+    #[test]
+    fn streaming_digest_checks_exact_size_and_bytes() {
+        use std::io::Cursor;
+        let payload = vec![b'W'; 2048];
+        let expected = format!("{:x}", Sha256::digest(&payload));
+        let mut candidate = select_apk_candidate(&release(), "worker-v1.2.3").unwrap();
+        candidate.size = payload.len() as u64;
+        candidate.expected_sha256 = expected;
+        assert!(verify_apk_stream(&mut Cursor::new(&payload), &candidate).unwrap());
+
+        // Same length but corrupted bytes must fail.
+        let mut corrupt = payload.clone();
+        corrupt[150] ^= 0x01;
+        assert!(!verify_apk_stream(&mut Cursor::new(&corrupt), &candidate).unwrap());
+
+        // Truncated and oversized downloads are rejected independently of hash.
+        assert!(!verify_apk_stream(&mut Cursor::new(&payload[..2047]), &candidate).unwrap());
+        let mut oversized = payload.clone();
+        oversized.push(b'X');
+        assert!(!verify_apk_stream(&mut Cursor::new(&oversized), &candidate).unwrap());
+        candidate.expected_sha256 = "a".repeat(64);
+        assert!(!verify_apk_stream(&mut Cursor::new(&payload), &candidate).unwrap());
+    }
+
+    #[test]
+    fn streaming_digest_fails_closed_for_bad_metadata_and_read_errors() {
+        use std::io::{Cursor, Error, ErrorKind};
+        struct FailRead;
+        impl Read for FailRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(Error::new(ErrorKind::Interrupted, "simulated failure"))
+            }
+        }
+        let mut candidate = select_apk_candidate(&release(), "worker-v1.2.3").unwrap();
+        assert!(verify_apk_stream(&mut FailRead, &candidate).is_err());
+        candidate.size = MAX_APK_BYTES + 1;
+        assert!(!verify_apk_stream(&mut Cursor::new(vec![0u8; 16]), &candidate).unwrap());
+        candidate.size = MIN_APK_BYTES;
+        candidate.expected_sha256 = "bad".to_owned();
+        assert!(!verify_apk_stream(&mut Cursor::new(vec![0u8; 1024]), &candidate).unwrap());
     }
 
     #[test]
