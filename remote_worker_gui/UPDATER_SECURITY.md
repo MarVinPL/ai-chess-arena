@@ -740,3 +740,34 @@ podłączonego do prawdziwego wykonawcy. Nie dodano `Session.commit()`.
 Bez tych elementów nie wolno uruchamiać nieodzyskiwalnej instalacji.
 Testy źródłowe nie zastępują kompilacji JNI na Androidzie i testu na
 fizycznym urządzeniu.
+
+
+## 2026-11-22 — decyzja: potwierdzenie aktualizacji po ponownym uruchomieniu
+
+Użytkownik upraszcza wymaganie: po udanej instalacji Android uruchomi
+aplikację już w nowej wersji. **Nie uzależniać samego potwierdzenia
+sukcesu wyłącznie od otrzymania callbacku `PackageInstaller`**.
+Przed wywołaniem instalacji zachować w trwałym, prywatnym dzienniku
+identyfikator pakietu, podpisujący certyfikat, dotychczasowy i
+docelowy `versionCode` oraz powiązaną rezerwację koordynatora.
+Przy następnym uruchomieniu odczytać faktycznie zainstalowane
+`packageName`, `versionCode` i certyfikat przez Android
+`PackageManager`, niezależnie od deklarowanej wersji z JS
+lub samego napisu Tauri. **Sukces** uznać tylko, gdy docelowy
+`versionCode` jest obecny (lub przekroczony zgodnie z zaakceptowaną
+polityką) i odcisk certyfikatu odpowiada przypiętemu
+`WORKER_SIGNING_CERT_SHA256`, a tożsamość oczekującej
+aktualizacji oraz hold koordynatora są prawidłowe.
+
+Brak uruchomienia po instalacji, stara wersja, odmowa odczytu
+Androida lub zła tożsamość **nie dowodzą sukcesu**; rezerwacja
+nie może zostać zwolniona na podstawie samego timeoutu.
+Dla anulowania lub niepowodzenia bez ponownego uruchomienia
+nadal potrzebny jest wynik OS albo jawne uzgodnienie,
+aby nie zablokować urządzenia na zawsze. Po potwierdzeniu
+nowej wersji i bezpiecznym uzgodnieniu zadania udostępnić
+ręczne `Wznów`. Nie wymaga automatycznego wznowienia.
+
+Ta decyzja określa docelowy mechanizm; obecny PR
+**nie ma jeszcze** kompletnego, trwałego dziennika identyfikatora
+instalacji ani procedury uzgadniającej przy starcie.
