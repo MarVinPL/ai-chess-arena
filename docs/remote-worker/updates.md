@@ -378,3 +378,16 @@ peer saturation and expiry. These protections do **not** replace TLS, reverse
 proxy connection limits, production request accounting, or safe worker
 reconciliation. The listener remains disabled by default and is not wired to
 `server.py`.
+
+### Caddy HTTPS loopback-only example
+
+`deploy/remote-worker/Caddyfile.loopback.example` is an **offline-only**
+Caddy configuration using `tls internal`, explicit `bind 127.0.0.1`, a
+POST-only result route, a 2048-byte body limit, and a loopback-only upstream
+on port 19444. It is deliberately **not imported** by production Caddy.
+Caddy `adapt` was checked on the existing VPS and confirms the listener
+is `127.0.0.1:19443`, not the wildcard interface. A regression test checks
+the adapted listener. Internal CA TLS is suitable for a local smoke test,
+not remote worker deployment; external trust, identity and transport
+requirements remain unresolved. No Caddy reload or production service
+change was made.
