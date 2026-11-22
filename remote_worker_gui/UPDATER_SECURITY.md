@@ -369,3 +369,33 @@ z Android PackageInstaller**. W stanie niepewnym rezerwacja pozostaje
 zablokowana. Przed umożliwieniem instalacji niezbędny jest test
 systemowego magazynu na fizycznym Android 16, trwała obsługa wyniku
 systemowej instalacji i niezależne uzgodnienie koordynatora.
+
+## 2026-11-22 — jawny model cyklu życia Android PackageInstaller
+
+Dodano `android_update_install_state.rs` z czystą polityką przejść
+`VerifiedStaged → CoordinatorReserved → SessionCreated →
+SessionCommitted → AwaitingUserConsent`, oraz wynikami
+`InstalledConfirmed`, `CancelledConfirmed`, `FailedConfirmed`
+i `ResultUnknown` przy przerwaniu pracy.
+
+Samo wywołanie `Session.commit()` ani zgłoszenie
+`STATUS_PENDING_USER_ACTION` nie jest wynikiem instalacji.
+Pakiet wolno przekazać instalatorowi dopiero po sprawdzeniu
+wszystkich elementów: ważnej blokady koordynatora, SHA-256,
+certyfikatu z istniejącego GitHub Secret, wyższego `versionCode`
+i uprawnienia Androida do zlecenia instalacji. Wymagana jest
+świadoma zgoda użytkownika systemu Android, nigdy silent install.
+Zwolnienie rezerwacji dopiero po potwierdzonym przez OS wyniku
+i niezależnym uzgodnieniu stanu aplikacji; restart lub brak
+callbacku daje `ResultUnknown`, bez zgody na nową instalację
+ani zwolnienie rezerwacji. Referencje:
+https://developer.android.com/reference/android/content/pm/PackageInstaller.Session
+oraz
+https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams
+
+**To polityka i testy — nie uruchomiony instalator.**
+Nie dodano wywołania `Session.commit`, sesji PackageInstaller,
+natywnego odbiornika statusów ani przycisku „Instaluj”. Należy
+zintegrować odbiornik OS, trwały identyfikator sesji, odzyskiwanie
+wyniku po restarcie, a dopiero potem podłączyć do koordynatora.
+`update_installation_readiness` nadal `can_install=false`.
