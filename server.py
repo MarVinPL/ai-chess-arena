@@ -609,7 +609,7 @@ def tournament_preflight(tournament_id):
                 sha = model.get('sha256')
                 if phone_delivery.find_ready_worker(sha) is None:
                     raise ValueError('no ready matching phone')
-            except (KeyError, TypeError, ValueError, sqlite3.Error):
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error):
                 reasons.append('brak gotowego telefonu z wymaganym lokalnym modelem')
                 runtime_available = False
         if allowlist_error is not None:
