@@ -299,3 +299,21 @@ pozostawić trwale zablokowane przydziały. Następny krok to
 orkiestracja po stronie aplikacji bezpośrednio przed wywołaniem
 systemowego instalatora, obsługa anulowania i wznowienia po
 restarcie. Endpoint nie jest dowodem gotowego instalatora.
+
+## 2026-11-22 — weryfikacja możliwości zgłoszenia instalacji w Androidzie
+
+Po pomyślnym sprawdzeniu SHA-256 oraz zgodności identyfikatora pakietu,
+`versionCode` i certyfikatu `verify_downloaded_worker_apk` odczytuje
+przez JNI `PackageManager.canRequestPackageInstalls()`. W razie
+braku uprawnienia, braku API albo błędu JNI wynik to `false`.
+Interfejs wyraźnie odróżnia brak uprawnienia Androida od błędnego
+podpisu APK. Jest to **tylko diagnostyka**: `true` nie oznacza
+instalacji ani zgody użytkownika.
+
+Do aktywacji systemowego instalatora potrzebne będą jeszcze:
+odpowiednio zdefiniowane i przetestowane na Android 16 uprawnienie
+`REQUEST_INSTALL_PACKAGES`, obsługa ustawień Androida, kompletna
+sesja `PackageInstaller` z `USER_ACTION_REQUIRED`, jej wynik i
+anulowanie, powiązanie rezerwacji koordynatora z całym procesem
+oraz odzyskiwanie po restarcie. Nie wolno traktować samego
+`canRequestPackageInstalls()` jako zgody na bezobsługową instalację.
