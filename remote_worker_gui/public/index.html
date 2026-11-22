@@ -76,7 +76,7 @@ async function checkForWorkerUpdate(){
  try{
   const info=await invoke('check_worker_release');
   status.textContent=info.update_available
-   ?`Dostępna wersja ${info.latest_version} (zainstalowana: ${info.current_version}). Instalacja nie jest jeszcze dostępna.`
+   ?`Dostępna wersja ${info.latest_version} (zainstalowana: ${info.current_version}). ${info.apk_asset_available===true?'Wydanie ma plik APK ARM64 z poprawnymi metadanymi.':'Brak kwalifikującego się pliku APK ARM64 w wydaniu.'} Pobieranie i instalacja nie są jeszcze dostępne.`
    :info.latest_version?`Masz aktualną wersję (${info.current_version}).`:`Brak opublikowanych wydań. Wersja: ${info.current_version}.`;
  }catch(_){status.textContent='Nie udało się sprawdzić wydań. Spróbuj później.';}
  finally{checkingUpdate=false;button.disabled=false;}
