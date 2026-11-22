@@ -54,6 +54,8 @@ async function processOnePhoneMove(){
    phoneInferenceStatus.textContent='Telefon wykonał obliczenie. Ruch przekazany Arenie; zatwierdzenie partii należy do Areny.';
   }else if(result?.state==='awaiting_arena'){
    phoneInferenceStatus.textContent='Wynik oczekuje na zatwierdzenie przez Arenę.';
+  }else if(result?.state==='ready'){
+   phoneInferenceStatus.textContent='Lokalny model telefonu gotowy. Arena może teraz przydzielić temu Workerowi ruch.';
   }else if(result?.state==='none'){
    phoneInferenceStatus.textContent='Worker aktywny. Arena nie przydzieliła aktualnie zadania.';
   }else if(result?.state==='expired'||result?.state==='blocked'){
