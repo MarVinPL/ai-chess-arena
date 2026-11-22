@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile exact owner-admitted Arena versions after PR #260 is merged.
+"""Reconcile the two mismatched owner-admitted Arena versions (IDs 1 and 2).
 
 Dry-run by default. Does not download weights, enable an age-gated model,
 modify roster/games or start inference. --apply backs up the SQLite DB first.
@@ -20,8 +20,8 @@ if str(ROOT) not in sys.path:
 import model_allowlist
 from model_manifest import load_manifest
 DB = ROOT / "arena.sqlite3"
-# Bielik v3 requires >=18; not activated by this migration.
-OPERATIONAL_MODEL_IDS = (1, 2, 3, 4, 5, 7, 8)
+# Only Qwen2.5 and SmolLM2 need metadata repair. No other model is activated or modified.
+OPERATIONAL_MODEL_IDS = (1, 2)
 
 
 def expected_manifest():
