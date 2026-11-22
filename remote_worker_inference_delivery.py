@@ -250,20 +250,32 @@ class WorkerInferenceDelivery:
         move = validate_result(json.loads(result[0]), job, chess.Board(job["fen"]))
         return move.uci()
 
-    def finalize_arena_result(self, worker_id, job_id, uci):
-        """Trusted Arena runner only, after accepting a particular legal UCI.
+    def finalize_arena_result(self, worker_id, job_id, uci, *,
+                              tournament_id, checkpoint):
+        """Atomically persist Arena's move checkpoint AND release phone lease.
 
-        This does NOT write tournament checkpoints. The server-owned runner
-        applies the move and saves the only checkpoint after this returns.
-        If the process crashes before that, replay starts from the previous
-        authoritative checkpoint; no speculative phone state is used.
+        The phone never writes a board/checkpoint. A crash before this
+        transaction commits leaves the original checkpoint, receipt and lease
+        intact. A crash after it commits leaves the new checkpoint and an idle
+        worker. Repeated finalizations are rejected instead of replayed.
         """
+        import hashlib
+        import tournament_checkpoint
+
         self.jobs._id(worker_id)
         self.jobs._id(job_id)
         if not isinstance(uci, str) or len(uci) not in (4, 5):
             raise ValueError("Invalid UCI finalization")
+        if type(tournament_id) is not int or tournament_id <= 0:
+            raise ValueError("Invalid Arena tournament ID")
+        if not isinstance(checkpoint, dict) or (
+            checkpoint.get("schema_version") != tournament_checkpoint.SCHEMA_VERSION
+            or checkpoint.get("tournament_id") != tournament_id
+        ):
+            raise ValueError("Invalid next Arena checkpoint")
         now = self.clock()
         with self.jobs._db() as db:
+            db.execute("PRAGMA synchronous=FULL")
             db.execute("BEGIN IMMEDIATE")
             self.jobs._reject_update_hold(db, worker_id)
             self.jobs._reject_pending_pause(db, worker_id)
@@ -283,11 +295,50 @@ class WorkerInferenceDelivery:
             if not row or not received or not lease or lease[0] != "running" or (
                 lease[1] != job_id or lease[2] is None or lease[2] <= now
             ):
-                raise ValueError("No live result to finalize")
+                raise ValueError("No live remote result to finalize")
             job = validate_job(json.loads(row[0]))
-            move = validate_result(json.loads(received[0]), job, chess.Board(job["fen"]))
+            before_board = chess.Board(job["fen"])
+            move = validate_result(json.loads(received[0]), job, before_board)
             if move.uci() != uci:
                 raise ValueError("Arena attempted to finalize a different UCI")
+            before_board.push(move)
+            expected_fen = before_board.fen()
+
+            # Validate continuation of the *persisted* Arena checkpoint,
+            # not merely a fresh board proposed by any caller.
+            old = db.execute(
+                "SELECT payload_json,sha256 FROM tournament_checkpoints WHERE tournament_id=?",
+                (tournament_id,),
+            ).fetchone()
+            if old is None or hashlib.sha256(old[0].encode("utf-8")).hexdigest() != old[1]:
+                raise ValueError("Missing or corrupted predecessor checkpoint")
+            predecessor = json.loads(old[0])
+            previous_moves = predecessor.get("moves")
+            next_moves = checkpoint.get("moves")
+            previous_times = predecessor.get("move_times")
+            next_times = checkpoint.get("move_times")
+            if (predecessor.get("fen") != job["fen"]
+                or predecessor.get("pairing") != checkpoint.get("pairing")
+                or predecessor.get("white") != checkpoint.get("white")
+                or predecessor.get("black") != checkpoint.get("black")
+                or not isinstance(previous_moves, list)
+                or not isinstance(next_moves, list)
+                or len(next_moves) != len(previous_moves) + 1
+                or next_moves[:-1] != previous_moves
+                or not isinstance(previous_times, list)
+                or not isinstance(next_times, list)
+                or len(next_times) != len(previous_times) + 1
+                or next_times[:-1] != previous_times
+                or not isinstance(next_moves[-1], dict)
+                or next_moves[-1].get("uci") != uci
+                or next_moves[-1].get("fen") != expected_fen
+                or next_moves[-1].get("ply") != len(next_moves)
+                or checkpoint.get("fen") != expected_fen):
+                raise ValueError("Arena checkpoint does not extend the assigned chess move")
+
+            tournament_checkpoint.save_in_transaction(
+                db, tournament_id, checkpoint, expected_sha256=old[1],
+            )
             db.execute(
                 "DELETE FROM worker_inference_results WHERE worker_id=? AND job_id=?",
                 (worker_id, job_id),
