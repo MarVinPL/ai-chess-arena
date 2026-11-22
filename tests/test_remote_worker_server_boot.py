@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from remote_worker_job_registry import WorkerJobRegistry
+from remote_worker_jobs import DurableWorkerJobs
 
 
 def test_server_startup_invalidates_jobs_before_listener(tmp_path):
@@ -13,6 +14,9 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
     registry.record_assignment('worker_87654321', 'job_87654321', deadline=200.0)
     registry.record_terminal('worker_87654321', 'job_87654321')
     assert registry.state('worker_87654321') == 'idle_confirmed'
+    durable = DurableWorkerJobs(path, clock=lambda: 100)
+    durable.assign('worker_99999999', 'job_99999999', timeout_seconds=90)
+    assert durable.state('worker_99999999') == 'running'
 
     source = Path(__file__).resolve().parents[1] / 'server.py'
     tree = ast.parse(source.read_text())
@@ -34,6 +38,7 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
             assert address == ('127.0.0.1', 0)
             assert WorkerJobRegistry(path).state('worker_12345678') == 'unknown'
             assert WorkerJobRegistry(path).state('worker_87654321') == 'unknown'
+            assert DurableWorkerJobs(path).state('worker_99999999') == 'unknown'
             started.append('listener')
         def serve_forever(self):
             started.append('serve')
@@ -41,6 +46,7 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
     ns = {
         'DB': path, 'db_init': lambda: started.append('db_init'),
         'remote_worker_job_registry': SimpleNamespace(WorkerJobRegistry=WorkerJobRegistry),
+        'remote_worker_jobs': SimpleNamespace(DurableWorkerJobs=DurableWorkerJobs),
         'threading': SimpleNamespace(Thread=FakeThread),
         '_hf_download_planner_loop': lambda: None,
         'hf_candidate_queue': SimpleNamespace(start_background_workers=lambda: started.append('queue')),
@@ -71,6 +77,7 @@ def test_server_boot_fails_closed_when_recovery_fails(tmp_path):
     started = []
     ns = {'DB': tmp_path / 'broken.sqlite', 'db_init': lambda: started.append('db_init'),
           'remote_worker_job_registry': SimpleNamespace(WorkerJobRegistry=BrokenRegistry),
+          'remote_worker_jobs': SimpleNamespace(DurableWorkerJobs=DurableWorkerJobs),
           'threading': SimpleNamespace(Thread=lambda **kwargs: started.append('thread'))}
     import pytest
     with pytest.raises(OSError, match='SQLite unavailable'):

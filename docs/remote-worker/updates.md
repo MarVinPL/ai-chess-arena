@@ -86,3 +86,8 @@ statements against a temporary SQLite database with stubbed background
 services and HTTP listener. They verify recovery occurs before accepting
 traffic and a recovery failure aborts startup. They do not restart the
 production systemd unit or exercise the complete server process.
+
+Security review correction: startup must invalidate **both** independent
+SQLite registries (`remote_worker_job_state` and `worker_job_safety`) before
+starting background threads or HTTP. Neither registry is currently a complete
+scheduler; a confirmed idle state is not authorization to install updates.
