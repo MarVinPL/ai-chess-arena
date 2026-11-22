@@ -83,6 +83,36 @@ class WorkerInferenceDelivery:
             )
         return "ready"
 
+    def find_ready_worker(self, model_sha256):
+        """Select an idle phone for an exact, recent model alias.
+
+        Read-only hint; assign_from_arena must recheck the same evidence
+        under BEGIN IMMEDIATE, so a race cannot claim an already busy phone.
+        """
+        if not isinstance(model_sha256, str) or len(model_sha256) != 64 or not all(
+            c in "0123456789abcdef" for c in model_sha256
+        ):
+            raise ValueError("Invalid requested model")
+        now = self.clock()
+        with self.jobs._db() as db:
+            row = db.execute(
+                """SELECT c.worker_id FROM worker_inference_capabilities c
+                JOIN worker_job_safety s ON s.worker_id=c.worker_id
+                WHERE c.model_sha256=? AND c.checked_at BETWEEN ? AND ?
+                AND s.state='idle_confirmed' AND s.job_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM worker_inference_assignments a
+                                WHERE a.worker_id=c.worker_id)
+                AND NOT EXISTS (SELECT 1 FROM worker_update_holds h
+                                WHERE h.worker_id=c.worker_id)
+                AND NOT EXISTS (SELECT 1 FROM worker_update_pause_requests p
+                                WHERE p.worker_id=c.worker_id)
+                AND NOT EXISTS (SELECT 1 FROM worker_update_resume r
+                                WHERE r.worker_id=c.worker_id)
+                ORDER BY c.checked_at DESC, c.worker_id ASC LIMIT 1""",
+                (model_sha256, now - 30, now),
+            ).fetchone()
+        return row[0] if row else None
+
     def assign_from_arena(self, worker_id, job):
         """Trusted Arena-only transaction; NOT exposed as a worker HTTP method.
 
