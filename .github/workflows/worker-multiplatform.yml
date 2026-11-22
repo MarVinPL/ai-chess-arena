@@ -63,7 +63,8 @@ jobs:
           ANDROID: ${{ steps.filter.outputs.android }}
         run: |
           for platform in linux windows android; do
-            value="${!platform}"
+            upper="${platform^^}"
+            value="${!upper}"
             if [[ "$MANUAL" == true || "$SHARED" == true || "$value" == true ]]; then
               echo "$platform=true" >> "$GITHUB_OUTPUT"
             else
