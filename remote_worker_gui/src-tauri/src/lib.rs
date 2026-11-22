@@ -257,47 +257,94 @@ fn numeric_version(version: &str) -> Option<[u64; 3]> {
     Some([parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?])
 }
 
-// Select only stable releases belonging to the Worker, not Arena server.
-fn newest_worker_release(releases: &[serde_json::Value]) -> Option<([u64; 3], &str, &serde_json::Value)> {
+// Explicit, read-only release channels. Neither channel permits installation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerReleaseChannel { Latest, PreRelease }
+
+impl WorkerReleaseChannel {
+    fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "latest" => Ok(Self::Latest),
+            "pre-release" => Ok(Self::PreRelease),
+            _ => Err("Nieznany kanał aktualizacji".into()),
+        }
+    }
+    fn is_prerelease(self) -> bool { self == Self::PreRelease }
+}
+
+fn worker_release_version(tag: &str, channel: WorkerReleaseChannel) -> Option<[u64; 3]> {
+    let version = tag.strip_prefix("worker-v")?;
+    if channel == WorkerReleaseChannel::Latest { return numeric_version(version); }
+    let (base, suffix) = version.split_once('-')?;
+    if suffix.is_empty() || suffix.len() > 64 || suffix.starts_with('.')
+        || suffix.ends_with('.') || suffix.contains("..")
+        || suffix.split('.').any(|part| part.is_empty() ||
+            !part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')) {
+        return None;
+    }
+    numeric_version(base)
+}
+
+fn release_published_at(release: &serde_json::Value) -> &str {
+    release.get("published_at").and_then(|v| v.as_str()).unwrap_or("")
+}
+
+// Filter out server releases, drafts, and mismatched prerelease flags.
+fn newest_worker_release(releases: &[serde_json::Value], channel: WorkerReleaseChannel)
+    -> Option<([u64; 3], &str, &serde_json::Value)> {
     releases.iter()
-        .filter(|release| release.get("draft").and_then(|v| v.as_bool()) == Some(false)
-            && release.get("prerelease").and_then(|v| v.as_bool()) == Some(false))
-        .filter_map(|release| {
-            let tag = release.get("tag_name")?.as_str()?;
-            let version = numeric_version(tag.strip_prefix("worker-v")?)?;
-            Some((version, tag, release))
+        .filter(|r| r.get("draft").and_then(|v| v.as_bool()) == Some(false)
+            && r.get("prerelease").and_then(|v| v.as_bool()) == Some(channel.is_prerelease()))
+        .filter_map(|r| {
+            let tag = r.get("tag_name")?.as_str()?;
+            Some((worker_release_version(tag, channel)?, tag, r))
         })
-        .max_by_key(|(version, _, _)| *version)
+        .max_by(|a, b| a.0.cmp(&b.0)
+            .then_with(|| release_published_at(a.2).cmp(release_published_at(b.2)))
+            .then_with(|| a.1.cmp(b.1)))
 }
 
 #[tauri::command]
-async fn check_worker_release() -> Result<ReleaseInfo, String> {
+async fn check_worker_release(channel: String) -> Result<ReleaseInfo, String> {
+    let channel = WorkerReleaseChannel::parse(&channel)?;
     let current = env!("CARGO_PKG_VERSION").to_string();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(8))
         .build().map_err(|_| "Błąd klienta HTTPS")?;
-    // The repository also publishes non-Worker releases. Inspect a bounded
-    // list rather than GitHub's /latest, which may belong to the server.
+    // This repository publishes server and adapter releases too.
     let response = client.get("https://api.github.com/repos/MarVinPL/ai-chess-arena/releases?per_page=100")
         .header(reqwest::header::USER_AGENT, "ai-chess-arena-worker-update-check")
         .send().await.map_err(|_| "Nie udało się sprawdzić wydań")?;
-    if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniach".into()); }
-    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydań")?;
+    if !response.status().is_success() {
+        return Err("GitHub nie udostępnił informacji o wydaniach".into());
+    }
+    let data: serde_json::Value = response.json().await
+        .map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
-    let candidate = newest_worker_release(releases);
+    let candidate = newest_worker_release(releases, channel);
     let Some((latest, tag, data)) = candidate else {
-        return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
+        return Ok(ReleaseInfo {
+            current_version: current, latest_version: None,
+            update_available: false, release_notes_url: None
+        });
     };
+    let expected_path = format!("/MarVinPL/ai-chess-arena/releases/tag/{tag}");
     let notes = data.get("html_url").and_then(|v| v.as_str())
         .and_then(|raw| reqwest::Url::parse(raw).ok())
         .filter(|url| url.scheme() == "https" && url.host_str() == Some("github.com")
-            && url.path().starts_with("/MarVinPL/ai-chess-arena/releases/tag/worker-v")
-            && url.query().is_none() && url.fragment().is_none()
+            && url.path() == expected_path
+            && url.port().is_none() && url.query().is_none()
+            && url.fragment().is_none()
             && url.username().is_empty() && url.password().is_none())
         .map(|url| url.to_string());
-    Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes })
+    // A prerelease with the same base version is visible as a channel
+    // release, NOT falsely advertised as a newer installable Android APK.
+    Ok(ReleaseInfo {
+        current_version: current, latest_version: Some(tag.to_owned()),
+        update_available: latest > installed, release_notes_url: notes
+    })
 }
 
 // Fail closed: a missing coordinator confirmation is not an idle worker.
@@ -335,7 +382,7 @@ fn update_installation_readiness() -> UpdateReadiness {
 
 #[cfg(test)]
 mod version_tests {
-    use super::{numeric_version, newest_worker_release, may_install_update, update_installation_readiness, VerifiedTaskState, PendingWorkerJob, validate_pending_worker_job};
+    use super::{numeric_version, newest_worker_release, worker_release_version, WorkerReleaseChannel, may_install_update, update_installation_readiness, VerifiedTaskState, PendingWorkerJob, validate_pending_worker_job};
     use serde_json::json;
     #[test]
     fn selects_newest_stable_worker_only() {
@@ -347,7 +394,7 @@ mod version_tests {
             json!({"tag_name":"worker-v1.9.9","draft":false,"prerelease":false}),
             json!({"tag_name":"worker-v1.11.0-rc1","draft":false,"prerelease":false}),
         ];
-        let selected = newest_worker_release(&releases).unwrap();
+        let selected = newest_worker_release(&releases, WorkerReleaseChannel::Latest).unwrap();
         assert_eq!(selected.1, "worker-v1.10.0");
         assert_eq!(selected.0, [1,10,0]);
     }
@@ -384,9 +431,51 @@ mod version_tests {
     }
 
     #[test]
+    fn test_channel_finds_real_signed_worker_prerelease_only() {
+        let releases = vec![
+            json!({"tag_name":"issue-190-lora-v1","draft":false,"prerelease":true}),
+            json!({"tag_name":"worker-v0.1.0-test.1","draft":false,"prerelease":true,
+                   "published_at":"2026-11-21T15:00:00Z"}),
+            json!({"tag_name":"worker-v0.1.0-test.2","draft":false,"prerelease":true,
+                   "published_at":"2026-11-22T15:00:00Z"}),
+            json!({"tag_name":"worker-v0.1.0-test.3","draft":true,"prerelease":true}),
+            json!({"tag_name":"worker-v0.1.0","draft":false,"prerelease":false}),
+            json!({"tag_name":"worker-v99.0.0","draft":false,"prerelease":true}),
+        ];
+        let selected = newest_worker_release(&releases, WorkerReleaseChannel::PreRelease).unwrap();
+        assert_eq!(selected.1, "worker-v0.1.0-test.2");
+        assert_eq!(selected.0, [0, 1, 0]);
+    }
+    #[test]
+    fn channel_names_and_release_tag_flags_are_strict() {
+        assert_eq!(WorkerReleaseChannel::parse("latest").unwrap(), WorkerReleaseChannel::Latest);
+        assert_eq!(WorkerReleaseChannel::parse("pre-release").unwrap(), WorkerReleaseChannel::PreRelease);
+        assert!(WorkerReleaseChannel::parse("anything-else").is_err());
+        for tag in ["worker-v1.2.3", "worker-v1.2.3-",
+                    "worker-v1.2.3-../bad", "worker-v1.2.3-foo/evil",
+                    "worker-v1.2.3-test..1", "worker-v1.2.3-test.1+build"] {
+            assert!(worker_release_version(tag, WorkerReleaseChannel::PreRelease).is_none());
+        }
+        assert!(worker_release_version("worker-v1.2.3-test.1", WorkerReleaseChannel::Latest).is_none());
+        assert_eq!(worker_release_version("worker-v0.1.0-test.1", WorkerReleaseChannel::PreRelease), Some([0,1,0]));
+        let invalid = vec![
+            json!({"tag_name":"worker-v1.2.3","draft":false,"prerelease":true}),
+            json!({"tag_name":"worker-v1.2.3-test.1","draft":false,"prerelease":false}),
+        ];
+        assert!(newest_worker_release(&invalid, WorkerReleaseChannel::Latest).is_none());
+        assert!(newest_worker_release(&invalid, WorkerReleaseChannel::PreRelease).is_none());
+    }
+    #[test]
+    fn same_version_prerelease_does_not_authorize_install() {
+        let base = worker_release_version("worker-v0.1.0-test.1", WorkerReleaseChannel::PreRelease).unwrap();
+        assert_eq!(base, numeric_version("0.1.0").unwrap());
+        assert!(!(base > numeric_version("0.1.0").unwrap()));
+        assert!(!update_installation_readiness().can_install);
+    }
+    #[test]
     fn no_eligible_release_means_no_update() {
         let releases = vec![json!({"tag_name":"worker-v2.0.0","draft":true,"prerelease":false}), json!({"tag_name":"server-v9.0.0","draft":false,"prerelease":false})];
-        assert!(newest_worker_release(&releases).is_none());
+        assert!(newest_worker_release(&releases, WorkerReleaseChannel::Latest).is_none());
     }
     #[test]
     fn gui_never_offers_installation_before_integrations() {
