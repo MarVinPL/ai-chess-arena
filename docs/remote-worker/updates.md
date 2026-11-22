@@ -91,3 +91,11 @@ Security review correction: startup must invalidate **both** independent
 SQLite registries (`remote_worker_job_state` and `worker_job_safety`) before
 starting background threads or HTTP. Neither registry is currently a complete
 scheduler; a confirmed idle state is not authorization to install updates.
+
+Result and failure transitions in the experimental `WorkerSessions` now
+confirm durable completion before setting the in-memory `committed` flag or
+recording metrics. Failed durable completion invalidates the safety state and
+leaves the job uncommitted; regression tests cover both transitions. Metrics
+are best-effort after the durable transition. This is not an atomic result
+commit or a complete reconciliation protocol: the two SQLite registries remain
+independent, and neither is wired to a production remote-job scheduler.

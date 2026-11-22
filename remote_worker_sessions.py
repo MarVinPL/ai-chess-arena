@@ -121,19 +121,23 @@ class WorkerSessions:
         if board.fen() != job.payload['fen']:
             raise ProtocolError('Board changed since assignment')
         move = validate_result(result, job.payload, board)
-        # Persist the coordinator-validated result before marking it committed.
-        # This is wall time, not a claimed worker CPU/GPU utilization metric.
-        if self._metrics is not None:
-            self._metrics.record(job_id=result['job_id'], worker_id=worker_id,
-                                 status='success', duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)),
-                                 moves=1)
-        job.committed = True
+        # Confirm durable state before publishing in-memory completion or metrics.
+        # On failure invalidate the safety claim; do not accept the result.
         if self._durable_jobs is not None:
             try:
                 self._durable_jobs.complete(worker_id, result['job_id'])
             except (ValueError, OSError):
                 self._durable_jobs.invalidate(worker_id)
                 raise
+        job.committed = True
+        # Metrics are best-effort; they must not undo an already committed job.
+        if self._metrics is not None:
+            try:
+                self._metrics.record(job_id=result['job_id'], worker_id=worker_id,
+                                     status='success', duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)),
+                                     moves=1)
+            except (ValueError, OSError):
+                pass
         return move
 
     def terminate(self, worker_id: str, token: str, job_id: str, *, status: str) -> None:
@@ -144,13 +148,16 @@ class WorkerSessions:
         job = self._jobs.get(job_id)
         if not job or job.worker_id != worker_id or job.committed:
             raise ProtocolError('Unknown or completed job')
-        if self._metrics is not None:
-            self._metrics.record(job_id=job_id, worker_id=worker_id,
-                                 status=status, duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)))
-        job.committed = True
         if self._durable_jobs is not None:
             try:
                 self._durable_jobs.complete(worker_id, job_id)
             except (ValueError, OSError):
                 self._durable_jobs.invalidate(worker_id)
                 raise
+        job.committed = True
+        if self._metrics is not None:
+            try:
+                self._metrics.record(job_id=job_id, worker_id=worker_id,
+                                     status=status, duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)))
+            except (ValueError, OSError):
+                pass
