@@ -1,40 +1,56 @@
 use serde::Serialize;
 use std::time::Duration;
 
-const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
 const TOKEN_ACCOUNT: &str = "worker-token";
 
-fn token_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
-        .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
-}
+// Use the platform's native credential store: Android Keystore on Android,
+// Credential Manager on Windows and Secret Service on Linux.
+// The service is the Tauri application identifier, matching the previous
+// desktop storage service. Never store tokens in JS storage or log them.
+use tauri_plugin_keyring_store::KeyringExt;
 
-#[tauri::command]
-fn store_worker_token(token: String) -> Result<(), String> {
-    // Never return, log, or serialize the secret back to the frontend.
+fn validate_worker_token(token: &str) -> Result<(), String> {
     if token.len() < 24 || token.len() > 512 || !token.is_ascii()
         || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         return Err("Nieprawidłowy format tokenu".to_string());
     }
-    token_entry()?.set_password(&token)
-        .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".to_string())
+    Ok(())
+}
+
+async fn read_saved_worker_token(app: tauri::AppHandle) -> Result<String, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.keyring().store.get_password(TOKEN_ACCOUNT)
+            .map_err(|_| "Magazyn poświadczeń jest niedostępny".to_string())
+    }).await.map_err(|_| "Nie udało się odczytać tokenu".to_string())??;
+    result.filter(|token| !token.is_empty())
+        .ok_or_else(|| "Brak zapisanego tokenu".to_string())
 }
 
 #[tauri::command]
-fn has_saved_worker_token() -> bool {
-    token_entry().and_then(|entry| entry.get_password()
-        .map_err(|_| "Brak zapisanego tokenu".to_string())).is_ok()
+async fn store_worker_token(app: tauri::AppHandle, token: String) -> Result<(), String> {
+    validate_worker_token(&token)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.keyring().store.set_password(TOKEN_ACCOUNT, &token)
+            .map_err(|_| "Nie udało się zapisać tokenu w magazynie poświadczeń".to_string())
+    }).await.map_err(|_| "Nie udało się uruchomić zapisu tokenu".to_string())?
 }
 
 #[tauri::command]
-fn forget_worker_token() -> Result<(), String> {
-    let entry = token_entry()?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
-    }
+async fn has_saved_worker_token(app: tauri::AppHandle) -> Result<bool, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        app.keyring().store.get_password(TOKEN_ACCOUNT)
+            .map_err(|_| "Magazyn poświadczeń jest niedostępny".to_string())
+    }).await.map_err(|_| "Nie udało się sprawdzić tokenu".to_string())??;
+    Ok(result.as_ref().is_some_and(|secret| !secret.is_empty()))
 }
 
+#[tauri::command]
+async fn forget_worker_token(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.keyring().store.delete(TOKEN_ACCOUNT)
+            .map_err(|_| "Nie udało się usunąć tokenu".to_string())
+    }).await.map_err(|_| "Nie udało się uruchomić usunięcia tokenu".to_string())?
+}
 
 #[tauri::command]
 fn worker_version() -> &'static str {
@@ -62,7 +78,7 @@ fn worker_status() -> WorkerStatus {
 // The desktop app connects outbound only. Never pass the token into JS or a URL.
 // HTTPS is mandatory; redirect following is disabled to avoid credential leakage.
 #[tauri::command]
-async fn verify_worker_connection(server: String, worker_id: String) -> Result<bool, String> {
+async fn verify_worker_connection(app: tauri::AppHandle, server: String, worker_id: String) -> Result<bool, String> {
     if worker_id.len() < 8 || worker_id.len() > 96 ||
         !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
         return Err("Nieprawidłowy identyfikator komputera".into());
@@ -73,7 +89,7 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
         url.path() != "/" || url.port().is_some() {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = read_saved_worker_token(app).await?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12))
@@ -93,7 +109,7 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
 // Advisory only: the server currently returns unknown until its durable
 // coordinator job registry is wired. Never interpret an error as idle.
 #[tauri::command]
-async fn check_update_safety(server: String, worker_id: String) -> Result<String, String> {
+async fn check_update_safety(app: tauri::AppHandle, server: String, worker_id: String) -> Result<String, String> {
     if worker_id.len() < 8 || worker_id.len() > 96 ||
         !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
         return Err("Nieprawidłowy identyfikator komputera".into());
@@ -104,7 +120,7 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         url.path() != "/" || url.port().is_some() {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = read_saved_worker_token(app).await?;
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12)).build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/update-safety")
@@ -272,6 +288,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_keyring_store::init())
         .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, check_update_safety, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
