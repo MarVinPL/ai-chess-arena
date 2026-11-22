@@ -30,3 +30,23 @@ def test_committed_terminal_state_persists(tmp_path):
         jobs.complete('worker_12345678', 'job_12345678')
     jobs.invalidate('worker_12345678')
     assert jobs.state('worker_12345678') == 'unknown'
+
+
+def test_session_coordinator_updates_durable_state(tmp_path):
+    import chess
+    from remote_worker_sessions import WorkerSessions
+    path = tmp_path / 'jobs.db'
+    now = [100]
+    durable = DurableWorkerJobs(path, clock=lambda: now[0])
+    sessions = WorkerSessions(clock=lambda: now[0], durable_jobs=durable)
+    worker = 'worker_12345678'
+    token = sessions.approve(worker, sessions.request_pairing(worker))
+    board = chess.Board()
+    job = dict(version=1, job_id='job_12345678', fen=board.fen(),
+               model_sha256='b' * 64, max_tokens=16, timeout_seconds=90)
+    sessions.assign(worker, token, job)
+    assert DurableWorkerJobs(path, clock=lambda: now[0]).state(worker) == 'running'
+    sessions.accept(worker, token, dict(version=1, job_id=job['job_id'], uci='e2e4'), board)
+    assert DurableWorkerJobs(path, clock=lambda: now[0]).state(worker) == 'idle_confirmed'
+    sessions.revoke(worker)
+    assert durable.state(worker) == 'unknown'

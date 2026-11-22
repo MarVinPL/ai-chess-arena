@@ -51,3 +51,10 @@ A coordinator must atomically coordinate its actual job assignment/terminal
 commit with these transitions before trusting `idle_confirmed`; this integration
 is **not implemented**. The HTTP update-safety endpoint still returns `unknown`
 for every authenticated worker. The registry alone does not enable installation.
+
+`WorkerSessions` can now optionally receive `durable_jobs=DurableWorkerJobs(...)`.
+It records assignment before in-memory dispatch, confirms terminal results,
+and invalidates the registry on revocation. This remains an integration
+prototype: coordinator recovery, concurrent writers, cross-store atomicity,
+and live scheduler wiring are not yet complete. Do not expose persisted
+`idle_confirmed` as permission to install until these are resolved.

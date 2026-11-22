@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 from remote_worker_metrics import WorkerMetrics
+from remote_worker_jobs import DurableWorkerJobs
 
 from remote_worker_protocol import ProtocolError, validate_job, validate_result
 import chess
@@ -42,9 +43,10 @@ class _Job:
 
 
 class WorkerSessions:
-    def __init__(self, clock: Callable[[], float] = time.monotonic, metrics: WorkerMetrics | None = None):
+    def __init__(self, clock: Callable[[], float] = time.monotonic, metrics: WorkerMetrics | None = None, durable_jobs: DurableWorkerJobs | None = None):
         self._clock = clock
         self._metrics = metrics
+        self._durable_jobs = durable_jobs
         self._pairings: dict[str, _Pairing] = {}
         self._sessions: dict[str, _Session] = {}
         self._jobs: dict[str, _Job] = {}
@@ -94,6 +96,8 @@ class WorkerSessions:
         s = self._sessions.get(worker_id)
         if s:
             s.revoked = True
+        if self._durable_jobs is not None:
+            self._durable_jobs.invalidate(worker_id)
         for job_id, job in list(self._jobs.items()):
             if job.worker_id == worker_id:
                 del self._jobs[job_id]
@@ -103,6 +107,8 @@ class WorkerSessions:
         payload = validate_job(job)
         if payload['job_id'] in self._jobs:
             raise ProtocolError('Duplicate job ID')
+        if self._durable_jobs is not None:
+            self._durable_jobs.assign(worker_id, payload['job_id'], timeout_seconds=payload['timeout_seconds'])
         self._jobs[payload['job_id']] = _Job(payload, worker_id, self._clock() + payload['timeout_seconds'], assigned_at=self._clock())
 
     def accept(self, worker_id: str, token: str, result: dict, board: chess.Board) -> chess.Move:
@@ -122,6 +128,12 @@ class WorkerSessions:
                                  status='success', duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)),
                                  moves=1)
         job.committed = True
+        if self._durable_jobs is not None:
+            try:
+                self._durable_jobs.complete(worker_id, result['job_id'])
+            except (ValueError, OSError):
+                self._durable_jobs.invalidate(worker_id)
+                raise
         return move
 
     def terminate(self, worker_id: str, token: str, job_id: str, *, status: str) -> None:
@@ -136,3 +148,9 @@ class WorkerSessions:
             self._metrics.record(job_id=job_id, worker_id=worker_id,
                                  status=status, duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)))
         job.committed = True
+        if self._durable_jobs is not None:
+            try:
+                self._durable_jobs.complete(worker_id, job_id)
+            except (ValueError, OSError):
+                self._durable_jobs.invalidate(worker_id)
+                raise
