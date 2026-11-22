@@ -36,7 +36,7 @@ def test_manual_main_only_trusted_signing_and_permissions():
 
 def test_pinned_provenance_and_verify_before_upload():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "run-id: 45018325702" in text
+    assert "gh run download 45018325702" in text
     assert COMMIT in text
     assert SOURCE in text
     assert CERT in text
