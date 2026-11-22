@@ -15,6 +15,9 @@ def test_stacked_desktop_matrix_disabled_but_preserved():
 
 def test_android_build_stays_enabled_and_selective():
     src = WORKFLOW.read_text(encoding="utf-8")
-    assert "  android:\n    needs: changes\n    if: needs.changes.outputs.android == 'true'" in src
+    assert "  android:\n    needs: changes" in src
+    assert "  android_signed:\n    needs: changes" in src
+    assert "github.event_name == 'pull_request'" in src
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in src
     assert "python scripts/reuse_worker_artifacts.py" in src
     assert "workflow_dispatch:" not in src
