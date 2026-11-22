@@ -1807,7 +1807,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 registry = remote_worker_job_registry.WorkerJobRegistry(DB)
                 if path == '/api/remote-workers/update-reserve':
-                    hold_token = registry.reserve_update(worker_id)
+                    # A client-generated CSPRNG hold token is journaled in the
+                    # Android secure store BEFORE the network request. On lost
+                    # responses the client can recover without server secrets.
+                    proposed_token = payload.get('hold_token')
+                    hold_token = registry.reserve_update(
+                        worker_id, hold_token=proposed_token)
                     self.send_json({
                         'state': 'reserved', 'authenticated': True,
                         'source': 'coordinator', 'worker_id': worker_id,
