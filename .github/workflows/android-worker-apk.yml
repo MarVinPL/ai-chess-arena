@@ -83,6 +83,9 @@ jobs:
           npm ci
           # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+          # Generated Android sources are recreated on CI; install the
+          # version-controlled PackageInstaller receiver before compiling.
+          python3 android/inject_package_installer.py
       - name: Restore original Android test signing key
         # Never provide the keystore to pull_request or untrusted source builds.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
