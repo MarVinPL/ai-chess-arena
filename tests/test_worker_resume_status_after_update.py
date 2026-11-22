@@ -88,9 +88,13 @@ def test_single_button_does_not_claim_game_resumed_without_executor():
     assert "button.disabled=true" in GUI
     assert "Checkpoint przerwanego zadania jest zachowany w Arenie." in GUI
     assert "state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled" in GUI
-    assert "state!=='no_checkpoint'||safety!=='idle_confirmed'||!supported" in GUI
+    assert "state!=='no_checkpoint'||!supported" in GUI
+    assert "reconciled!=='ready'" in GUI
+    assert "safety!=='idle_confirmed'" in GUI
     assert "const authenticated=await invoke('verify_worker_connection'" in GUI
     assert "if(!activatePhoneJobPolling())" in GUI
+    assert "invoke('reconcile_idle_phone_after_update'" in GUI
+    assert "async fn reconcile_idle_phone_after_update(" in NATIVE
     assert "async fn inspect_worker_resume_readiness(" in NATIVE
     assert "android_update_coordinator::fetch_resume_status(" in NATIVE
 
