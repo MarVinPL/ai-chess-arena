@@ -287,6 +287,42 @@ pub(crate) fn commit_staged_session(session_id: i32) -> Result<(), String> {
     result.map(|_| ())
 }
 
+
+/// Read a callback from the app-private Android preferences, strictly bound
+/// to the journaled session ID. No callback alone proves installation.
+#[allow(dead_code)]
+pub(crate) fn read_session_result(expected_session_id: i32) -> Result<Option<i32>, String> {
+    use jni::objects::JValue;
+    if expected_session_id < 0 { return Err("Nieprawidłowy identyfikator sesji".into()); }
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(jni_error)?;
+    let mut env = vm.attach_current_thread().map_err(jni_error)?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let pref_name = env.new_string("worker_android_installer_status_v1")
+        .map_err(jni_error)?;
+    let prefs = env.call_method(&context, "getSharedPreferences",
+        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
+        &[JValue::Object(pref_name.as_ref()), JValue::Int(0)])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    let sid_key = env.new_string("session_id").map_err(jni_error)?;
+    let recorded_id = env.call_method(&prefs, "getInt",
+        "(Ljava/lang/String;I)I",
+        &[JValue::Object(sid_key.as_ref()), JValue::Int(-1)])
+        .map_err(jni_error)?.i().map_err(jni_error)?;
+    if recorded_id == -1 { return Ok(None); }
+    if recorded_id != expected_session_id {
+        return Err("Callback Androida dotyczy innej instalacji".into());
+    }
+    let status_key = env.new_string("installer_status").map_err(jni_error)?;
+    let status = env.call_method(&prefs, "getInt", "(Ljava/lang/String;I)I",
+        &[JValue::Object(status_key.as_ref()), JValue::Int(-1000)])
+        .map_err(jni_error)?.i().map_err(jni_error)?;
+    if status == -1000 { return Ok(None); }
+    // Android success is STATUS_SUCCESS == 0, but the installed version
+    // and original signing cert are still rechecked through PackageManager.
+    Ok(Some(status))
+}
+
 pub(crate) fn observation_is_terminal(_observation: SessionObservation) -> bool {
     // Even "no visible session" cannot prove success or safe cancellation.
     false
