@@ -218,3 +218,16 @@ def test_result_api_is_authenticated_and_never_applies_moves():
     assert "board.push" not in block
     assert '"job-result"' in rust
     assert "submit_my_inference_move(" in rust
+
+
+def test_android_ui_polls_only_its_assigned_job_and_does_not_claim_inference():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    ui = (root / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert "invoke('poll_my_inference_job'" in ui
+    assert 'id="myAssignedModel"' in ui
+    assert 'id="myAssignedGame"' in ui
+    assert 'id="myAssignedStatus"' in ui
+    assert "Przydzielone — oczekiwanie na lokalny silnik modelu" in ui
+    assert "document.hidden" in ui
+    assert "setInterval(()=>{void refreshMyInferenceAssignment();},8000)" in ui
