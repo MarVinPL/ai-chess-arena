@@ -41,3 +41,13 @@ always returns `install_allowed: false`. No worker-facing route can mark a job
 terminal or initialize an idle state. The production scheduler is **not yet
 wired** to these writes; do not treat the registry as operational evidence of
 idle until scheduler integration, restart recovery and concurrency tests pass.
+
+## Durable coordinator job safety registry (prototype)
+
+`remote_worker_jobs.py` provides SQLite-backed coordinator-only `assign`,
+`complete`, `invalidate`, and `state` operations. Unknown workers, expired jobs,
+revoked/invalidated states, and uncommitted transitions never grant idle status.
+A coordinator must atomically coordinate its actual job assignment/terminal
+commit with these transitions before trusting `idle_confirmed`; this integration
+is **not implemented**. The HTTP update-safety endpoint still returns `unknown`
+for every authenticated worker. The registry alone does not enable installation.
