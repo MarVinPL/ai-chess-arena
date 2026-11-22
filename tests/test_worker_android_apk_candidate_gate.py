@@ -43,3 +43,6 @@ def test_rust_unit_cases_reject_url_tampering_ambiguous_assets_and_downgrade_can
     assert "fn rejects_ambiguous_missing_or_outsize_assets()" in gate
     assert "fn rejects_wrong_platform_pending_and_draft()" in gate
     assert "select_apk_candidate(&release(), \"worker-v1.2.4\").is_none()" in gate
+    assert "fn rejects_prereleases_missing_flags_and_malformed_worker_tags()" in gate
+    assert "crate::numeric_version(version)?" in gate
+    assert 'release.get("prerelease")?.as_bool()?' in gate
