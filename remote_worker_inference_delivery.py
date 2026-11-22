@@ -34,6 +34,54 @@ class WorkerInferenceDelivery:
                 result_json TEXT NOT NULL,
                 received_at REAL NOT NULL
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_inference_capabilities (
+                worker_id TEXT PRIMARY KEY,
+                model_sha256 TEXT NOT NULL,
+                checked_at REAL NOT NULL
+            )""")
+
+    def register_local_ready(self, worker_id, model_sha256):
+        """Machine-token authenticated, fail-closed readiness from a phone.
+
+        Only an idle client without existing assignments, holds or checkpoints
+        may announce a model. The alias is a routing hint, not cryptographic
+        verification of the GGUF bytes.
+        """
+        self.jobs._id(worker_id)
+        if not isinstance(model_sha256, str) or len(model_sha256) != 64 or not all(
+            c in "0123456789abcdef" for c in model_sha256
+        ):
+            raise ValueError("Invalid model digest")
+        now = self.clock()
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            self.jobs._reject_pending_pause(db, worker_id)
+            self.jobs._reject_pending_resume(db, worker_id)
+            if db.execute(
+                "SELECT 1 FROM worker_inference_assignments WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone():
+                return "blocked"
+            row = db.execute(
+                "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            if row and (row[1] is not None or row[0] == "running"):
+                return "blocked"
+            db.execute(
+                """INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                state='idle_confirmed',job_id=NULL,deadline=NULL,updated_at=excluded.updated_at""",
+                (worker_id, now),
+            )
+            db.execute(
+                """INSERT INTO worker_inference_capabilities VALUES (?,?,?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                model_sha256=excluded.model_sha256, checked_at=excluded.checked_at""",
+                (worker_id, model_sha256, now),
+            )
+        return "ready"
 
     def assign_from_arena(self, worker_id, job):
         """Trusted Arena-only transaction; NOT exposed as a worker HTTP method.
@@ -58,8 +106,16 @@ class WorkerInferenceDelivery:
                 "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
+            capability = db.execute(
+                "SELECT model_sha256,checked_at FROM worker_inference_capabilities WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
             if not existing or existing != ("idle_confirmed", None):
                 raise ValueError("Worker must first be confirmed idle")
+            if not capability or capability[0] != validated["model_sha256"] or not (
+                0 <= now - capability[1] <= 30
+            ):
+                raise ValueError("Worker did not recently confirm the requested local model")
             if db.execute(
                 "SELECT 1 FROM worker_inference_assignments WHERE worker_id=?",
                 (worker_id,),
