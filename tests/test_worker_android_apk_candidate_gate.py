@@ -101,7 +101,9 @@ def test_download_is_real_native_command_with_private_verified_staging():
     end = lib.index("// Fail closed: a missing coordinator confirmation", start)
     command = lib[start:end]
     assert "mod android_update_download;" in lib
-    assert "download_worker_apk, check_update_safety" in lib
+    handler = lib.split("tauri::generate_handler![", 1)[1].split("]", 1)[0]
+    for command_name in ("download_worker_apk", "verify_downloaded_worker_apk", "check_update_safety"):
+        assert command_name in handler
     assert "let releases = fetch_worker_releases().await?" in command
     assert "android_update_asset::select_apk_candidate(release, tag)" in command
     assert "android_update_download::stage_candidate(&app, candidate, tag).await" in command
