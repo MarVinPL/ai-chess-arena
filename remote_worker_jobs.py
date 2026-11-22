@@ -151,8 +151,13 @@ class DurableWorkerJobs:
                 'SELECT state,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            hold = db.execute(
+                'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
         now = self.clock()
-        if not row:
+        # A reserved worker is not available for fresh idle authorization.
+        if not row or hold:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
