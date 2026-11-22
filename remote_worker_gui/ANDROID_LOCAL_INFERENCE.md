@@ -114,3 +114,38 @@ zakończeniu. Nie wysyła automatycznego ACK ani nie zezwala na
 instalację. Arena przechowuje checkpoint i zachowuje blokadę przydziału,
 dopóki nie zostanie wprowadzony zaufany mechanizm potwierdzenia
 bezpiecznego zakończenia lokalnych obliczeń.
+
+## Android 0.1.2: trwały, szyfrowany token Workera
+
+W 0.1.1 używany był keyring 3.6, który na Androidzie nie ma natywnego
+trwałego magazynu poświadczeń. W 0.1.2 natywna komenda używa własnego
+WorkerCredentialVault.kt i AndroidKeyStore do bezpiecznego przechowania
+klucza AES-256. Token przechowywany jest tylko jako szyfrogram AES-GCM
+w prywatnych SharedPreferences aplikacji. Nie ma fallbacku do mocka,
+localStorage ani zapisu sekretu w jawnej postaci. Uszkodzenie klucza
+lub danych powoduje odmowę uwierzytelnienia, nie silent reset.
+
+Podpisany APK o tym samym identyfikatorze pakietu zachowuje dane przy
+aktualizacji, ale token zapisany w poprzednim keyring mock mógł zniknąć.
+Po instalacji 0.1.2 może być konieczne ponowne zapisanie istniejącego
+tokenu lub jego jawne odnowienie przez administratora Areny (tylko po
+poleceniu użytkownika). Sam kod nie odwołuje tokenu na serwerze.
+
+Test na fizycznym telefonie powinien objąć zapis tokenu, uwierzytelnienie
+HTTPS, wymuszone zamknięcie aplikacji, ponowne otwarcie oraz aktualizację
+do nowszego APK bez odinstalowywania. Zielone CI nie zastępuje tego testu.
+
+## Trwałość identyfikatora komputera
+
+W 0.1.1 identyfikator wpisany ręcznie (np. android_marvin_01) nie był
+zapisywany. Przy kolejnym uruchomieniu aplikacja przywracała identyfikator
+automatycznie wygenerowany w WebView, przez co para worker_id + token
+mogła nie odpowiadać rejestracji w Arenie.
+
+W 0.1.2 zachowywany jest aktualnie wpisany i poprawny identyfikator
+po zmianie pola oraz po zaakceptowaniu tokenu przez Arenę. Przy ponownym
+uruchomieniu aplikacja wczytuje zapisany identyfikator zamiast tworzyć
+nowy; bez reinstalacji i bez czyszczenia danych Android WebView
+przetrwa również aktualizację podpisanego APK. Identyfikator nie jest
+sekretem i może być zapisany w WebView localStorage. Token jest
+przechowywany wyłącznie przez natywny magazyn Android Keystore.

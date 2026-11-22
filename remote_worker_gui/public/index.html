@@ -6,21 +6,41 @@
 <button id="checkUpdate" type="button" class="secondary">Sprawdź aktualizacje</button><a id="manualWorkerUpdate" href="#" target="_blank" rel="noopener noreferrer" hidden style="display:none;margin-left:10px;color:#b9c6ff">Otwórz wydanie APK w przeglądarce</a><button id="downloadWorkerApk" type="button" class="secondary" hidden disabled>Pobierz APK</button><button id="installWorkerApk" type="button" hidden disabled>Zainstaluj aktualizację</button><button id="resumeWorkerGame" type="button" disabled title="Wznowienie wymaga lokalnego silnika obliczeń na tym telefonie">Wznów</button><p class="muted" id="resumeWorkerStatus" role="status" aria-live="polite">Sprawdzanie możliwości wznowienia…</p><progress id="apkDownloadProgress" max="100" value="0" hidden aria-label="Postęp pobierania APK"></progress><p class="muted" id="apkDownloadStatus" role="status">Instalacja APK pozostaje wyłączona do czasu weryfikacji certyfikatu i stanu zadań.</p><button id="checkUpdateSafety" type="button" class="secondary">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p><button id="checkCoordinatorStop" type="button" class="secondary">Sprawdź polecenie STOP z Areny</button><p class="muted" id="coordinatorStopStatus" role="status" aria-live="polite">Odczyt poleceń nie wstrzymuje obliczeń ani nie zezwala na instalację.</p><p class="muted" id="updateRecoveryStatus" role="status" aria-live="polite">Sprawdzanie lokalnej rezerwacji aktualizacji…</p><button id="inspectUpdateHold" type="button" class="secondary" hidden disabled>Sprawdź rezerwację na serwerze</button><p class="muted" id="updateHoldRemoteStatus" role="status" aria-live="polite"></p><button id="inspectAndroidSessions" type="button" class="secondary" hidden disabled>Sprawdź sesje instalatora Android</button><p class="muted" id="androidSessionsStatus" role="status" aria-live="polite"></p></section>
 <aside class="notice" role="status"><span id="backendStatus">Sprawdzanie lokalnego backendu…</span> Token można zapisać i usunąć lokalnie. Weryfikacja tokenu przez VPS jest dostępna po kliknięciu „Sprawdź połączenie HTTPS”. Obliczenia nie są jeszcze podłączone, a przyciski sterowania pozostają nieaktywne.</aside></main><script>
 'use strict';
-// Non-hardware identity: generated once and persisted per app installation.
+// Persist the actual registered Worker ID (including user-chosen IDs like
+// android_marvin_01), not only auto-generated names. Android WebView
+// localStorage survives a same-package, same-certificate APK update; it is
+// non-secret. The token remains exclusively in native Android Keystore.
 const workerIdentityKey='arena-worker-installation-id-v1';
 const workerIdField=document.getElementById('workerId');
-try {
-  let id=localStorage.getItem(workerIdentityKey);
-  if(!id || !/^android_[0-9a-f]{32}$/.test(id)){
-    const bytes=new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    id='android_'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
-    localStorage.setItem(workerIdentityKey,id);
-  }
-  workerIdField.value=id;
-}catch(_error){
-  document.getElementById('backendStatus').textContent='Nie udało się zapisać identyfikatora urządzenia. Wpisz go ręcznie.';
+function validWorkerIdentity(id){
+ return typeof id==='string' && /^[A-Za-z0-9_-]{8,96}$/.test(id);
 }
+function persistWorkerIdentity(){
+ const id=workerIdField.value.trim();
+ if(!validWorkerIdentity(id))return false;
+ try {
+  localStorage.setItem(workerIdentityKey,id);
+  return true;
+ }catch(_error){
+  document.getElementById('backendStatus').textContent='Nie udało się zapamiętać identyfikatora Workera na urządzeniu.';
+  return false;
+ }
+}
+try {
+ let id=localStorage.getItem(workerIdentityKey);
+ if(!validWorkerIdentity(id)){
+  const bytes=new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  id='android_'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  localStorage.setItem(workerIdentityKey,id);
+ }
+ workerIdField.value=id;
+}catch(_error){
+ document.getElementById('backendStatus').textContent='Nie udało się wczytać identyfikatora urządzenia. Wpisz go ręcznie.';
+}
+// Save a typed ID when editing ends; also save after successful HTTPS auth.
+// Do not replace an existing valid ID during startup or auto-update.
+workerIdField.addEventListener('change',persistWorkerIdentity);
 const cpu=document.getElementById('cpu'),ram=document.getElementById('ram'),gpu=document.getElementById('gpu');
 function update(){document.getElementById('cpuValue').textContent=cpu.value+'%';document.getElementById('ramValue').textContent=ram.value+' MB';document.getElementById('gpuValue').textContent=gpu.checked?'Włączone':'Wyłączone'}
 for(const el of [cpu,ram,gpu])el.addEventListener('input',update);
@@ -587,6 +607,10 @@ document.getElementById('pair').addEventListener('click',async()=>{
   phonePaired=ok;
   phoneWorkerEnabled=false;
   refreshPhoneButtons();
+  if(ok && !persistWorkerIdentity()){
+   tokenMessage.textContent='Token zaakceptowany, ale nie udało się zapisać identyfikatora Workera.';
+   return;
+  }
   tokenMessage.textContent=ok
     ?phoneSupported
       ?'Arena zaakceptowała token. Możesz uruchomić lokalne obliczenia na tym telefonie.'

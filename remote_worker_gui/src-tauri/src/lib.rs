@@ -16,6 +16,8 @@ mod android_update_coordinator;
 mod android_update_recovery;
 mod android_update_install_journal;
 mod android_local_llama;
+#[cfg(target_os = "android")]
+mod android_worker_token_store;
 #[allow(dead_code)]
 mod android_update_install_state;
 
@@ -129,9 +131,17 @@ fn inspect_android_install_sessions() -> Result<&'static str, String> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn token_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
         .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
+}
+
+#[cfg(target_os = "android")]
+fn token_entry() -> Result<android_worker_token_store::AndroidTokenEntry, String> {
+    // Never use keyring v3 on Android: it silently selects an in-memory
+    // mock credential store, losing the machine token after app restart.
+    Ok(android_worker_token_store::AndroidTokenEntry)
 }
 
 #[tauri::command]
@@ -156,9 +166,17 @@ fn has_saved_worker_token() -> bool {
 fn forget_worker_token() -> Result<(), String> {
     ensure_no_pending_update()?;
     let entry = token_entry()?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
+    #[cfg(not(target_os = "android"))]
+    {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        entry.delete_credential()
+            .map_err(|_| "Nie udało się usunąć tokenu z Android Keystore".to_string())
     }
 }
 
