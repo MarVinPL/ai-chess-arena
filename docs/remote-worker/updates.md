@@ -673,3 +673,20 @@ An isolated regression confirms that timeout and cancellation of a staged
 result wait retain the original running reservation and binding. A subsequent
 attempt to assign a second job is rejected, and the unresolved job remains
 visible to the coordinator inventory. No automatic release or retry occurs.
+
+### Android installation package decision
+
+The Android client is to be delivered as a **signed, single installable `.apk`**
+(not a PWA, and not an `.apks` split-package archive). An Android-compatible
+Rust/Tauri client build and secure platform credential storage are prerequisites.
+The user must approve installation and subsequent updates through Android's
+installer; do not silently install or bypass platform safeguards. Windows and
+Linux retain native desktop distributions. This is a packaging requirement,
+not a claim that an Android build has been produced.
+
+### Restart replay checkpoint-conflict regression
+
+A staged move after restart is not consumed if its source checkpoint changed:
+CAS rejects replay, leaves the staged journal entry intact, retains unknown
+worker state, and reports a manual checkpoint conflict. No automatic retry or
+new job assignment is performed.
