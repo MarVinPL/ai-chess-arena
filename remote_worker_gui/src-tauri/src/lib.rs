@@ -10,6 +10,7 @@ mod android_update_download;
 mod android_update_identity;
 #[cfg(target_os = "android")]
 mod android_update_package_manager;
+mod android_update_coordinator;
 
 use serde::Serialize;
 use std::time::Duration;
@@ -122,16 +123,22 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         .timeout(Duration::from_secs(12)).build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/update-safety")
         .map_err(|_| "Nieprawidłowy endpoint")?;
+    let nonce = android_update_coordinator::random_nonce()?;
     let response = client.post(endpoint).json(&serde_json::json!({
-        "worker_id": worker_id, "token": token
+        "worker_id": worker_id, "token": token, "nonce": nonce
     })).send().await.map_err(|_| "Nie udało się sprawdzić stanu zadań")?;
     if !response.status().is_success() { return Err("Nie udało się potwierdzić stanu zadań".into()); }
     let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
     let state = data.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
-    // This command does not authorize installation; unknown fields fail closed.
-    match state {
-        "idle_confirmed" | "running" | "unknown" => Ok(state.to_string()),
-        _ => Ok("unknown".into()),
+    // Server response must explicitly prove fresh coordinator-derived idle:
+    // previously cached or unauthenticated "idle_confirmed" is NOT enough.
+    // Legacy servers without nonce/time/task evidence remain fail-closed.
+    if state == "running" { return Ok("running".into()); }
+    let now = android_update_coordinator::system_unix_ms()?;
+    if android_update_coordinator::fresh_authenticated_idle(&data, &worker_id, &nonce, now) {
+        Ok("idle_confirmed".into())
+    } else {
+        Ok("unknown".into())
     }
 }
 
