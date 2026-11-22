@@ -20,14 +20,18 @@ def test_staging_is_internal_and_requires_identity_reservation_and_digest():
     assert 'if observe_own_session()? != SessionObservation::NoVisibleSession' in MODULE
 
 
-def test_native_session_stages_bytes_but_never_commits_without_os_callback():
+def test_native_session_stages_bytes_and_commits_with_explicit_os_callback():
     assert '"createSession"' in MODULE
     assert '"openSession"' in MODULE
     assert '"openWrite"' in MODULE
     assert '"write", "([BII)V"' in MODULE
     assert '"fsync"' in MODULE
     assert '"abandon"' in MODULE
-    assert '"commit"' not in MODULE
+    assert '"commit"' in MODULE
+    assert '"getBroadcast"' in MODULE
+    assert '"getIntentSender"' in MODULE
+    assert 'WorkerInstallStatusReceiver' in MODULE
+    assert 'FLAG_MUTABLE' in MODULE
     assert "stage_verified_apk_session" not in LIB
     assert "fn update_installation_readiness()" in LIB
     assert "VerifiedTaskState::Unknown, false, false" in LIB
