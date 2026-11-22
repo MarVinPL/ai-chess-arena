@@ -168,6 +168,20 @@ for n in 1 2 3 4 5 6 7 8 9 10 11 12; do
   sleep 2
 done
 [[ $verified == 1 ]] || { echo 'HTTPS stage unavailable' >&2; exit 1; }
+# Reject invalid credentials through the HTTPS Worker API, without the
+# normal web login redirect. This check never sends the real Worker token.
+auth_body=$(mktemp)
+auth_code=$(curl -sS --max-time 10 -o "$auth_body" -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -X POST "https://$domain/api/remote-workers/job-poll" \
+  --data '{"worker_id":"android_marvin_01","token":"deliberately-invalid-staging-probe"}')
+if [[ "$auth_code" != 401 ]] || grep -q 'login_url' "$auth_body"; then
+  rm -f "$auth_body"
+  echo "Staging Worker authentication probe failed (HTTP $auth_code)" >&2
+  exit 1
+fi
+rm -f "$auth_body"
+echo 'STAGING_INVALID_TOKEN_401=PASS'
 echo "STAGING_HTTPS_READY=https://$domain"
 echo 'PRODUCTION_SERVICE=UNCHANGED'
 trap - EXIT
