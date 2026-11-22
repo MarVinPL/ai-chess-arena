@@ -42,8 +42,22 @@ def _require_separate_db(destination: Path, source: Path | None = None) -> None:
         raise ValueError("Sandbox cannot use the production database")
     if source is not None and destination == source.resolve():
         raise ValueError("Source and sandbox databases must differ")
-    if destination.exists() and PRODUCTION_DB.exists() and os.path.samefile(destination, PRODUCTION_DB):
-        raise ValueError("Sandbox database is a hardlink to production")
+    if destination.exists():
+        # A dedicated stage UID cannot traverse the production DB directory
+        # (0700 + systemd InaccessiblePaths). That is a security property,
+        # not an error. The stage file must be owned by this process, so
+        # it cannot be a hardlink to the production file owned by debian.
+        staged = destination.stat()
+        if staged.st_uid != os.geteuid():
+            raise ValueError("Sandbox database is not owned by this process")
+        try:
+            production = PRODUCTION_DB.stat()
+        except (PermissionError, FileNotFoundError):
+            production = None
+        if production is not None and (
+            staged.st_dev, staged.st_ino
+        ) == (production.st_dev, production.st_ino):
+            raise ValueError("Sandbox database is a hardlink to production")
 
 
 def prepare_sandbox(destination: Path, source: Path, worker_id: str) -> None:
