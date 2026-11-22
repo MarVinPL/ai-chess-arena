@@ -22,9 +22,18 @@ def test_manual_main_only_trusted_signing_and_permissions():
     assert "contents: write" in publish
     assert "secrets.WORKER_ANDROID_DEBUG" not in publish
     assert "secrets: inherit" not in text
-    assert "gh run download 45018325702" in signed
-    assert 'gh run download "$GITHUB_RUN_ID"' in publish
-    assert "actions/download-artifact@v4" not in text
+    assert signed.count("uses: actions/download-artifact@v4") == 1
+    assert "run-id: 45018325702" in signed
+    assert "repository: ${{ github.repository }}" in signed
+    assert "github-token: ${{ github.token }}" in signed
+    assert "name: ai-chess-arena-worker-arm64-debug" in signed
+    assert "path: input" in signed
+    assert publish.count("uses: actions/download-artifact@v4") == 1
+    assert "name: worker-v0.1.0-test1-original-key-verified" in publish
+    assert "path: dist" in publish
+    assert "run-id:" not in publish
+    assert "github-token:" not in publish
+    assert "gh run download" not in text
     assert "actions/upload-artifact@v4" in signed
     assert "npx tauri android build" not in text
     assert "gradle" not in text.lower()
@@ -36,7 +45,7 @@ def test_manual_main_only_trusted_signing_and_permissions():
 
 def test_pinned_provenance_and_verify_before_upload():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "gh run download 45018325702" in text
+    assert "run-id: 45018325702" in text
     assert COMMIT in text
     assert SOURCE in text
     assert CERT in text
