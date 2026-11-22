@@ -434,12 +434,16 @@ async fn verify_downloaded_worker_apk(app: tauri::AppHandle) -> Result<WorkerApk
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum VerifiedTaskState {
     IdleConfirmed,
+    // A job may be interrupted for an update after the real executor has
+    // stopped and its previous lease has been fenced. This is NOT idle.
+    InterruptedAndFenced,
     Running,
     Unknown,
 }
 
 fn may_install_update(state: VerifiedTaskState, signature_verified: bool, newer_version: bool) -> bool {
-    state == VerifiedTaskState::IdleConfirmed && signature_verified && newer_version
+    matches!(state, VerifiedTaskState::IdleConfirmed | VerifiedTaskState::InterruptedAndFenced)
+        && signature_verified && newer_version
 }
 
 #[derive(Serialize)]
@@ -490,6 +494,10 @@ mod version_tests {
     #[test]
     fn update_installation_requires_verified_idle_and_signature() {
         assert!(may_install_update(VerifiedTaskState::IdleConfirmed, true, true));
+        // The user may update while a game is active, but ONLY after an
+        // authenticated stop and exclusive lease fencing — never while running.
+        assert!(may_install_update(VerifiedTaskState::InterruptedAndFenced, true, true));
+        assert!(!may_install_update(VerifiedTaskState::InterruptedAndFenced, false, true));
         for state in [VerifiedTaskState::Running, VerifiedTaskState::Unknown] {
             assert!(!may_install_update(state, true, true));
         }
