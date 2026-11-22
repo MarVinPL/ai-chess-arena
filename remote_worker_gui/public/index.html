@@ -72,13 +72,15 @@ async function processOnePhoneMove(){
   refreshPhoneButtons();
  }
 }
-phoneStartButton.addEventListener('click',()=>{
- if(!phoneSupported||!phonePaired)return;
+function activatePhoneJobPolling(){
+ if(!phoneSupported||!phonePaired)return false;
  phoneWorkerEnabled=true;
  refreshPhoneButtons();
- phoneInferenceStatus.textContent='Worker aktywowany. Oczekiwanie na zadania Areny; obliczenia wykona ten telefon.';
+ phoneInferenceStatus.textContent='Telefon odbiera zadania Areny. Obliczenia będą wykonywane lokalnie.';
  void processOnePhoneMove();
-});
+ return true;
+}
+phoneStartButton.addEventListener('click',()=>{activatePhoneJobPolling();});
 function stopNewPhoneJobs(){
  phoneWorkerEnabled=false;
  phoneInferenceStatus.textContent=phoneWorkerRunning
@@ -354,33 +356,62 @@ async function reconcileInstalledApkAtStartup(){
  }
 }
 void reconcileInstalledApkAtStartup();
-// A checkpoint alone never proves that inference can restart. Keep the
-// one-click Resume button disabled until the executor/lease handshake exists.
+// This is a verified one-tap restart of LOCAL job polling after an idle APK
+// update, NOT a replay of an interrupted game from a pending checkpoint.
+// A real pending checkpoint stays blocked until Arena dispatch/ACK exists.
+let resumeReadinessState=null;
 async function refreshWorkerResumeReadiness(){
  const button=document.getElementById('resumeWorkerGame');
  const label=document.getElementById('resumeWorkerStatus');
  const invoke=window.__TAURI__?.core?.invoke;
- button.disabled=true;
+ button.disabled=true;resumeReadinessState=null;
  if(!invoke){label.textContent='Wznowienie wymaga aplikacji Android.';return;}
  try{
   const state=await invoke('inspect_worker_resume_readiness',{
    server:document.getElementById('server').value.trim(),
    workerId:document.getElementById('workerId').value.trim()
   });
+  resumeReadinessState=state;
+  const supported=await invoke('phone_inference_supported');
+  button.disabled=!(state==='no_checkpoint'&&supported===true);
   label.textContent=state==='no_checkpoint'
-   ?'Nie ma przerwanej partii do wznowienia.'
+   ?'Nie ma przerwanego checkpointu. Możesz bezpiecznie wznowić odbieranie zadań Areny.'
    :state==='waiting_update_reconciliation'
    ?'Aktualizacja wymaga jeszcze potwierdzenia i uzgodnienia.'
    :state==='awaiting_local_engine'
-   ?'Checkpoint partii jest zachowany. Brakuje uruchamiania silnika modeli lokalnie na tym telefonie.'
+   ?'Checkpoint przerwanego zadania jest zachowany w Arenie. Wznowienie tego zadania wymaga potwierdzonego nowego przydziału.'
    :'Wznowienie jest zablokowane do czasu uzgodnienia stanu Workera.';
  }catch(_){
+  resumeReadinessState=null;
   label.textContent='Nie udało się uwierzytelnić stanu wznowienia w Arenie.';
  }
 }
-document.getElementById('resumeWorkerGame').addEventListener('click',()=>{
- // No executable resume lease exists yet; never fake a running game.
- document.getElementById('resumeWorkerStatus').textContent='Lokalny silnik obliczeń telefonu nie jest jeszcze podłączony do checkpointu.';
+document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
+ const button=document.getElementById('resumeWorkerGame');
+ const label=document.getElementById('resumeWorkerStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||resumeReadinessState!=='no_checkpoint')return;
+ button.disabled=true;
+ const server=document.getElementById('server').value.trim();
+ const workerId=document.getElementById('workerId').value.trim();
+ try{
+  // Recheck the coordinator after the APK installer has reconciled its hold.
+  const state=await invoke('inspect_worker_resume_readiness',{server,workerId});
+  const safety=await invoke('check_update_safety',{server,workerId});
+  const authenticated=await invoke('verify_worker_connection',{server,workerId});
+  const supported=authenticated&&await invoke('phone_inference_supported');
+  if(state!=='no_checkpoint'||safety!=='idle_confirmed'||!supported){
+   throw Error('Niepotwierdzony stan Workera lub rezerwacji aktualizacji');
+  }
+  phoneSupported=true;phonePaired=true;
+  if(!activatePhoneJobPolling())throw Error('Nie udało się włączyć odbioru zadań');
+  label.textContent='Odbieranie zadań wznowione na telefonie. Arena nadal prowadzi partię i checkpointy.';
+ }catch(error){
+  phoneWorkerEnabled=false;refreshPhoneButtons();
+  label.textContent='Nie można jeszcze wznowić odbierania zadań: '+String(error);
+ }finally{
+  if(!phoneWorkerEnabled)button.disabled=resumeReadinessState!=='no_checkpoint';
+ }
 });
 
 document.getElementById('checkUpdateSafety').addEventListener('click',async()=>{
