@@ -194,3 +194,24 @@ gałąź z filtrów workflowów.** Nie traktować samego wpisu filtra
 jako zakończonego CI: obecny odczyt przebiegów PR na HEAD nie
 potwierdza Python/Rust/Android PASS. Dopiero rzeczywisty wynik
 kompilacji i testy Android 16 mogą zatwierdzić tę funkcję.
+
+## 2026-11-22 — istniejący certyfikat Workera w bramce tożsamości
+
+Bez generowania nowego klucza: `android_update_identity.rs` stosuje
+`WORKER_SIGNING_CERT_SHA256 =
+3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12`,
+czyli dokładnie ten sam odcisk co zaufany build `main` sprawdzający
+klucz `WORKER_ANDROID_DEBUG_KEYSTORE_B64` w CI. Bramka wymaga
+jednocześnie: identycznego `packageName` z konfiguracją Tauri,
+`versionCode` większego od zainstalowanego, pojedynczego certyfikatu
+obecnego podpisującego po obu stronach, poprawnego odcisku i
+odcisku obu aplikacji równego przypiętemu certyfikatowi. Dwa pliki
+podpisane **jednakowym, ale obcym** certyfikatem też są odrzucane.
+
+Nie ma jeszcze mostu Android PackageManager odczytującego te informacje
+z realnie zainstalowanego pakietu i pobranego APK. Z tego względu
+ta polityka jest sprawdzalna testami jednostkowymi, ale nie może
+autoryzować instalacji. **Klucz prywatny zostaje wyłącznie w GitHub
+Secrets; do aplikacji wpisujemy jedynie publiczny odcisk SHA-256.**
+Weryfikacji samego digestu GitHub Release nie wolno mylić z
+weryfikacją tożsamości podpisującego APK.
