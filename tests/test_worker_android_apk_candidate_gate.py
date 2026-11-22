@@ -296,3 +296,32 @@ def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
     assert "install_allowed': False" in server
     # Neither the journal contents nor the signing key are in the webview.
     assert "hold_token" not in (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+
+
+def test_update_recovery_status_never_exposes_hold_and_prevents_token_rotation():
+    lib = LIB.read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert "fn update_recovery_status() -> UpdateRecoveryStatus" in lib
+    assert "struct UpdateRecoveryStatus" in lib
+    assert "pending: bool" in lib
+    assert "blocked: bool" in lib
+    assert "update_recovery_status, update_installation_readiness" in lib
+    guard = lib.split("fn ensure_no_pending_update()", 1)[1].split("fn token_entry()", 1)[0]
+    assert "android_update_recovery::load_pending()" in guard
+    assert "Ok(Some(_)) => Err(" in guard
+    assert "Err(_) => Err(" in guard
+    assert "hold_token" not in guard
+    assert "fn store_worker_token(token: String) -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
+    assert "fn forget_worker_token() -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
+    status = lib.split("fn update_recovery_status()", 1)[1].split("fn token_entry()", 1)[0]
+    assert "Ok(Some(_)) => UpdateRecoveryStatus" in status
+    assert "Err(_) => UpdateRecoveryStatus" in status
+    assert "blocked: true" in status
+    assert "hold_token" not in status
+    assert 'id="updateRecoveryStatus"' in ui
+    assert "invoke('update_recovery_status')" in ui
+    assert "if(result?.blocked!==false)" in ui
+    assert "document.getElementById('saveToken').disabled=true" in ui
+    assert "document.getElementById('forgetToken').disabled=true" in ui
+    assert "hold_token" not in ui
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
