@@ -22,11 +22,7 @@ WORKER = "android_1234567890abcdef"
 def setup(tmp_path):
     path = tmp_path / "arena.sqlite"
     delivery = WorkerInferenceDelivery(path, clock=lambda: 1000.0)
-    with sqlite3.connect(path) as db:
-        db.execute(
-            "INSERT INTO worker_job_safety VALUES (?,?,?,?,?)",
-            (WORKER, None, "idle_confirmed", None, 1000.0),
-        )
+    assert delivery.register_local_ready(WORKER, JOB["model_sha256"]) == "ready"
     return path, delivery
 
 
@@ -231,3 +227,41 @@ def test_android_ui_polls_only_its_assigned_job_and_does_not_claim_inference():
     assert "Przydzielone — oczekiwanie na wykonawcę telefonu" in ui
     assert "document.hidden" in ui
     assert "setInterval(()=>{void refreshMyInferenceAssignment();},8000)" in ui
+
+
+def test_requires_recent_matching_on_phone_model_before_assignment(tmp_path):
+    path = tmp_path / "ready.sqlite"
+    delivery = WorkerInferenceDelivery(path, clock=lambda: 1000.0)
+    with pytest.raises(ValueError):
+        delivery.assign_from_arena(WORKER, JOB)
+    with pytest.raises(ValueError):
+        delivery.register_local_ready(WORKER, "x" * 64)
+    assert delivery.register_local_ready(WORKER, "b" * 64) == "ready"
+    with pytest.raises(ValueError):
+        delivery.assign_from_arena(WORKER, JOB)
+    assert delivery.register_local_ready(WORKER, JOB["model_sha256"]) == "ready"
+    stale = WorkerInferenceDelivery(path, clock=lambda: 1031.0)
+    with pytest.raises(ValueError):
+        stale.assign_from_arena(WORKER, JOB)
+    # Registered model is now fresh again.
+    assert stale.register_local_ready(WORKER, JOB["model_sha256"]) == "ready"
+    assert stale.assign_from_arena(WORKER, JOB) == JOB["job_id"]
+    assert stale.register_local_ready(WORKER, JOB["model_sha256"]) == "blocked"
+
+
+def test_ready_endpoint_is_machine_authenticated_not_an_assignment():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    server = (root / "server.py").read_text(encoding="utf-8")
+    coordinator = (
+        root / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs"
+    ).read_text(encoding="utf-8")
+    section = server.split("if path == '/api/remote-workers/ready':", 1)[1].split(
+        "if path == '/api/remote-workers/job-result':", 1
+    )[0]
+    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
+    assert "register_local_ready(" in section
+    assert "assign_from_arena" not in section
+    assert "'nonce': nonce" in section
+    assert "async fn announce_phone_ready(" in coordinator
+    assert 'model_sha256.len() != 64' in coordinator
