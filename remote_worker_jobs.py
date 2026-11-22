@@ -25,6 +25,17 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
                 created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
 
+            # Shared coordinator lock. Requests must block a racing new
+            # assignment before a trusted STOP/checkpoint ACK is delivered.
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
+                worker_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                phase TEXT NOT NULL CHECK(phase IN ('requested','acknowledged')),
+                created_at REAL NOT NULL,
+                acknowledged_at REAL
+            )''')
+
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.execute('PRAGMA busy_timeout=10000')
@@ -34,6 +45,15 @@ class DurableWorkerJobs:
     def _id(value):
         if not isinstance(value, str) or not _ID.fullmatch(value):
             raise ValueError('Invalid identifier')
+
+    def _reject_pending_pause(self, db, worker_id):
+        # A requested or ACKed pause is not idle. Block assignment even if
+        # another coordinator thread commits the last job concurrently.
+        if db.execute(
+            'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+            (worker_id,)
+        ).fetchone():
+            raise ValueError('Worker pause for update pending; assignment blocked')
 
     def _reject_update_hold(self, db, worker_id):
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
@@ -67,6 +87,7 @@ class DurableWorkerJobs:
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
             row = db.execute('''SELECT state,job_id,deadline,updated_at
                                 FROM worker_job_safety WHERE worker_id=?''',
                              (worker_id,)).fetchone()
@@ -145,6 +166,7 @@ class DurableWorkerJobs:
             # Serialize read-check-write across independent coordinator processes.
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
             row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
