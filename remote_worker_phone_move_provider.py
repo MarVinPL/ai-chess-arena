@@ -94,3 +94,38 @@ class ArenaPhoneMoveProvider:
                     "runtime": "android-local-llama-cpp",
                 }
             self.sleep(self.poll_seconds)
+
+
+class ArenaPhonePoolProvider:
+    """Pick a ready phone per model and never fall back after remote dispatch.
+
+    Explicit opt-in only. Arena remains the one tournament checkpoint writer.
+    """
+
+    def __init__(self, database, *, on_assignment=None, clock=time.time,
+                 sleep=time.sleep, timeout_seconds=600):
+        self.database = database
+        self.delivery = WorkerInferenceDelivery(database, clock=clock)
+        self.on_assignment = on_assignment
+        self.clock = clock
+        self.sleep = sleep
+        self.timeout_seconds = timeout_seconds
+
+    def __call__(self, board: chess.Board, player: dict, stop_event, kwargs: dict):
+        if not isinstance(player, dict):
+            raise PhoneMoveUnavailable("Invalid player for phone selection")
+        sha256 = player.get("model_sha256")
+        try:
+            worker_id = self.delivery.find_ready_worker(sha256)
+        except ValueError as exc:
+            raise PhoneMoveUnavailable("Player model has no verified SHA-256") from exc
+        if worker_id is None:
+            raise PhoneMoveUnavailable(
+                "No ready phone with the required model; remote execution stays blocked"
+            )
+        provider = ArenaPhoneMoveProvider(
+            self.database, worker_id, clock=self.clock, sleep=self.sleep,
+            timeout_seconds=self.timeout_seconds,
+            on_assignment=self.on_assignment,
+        )
+        return provider(board, player, stop_event, kwargs)
