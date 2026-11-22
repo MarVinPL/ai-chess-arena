@@ -64,3 +64,13 @@ Concurrent assignment is now guarded by SQLite `BEGIN IMMEDIATE`, and
 **Startup integration is mandatory and not wired:** the actual coordinator
 must call recovery before accepting traffic, and reconcile its active jobs.
 Until that happens, the HTTP endpoint must continue to return `unknown`.
+
+### Server startup integration
+
+`server.py` now invokes `WorkerJobRegistry(DB).recover_after_restart()`
+after `db_init()` and before starting background threads or the HTTP listener.
+This is the registry currently read by `/api/remote-workers/update-safety`
+(`remote_worker_job_registry.py`), separate from the earlier experimental
+`remote_worker_jobs.py` session registry. Startup invalidates persisted idle
+and running assertions, and failures abort startup. This does not reconcile
+or resume interrupted jobs; installation remains disabled.

@@ -39,6 +39,7 @@ class WorkerJobRegistry:
         if not isinstance(deadline, (int, float)) or isinstance(deadline, bool) or deadline <= self.clock():
             raise ValueError('Invalid deadline')
         with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT state FROM remote_worker_job_state WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker has unresolved job state')
@@ -56,6 +57,14 @@ class WorkerJobRegistry:
                 (self.clock(), worker_id, job_id))
             if result.rowcount != 1:
                 raise ValueError('Unrecognized or already completed job')
+
+    def recover_after_restart(self):
+        """Invalidate stale claims before the HTTP listener accepts traffic."""
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("""UPDATE remote_worker_job_state
+                SET state='unknown', job_id=NULL, deadline=NULL, updated_at=?""",
+                (self.clock(),))
 
     def state(self, worker_id: str) -> str:
         self._validate(worker_id)
