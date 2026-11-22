@@ -218,8 +218,8 @@ pub(crate) async fn inspect_pending_update(machine_token: &str) -> Result<&'stat
         .map_err(|_| "Nieprawidłowa odpowiedź koordynatora".to_string())?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
-        || body.get("worker_id").and_then(Value::as_str) != Some(&pending.worker_id)
-        || body.get("nonce").and_then(Value::as_str) != Some(&nonce)
+        || body.get("worker_id").and_then(Value::as_str) != Some(pending.worker_id.as_str())
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())
         || body.get("install_allowed").and_then(Value::as_bool) != Some(false) {
         return Err("Niepotwierdzony status rezerwacji".into());
     }
