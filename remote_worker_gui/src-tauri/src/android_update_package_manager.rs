@@ -82,6 +82,38 @@ pub(crate) fn can_request_package_installation() -> Result<bool, String> {
         .map_err(java_error)?.z().map_err(java_error)
 }
 
+/// Read the *installed* Worker's package identity after Android restarts us.
+/// This is stronger than a displayed Cargo version: PackageManager supplies
+/// the actual installed versionCode and signing certificate. No JS inputs.
+#[allow(dead_code)]
+pub(crate) fn inspect_installed_worker_identity() -> Result<PlatformApkIdentity, String> {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(java_error)?;
+    let mut env = vm.attach_current_thread().map_err(java_error)?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let own_name = env.call_method(&context, "getPackageName",
+        "()Ljava/lang/String;", &[])
+        .map_err(java_error)?.l().map_err(java_error)?;
+    if own_name.is_null() {
+        return Err("Nie można potwierdzić pakietu uruchomionej aplikacji".into());
+    }
+    let actual_name = env.get_string(&JString::from(own_name))
+        .map_err(java_error)?.to_string_lossy().into_owned();
+    if actual_name != WORKER_PACKAGE_ID {
+        return Err("Uruchomiony pakiet nie jest Workerem Areny".into());
+    }
+    let pm = env.call_method(&context, "getPackageManager",
+        "()Landroid/content/pm/PackageManager;", &[])
+        .map_err(java_error)?.l().map_err(java_error)?;
+    if pm.is_null() { return Err("Brak Android PackageManager".into()); }
+    let package_name = env.new_string(WORKER_PACKAGE_ID).map_err(java_error)?;
+    let info = env.call_method(&pm, "getPackageInfo",
+        "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+        &[JValue::Object(package_name.as_ref()), JValue::Int(GET_SIGNING_CERTIFICATES)])
+        .map_err(java_error)?.l().map_err(java_error)?;
+    read_android_identity(&mut env, &info)
+}
+
 /// Obtain *both* identities via Android PackageManager. The caller supplies
 /// only a private staged path, never a JavaScript URL or a user-chosen file.
 /// On any API error, ambiguity, missing cert or downgrade return a denial.
