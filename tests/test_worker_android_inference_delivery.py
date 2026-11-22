@@ -228,6 +228,6 @@ def test_android_ui_polls_only_its_assigned_job_and_does_not_claim_inference():
     assert 'id="myAssignedModel"' in ui
     assert 'id="myAssignedGame"' in ui
     assert 'id="myAssignedStatus"' in ui
-    assert "Przydzielone — oczekiwanie na lokalny silnik modelu" in ui
+    assert "Przydzielone — oczekiwanie na wykonawcę telefonu" in ui
     assert "document.hidden" in ui
     assert "setInterval(()=>{void refreshMyInferenceAssignment();},8000)" in ui
