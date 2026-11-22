@@ -94,6 +94,10 @@ class WorkerInferenceDelivery:
                 "SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
+            completed = db.execute(
+                "SELECT 1 FROM worker_inference_results WHERE worker_id=? AND job_id=?",
+                (worker_id, row[0] if row else ""),
+            ).fetchone()
             barriers = any(db.execute(
                 f"SELECT 1 FROM {table} WHERE worker_id=?", (worker_id,),
             ).fetchone() for table in (
@@ -106,6 +110,10 @@ class WorkerInferenceDelivery:
             return {"state": "none"}
         if not lease or lease[0] != row[0] or lease[1] != "running":
             return {"state": "blocked"}
+        if completed:
+            # Model already sent its legal UCI move. Only the Arena runner
+            # may apply it and release the lease. Do not infer again.
+            return {"state": "awaiting_arena"}
         if not isinstance(lease[2], (int, float)) or lease[2] <= now:
             return {"state": "expired"}
         if len(row[1].encode("utf-8")) > MAX_JOB_BYTES:
