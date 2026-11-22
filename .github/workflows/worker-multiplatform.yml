@@ -18,10 +18,6 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
-      - 'remote_worker_gui/src-tauri/gen/linux/**'
-      - 'remote_worker_gui/src-tauri/linux/**'
-      - 'remote_worker_gui/src-tauri/gen/windows/**'
-      - 'remote_worker_gui/src-tauri/windows/**'
   pull_request:
     branches: [main]
     paths:
@@ -37,10 +33,6 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
-      - 'remote_worker_gui/src-tauri/gen/linux/**'
-      - 'remote_worker_gui/src-tauri/linux/**'
-      - 'remote_worker_gui/src-tauri/gen/windows/**'
-      - 'remote_worker_gui/src-tauri/windows/**'
 
 permissions:
   contents: read
@@ -98,7 +90,9 @@ jobs:
 
   linux:
     needs: detect
-    if: needs.detect.outputs.linux == 'true'
+    # Temporarily paused by Issue #225. Keep the complete job for later review.
+    # To resume: remove 'false &&' in a dedicated PR.
+    if: ${{ false && needs.detect.outputs.linux == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     defaults:
@@ -138,7 +132,9 @@ jobs:
 
   windows:
     needs: detect
-    if: needs.detect.outputs.windows == 'true'
+    # Temporarily paused by Issue #225. Keep the complete job for later review.
+    # To resume: remove 'false &&' in a dedicated PR.
+    if: ${{ false && needs.detect.outputs.windows == 'true' }}
     runs-on: windows-2022
     timeout-minutes: 70
     defaults:
