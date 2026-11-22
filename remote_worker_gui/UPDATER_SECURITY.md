@@ -849,3 +849,28 @@ wznawiającego grę; `resume_available=false` jest obecnie stałą
 zabezpieczającą, a nie sukcesem. Nie należy scalać #197 jako
 kompletnego wznowienia przed dodaniem transportu do wykonawcy,
 zweryfikowanego ACK oraz testu end-to-end na urządzeniu.
+
+
+## 2026-11-22 — poprawka architektury: telefon to wykonawca
+
+**Android Worker na telefonie jest docelowym wykonawcą inferencji**,
+nie tylko klientem HTTP ani przekaźnikiem do kolejnego urządzenia.
+VPS/Arena to koordynator: przydziela partię, zachowuje checkpoint,
+fencuje poprzednią dzierżawę i przyjmuje wyniki.
+Telefon pobiera i uruchamia model lokalnie w dostępnym limicie RAM/CPU,
+wykonuje kolejne ruchy, raportuje je Arenie i zapisuje checkpointy.
+Przy aktualizacji to **lokalny silnik telefonu** ma zakończyć inference
+i potwierdzić STOP; Android instaluje nowszy APK z zachowaniem danych.
+Po ponownym uruchomieniu jedyny przycisk `Wznów` musi uruchomić
+lokalną inferencję na tym samym telefonie dla sprawdzonego, jednoznacznie
+przydzielonego checkpointu (lub ponowić tę partię od początku),
+nigdy łączyć się z niezależnym zewnętrznym wykonawcą.
+
+Aktualny prototyp `remote_worker_gui/src-tauri/src/lib.rs` ma
+`worker_status.connected=false`, `running=false`; nie ma jeszcze
+implementacji lokalnego silnika uruchamiania modeli. Dotychczasowe
+teksty sugerujące oczekiwanie na innego wykonawcę są błędne.
+Status `awaiting_executor` należy interpretować jako
+`awaiting_local_engine`, a nie gotowość innego serwera.
+Nie włączać `Wznów` na podstawie samego checkpointu, bo to
+fałszywie oznaczałoby rozpoczęcie obliczeń.
