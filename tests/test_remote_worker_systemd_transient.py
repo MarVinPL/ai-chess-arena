@@ -1,5 +1,6 @@
 """Exercise a disposable gateway under the user's systemd manager on VPS."""
 import json
+import os
 import shutil
 import socket
 import sqlite3
@@ -23,7 +24,13 @@ def _systemctl(*args):
 
 @pytest.mark.skipif(not shutil.which('systemd-run'), reason='systemd unavailable')
 def test_disposable_systemd_gateway_lifecycle(tmp_path):
-    if _systemctl('is-system-running').returncode not in (0, 1):
+    # Non-interactive runners may have systemd binaries but no user-session
+    # manager/bus.  An exit code of 1 alone does not prove systemd is usable.
+    if not os.environ.get('XDG_RUNTIME_DIR'):
+        pytest.skip('No user systemd session (XDG_RUNTIME_DIR missing)')
+    probe = _systemctl('is-system-running')
+    bus_error = 'Failed to connect to bus' in probe.stderr or 'Failed to connect to user scope bus' in probe.stderr
+    if bus_error or probe.returncode not in (0, 1):
         pytest.skip('User systemd manager unavailable')
     path, jobs, _, digest = setup_game(tmp_path)
     token = WorkerTokenStore(path).issue('worker_12345678', ttl_seconds=600)

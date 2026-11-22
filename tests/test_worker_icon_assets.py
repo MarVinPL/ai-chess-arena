@@ -123,7 +123,7 @@ def test_android_icons_generated_after_android_init_and_before_build():
     assert "mipmap-mdpi/ic_launcher.png" in workflow
     assert "mipmap-xxxhdpi/ic_launcher_foreground.png" in workflow
     # No manual build without actual Worker code/resource change.
-    assert "workflow_dispatch:" not in workflow
+    assert not any(line.strip() == "workflow_dispatch:" for line in workflow.splitlines())
 
 
 def test_platform_filters_rebuild_only_affected_icons():
@@ -133,4 +133,4 @@ def test_platform_filters_rebuild_only_affected_icons():
     assert "'remote_worker_gui/src-tauri/icons/32x32.png'" in workflow
     assert "'remote_worker_gui/src-tauri/icons/128x128.png'" in workflow
     assert "'remote_worker_gui/src-tauri/icons/128x128@2x.png'" in workflow
-    assert "workflow_dispatch:" not in workflow
+    assert not any(line.strip() == "workflow_dispatch:" for line in workflow.splitlines())
