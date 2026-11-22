@@ -23,6 +23,8 @@ class ReconcileIssue259Tests(unittest.TestCase):
         self.expected = load_manifest()["models"]
         with sqlite3.connect(self.db) as c:
             c.executescript("""
+                CREATE TABLE model_admission_decisions(
+                  model_id INTEGER PRIMARY KEY,status TEXT,repo_id TEXT,revision TEXT);
                 CREATE TABLE tournaments(id INTEGER PRIMARY KEY, status TEXT);
                 CREATE TABLE league_models(id INTEGER PRIMARY KEY, active INTEGER);
                 CREATE TABLE model_versions(
@@ -45,6 +47,8 @@ class ReconcileIssue259Tests(unittest.TestCase):
                 if model_id == 2:
                     metadata.pop("repo_id")
                     source = entry["download_url"]
+                c.execute("INSERT INTO model_admission_decisions VALUES(?,'admitted',?,?)",
+                          (model_id,repo,revision))
                 c.execute("INSERT INTO league_models(id,active) VALUES(?,1)", (model_id,))
                 c.execute("""INSERT INTO model_versions(id,model_id,source,license,
                     license_verified,filename,sha256,size_bytes,metadata_json)

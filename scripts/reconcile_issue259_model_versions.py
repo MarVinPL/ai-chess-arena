@@ -24,13 +24,17 @@ DB = ROOT / "arena.sqlite3"
 OPERATIONAL_MODEL_IDS = (1, 2)
 
 
-def expected_manifest():
-    allowlist = model_allowlist.load_allowlist()
-    by_id = {int(m["model_id"]): m for m in allowlist["models"]}
-    manifest = {int(m["model_id"]): m for m in load_manifest()["models"]}
-    for model_id in OPERATIONAL_MODEL_IDS:
-        if not model_allowlist.is_owner_admitted(by_id[model_id], manifest[model_id]):
-            raise ValueError(f"Brak jawnej decyzji właściciela dla modelu {model_id}")
+def expected_manifest(db_path: Path):
+    """Legacy migration validates the recorded owner decision in SQLite."""
+    manifest = {int(item["model_id"]): item for item in load_manifest()["models"]}
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as c:
+        for model_id in OPERATIONAL_MODEL_IDS:
+            row = c.execute("SELECT status,repo_id,revision FROM model_admission_decisions "
+                            "WHERE model_id=?", (model_id,)).fetchone()
+            expected = manifest[model_id]
+            if row is None or (row[0], row[1], row[2]) != (
+                    'admitted', expected['repo_id'], expected['revision']):
+                raise ValueError(f"Brak decyzji SQLite dla modelu {model_id}")
     return manifest
 
 
@@ -116,7 +120,7 @@ def backup_db(db_path: Path, directory: Path) -> Path:
 
 
 def run(db_path: Path, *, apply: bool = False, backup_dir: Path | None = None) -> dict:
-    manifest = expected_manifest()
+    manifest = expected_manifest(db_path)
     if not db_path.is_file():
         raise FileNotFoundError(str(db_path))
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as reader:
