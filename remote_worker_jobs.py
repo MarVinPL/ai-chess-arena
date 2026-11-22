@@ -82,7 +82,11 @@ class DurableWorkerJobs:
                     and self.clock() < row[1])
 
     def release_update_hold(self, worker_id, token):
-        """Explicit coordinator release. Wrong/expired tokens never clear holds."""
+        """Explicit coordinator release. Only the exact token clears a hold.
+
+        An expired reservation stays blocked; an authenticated release holding
+        the original token can still recover it after expiry.
+        """
         self._id(worker_id)
         if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
             raise ValueError('Invalid update reservation')
