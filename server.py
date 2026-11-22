@@ -517,6 +517,23 @@ def _prepare_game_models(white, black):
     return prepared
 
 
+def _prepare_game_execution_assets(white, black, *, phone_inference_enabled=False):
+    """Avoid downloading large GGUF files onto the VPS in phone-only mode.
+
+    Arena still validates registry SHA, model eligibility and checkpoint.
+    The on-phone model runtime is solely responsible for actual inference.
+    When phone mode is off, retain the original local model lifecycle.
+    """
+    if phone_inference_enabled:
+        for player in (white, black):
+            digest = player.get('model_sha256')
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                raise ValueError('Phone inference requires pinned GGUF SHA-256')
+        return ({'path': None, 'draft_path': None},
+                {'path': None, 'draft_path': None})
+    return _prepare_game_models(white, black)
+
+
 def live_moves_snapshot(move):
     with live_lock:
         previous = list(live_status.get('moves') or [])
@@ -934,7 +951,9 @@ def tournament_loop(tournament_id):
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen))
             set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
-            white_assets, black_assets = _prepare_game_models(white, black)
+            white_assets, black_assets = _prepare_game_execution_assets(
+                white, black, phone_inference_enabled=phone_inference_enabled,
+            )
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             set_live('game_running','Wznowiono partię' if resume_moves else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
