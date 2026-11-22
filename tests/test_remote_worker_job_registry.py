@@ -52,3 +52,49 @@ def test_server_boot_recovers_before_starting_listener():
     boot = source.split("if __name__ == '__main__':", 1)[1]
     assert boot.index('WorkerJobRegistry(DB).recover_after_restart()') < boot.index('ThreadingHTTPServer(')
     assert boot.index('WorkerJobRegistry(DB).recover_after_restart()') < boot.index('_hf_download_planner_loop')
+
+
+def test_isolated_server_boot_invalidates_real_sqlite_before_listener(tmp_path):
+    """Execute actual __main__ startup body with external services stubbed."""
+    import ast
+    from pathlib import Path
+    import server
+
+    path = tmp_path / 'isolated.sqlite'
+    registry = WorkerJobRegistry(path)
+    worker = 'worker_12345678'
+    with registry._connect() as db:
+        db.execute("INSERT INTO remote_worker_job_state VALUES (?, NULL, 'idle_confirmed', NULL, ?)",
+                   (worker, 100.0))
+    source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
+    module = ast.parse(source)
+    entry = next(node for node in module.body if isinstance(node, ast.If)
+                 and isinstance(node.test, ast.Compare)
+                 and isinstance(node.test.left, ast.Name)
+                 and node.test.left.id == '__name__')
+    executed = []
+
+    class FakeThread:
+        def __init__(self, **kwargs):
+            pass
+        def start(self):
+            executed.append('thread')
+
+    class FakeHTTPServer:
+        def __init__(self, *_):
+            assert registry.state(worker) == 'unknown'
+            executed.append('listener')
+        def serve_forever(self):
+            pass
+
+    globals_for_boot = dict(vars(server), DB=path,
+                            db_init=lambda: executed.append('db_init'),
+                            threading=type('Threading', (), {'Thread': FakeThread}),
+                            ThreadingHTTPServer=FakeHTTPServer,
+                            _prune_jsonl=lambda *_: None,
+                            hf_candidate_queue=type('Queue', (), {'start_background_workers': staticmethod(lambda: None)}),
+                            hf_candidate_runtime=type('Runtime', (), {'start_background_planner': staticmethod(lambda: None)}))
+    exec(compile(ast.Module(body=entry.body, type_ignores=[]), '<isolated-server-boot>', 'exec'),
+         globals_for_boot)
+    assert executed == ['db_init', 'thread', 'listener']
+    assert registry.state(worker) == 'unknown'
