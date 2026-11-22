@@ -11,6 +11,7 @@ mod android_update_identity;
 #[cfg(target_os = "android")]
 mod android_update_package_manager;
 mod android_update_coordinator;
+mod android_update_recovery;
 
 use serde::Serialize;
 use std::time::Duration;
