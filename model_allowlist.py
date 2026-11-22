@@ -101,6 +101,8 @@ def load_allowlist(connection: sqlite3.Connection) -> dict:
         if not row['format'] in scope:
             reasons.append('format modelu nie jest objęty decyzją')
         status = snap.get('status') if not reasons else 'blocked'
+        can_restore = (row['decision_status'] == 'revoked' and
+                       reasons == ['decyzja dopuszczenia została cofnięta'])
         entries.append({
             'model_id': mid, 'repo_id': decision_repo, 'revision': revision,
             'status': status, 'admission_scope': scope if not reasons else [],
@@ -116,6 +118,7 @@ def load_allowlist(connection: sqlite3.Connection) -> dict:
             'block_reason': '; '.join(reasons) if reasons else None,
             'display_name': row['name'] or snap.get('display_name') or decision_repo,
             'decision_status': row['decision_status'],
+            'can_restore': can_restore,
             'version_id': row['version_id'],
         })
     return {'schema_version': 1, 'source': 'sqlite', 'models': entries}

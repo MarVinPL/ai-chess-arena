@@ -41,6 +41,7 @@ def evaluate_candidates(*, connection: sqlite3.Connection | None = None,
                 else ['Model nie ma aktualnej decyzji dopuszczenia.']),
             'eligible': bool(item.get('status') in {'eligible', 'restricted'}
                              and not item.get('block_reason')),
+            'can_restore': bool(item.get('can_restore')),
             'display_name': item.get('display_name') or item['repo_id'].rsplit('/', 1)[-1],
         } for item in entries]
 
@@ -99,7 +100,7 @@ def list_decisions(connection: sqlite3.Connection, *, allowlist=None, manifest=N
             decision['status'] = 'stale'
         item['decision'] = decision
         item['history'] = history.get(item['model_id'], [])
-        item['can_admit'] = item['eligible'] and not (
+        item['can_admit'] = (item['eligible'] or item.get('can_restore', False)) and not (
             decision_matches_version and decision and decision['status'] == 'admitted')
         item['can_revoke'] = bool(decision_matches_version and decision and decision['status'] == 'admitted')
     return candidates
@@ -123,7 +124,7 @@ def apply_decision(connection: sqlite3.Connection, *, model_id: int, action: str
         'SELECT status,repo_id,revision FROM model_admission_decisions WHERE model_id=?', (model_id,)
     ).fetchone()
     if action == 'admit':
-        if candidate['blockers']:
+        if candidate['blockers'] and not candidate.get('can_restore'):
             raise ValueError('Nie można dopuścić modelu: ' + ' '.join(candidate['blockers']))
         if (current and current['status'] == 'admitted' and
                 current['repo_id'] == candidate['repo_id'] and current['revision'] == candidate['revision']):

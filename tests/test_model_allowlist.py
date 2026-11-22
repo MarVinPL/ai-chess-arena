@@ -59,6 +59,7 @@ class DatabaseAllowlistTests(unittest.TestCase):
         entry=self.entries()[0]
         self.assertEqual(entry['status'], 'blocked')
         self.assertTrue(entry['block_reason'])
+        self.assertTrue(entry['can_restore'])
 
     def test_version_pin_change_blocks_even_if_db_decision_still_admitted(self):
         self.metadata['revision'] = 'c' * 40
