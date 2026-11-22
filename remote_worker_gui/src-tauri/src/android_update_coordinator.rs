@@ -118,6 +118,96 @@ pub(crate) fn verify_release_reply(
         && response.get("install_allowed").and_then(Value::as_bool) == Some(false)
 }
 
+/// Only trusted native Rust code should call these transport functions.
+/// Frontend callers must never receive or persist the reservation capability.
+/// Never follow cross-origin/HTTP redirects with the machine credential.
+#[allow(dead_code)]
+fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
+    if !matches!(action, "update-reserve" | "update-release") {
+        return Err("Nieznana operacja koordynatora".into());
+    }
+    let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
+    if url.scheme() != "https" || url.host_str().is_none()
+        || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some()
+        || url.port().is_some() || url.path() != "/" {
+        return Err("Wymagany główny adres serwera HTTPS bez portu".into());
+    }
+    url.join(&format!("api/remote-workers/{action}"))
+        .map_err(|_| "Nieprawidłowy endpoint koordynatora".into())
+}
+
+#[allow(dead_code)]
+fn valid_worker_id(worker_id: &str) -> bool {
+    (8..=96).contains(&worker_id.len()) && worker_id.bytes().all(|c|
+        c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+#[allow(dead_code)]
+fn update_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(12))
+        .build().map_err(|_| "Nie można utworzyć klienta HTTPS".into())
+}
+
+/// Authenticated, atomic coordinator reservation. A future installer must
+/// acquire this only after it has verified APK bytes AND OS signing identity.
+/// This API is internal; it is intentionally not a Tauri webview command.
+#[allow(dead_code)]
+pub(crate) async fn reserve_update(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<UpdateHold, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let endpoint = coordinator_endpoint(base, "update-reserve")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+        }))
+        .send().await.map_err(|_| "Brak potwierdzenia rezerwacji")?;
+    if !response.status().is_success() {
+        return Err("Koordynator odmówił rezerwacji aktualizacji".into());
+    }
+    let body: Value = response.json().await.map_err(|_|
+        "Nieprawidłowa odpowiedź koordynatora")?;
+    verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)
+}
+
+/// Explicit hold release after a cancelled/completed update transaction.
+/// Release does not mark the Worker idle; coordinator sets state=unknown.
+/// If release fails, durable coordinator hold stays in force (fail closed).
+#[allow(dead_code)]
+pub(crate) async fn release_update(
+    base: &str, worker_id: &str, machine_token: &str, hold_token: &str,
+) -> Result<(), String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty()
+        || hold_token.len() != 64 || !hold_token.bytes().all(|c|
+            c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return Err("Nieprawidłowe dane zwolnienia rezerwacji".into());
+    }
+    let endpoint = coordinator_endpoint(base, "update-release")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token,
+            "nonce": nonce, "hold_token": hold_token
+        }))
+        .send().await.map_err(|_| "Brak potwierdzenia zwolnienia rezerwacji")?;
+    if !response.status().is_success() {
+        return Err("Koordynator odmówił zwolnienia rezerwacji".into());
+    }
+    let body: Value = response.json().await.map_err(|_|
+        "Nieprawidłowa odpowiedź o zwolnieniu rezerwacji")?;
+    if verify_release_reply(&body, worker_id, &nonce) {
+        Ok(())
+    } else {
+        Err("Koordynator nie potwierdził zwolnienia rezerwacji".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +301,22 @@ mod tests {
             assert!(!verify_release_reply(&forged, "worker_12345678", NONCE));
         }
     }
+    #[test]
+    fn authenticated_update_transport_rejects_untrusted_destinations() {
+        assert!(coordinator_endpoint("https://arena.example/", "update-reserve").is_ok());
+        for base in [
+            "http://arena.example/", "https://arena.example:8090/",
+            "https://user:password@arena.example/", "https://arena.example/other",
+            "https://arena.example/?q=1", "https://arena.example/#fragment",
+            "file:///tmp/worker", "https://arena.example.evil/anything",
+        ] {
+            assert!(coordinator_endpoint(base, "update-reserve").is_err(), "{base}");
+        }
+        assert!(coordinator_endpoint("https://arena.example/", "install").is_err());
+        assert!(!valid_worker_id("invalid"));
+        assert!(valid_worker_id("worker_12345678"));
+    }
+
     #[test]
     fn random_nonce_uses_os_rng_and_is_correctly_encoded() {
         let a = random_nonce().unwrap();
