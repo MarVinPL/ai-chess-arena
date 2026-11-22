@@ -20,6 +20,11 @@ def test_unknown_until_coordinator_assigns_and_confirms_terminal(tmp_path):
         registry.record_assignment(worker, 'job_87654321', deadline=200)
     now[0] = 201
     assert WorkerJobRegistry(db, clock=lambda: now[0]).state(worker) == 'unknown'
+    with pytest.raises(ValueError):
+        registry.record_terminal(worker, job)
+    assert registry.state(worker) == 'unknown'
+    # Coordinator must reconcile expired work; an on-time result may finish.
+    now[0] = 150
     registry.record_terminal(worker, job)
     assert WorkerJobRegistry(db, clock=lambda: now[0]).state(worker) == 'idle_confirmed'
     with pytest.raises(ValueError):

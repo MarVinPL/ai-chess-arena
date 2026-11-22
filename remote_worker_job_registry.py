@@ -53,8 +53,8 @@ class WorkerJobRegistry:
         with self._connect() as db:
             result = db.execute('''UPDATE remote_worker_job_state
                 SET state='idle_confirmed', job_id=NULL, deadline=NULL, updated_at=?
-                WHERE worker_id=? AND job_id=? AND state='running' ''',
-                (self.clock(), worker_id, job_id))
+                WHERE worker_id=? AND job_id=? AND state='running' AND deadline>? ''',
+                (self.clock(), worker_id, job_id, self.clock()))
             if result.rowcount != 1:
                 raise ValueError('Unrecognized or already completed job')
 

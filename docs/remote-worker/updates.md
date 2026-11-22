@@ -74,3 +74,8 @@ This is the registry currently read by `/api/remote-workers/update-safety`
 `remote_worker_jobs.py` session registry. Startup invalidates persisted idle
 and running assertions, and failures abort startup. This does not reconcile
 or resume interrupted jobs; installation remains disabled.
+
+Review finding: a terminal acknowledgement arriving after its assignment
+lease expired must not restore `idle_confirmed`. `WorkerJobRegistry.record_terminal`
+now requires an unexpired deadline; expired work remains `unknown` pending
+explicit coordinator reconciliation. Covered by regression test.
