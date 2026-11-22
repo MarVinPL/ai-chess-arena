@@ -64,3 +64,26 @@ def test_apk_stream_verification_is_bounded_and_fail_closed():
     assert "fn streaming_digest_fails_closed_for_bad_metadata_and_read_errors()" in gate
     assert "This is only an integrity check, NOT APK certificate validation" in gate
     assert "download_and_install" not in gate
+
+
+def test_native_release_checker_actually_uses_candidate_gate_and_displays_result():
+    """Integration wiring guard: selector must be invoked by a Tauri command, not dead code."""
+    lib = LIB.read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    start = lib.index("async fn check_worker_release()")
+    end = lib.index("// Fail closed: a missing coordinator confirmation", start)
+    release_command = lib[start:end]
+    assert "android_update_asset::select_apk_candidate(data, tag).is_some()" in release_command
+    assert "apk_asset_available: bool" in lib
+    assert "let apk_asset_available = latest > installed" in release_command
+    assert "apk_asset_available: false" in release_command
+    assert "bounded GitHub metadata" in release_command
+    assert "MAX_RELEASE_JSON: usize = 1024 * 1024" in release_command
+    assert "if chunk.len() > MAX_RELEASE_JSON - body.len()" in release_command
+    assert "serde_json::from_slice(&body)" in release_command
+    assert "info.apk_asset_available===true" in ui
+    assert "Brak kwalifikującego się pliku APK ARM64" in ui
+    assert "Pobieranie i instalacja nie są jeszcze dostępne." in ui
+    assert "invoke('check_worker_release')" in ui
+    assert "invoke('download_update')" not in ui
+    assert "invoke('install_update')" not in ui
