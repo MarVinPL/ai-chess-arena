@@ -37,7 +37,11 @@ jobs:
       - name: Install SDK and NDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
+          # Android 17 SDK packages have minor-version names (37.0). The app
+          # needs no API 37 features: use the stable Android 16 API 36 SDK.
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
