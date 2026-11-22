@@ -108,6 +108,19 @@ fn numeric_version(version: &str) -> Option<[u64; 3]> {
     Some([parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?])
 }
 
+// Select only stable releases belonging to the Worker, not Arena server.
+fn newest_worker_release(releases: &[serde_json::Value]) -> Option<([u64; 3], &str, &serde_json::Value)> {
+    releases.iter()
+        .filter(|release| release.get("draft").and_then(|v| v.as_bool()) == Some(false)
+            && release.get("prerelease").and_then(|v| v.as_bool()) == Some(false))
+        .filter_map(|release| {
+            let tag = release.get("tag_name")?.as_str()?;
+            let version = numeric_version(tag.strip_prefix("worker-v")?)?;
+            Some((version, tag, release))
+        })
+        .max_by_key(|(version, _, _)| *version)
+}
+
 #[tauri::command]
 async fn check_worker_release() -> Result<ReleaseInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
@@ -124,15 +137,7 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
     let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
-    let candidate = releases.iter()
-        .filter(|release| release.get("draft").and_then(|v| v.as_bool()) == Some(false)
-            && release.get("prerelease").and_then(|v| v.as_bool()) == Some(false))
-        .filter_map(|release| {
-            let tag = release.get("tag_name")?.as_str()?;
-            let version = numeric_version(tag.strip_prefix("worker-v")?)?;
-            Some((version, tag, release))
-        })
-        .max_by_key(|(version, _, _)| *version);
+    let candidate = newest_worker_release(releases);
     let Some((latest, tag, data)) = candidate else {
         return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
     };
@@ -181,7 +186,27 @@ fn update_installation_readiness() -> UpdateReadiness {
 
 #[cfg(test)]
 mod version_tests {
-    use super::{numeric_version, may_install_update, update_installation_readiness, VerifiedTaskState};
+    use super::{numeric_version, newest_worker_release, may_install_update, update_installation_readiness, VerifiedTaskState};
+    use serde_json::json;
+    #[test]
+    fn selects_newest_stable_worker_only() {
+        let releases = vec![
+            json!({"tag_name":"v99.0.0","draft":false,"prerelease":false}),
+            json!({"tag_name":"worker-v4.0.0","draft":false,"prerelease":true}),
+            json!({"tag_name":"worker-v3.0.0","draft":true,"prerelease":false}),
+            json!({"tag_name":"worker-v1.10.0","draft":false,"prerelease":false}),
+            json!({"tag_name":"worker-v1.9.9","draft":false,"prerelease":false}),
+            json!({"tag_name":"worker-v1.11.0-rc1","draft":false,"prerelease":false}),
+        ];
+        let selected = newest_worker_release(&releases).unwrap();
+        assert_eq!(selected.1, "worker-v1.10.0");
+        assert_eq!(selected.0, [1,10,0]);
+    }
+    #[test]
+    fn no_eligible_release_means_no_update() {
+        let releases = vec![json!({"tag_name":"worker-v2.0.0","draft":true,"prerelease":false}), json!({"tag_name":"server-v9.0.0","draft":false,"prerelease":false})];
+        assert!(newest_worker_release(&releases).is_none());
+    }
     #[test]
     fn gui_never_offers_installation_before_integrations() {
         assert!(!update_installation_readiness().can_install);
