@@ -594,3 +594,28 @@ Nie należy wywoływać `finalize_verified_pause` na podstawie
 samego pollingu. Testy HTTP i Rust obejmują nonce, tożsamość,
 powtarzalność polecenia, wygasłą dzierżawę oraz fałszywe twierdzenia
 klienta o zakończonym STOP.
+
+## 2026-11-22 — połączenie poleceń STOP z natywną aplikacją
+
+Komenda Tauri `poll_worker_update_pause` wykonuje faktyczny,
+uwierzytelniony odczyt polecenia `update-pause-poll` przez HTTPS.
+Token Workera pozostaje wyłącznie w natywnym systemowym magazynie;
+JavaScript przekazuje tylko jawny adres koordynatora i identyfikator
+Workera. Rust weryfikuje odpowiedź powiązaną z losowym nonce,
+tożsamością Workera i koordynatorem. Jeśli istnieje lokalny
+nieuzgodniony hold, żądanie nie zostanie wysłane.
+
+W widoku aktualizacji dodano przycisk „Sprawdź polecenie STOP z Areny”.
+Można nim zobaczyć stany `none`, `stop_checkpoint`,
+`await_reconciliation` i `blocked` bez wypisywania
+`request_id`, sekretu lub danych checkpointu do webview.
+
+**Zakres jest celowo ograniczony:** to rzeczywisty transport
+polecenia, ale nie rzeczywiste zatrzymanie inference. Przy obecnym
+prototypowym Workerze sterowanie obliczeniami pozostaje niedostępne.
+Nawet gdy koordynator zwróci `stop_checkpoint`, aplikacja tylko
+pokazuje żądanie — nie odsyła ACK i nie zwalnia blokady. Nie
+dodano systemowej instalacji APK ani przyznawania zgody na nią.
+Żeby ukończyć całość, trzeba podłączyć działający silnik zadań,
+jego sprawdzony checkpoint i idempotentny protokół STOP/RESUME;
+sam odczyt po HTTPS nie jest wystarczającym dowodem.
