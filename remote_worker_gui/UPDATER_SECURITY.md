@@ -461,3 +461,28 @@ aktywnego zadania — wykonawca zatrzyma się przy najbliższym
 bezpiecznym punkcie i po restarcie wznowi od checkpointu albo
 rozpocznie to zadanie od nowa. W obecnym prototypie nie wolno
 deklarować, że przerwanie lub wznowienie już działa.
+
+## 2026-11-22 — żądanie pauzy blokuje wszystkie nowe przydziały
+
+W rejestrze `DurableWorkerJobs` tabela
+`worker_update_pause_requests` jest tworzona wraz z pozostałymi
+strukturami bezpieczeństwa, dzięki czemu zarówno bieżący scheduler
+(`assign`), jak i starszy kompatybilny (`record_assignment`)
+sprawdzają tę samą blokadę **w obrębie `BEGIN IMMEDIATE`**.
+Wyścig „żądanie pauzy ↔ zakończenie partii ↔ nowy przydział” ma
+zatem jednoznaczny wynik: albo nowe zadanie zostanie przydzielone,
+zanim prośba mogła zostać zaakceptowana, albo prośba wygra i
+wówczas przydział zostaje zablokowany. Nie ma możliwości, aby
+obie operacje wygrały jednocześnie.
+
+Dopóki istnieje prośba `requested` lub `acknowledged`,
+`reserve_update` również odmawia, a odczytowy
+`update_safety_snapshot` zwraca `unknown`. To istotne, ponieważ
+zadanie mogło zakończyć się podczas wysyłania STOP i ustawić
+`idle_confirmed` — nie oznacza to jeszcze zakończenia całego
+protokołu pauzy. Wymagane jest jawne uzgodnienie i `clear`;
+restart koordynatora nie usuwa prośby.
+
+Te zabezpieczenia są już w bazie danych i mają testy wyścigów.
+Faktyczny STOP/checkpoint/ACK wykonawcy i późniejsze wznowienie
+nadal wymagają podłączenia do transportu Workera.
