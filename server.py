@@ -1786,7 +1786,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
-        if path in ('/api/remote-workers/update-reserve', '/api/remote-workers/update-release'):
+        if path in ('/api/remote-workers/update-reserve', '/api/remote-workers/update-release',
+                     '/api/remote-workers/update-hold-status'):
             # These are coordinator transactions, not an APK installer.
             # The device must authenticate with its existing machine token.
             # The server NEVER permits installation or exposes signing keys.
@@ -1821,6 +1822,14 @@ class Handler(BaseHTTPRequestHandler):
                         'nonce': nonce, 'hold_token': hold_token,
                         'expires_at_unix_ms': int((time.time() + 300) * 1000),
                         'install_allowed': False,
+                    })
+                elif path == '/api/remote-workers/update-hold-status':
+                    hold_token = payload.get('hold_token')
+                    reservation_state = registry.inspect_update_hold(worker_id, hold_token)
+                    self.send_json({
+                        'state': reservation_state, 'authenticated': True,
+                        'source': 'coordinator', 'worker_id': worker_id,
+                        'nonce': nonce, 'install_allowed': False,
                     })
                 else:
                     hold_token = payload.get('hold_token')
