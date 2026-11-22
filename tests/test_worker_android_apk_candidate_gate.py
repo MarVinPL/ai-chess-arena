@@ -393,7 +393,8 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
     assert 'fn observation_is_terminal(_observation: SessionObservation) -> bool' in source
     assert 'fn inspect_android_install_sessions() -> Result<&\'static str, String>' in lib
     assert 'android_update_recovery::load_pending()?.is_none()' in lib
-    assert 'inspect_android_install_sessions, update_installation_readiness' in lib
+    assert 'inspect_android_install_sessions' in lib.split('tauri::generate_handler![', 1)[1]
+    assert 'update_installation_readiness' in lib.split('tauri::generate_handler![', 1)[1]
     assert "invoke('inspect_android_install_sessions')" in ui
     assert "Brak widocznej sesji: to NIE potwierdza zakończenia instalacji" in ui
     executable = '\n'.join(line for line in source.splitlines() if not line.lstrip().startswith('//'))
