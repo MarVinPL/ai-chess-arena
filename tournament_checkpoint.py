@@ -77,3 +77,26 @@ def load(db_path: str | Path, tournament_id: int) -> dict | None:
 def delete(db_path: str | Path, tournament_id: int) -> None:
     with sqlite3.connect(db_path, timeout=10) as db:
         db.execute('DELETE FROM tournament_checkpoints WHERE tournament_id=?', (int(tournament_id),))
+def save_in_transaction(db: sqlite3.Connection, tournament_id: int, payload: dict, *, expected_sha256: str) -> dict:
+    """Compare-and-swap checkpoint inside caller-owned SQLite transaction.
+
+    Used for crash-safe remote result application. Caller must own an IMMEDIATE
+    transaction and atomically acknowledge the result in the same database.
+    """
+    if not isinstance(tournament_id, int) or isinstance(tournament_id, bool) or tournament_id <= 0:
+        raise ValueError('Invalid tournament ID')
+    if not isinstance(payload, dict) or payload.get('tournament_id') != tournament_id or payload.get('schema_version') != SCHEMA_VERSION:
+        raise ValueError('Invalid checkpoint payload')
+    if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+        raise ValueError('Invalid expected checkpoint hash')
+    row = db.execute('SELECT sha256,payload_json FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,)).fetchone()
+    if row is None or row[0] != expected_sha256 or hashlib.sha256(row[1].encode('utf-8')).hexdigest() != row[0]:
+        raise ValueError('Checkpoint changed or corrupted; remote result rejected')
+    encoded = _canonical(payload)
+    digest = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    updated = db.execute('''UPDATE tournament_checkpoints SET schema_version=?,payload_json=?,sha256=?,updated_at=?
+        WHERE tournament_id=? AND sha256=?''', (SCHEMA_VERSION, encoded, digest, stamp, tournament_id, expected_sha256))
+    if updated.rowcount != 1:
+        raise ValueError('Checkpoint concurrently modified')
+    return {'tournament_id': tournament_id, 'sha256': digest, 'updated_at': stamp}

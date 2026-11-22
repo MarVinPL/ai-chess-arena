@@ -1,0 +1,140 @@
+"""Real HTTP gateway and atomic checkpoint in an isolated SQLite tournament."""
+import hashlib
+import json
+import sqlite3
+import threading
+from http.server import ThreadingHTTPServer
+from urllib import request, error
+
+import chess
+import pytest
+import server
+import tournament_checkpoint
+from remote_worker_inference_delivery import WorkerInferenceDelivery
+from remote_worker_phone_sandbox import (
+    SandboxHandler, MODEL_SHA, arm_one_job, finalize_one_result,
+    prepare_sandbox, SANDBOX_TOURNAMENT_ID,
+)
+from remote_worker_tokens import WorkerTokenStore
+
+WORKER = "android_test_12345678"
+NONCE = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture
+def sandbox(tmp_path, monkeypatch):
+    source = tmp_path / "production-reference.sqlite3"
+    token = WorkerTokenStore(source).issue(WORKER, ttl_seconds=600)
+    source_before = hashlib.sha256(source.read_bytes()).hexdigest()
+    destination = tmp_path / "isolation" / "arena.sqlite3"
+    prepare_sandbox(destination, source, WORKER)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_before
+    assert WorkerTokenStore(destination).authenticate(WORKER, token)
+    with sqlite3.connect(destination) as con:
+        assert con.execute("SELECT COUNT(*) FROM worker_tokens").fetchone()[0] == 1
+    monkeypatch.setattr(server, "DB", destination)
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
+    api = ThreadingHTTPServer(("127.0.0.1", 0), SandboxHandler)
+    thread = threading.Thread(target=api.serve_forever, daemon=True)
+    thread.start()
+
+    def post(route, data):
+        req = request.Request(
+            f"http://127.0.0.1:{api.server_port}/api/remote-workers/{route}",
+            json.dumps(data).encode(),
+            {"Content-Type": "application/json"}, method="POST"
+        )
+        try:
+            with request.urlopen(req, timeout=4) as response:
+                return response.status, json.load(response)
+        except error.HTTPError as exc:
+            try:
+                return exc.code, json.load(exc)
+            except ValueError:
+                return exc.code, {}
+
+    try:
+        yield destination, token, post
+    finally:
+        api.shutdown()
+        api.server_close()
+        thread.join(timeout=4)
+
+
+def auth(token):
+    return {"worker_id": WORKER, "token": token, "nonce": NONCE}
+
+
+def test_no_external_admin_or_public_data(sandbox):
+    _, token, post = sandbox
+    assert post("authenticate", {"worker_id": WORKER, "token": token}) == (
+        200, {"authenticated": True, "worker_id": WORKER}
+    )
+    assert post("authenticate", {"worker_id": WORKER, "token": "not-a-real-token-00000000000"})[0] == 401
+    status, reply = post("job-poll", auth("not-a-real-token-00000000000"))
+    assert status == 401 and "nonce" not in reply
+    assert post("admin-assign", auth(token))[0] == 404
+    assert post("update-release", auth(token))[0] == 404
+    assert post("tournaments/start", auth(token))[0] == 404
+    assert post("job-poll", {**auth(token), "nonce": "bad"})[0] == 400
+
+
+def test_real_http_job_result_and_transactional_checkpoint(sandbox):
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("job-poll", who)[1]["state"] == "none"
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    code, job_reply = post("job-poll", who)
+    assert code == 200 and job_reply["state"] == "assigned"
+    job = job_reply["job"]
+    assert job["job_id"] == job_id and job["version"] == 2
+    assert job["legal_moves"] == sorted(move.uci() for move in chess.Board().legal_moves)
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e5"
+    }})[0] == 409
+    code, accepted = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})
+    assert code == 200 and accepted["state"] == "received_not_applied"
+    assert post("job-poll", who)[1]["state"] == "awaiting_arena"
+    old = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    assert old["moves"] == [] and old["fen"] == chess.STARTING_FEN
+    assert finalize_one_result(path, WORKER) == "e2e4"
+    new = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    assert new["moves"][0]["uci"] == "e2e4"
+    board = chess.Board()
+    board.push_uci("e2e4")
+    assert new["fen"] == board.fen()
+    assert post("job-poll", who)[1]["state"] == "none"
+    with pytest.raises(ValueError, match="No pending sandbox job"):
+        finalize_one_result(path, WORKER)
+    with pytest.raises(ValueError, match="already completed"):
+        arm_one_job(path, WORKER)
+
+
+def test_failed_checkpoint_keeps_result_and_running_lease(sandbox):
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "d2d4"
+    }})[0] == 200
+    delivery = WorkerInferenceDelivery(path)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    with pytest.raises(ValueError, match="does not extend"):
+        delivery.finalize_arena_result(
+            WORKER, job_id, "d2d4", tournament_id=SANDBOX_TOURNAMENT_ID,
+            checkpoint={**original, "fen": chess.STARTING_FEN, "moves": []},
+        )
+    with sqlite3.connect(path) as con:
+        assert con.execute(
+            "SELECT state FROM worker_job_safety WHERE worker_id=?", (WORKER,)
+        ).fetchone()[0] == "running"
+        assert con.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?", (WORKER,)
+        ).fetchone()[0] == 1
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    assert finalize_one_result(path, WORKER) == "d2d4"
