@@ -46,3 +46,11 @@ def test_equal_version_test_release_not_misrepresented_as_upgrade():
     assert 'Ten sam numer wersji podstawowej nie oznacza nowszego APK' in HTML
     assert 'Instalacja tylko ręczna' in HTML
     assert 'nie pobiera ani nie instaluje APK' in HTML
+
+
+def test_stacked_android_pr_builds_without_unpausing_desktop_jobs():
+    workflow = (Path(__file__).resolve().parents[1] /
+                '.github/workflows/worker-multiplatform.yml').read_text()
+    assert 'branches: [main, feat/issue-192-remote-worker-protocol]' in workflow
+    assert "false && needs.detect.outputs.linux == 'true'" in workflow
+    assert "false && needs.detect.outputs.windows == 'true'" in workflow
