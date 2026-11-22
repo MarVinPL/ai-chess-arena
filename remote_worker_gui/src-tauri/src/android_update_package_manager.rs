@@ -118,6 +118,13 @@ pub(crate) fn inspect_installed_worker_identity() -> Result<PlatformApkIdentity,
 /// only a private staged path, never a JavaScript URL or a user-chosen file.
 /// On any API error, ambiguity, missing cert or downgrade return a denial.
 pub(crate) fn inspect_staged_worker_apk(archive: &Path) -> Result<IdentityCheck, String> {
+    inspect_staged_worker_apk_details(archive).map(|(result, _, _)| result)
+}
+
+/// Inspect both signed identities and versionCodes in one OS operation.
+pub(crate) fn inspect_staged_worker_apk_details(
+    archive: &Path,
+) -> Result<(IdentityCheck, u64, u64), String> {
     if !archive.is_absolute() { return Err("Nieprawidłowa ścieżka APK".into()); }
     let archive_path = archive.to_str().ok_or("Nieprawidłowa nazwa APK")?;
     let ctx = ndk_context::android_context();
@@ -142,5 +149,6 @@ pub(crate) fn inspect_staged_worker_apk(archive: &Path) -> Result<IdentityCheck,
         &[JValue::Object(archive_name.as_ref()), JValue::Int(GET_SIGNING_CERTIFICATES)])
         .map_err(java_error)?.l().map_err(java_error)?;
     let candidate_identity = read_android_identity(&mut env, &candidate)?;
-    Ok(check_platform_apk_identity(&installed_identity, &candidate_identity))
+    Ok((check_platform_apk_identity(&installed_identity, &candidate_identity),
+        installed_identity.long_version_code, candidate_identity.long_version_code))
 }
