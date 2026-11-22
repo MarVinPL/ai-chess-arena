@@ -50,6 +50,40 @@ fn model_alias_matches(models: &Value, expected: &str) -> bool {
         .is_some_and(|id| id == expected || id == format!("sha256:{expected}"))
 }
 
+/// Advertise local readiness only if one llama.cpp model has a strict SHA
+/// alias. The alias is not a cryptographic hash attestation of GGUF bytes.
+pub(crate) async fn probe_local_model_alias() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(5))
+        .build().map_err(|_| "Brak klienta lokalnego modelu".to_owned())?;
+    let response = client.get(format!("{LOCAL_SERVER}/v1/models"))
+        .send().await.map_err(|_| "Uruchom llama.cpp na telefonie (127.0.0.1:8088)")?;
+    if !response.status().is_success() {
+        return Err("Lokalny model na telefonie nie jest dostępny".into());
+    }
+    let body = response.bytes().await
+        .map_err(|_| "Nie można odczytać modelu telefonu".to_owned())?;
+    if body.len() > 64 * 1024 {
+        return Err("Zbyt duża lista modeli llama.cpp".into());
+    }
+    let models: Value = serde_json::from_slice(&body)
+        .map_err(|_| "Nieprawidłowa lista modeli llama.cpp".to_owned())?;
+    let items = models.get("data").and_then(Value::as_array)
+        .ok_or("Lokalny serwer nie podał listy modeli")?;
+    if items.len() != 1 {
+        return Err("Wymagany dokładnie jeden lokalnie uruchomiony model".into());
+    }
+    let id = items[0].get("id").and_then(Value::as_str)
+        .ok_or("Lokalny model nie ma aliasu SHA-256")?;
+    let alias = id.strip_prefix("sha256:").unwrap_or(id);
+    if !valid_hex_sha256(alias) {
+        return Err("Uruchom llama-server z aliasem SHA-256 modelu".into());
+    }
+    Ok(alias.to_owned())
+}
+
 pub(crate) fn parse_exact_uci_answer(content: &str) -> Result<String, String> {
     let answer = content.trim();
     let b = answer.as_bytes();
