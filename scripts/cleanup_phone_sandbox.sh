@@ -55,5 +55,12 @@ case "$release" in
 esac
 rm -f "$db"
 rmdir "$dir"
+# Remove the narrow /home/debian traversal ACL only if resume created it.
+acl_marker=/etc/ai-chess-phone-e2e-acl-owned
+if [[ -e "$acl_marker" ]]; then
+  [[ $(stat -c %a "$acl_marker") == 600 ]] || { echo 'Unexpected ACL marker mode' >&2; exit 2; }
+  setfacl -x u:arena-phone-test /home/debian
+  rm -f "$acl_marker"
+fi
 userdel arena-phone-test
 echo "SANDBOX_DATA_PURGED, PRODUCTION_UNCHANGED"
