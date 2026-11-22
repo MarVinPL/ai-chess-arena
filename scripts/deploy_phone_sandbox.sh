@@ -79,6 +79,7 @@ chown -R arena-phone-test:arena-phone-test "$stage_root"
 
 installed_unit=0
 installed_caddy=0
+acl_granted=0
 rollback() {
   rc=$?
   if [[ $rc != 0 ]]; then
@@ -93,11 +94,25 @@ rollback() {
       rm -f "$unit_file"
       systemctl daemon-reload || true
     fi
+    # An ACL is granted only for the staging UID, never to group debian.
+    if [[ $acl_granted == 1 ]]; then
+      setfacl -x u:arena-phone-test /home/debian || true
+    fi
     # Keep the private database for forensic review; never expose the digest.
   fi
   exit "$rc"
 }
 trap rollback EXIT
+
+# /home/debian has a restrictive ACL with group::---; SupplementaryGroups
+# alone does NOT allow CHDIR. Give ONLY the dedicated staging UID traverse
+# (no read/list/write) and revoke it on rollback/cleanup.
+if ! getfacl -cp /home/debian | grep -Fxq 'user:arena-phone-test:--x'; then
+  setfacl -m u:arena-phone-test:--x /home/debian
+  acl_granted=1
+fi
+runuser -u arena-phone-test -- sh -c   'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
+runuser -u arena-phone-test --   /home/debian/ai-chess-arena/.venv/bin/python -c 'import chess'
 
 install -m 0644 -o root -g root "$work/systemd/ai-chess-arena-phone-e2e.service" "$unit_file"
 installed_unit=1

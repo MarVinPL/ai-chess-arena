@@ -55,5 +55,10 @@ case "$release" in
 esac
 rm -f "$db"
 rmdir "$dir"
+# Undo the narrow test-only traversal ACL before deleting the UID, otherwise
+# an obsolete numerical ACL principal would remain on the user's home.
+if getfacl -cp /home/debian | grep -Fxq 'user:arena-phone-test:--x'; then
+  setfacl -x u:arena-phone-test /home/debian
+fi
 userdel arena-phone-test
 echo "SANDBOX_DATA_PURGED, PRODUCTION_UNCHANGED"

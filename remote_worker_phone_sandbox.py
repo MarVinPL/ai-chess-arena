@@ -64,7 +64,9 @@ def prepare_sandbox(destination: Path, source: Path, worker_id: str) -> None:
         if not record or record["revoked_at"] is not None or record["expires_at"] <= int(time.time()):
             raise ValueError("Source worker token missing, expired or revoked")
         digest = bytes(record["token_digest"])
-        expiry = record["expires_at"]
+        # The copied verifier must be short-lived even if the real Worker
+        # token is valid for weeks. It never rotates the original token.
+        expiry = min(record["expires_at"], int(time.time()) + 3600)
         if len(digest) != 32:
             raise ValueError("Invalid source digest length")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
