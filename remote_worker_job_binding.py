@@ -18,7 +18,7 @@ class BoundWorkerResults(WorkerResultJournal):
                 tournament_id INTEGER NOT NULL, pairing_id INTEGER NOT NULL,
                 checkpoint_sha256 TEXT NOT NULL, fen TEXT NOT NULL)''')
 
-    def assign_bound(self, worker_id, job_id, *, tournament_id, pairing_id, expected_sha256, timeout_seconds):
+    def assign_bound(self, worker_id, job_id, *, tournament_id, pairing_id, expected_sha256, timeout_seconds, require_fresh_heartbeat=False, heartbeat_max_age=30):
         """Bind a job and reserve worker atomically against a live checkpoint."""
         self._id(worker_id)
         self._id(job_id)
@@ -64,6 +64,24 @@ class BoundWorkerResults(WorkerResultJournal):
             if state and state[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
             now = self.clock()
+            if require_fresh_heartbeat:
+                if type(heartbeat_max_age) not in (int, float) or not 0 < heartbeat_max_age <= 300:
+                    raise ValueError('Invalid heartbeat age')
+                if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_heartbeats'").fetchone():
+                    raise ValueError('Worker heartbeat registry not initialized')
+                presence = db.execute('SELECT observed_at FROM worker_heartbeats WHERE worker_id=?',
+                                      (worker_id,)).fetchone()
+                credential = db.execute('SELECT expires_at,revoked_at FROM worker_tokens WHERE worker_id=?',
+                                        (worker_id,)).fetchone()
+                if (not presence or not 0 <= now - presence[0] <= heartbeat_max_age
+                        or not credential or credential[1] is not None or credential[0] <= now):
+                    raise ValueError('Worker heartbeat or credential not current')
+                # Strict idle shape: an unknown/unfinished job cannot be
+                # reclassified by a fresh heartbeat alone.
+                idle = db.execute('SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?',
+                                  (worker_id,)).fetchone()
+                if idle != ('idle_confirmed', None, None):
+                    raise ValueError('Worker not durably idle')
             db.execute('''INSERT INTO worker_job_safety VALUES (?,?,'running',?,?)
                 ON CONFLICT(worker_id) DO UPDATE SET job_id=excluded.job_id,state='running',
                 deadline=excluded.deadline,updated_at=excluded.updated_at''', (worker_id, job_id, now + timeout_seconds, now))

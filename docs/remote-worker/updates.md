@@ -638,3 +638,13 @@ job state or permits reassignment. The checks are preliminary and not an
 atomic reservation; final assignment must still enforce SQLite transaction
 preconditions, and heartbeat does not attest model capacity. The production
 scheduler remains local-only.
+
+### Atomic heartbeat-gated assignment
+
+`BoundWorkerResults.assign_bound(..., require_fresh_heartbeat=True)` validates
+fresh authenticated presence, active credential and exact durable idle shape
+inside the same SQLite `BEGIN IMMEDIATE` transaction that reserves the worker
+and binds its checkpoint. Missing heartbeat schema fails closed. Concurrent
+reservation regression confirms only one assignment succeeds. The flag is
+opt-in to preserve existing offline integration tests; production dispatch is
+not enabled. Heartbeat alone still does not attest execution capacity.
