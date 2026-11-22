@@ -36,19 +36,40 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v4
-        with:
-          # The legacy SDK 'tools' package was removed from Google's repository.
-          # v3 still defaults to requesting it unless packages is overridden.
-          packages: 'platform-tools'
-      - name: Install SDK and NDK
+      - name: Install pinned official Android CLI
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          # Android 17 SDK packages have minor-version names (37.0). The app
-          # needs no API 37 features: use the stable Android 16 API 36 SDK.
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          set -euo pipefail
+          # Official Android command-line tools Linux archive (v22.0).
+          # SHA-256 from developer.android.com/studio#command-line-tools-only.
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip" \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+          test -x "$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+      - name: Install SDK and NDK using Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install SDK packages directly using the official Android CLI.
+          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          # Android CLI prompts when a new Android SDK license must be accepted.
+          # Exit status must come from the installer, not the yes process.
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
           test -s "$ANDROID_HOME/platforms/android-36/android.jar"
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
