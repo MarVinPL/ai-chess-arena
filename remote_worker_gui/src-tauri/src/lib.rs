@@ -4,6 +4,10 @@
 mod android_update_asset;
 #[allow(dead_code)]
 mod android_update_download;
+// Pure policy gate; native Android PackageManager evidence is not wired yet.
+// Never expose this as a claim that a staged APK is ready for installation.
+#[allow(dead_code)]
+mod android_update_identity;
 
 use serde::Serialize;
 use std::time::Duration;
