@@ -1,3 +1,8 @@
+// Native updater asset metadata gate; installation stays disabled until
+// verified APK bytes, signing certificate, package and coordinator idle checks.
+#[allow(dead_code)]
+mod android_update_asset;
+
 use serde::Serialize;
 use std::time::Duration;
 
