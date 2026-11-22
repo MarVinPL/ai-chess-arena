@@ -54,3 +54,33 @@ def verify_chess_checkpoint(checkpoint):
     except (ValueError, AssertionError):
         return False
     return board.fen() == payload["current_fen"]
+
+
+def choose_interrupted_game_checkpoint(job_id, last_saved_checkpoint):
+    """Resume the last *validated, completed-move* snapshot or restart.
+
+    Caller must first ensure the old execution lease is fenced/revoked and
+    no other worker is still executing the same job. This function chooses
+    data only: it must never claim STOP, commit a move, or authorize install.
+    An untrusted current/in-flight model reply is never a checkpoint.
+    """
+    if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+        raise ValueError("Invalid interrupted job ID")
+    if (isinstance(last_saved_checkpoint, dict)
+            and last_saved_checkpoint.get("job_id") == job_id
+            and last_saved_checkpoint.get("resume_mode") == "resume"
+            and verify_chess_checkpoint(last_saved_checkpoint)):
+        return last_saved_checkpoint.copy() | {
+            "payload": {
+                "initial_fen": last_saved_checkpoint["payload"]["initial_fen"],
+                "moves_uci": list(last_saved_checkpoint["payload"]["moves_uci"]),
+                "current_fen": last_saved_checkpoint["payload"]["current_fen"],
+            }
+        }
+    # No usable checkpoint is not an error. Start this specific game anew.
+    return {
+        "schema_version": 1,
+        "job_id": job_id,
+        "resume_mode": "restart",
+        "payload": {},
+    }
