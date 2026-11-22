@@ -26,6 +26,7 @@ class ArenaPhoneMoveProvider:
         self, database, worker_id, *, clock=time.time, sleep=time.sleep,
         poll_seconds=0.25, timeout_seconds=600,
         on_assignment: Callable | None = None,
+        on_heartbeat: Callable | None = None,
     ):
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
             raise ValueError("Invalid phone inference timeout")
@@ -39,6 +40,7 @@ class ArenaPhoneMoveProvider:
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
         self.on_assignment = on_assignment
+        self.on_heartbeat = on_heartbeat
 
     def __call__(self, board: chess.Board, player: dict, stop_event, kwargs: dict):
         if not isinstance(board, chess.Board) or not board.is_valid():
@@ -70,6 +72,7 @@ class ArenaPhoneMoveProvider:
             # allocate a second board or checkpoint writer on the phone.
             self.on_assignment(self.worker_id, job_id, board.fen(), player)
         started = self.clock()
+        next_heartbeat = started + 10
         while True:
             if stop_event is not None and stop_event.is_set():
                 # The assignment remains fenced until explicit coordinator
@@ -93,6 +96,11 @@ class ArenaPhoneMoveProvider:
                     "seconds": max(0.0, min(3600.0, self.clock() - started)),
                     "runtime": "android-local-llama-cpp",
                 }
+            # Refresh the Arena-owned read-only live snapshot during slow
+            # inference. Never transfer board/checkpoint ownership to phone.
+            if self.on_heartbeat is not None and self.clock() >= next_heartbeat:
+                self.on_heartbeat(self.worker_id, job_id, board.fen(), player)
+                next_heartbeat = self.clock() + 10
             self.sleep(self.poll_seconds)
 
 
@@ -107,6 +115,7 @@ class ArenaPhonePoolProvider:
         self.database = database
         self.delivery = WorkerInferenceDelivery(database, clock=clock)
         self.on_assignment = on_assignment
+        self.on_heartbeat = on_assignment
         self.clock = clock
         self.sleep = sleep
         self.timeout_seconds = timeout_seconds
@@ -127,5 +136,6 @@ class ArenaPhonePoolProvider:
             self.database, worker_id, clock=self.clock, sleep=self.sleep,
             timeout_seconds=self.timeout_seconds,
             on_assignment=self.on_assignment,
+            on_heartbeat=self.on_heartbeat,
         )
         return provider(board, player, stop_event, kwargs)
