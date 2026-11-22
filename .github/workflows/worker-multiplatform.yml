@@ -91,6 +91,8 @@ jobs:
     steps:
       - name: Skip unchanged platform
         if: (matrix.platform == 'linux' && needs.changes.outputs.linux != 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows != 'true')
+        # The skipped matrix platform does not run checkout; its app workdir is absent.
+        working-directory: .
         run: echo "No relevant changes"
       - uses: actions/checkout@v4
         if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
