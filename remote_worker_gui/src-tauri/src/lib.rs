@@ -1,5 +1,40 @@
 use serde::Serialize;
 
+const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
+const TOKEN_ACCOUNT: &str = "worker-token";
+
+fn token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
+        .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
+}
+
+#[tauri::command]
+fn store_worker_token(token: String) -> Result<(), String> {
+    // Never return, log, or serialize the secret back to the frontend.
+    if token.len() < 24 || token.len() > 512 || !token.is_ascii()
+        || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("Nieprawidłowy format tokenu".to_string());
+    }
+    token_entry()?.set_password(&token)
+        .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".to_string())
+}
+
+#[tauri::command]
+fn has_saved_worker_token() -> bool {
+    token_entry().and_then(|entry| entry.get_password()
+        .map_err(|_| "Brak zapisanego tokenu".to_string())).is_ok()
+}
+
+#[tauri::command]
+fn forget_worker_token() -> Result<(), String> {
+    let entry = token_entry()?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
+    }
+}
+
+
 #[derive(Serialize)]
 struct WorkerStatus {
     connected: bool,
@@ -21,7 +56,7 @@ fn worker_status() -> WorkerStatus {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_status])
+        .invoke_handler(tauri::generate_handler![worker_status, store_worker_token, has_saved_worker_token, forget_worker_token])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

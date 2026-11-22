@@ -38,3 +38,15 @@ def test_token_onboarding_does_not_persist_plaintext():
     assert 'localStorage' not in html
     assert 'sessionStorage' not in html
     assert 'id="pair" disabled' in html
+
+
+def test_native_token_storage_never_exposes_secret():
+    rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
+    html = (ROOT / 'public' / 'index.html').read_text()
+    assert 'keyring::Entry::new' in rust
+    assert 'store_worker_token' in rust
+    assert 'has_saved_worker_token' in rust
+    assert 'forget_worker_token' in rust
+    assert "invoke('store_worker_token',{token:field.value})" in html
+    assert "invoke('forget_worker_token')" in html
+    assert 'localStorage' not in html

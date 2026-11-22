@@ -59,3 +59,26 @@ prototype code and is **not** the selected onboarding workflow.
 **Not implemented yet:** token storage, token issuance, TLS connection and
 revocation API. GUI controls remain disabled until these are integrated and
 tested. No secrets are currently saved by the app.
+
+### Native credential storage
+
+The Tauri Rust backend now uses the open-source `keyring` crate for system
+credential storage. GUI actions `store_worker_token`, `has_saved_worker_token`,
+and `forget_worker_token` save, detect, and delete credentials without exposing
+stored token values to the frontend. A local desktop secret service/keychain
+must be available; saving fails closed otherwise. On headless Debian with no
+unlocked Secret Service, the application cannot persist credentials. This is
+local storage only: no network verification or VPS connection is implemented.
+
+### Local OS credential storage
+
+The desktop GUI supports Save token, Check saved token and Remove saved token
+using the Rust `keyring` library (Windows Credential Manager, macOS Keychain,
+Linux Secret Service). The secret is never returned to JavaScript or written to
+app configuration. The user must explicitly opt into remembering the token.
+The Save button does not authenticate or connect to the VPS. Linux desktops
+must have a working Secret Service provider (e.g. GNOME Keyring or KWallet);
+headless Xvfb alone is not sufficient to test persistent storage. On Linux,
+macOS and Windows, real OS-keychain integration needs a user-session smoke test.
+Removing the local secret does not revoke a server-side credential; server-side
+revocation is a separate required feature.
