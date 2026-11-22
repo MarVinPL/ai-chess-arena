@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
@@ -88,6 +88,123 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
     let result: serde_json::Value = response.json().await
         .map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
     Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
+}
+
+// Read-only, explicit job inspection. This never starts inferencing, downloads
+// models, executes a command, or acknowledges a chess move.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingWorkerJob {
+    version: u8,
+    job_id: String,
+    fen: String,
+    model_sha256: String,
+    max_tokens: u16,
+    timeout_seconds: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingJobResponse {
+    job: Option<PendingWorkerJob>,
+}
+
+fn validate_pending_worker_job(job: &PendingWorkerJob) -> bool {
+    let id = job.job_id.as_bytes();
+    if job.version != 1 || id.len() < 8 || id.len() > 96 ||
+        !id.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-') {
+        return false;
+    }
+    if job.model_sha256.len() != 64 ||
+        !job.model_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return false;
+    }
+    if !(1..=1024).contains(&job.max_tokens) || !(1..=600).contains(&job.timeout_seconds) {
+        return false;
+    }
+    // A structural FEN check is defense in depth. The VPS validates a full
+    // chess.Board and is the sole legal-move/checkpoint authority.
+    if job.fen.len() > 120 || !job.fen.is_ascii() { return false; }
+    let parts: Vec<&str> = job.fen.split(' ').collect();
+    if parts.len() != 6 || !["w", "b"].contains(&parts[1]) ||
+        !parts[4].bytes().all(|c| c.is_ascii_digit()) ||
+        !parts[5].bytes().all(|c| c.is_ascii_digit()) ||
+        parts[4].is_empty() || parts[5].is_empty() {
+        return false;
+    }
+    if parts[3] != "-" && !(parts[3].len() == 2
+        && matches!(parts[3].as_bytes()[0], b'a'..=b'h')
+        && matches!(parts[3].as_bytes()[1], b'3' | b'6')) {
+        return false;
+    }
+    if parts[2] != "-" && (parts[2].is_empty() ||
+        parts[2].len() > 4 || !parts[2].bytes().all(|c| b"KQkq".contains(&c))) {
+        return false;
+    }
+    let ranks: Vec<&str> = parts[0].split('/').collect();
+    ranks.len() == 8 && ranks.iter().all(|rank| {
+        let mut n = 0usize;
+        for b in rank.bytes() {
+            if (b'1'..=b'8').contains(&b) { n += (b - b'0') as usize; }
+            else if b"prnbqkPRNBQK".contains(&b) { n += 1; }
+            else { return false; }
+        }
+        n == 8
+    })
+}
+
+#[tauri::command]
+async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<PendingWorkerJob>, String> {
+    if worker_id.len() < 8 || worker_id.len() > 96 ||
+        !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Nieprawidłowy identyfikator Workera".into());
+    }
+    let url = reqwest::Url::parse(&server).map_err(|_| "Nieprawidłowy adres VPS")?;
+    if url.scheme() != "https" || url.host_str().is_none() ||
+        !url.username().is_empty() || url.password().is_some() ||
+        url.path() != "/" || url.query().is_some() ||
+        url.fragment().is_some() || url.port().is_some() {
+        return Err("Adres Workera musi być HTTPS bez portu, ścieżki i danych".into());
+    }
+    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(12)).build()
+        .map_err(|_| "Błąd klienta HTTPS")?;
+    let endpoint = url.join("api/remote-workers/job")
+        .map_err(|_| "Błąd adresu endpointu")?;
+    let mut response = client.post(endpoint)
+        .json(&serde_json::json!({"worker_id": worker_id, "token": token}))
+        .send().await.map_err(|_| "Błąd sieci HTTPS")?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Serwer odrzucił zapisany token".into());
+    }
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err("Przekroczono limit sprawdzania zadań".into());
+    }
+    if !response.status().is_success() {
+        return Err("Serwer nie udostępnia jeszcze odbioru zadań".into());
+    }
+    if response.content_length().map(|n| n > 4096).unwrap_or(false) {
+        return Err("Nieprawidłowy rozmiar odpowiedzi".into());
+    }
+    // Limit actual bytes too: chunked/malformed servers must not cause
+    // an unbounded allocation on a battery-powered volunteer device.
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > 4096 - bytes.len() {
+            return Err("Zbyt duża odpowiedź serwera".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: PendingJobResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| "Nieprawidłowa struktura zadania")?;
+    if let Some(ref job) = reply.job {
+        if !validate_pending_worker_job(job) {
+            return Err("Nieprawidłowe lub niekompletne zlecenie inferencji".into());
+        }
+    }
+    Ok(reply.job)
 }
 
 // Advisory only: the server currently returns unknown until its durable
@@ -218,7 +335,7 @@ fn update_installation_readiness() -> UpdateReadiness {
 
 #[cfg(test)]
 mod version_tests {
-    use super::{numeric_version, newest_worker_release, may_install_update, update_installation_readiness, VerifiedTaskState};
+    use super::{numeric_version, newest_worker_release, may_install_update, update_installation_readiness, VerifiedTaskState, PendingWorkerJob, validate_pending_worker_job};
     use serde_json::json;
     #[test]
     fn selects_newest_stable_worker_only() {
@@ -234,6 +351,38 @@ mod version_tests {
         assert_eq!(selected.1, "worker-v1.10.0");
         assert_eq!(selected.0, [1,10,0]);
     }
+    #[test]
+    fn only_complete_typed_worker_jobs_are_displayable() {
+        let ok: PendingWorkerJob = serde_json::from_value(serde_json::json!({
+            "version": 1, "job_id": "job_12345678",
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "model_sha256": "a".repeat(64),
+            "max_tokens": 512, "timeout_seconds": 300
+        })).unwrap();
+        assert!(validate_pending_worker_job(&ok));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["fen"] = serde_json::json!("not a chess position");
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["model_sha256"] = serde_json::json!("../unexpected-file.gguf");
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["timeout_seconds"] = serde_json::json!(601);
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["command"] = serde_json::json!("exec");
+        assert!(serde_json::from_value::<PendingWorkerJob>(illegal).is_err());
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal.as_object_mut().unwrap().remove("max_tokens");
+        assert!(serde_json::from_value::<PendingWorkerJob>(illegal).is_err());
+    }
+
     #[test]
     fn no_eligible_release_means_no_update() {
         let releases = vec![json!({"tag_name":"worker-v2.0.0","draft":true,"prerelease":false}), json!({"tag_name":"server-v9.0.0","draft":false,"prerelease":false})];
@@ -272,7 +421,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, check_update_safety, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, check_update_safety, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

@@ -26,6 +26,8 @@ import model_permissions
 import remote_worker_metrics
 import remote_worker_tokens
 import remote_worker_job_registry
+import remote_worker_job_delivery
+from remote_worker_http_ingest import RateLimiter
 import remote_worker_jobs
 
 def _route_path(request_target):
@@ -36,6 +38,7 @@ def _route_path(request_target):
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
 DB = ROOT / 'arena.sqlite3'
+_remote_worker_job_limiter = RateLimiter(limit=12, window=60)
 LOG_DIR = ROOT / 'logs'
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
@@ -1693,6 +1696,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
+            return
+        if path == '/api/remote-workers/job':
+            # HTTPS reverse proxy -> coordinator. Read-only: no worker can
+            # assign a job, change a game, or choose its model via this route.
+            # Missing model manifest means no executable job is visible.
+            if self.path != path or self.headers.get('Transfer-Encoding'):
+                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                return
+            if self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json':
+                self.send_json({'error': 'Wymagany JSON'}, 415)
+                return
+            raw_length = self.headers.get('Content-Length', '')
+            if not raw_length.isascii() or not raw_length.isdecimal() or not 0 < int(raw_length) <= 2048:
+                self.send_json({'error': 'Nieprawidłowy rozmiar żądania'}, 400)
+                return
+            try:
+                payload = json.loads(self.rfile.read(int(raw_length)).decode('utf-8'))
+                if not isinstance(payload, dict) or set(payload) != {'worker_id', 'token'}:
+                    raise ValueError('Invalid payload')
+                worker_id, token = payload['worker_id'], payload['token']
+                remote_worker_tokens.WorkerTokenStore._worker(worker_id)
+                if not _remote_worker_job_limiter.allow((self.client_address[0], worker_id)):
+                    self.send_json({'error': 'Limit żądań'}, 429)
+                    return
+                job = remote_worker_job_delivery.AuthenticatedJobDelivery(DB).retrieve(
+                    worker_id, token, require_inference_manifest=True)
+                self.send_json({'job': job})
+            except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe poświadczenia lub żądanie'}, 401)
+            except Exception:
+                self.send_json({'error': 'Zadania są chwilowo niedostępne'}, 503)
             return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
