@@ -37,7 +37,8 @@ def evaluate_candidates(*, allowlist=None, manifest=None):
                 blockers.append('Repozytorium lub rewizja nie zgadza się z manifestem.')
             if not all(source.get(key) for key in ('filename', 'sha256', 'size_bytes')):
                 blockers.append('Manifest nie zawiera kompletnego targetu GGUF.')
-            if source.get('license_review_status') not in ELIGIBLE_LICENSE_STATES:
+            if (source.get('license_review_status') not in ELIGIBLE_LICENSE_STATES
+                    and not model_allowlist.is_owner_admitted(entry, source)):
                 blockers.append('Audyt licencji nie ma pozytywnego statusu.')
             if source.get('license_review_status') != (entry.get('license_requirements') or {}).get('manifest_audit_status'):
                 blockers.append('Status audytu licencji nie zgadza się z allowlistą.')
@@ -50,7 +51,10 @@ def evaluate_candidates(*, allowlist=None, manifest=None):
             blockers.append('Brak wymogu niezależnego zatwierdzenia licencji.')
         if not isinstance(license_info.get('manifest_license'), str) or not license_info['manifest_license']:
             blockers.append('Brak identyfikatora licencji w allowliście.')
-        if entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers'):
+        # Do not re-test explicitly owner-admitted versions merely to record
+        # the registry decision; do not fabricate a positive runtime result.
+        if not model_allowlist.is_owner_admitted(entry, source) and (
+                entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers')):
             blockers.append('Gotowość techniczna nie jest pozytywna lub istnieją blokady.')
         if entry.get('block_reason'):
             blockers.append('Wpis zawiera blokadę lub nierozstrzygnięte uzasadnienie blokujące.')
