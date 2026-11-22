@@ -4,6 +4,7 @@ import threading
 
 import chess
 import pytest
+import tournament_checkpoint
 
 from remote_worker_inference_delivery import WorkerInferenceDelivery
 from remote_worker_phone_move_provider import ArenaPhoneMoveProvider, ArenaPhonePoolProvider, PhoneMoveUnavailable
@@ -19,8 +20,37 @@ def prepare(tmp_path, *, clock=lambda: 1000.0):
     return db, delivery
 
 
+def initialize_arena_checkpoint(db, *, tournament_id=1):
+    """Minimal authoritative Arena checkpoint in the SAME coordinator DB."""
+    tournament_checkpoint.ensure_schema(db)
+    payload = {
+        "schema_version": 1, "tournament_id": tournament_id,
+        "fen": chess.STARTING_FEN, "moves": [], "move_times": [],
+        "pairing": {"id": 42}, "white": {"model_sha256": MODEL},
+        "black": {"model_sha256": "b" * 64},
+    }
+    tournament_checkpoint.save(db, tournament_id, payload)
+    return payload
+
+
+def next_arena_checkpoint(previous, uci, *, seconds=1.0):
+    board = chess.Board(previous["fen"])
+    move = chess.Move.from_uci(uci)
+    assert move in board.legal_moves
+    board.push(move)
+    record = {
+        "uci": uci, "fen": board.fen(),
+        "ply": len(previous["moves"]) + 1, "seconds": seconds,
+    }
+    updated = {**previous, "fen": board.fen(),
+               "moves": previous["moves"] + [record],
+               "move_times": previous["move_times"] + [seconds]}
+    return updated, record
+
+
 def test_arena_receives_phone_result_and_retains_board_authority(tmp_path):
     db, delivery = prepare(tmp_path)
+    checkpoint = initialize_arena_checkpoint(db)
     arena_board = chess.Board()
     event_calls = []
 
@@ -44,6 +74,17 @@ def test_arena_receives_phone_result_and_retains_board_authority(tmp_path):
     assert metadata["runtime"] == "android-local-llama-cpp"
     assert len(event_calls) == 1
     assert arena_board.fen() == chess.STARTING_FEN  # Provider never pushes
+    # A received UCI must NOT release the phone before Arena checkpoints it.
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM worker_inference_results").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM worker_inference_assignments").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT state FROM worker_job_safety WHERE worker_id=?", (WORKER,)
+        ).fetchone()[0] == "running"
+    assert tournament_checkpoint.load(db, 1)["fen"] == chess.STARTING_FEN
+    after, record = next_arena_checkpoint(checkpoint, "e2e4")
+    provider.commit_checkpoint_for_record(1, after, record)
+    assert tournament_checkpoint.load(db, 1)["fen"] == record["fen"]
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT count(*) FROM worker_inference_results").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM worker_inference_assignments").fetchone()[0] == 0
@@ -92,6 +133,7 @@ def test_expired_remote_move_leaves_lease_for_reconciliation(tmp_path):
 
 def test_arena_finalization_rejects_wrong_uci(tmp_path):
     db, delivery = prepare(tmp_path)
+    checkpoint = initialize_arena_checkpoint(db)
     job = {
         "version": 1, "job_id": "move_1234567890", "fen": chess.STARTING_FEN,
         "model_sha256": MODEL, "max_tokens": 16, "timeout_seconds": 600,
@@ -101,18 +143,22 @@ def test_arena_finalization_rejects_wrong_uci(tmp_path):
         WORKER, {"version": 1, "job_id": job["job_id"], "uci": "e2e4"}
     )
     assert delivery.read_arena_result(WORKER, job["job_id"]) == "e2e4"
+    after, record = next_arena_checkpoint(checkpoint, "e2e4")
     with pytest.raises(ValueError):
-        delivery.finalize_arena_result(WORKER, job["job_id"], "d2d4")
+        delivery.finalize_arena_result(
+            WORKER, job["job_id"], "d2d4", tournament_id=1, checkpoint=after)
     assert delivery.read_arena_result(WORKER, job["job_id"]) == "e2e4"
     assert delivery.finalize_arena_result(
-        WORKER, job["job_id"], "e2e4"
+        WORKER, job["job_id"], "e2e4", tournament_id=1, checkpoint=after
     ) == chess.Move.from_uci("e2e4")
     with pytest.raises(ValueError):
-        delivery.finalize_arena_result(WORKER, job["job_id"], "e2e4")
+        delivery.finalize_arena_result(
+            WORKER, job["job_id"], "e2e4", tournament_id=1, checkpoint=after)
 
 
 def test_phone_pool_selects_only_ready_matching_model(tmp_path):
     db, delivery = prepare(tmp_path)
+    checkpoint = initialize_arena_checkpoint(db)
     events = []
 
     def immediate(worker_id, job_id, fen, player):
@@ -131,6 +177,9 @@ def test_phone_pool_selects_only_ready_matching_model(tmp_path):
     assert move == chess.Move.from_uci("g1f3")
     assert metadata["runtime"] == "android-local-llama-cpp"
     assert len(events) == 1 and events[0][0] == WORKER
+    assert delivery.find_ready_worker(MODEL) is None
+    after, record = next_arena_checkpoint(checkpoint, "g1f3")
+    pool.commit_checkpoint_for_record(1, after, record)
     assert delivery.find_ready_worker(MODEL) == WORKER
     with pytest.raises(PhoneMoveUnavailable):
         pool(chess.Board(), {"model_sha256": "c" * 64}, None, {})
