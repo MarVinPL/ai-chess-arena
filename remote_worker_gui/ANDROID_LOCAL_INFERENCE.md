@@ -69,3 +69,28 @@ Testy obejmują przerwanie transakcji po przygotowaniu zapisu,
 niezgodny FEN, błędną parę, rozbieżny ruch i integrację z prawdziwym
 serwerowym runnerem partii. Test symuluje wynik telefonu w Pythonie:
 **nie jest** dowodem działania modelu GGUF na fizycznym urządzeniu.
+
+
+## Jednorazowe wznowienie gotowości po bezczynnej aktualizacji APK
+
+Po bezpiecznej aktualizacji **bezczynnego** telefonu Arena zwalnia oryginalną
+rezerwację aktualizacji za pomocą właściwego tokenu i zapisuje jednorazowe
+potwierdzenie `worker_idle_update_recovery` (maksymalnie 24 godziny).
+Worker przechodzi w `unknown`, a nie bezpośrednio w `idle_confirmed`.
+Dopiero po ponownym uruchomieniu APK i potwierdzeniu tokenu maszyny,
+braku przerwanego checkpointu, braku aktywnego przydziału i lokalnego
+modelu `llama.cpp`, komenda `reconcile_idle_phone_after_update`
+przedstawia gotowość Arenie. Arena **atomowo** zużywa potwierdzenie
+i zmienia stan na `idle_confirmed`. Dopiero później przycisk `Wznów`
+włącza odbieranie nowych zadań na telefonie.
+
+Brak właściwego zwolnienia rezerwacji, brak modelu, starszy niż 24 h
+dowód, wcześniejsza awaria, nieznany przydział, oczekująca pauza albo
+checkpoint przerwanej partii **nie** pozwalają uznać Workera za bezczynnego.
+Dowód nie może zostać wykorzystany ponownie. Stan `unknown` bez
+zaufanej historii aktualizacji pozostaje zablokowany.
+
+Ta funkcja **nie wznawia przerwanego ruchu** i nie stanowi jeszcze pełnego
+STOP/ACK przy aktualizacji wykonywanej podczas inferencji. W takich
+przypadkach checkpoint Areny pozostaje nietknięty i konieczne jest
+osobne, potwierdzone uzgodnienie przydziału.
