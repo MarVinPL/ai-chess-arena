@@ -42,7 +42,6 @@ jobs:
               - 'remote_worker_gui/src-tauri/src/**'
               - 'remote_worker_gui/src-tauri/capabilities/**'
               - 'remote_worker_gui/src-tauri/tauri.conf.json'
-              - '.github/workflows/worker-multiplatform.yml'
             linux:
               - 'remote_worker_gui/src-tauri/gen/linux/**'
               - 'remote_worker_gui/src-tauri/linux/**'
@@ -54,7 +53,6 @@ jobs:
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
-              - '.github/workflows/android-worker-apk.yml'
       - name: Select platforms
         id: select
         env:
