@@ -349,7 +349,7 @@ pub(crate) async fn fetch_resume_status(
         Some("no_checkpoint") => Ok("no_checkpoint"),
         Some("waiting_update_reconciliation") => Ok("waiting_update_reconciliation"),
         Some("blocked") => Ok("blocked"),
-        Some("awaiting_executor") => Ok("awaiting_executor"),
+        Some("awaiting_local_engine") => Ok("awaiting_local_engine"),
         _ => Err("Nieznany stan gotowości do wznowienia".into()),
     }
 }
