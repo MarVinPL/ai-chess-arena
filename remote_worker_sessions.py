@@ -12,6 +12,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from typing import Callable
+from remote_worker_metrics import WorkerMetrics
 
 from remote_worker_protocol import ProtocolError, validate_job, validate_result
 import chess
@@ -37,11 +38,13 @@ class _Job:
     worker_id: str
     expires: float
     committed: bool = False
+    assigned_at: float = 0.0
 
 
 class WorkerSessions:
-    def __init__(self, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, clock: Callable[[], float] = time.monotonic, metrics: WorkerMetrics | None = None):
         self._clock = clock
+        self._metrics = metrics
         self._pairings: dict[str, _Pairing] = {}
         self._sessions: dict[str, _Session] = {}
         self._jobs: dict[str, _Job] = {}
@@ -88,7 +91,7 @@ class WorkerSessions:
         payload = validate_job(job)
         if payload['job_id'] in self._jobs:
             raise ProtocolError('Duplicate job ID')
-        self._jobs[payload['job_id']] = _Job(payload, worker_id, self._clock() + payload['timeout_seconds'])
+        self._jobs[payload['job_id']] = _Job(payload, worker_id, self._clock() + payload['timeout_seconds'], assigned_at=self._clock())
 
     def accept(self, worker_id: str, token: str, result: dict, board: chess.Board) -> chess.Move:
         self.authenticate(worker_id, token)
@@ -100,5 +103,24 @@ class WorkerSessions:
         if board.fen() != job.payload['fen']:
             raise ProtocolError('Board changed since assignment')
         move = validate_result(result, job.payload, board)
+        # Persist the coordinator-validated result before marking it committed.
+        # This is wall time, not a claimed worker CPU/GPU utilization metric.
+        if self._metrics is not None:
+            self._metrics.record(job_id=result['job_id'], worker_id=worker_id,
+                                 status='success', duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)),
+                                 moves=1)
         job.committed = True
         return move
+
+    def terminate(self, worker_id: str, token: str, job_id: str, *, status: str) -> None:
+        """Coordinator-confirmed failure/cancellation; never trust raw worker status."""
+        self.authenticate(worker_id, token)
+        if status not in ('error', 'cancelled'):
+            raise ProtocolError('Invalid terminal status')
+        job = self._jobs.get(job_id)
+        if not job or job.worker_id != worker_id or job.committed:
+            raise ProtocolError('Unknown or completed job')
+        if self._metrics is not None:
+            self._metrics.record(job_id=job_id, worker_id=worker_id,
+                                 status=status, duration_ms=max(0, int((self._clock() - job.assigned_at) * 1000)))
+        job.committed = True

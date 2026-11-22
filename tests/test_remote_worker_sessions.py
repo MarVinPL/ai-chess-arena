@@ -66,3 +66,31 @@ class WorkerSessionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class WorkerMetricsIntegrationTests(unittest.TestCase):
+    def test_coordinator_commits_once_and_keeps_history_after_revoke(self):
+        import tempfile
+        from pathlib import Path
+        from remote_worker_metrics import WorkerMetrics
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = WorkerMetrics(Path(directory) / 'metrics.db')
+            now = [100.0]
+            sessions = WorkerSessions(clock=lambda: now[0], metrics=metrics)
+            worker = 'friend_linux_01'
+            token = sessions.approve(worker, sessions.request_pairing(worker))
+            board = chess.Board()
+            job = dict(version=1, job_id='game_1234_ply_1', fen=board.fen(),
+                       model_sha256='b' * 64, max_tokens=16, timeout_seconds=90)
+            sessions.assign(worker, token, job)
+            now[0] += 2
+            sessions.accept(worker, token, dict(version=1, job_id=job['job_id'], uci='e2e4'), board)
+            with self.assertRaises(ProtocolError):
+                sessions.accept(worker, token, dict(version=1, job_id=job['job_id'], uci='e2e4'), board)
+            job['job_id'] = 'game_1234_ply_2'
+            sessions.assign(worker, token, job)
+            now[0] += 3
+            sessions.terminate(worker, token, job['job_id'], status='error')
+            sessions.revoke(worker)
+            result = WorkerMetrics(Path(directory) / 'metrics.db').summary()[0]
+            self.assertEqual((result['tasks'], result['successes'], result['errors'], result['moves']), (2, 1, 1, 1))
+            self.assertEqual(result['duration_ms'], 5000)

@@ -109,3 +109,15 @@ completion events to `WorkerMetrics.record()`. Consequently the panel correctly
 shows zero data until actual remote jobs are integrated. CPU/GPU time requires
 trusted coordinator-side measurement; do not accept self-reported values from
 untrusted workers as authoritative. No production deployment was performed.
+
+### Session lifecycle metric integration
+
+`WorkerSessions(metrics=WorkerMetrics(path))` now writes a successful move only
+after coordinator-side board/FEN and move validation. A coordinator-confirmed
+error or cancellation can be written using `terminate()`. Duplicate terminal
+transitions cannot increment counters; the SQLite job ID is unique. Elapsed
+wall time is measured by the coordinator's monotonic clock, not reported by
+the agent. CPU/GPU usage is intentionally zero until a trusted measurement
+source is integrated. Existing session pairing is still an in-memory prototype;
+there is no remote worker transport or live scheduler hookup yet. Do not treat
+this integration test as evidence that real remote tasks are running.
