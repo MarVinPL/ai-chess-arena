@@ -2,7 +2,7 @@
 
 ## Trust and distribution
 
-- Use **free GitHub Releases** for versioned, reviewed builds. Publish only after PR review, tests, and explicit release approval; never use a moving development branch as an update source.
+- Use **free GitHub Releases** for versioned, reviewed builds. Reserve tags `worker-vX.Y.Z` for this app; general Arena releases must not trigger Worker update notices. The current read-only prototype checks the repository latest release and therefore may not discover an older Worker release when a newer server release exists; use a dedicated signed Worker update feed before enabling installation. Publish only after PR review, tests, and explicit release approval; never use a moving development branch as an update source.
 - For Windows, macOS and supported Linux bundles, use **Tauri 2 Updater** with a pinned public verification key embedded in the application and detached signatures generated with a protected private signing key. A HTTPS URL alone is not sufficient to authenticate updates.
 - **Do not commit private signing keys**, credentials, release tokens, or build secrets. Prepare a documented, revocable signing-key custody and rotation procedure before enabling updates.
 - Pin the updater endpoint to the project's approved GitHub Releases metadata; do not allow a remote worker or an arbitrary URL to supply an update manifest.

@@ -124,11 +124,20 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
     if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniu".into()); }
     let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydania")?;
     let tag = data.get("tag_name").and_then(|v| v.as_str()).ok_or("Brak numeru wersji wydania")?;
-    let latest = numeric_version(tag).ok_or("Nieobsługiwany format wersji wydania")?;
+    // Arena releases may belong to the server or other components.
+    // Only dedicated worker-vX.Y.Z releases are eligible for worker notices.
+    let Some(worker_tag) = tag.strip_prefix("worker-v") else {
+        return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
+    };
+    let latest = numeric_version(worker_tag).ok_or("Nieobsługiwany format wersji Workera")?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
     let notes = data.get("html_url").and_then(|v| v.as_str())
-        .filter(|url| url.starts_with("https://github.com/MarVinPL/ai-chess-arena/releases/tag/"))
-        .map(str::to_owned);
+        .and_then(|raw| reqwest::Url::parse(raw).ok())
+        .filter(|url| url.scheme() == "https" && url.host_str() == Some("github.com")
+            && url.path().starts_with("/MarVinPL/ai-chess-arena/releases/tag/worker-v")
+            && url.query().is_none() && url.fragment().is_none()
+            && url.username().is_empty() && url.password().is_none())
+        .map(|url| url.to_string());
     Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes })
 }
 
@@ -139,6 +148,10 @@ mod version_tests {
     fn compares_numeric_versions_without_lexical_ordering() {
         assert!(numeric_version("v1.10.0") > numeric_version("1.9.9"));
         assert_eq!(numeric_version("v0.1.0"), Some([0, 1, 0]));
+    }
+    #[test]
+    fn accepts_worker_tag_versions() {
+        assert_eq!(numeric_version("worker-v1.2.3".strip_prefix("worker-v").unwrap()), Some([1, 2, 3]));
     }
     #[test]
     fn rejects_untrusted_or_prerelease_tags() {
