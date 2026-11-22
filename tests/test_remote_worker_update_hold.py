@@ -26,6 +26,7 @@ def test_reservation_blocks_both_scheduler_apis_and_only_explicit_release_unlock
     jobs = initial_idle(db, now)
     token = jobs.reserve_update(WORKER)
     assert jobs.validate_update_hold(WORKER, token)
+    assert jobs.update_safety_snapshot(WORKER) == ("unknown", None)
     with pytest.raises(ValueError, match="reserved"):
         jobs.assign(WORKER, "job_12345678", timeout_seconds=60)
     with pytest.raises(ValueError, match="reserved"):
