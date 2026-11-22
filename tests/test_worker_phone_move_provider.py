@@ -6,7 +6,7 @@ import chess
 import pytest
 
 from remote_worker_inference_delivery import WorkerInferenceDelivery
-from remote_worker_phone_move_provider import ArenaPhoneMoveProvider, PhoneMoveUnavailable
+from remote_worker_phone_move_provider import ArenaPhoneMoveProvider, ArenaPhonePoolProvider, PhoneMoveUnavailable
 
 WORKER = "android_1234567890abcdef"
 MODEL = "a" * 64
@@ -109,3 +109,42 @@ def test_arena_finalization_rejects_wrong_uci(tmp_path):
     ) == chess.Move.from_uci("e2e4")
     with pytest.raises(ValueError):
         delivery.finalize_arena_result(WORKER, job["job_id"], "e2e4")
+
+
+def test_phone_pool_selects_only_ready_matching_model(tmp_path):
+    db, delivery = prepare(tmp_path)
+    events = []
+
+    def immediate(worker_id, job_id, fen, player):
+        events.append((worker_id, job_id))
+        delivery.submit_inference_result(
+            worker_id, {"version": 1, "job_id": job_id, "uci": "g1f3"},
+        )
+
+    pool = ArenaPhonePoolProvider(
+        db, clock=lambda: 1000.0, sleep=lambda _: None,
+        on_assignment=immediate,
+    )
+    move, metadata = pool(
+        chess.Board(), {"model_sha256": MODEL}, threading.Event(), {},
+    )
+    assert move == chess.Move.from_uci("g1f3")
+    assert metadata["runtime"] == "android-local-llama-cpp"
+    assert len(events) == 1 and events[0][0] == WORKER
+    assert delivery.find_ready_worker(MODEL) == WORKER
+    with pytest.raises(PhoneMoveUnavailable):
+        pool(chess.Board(), {"model_sha256": "c" * 64}, None, {})
+
+
+def test_arena_production_runner_is_phone_opt_in_only_and_keeps_its_checkpoint():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "server.py").read_text(encoding="utf-8")
+    runner = (root / "engine_runner.py").read_text(encoding="utf-8")
+    assert "os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'" in source
+    assert "phone_move_provider = None" in source
+    assert "ArenaPhonePoolProvider(" in source
+    assert "move_provider=phone_move_provider" in source
+    assert "set_live(" in source and "worker_id=worker_id, job_id=job_id, fen=fen" in source
+    assert "tournament_checkpoint.save(DB, tournament_id" in source
+    assert "if self.move_provider is None:" in runner
