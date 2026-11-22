@@ -231,3 +231,16 @@ checkpoint inside the same transaction as chess move validation, checkpoint
 update and result acknowledgement. Restart replay and stale-position tests
 pass. This is coordinator-side code only; it is **not** wired to the live
 `SequentialChessRunner` or its job dispatch. Production remains NO-GO.
+
+### Optional SequentialChessRunner inference seam
+
+`SequentialChessRunner` now accepts an optional `move_provider` callback.
+Without it, all inference still uses the existing local `LlamafileRuntime`.
+The callback receives an isolated board copy, player, stop event and inference
+options; its returned move must be legal and timing metadata valid. Tests play
+a complete four-ply checkmate with a simulated provider and reject an illegal
+provider move. The callback is **not** connected to network transport,
+`BoundWorkerResults`, or the production server, and no remote worker has been
+activated. Full remote execution requires coordinator dispatch, durable
+job-result bridging, checkpoint-aware progress handling, and crash/restart
+end-to-end tests before production approval.
