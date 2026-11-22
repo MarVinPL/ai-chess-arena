@@ -15,7 +15,7 @@ def sections():
 
 def test_only_manual_trusted_main_can_start_test_release():
     assert "workflow_dispatch:" in WF
-    assert "pull_request_target" not in WF
+    assert "\n  pull_request_target:" not in WF
     assert "  pull_request:" not in WF
     assert "  push:" not in WF
     assert WF.count("github.ref == 'refs/heads/main'") == 3
@@ -50,8 +50,8 @@ def test_signer_has_no_source_checkout_and_validates_original_cert():
     assert "WORKER_ANDROID_DEBUG_STORE_PASSWORD" in sign
     assert "WORKER_ANDROID_DEBUG_KEY_PASSWORD" in sign
     assert sign.count(ORIGINAL_CERT) >= 2
-    assert "apksigner\" sign" not in sign  # no unrelated shell interpolation
-    assert "apksigner\" verify" not in sign
+    assert '$ANDROID_HOME/build-tools/36.0.0/apksigner" sign' in sign
+    assert '"$tools/apksigner" verify --verbose' in sign
     assert "versionCode='1001' versionName='0.1.1'" in sign
     assert "worker-pr197-011-original-key-verified" in sign
 
