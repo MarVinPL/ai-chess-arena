@@ -1811,6 +1811,8 @@ class Handler(BaseHTTPRequestHandler):
                     # Android secure store BEFORE the network request. On lost
                     # responses the client can recover without server secrets.
                     proposed_token = payload.get('hold_token')
+                    if not isinstance(proposed_token, str) or not re.fullmatch(r'[0-9a-f]{64}', proposed_token):
+                        raise ValueError('Missing or malformed pre-journaled hold token')
                     hold_token = registry.reserve_update(
                         worker_id, hold_token=proposed_token)
                     self.send_json({
