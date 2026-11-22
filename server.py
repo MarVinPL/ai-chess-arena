@@ -981,9 +981,17 @@ def tournament_loop(tournament_id):
                 checkpoint_moves.append(dict(move))
                 checkpoint_times.append(float(move.get('seconds') or 0))
                 saved_fen = move.get('fen')
-                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                next_checkpoint = _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen))
+                    checkpoint_moves, checkpoint_times, saved_fen)
+                if phone_move_provider is None:
+                    tournament_checkpoint.save(DB, tournament_id, next_checkpoint)
+                else:
+                    # Same SQLite IMMEDIATE transaction commits the ONLY Arena
+                    # checkpoint and releases the phone result/lease. A crash
+                    # can never leave an idle phone with an uncommitted move.
+                    phone_move_provider.commit_checkpoint_for_record(
+                        tournament_id, next_checkpoint, move)
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
