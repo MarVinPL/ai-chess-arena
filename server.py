@@ -22,6 +22,7 @@ import passkey_test
 import tournament_checkpoint
 import arena_auth
 import model_permissions
+import remote_worker_metrics
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1335,6 +1336,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
+            return
+        if path == '/api/remote-workers/metrics':
+            try:
+                self.send_json({'period': 'all', 'workers': remote_worker_metrics.WorkerMetrics(DB).summary()})
+            except Exception:
+                self.send_json({'error': 'Nie udało się odczytać statystyk agentów'}, 500)
+            return
+        if path == '/remote-workers':
+            self.send_html_file('remote_workers.html')
             return
         if path == '/api/model-permissions':
             try:

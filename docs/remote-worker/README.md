@@ -94,3 +94,18 @@ Only issue the token over an administrator-authenticated channel, and protect
 the SQLite file with OS permissions and backups. **No HTTP API is exposed by
 this module**; authentication, authorization, TLS, rate limiting, audit logging
 and wiring into the arena scheduler still need integration and testing.
+
+### Statistics per agent/token — Issue #192
+
+`remote_worker_metrics.py` stores coordinator-confirmed terminal job events in
+SQLite, deduplicated by job ID. A stable `worker_id` links statistics across
+token rotation/revocation. Metrics: total tasks, successes, errors, cancellations,
+wall time, CPU/GPU compute milliseconds, chess moves and last activity. The
+admin-authenticated `/api/remote-workers/metrics` endpoint defaults to all-time;
+`/remote-workers` is the read-only panel table. Neither route returns tokens.
+
+**Integration gap:** The scheduler does not yet emit coordinator-verified job
+completion events to `WorkerMetrics.record()`. Consequently the panel correctly
+shows zero data until actual remote jobs are integrated. CPU/GPU time requires
+trusted coordinator-side measurement; do not accept self-reported values from
+untrusted workers as authoritative. No production deployment was performed.
