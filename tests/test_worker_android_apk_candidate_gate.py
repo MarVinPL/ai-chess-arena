@@ -118,6 +118,11 @@ def test_download_is_real_native_command_with_private_verified_staging():
     assert "release-assets.githubusercontent.com" in source
     assert "objects.githubusercontent.com" in source
     assert "attempt.previous().len() > 3" in source
+    assert "DOWNLOAD_IN_PROGRESS.compare_exchange(false, true" in source
+    assert "fn only_one_staging_transfer_can_hold_the_lock()" in source
+    assert "fs::symlink_metadata(&target)" in source
+    assert "verify_apk_stream(&mut f, &candidate)" in source
+    assert "fs::remove_file(&partial)" in source
     assert "Pobierz APK" in ui
     assert "apkDownloadProgress" in ui
     assert "worker-apk-download-progress" in ui
