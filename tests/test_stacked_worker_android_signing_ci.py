@@ -19,14 +19,14 @@ def test_only_main_android_build_receives_explicit_secrets():
     assert "secrets: inherit" not in text
     for suffix in ("KEYSTORE_B64", "STORE_PASSWORD", "KEY_PASSWORD"):
         assert "secrets.WORKER_ANDROID_DEBUG_" + suffix in main
-    assert "false && (needs.changes.outputs.linux" in text
+    assert "false && needs.detect.outputs.linux" in text
 
 
 def test_keystore_reused_after_icon_generation_and_before_build():
     text = CALLED.read_text(encoding="utf-8")
     assert text.index("npx tauri android init --ci") < text.index(
         "npx tauri icon src-tauri/icons/icon.png"
-    ) < text.index("Restore historical debug signing key") < text.index(
+    ) < text.index("Restore original Android test signing key") < text.index(
         "npx tauri android build --apk"
     )
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in text

@@ -1,13 +1,37 @@
-name: Worker multiplatform CI
+name: Worker selective builds (Linux, Windows, Android)
 
+# Do not build on workflow changes, docs, tests or unrelated Arena code.
+# A push/PR must modify the actual Worker application sources.
 on:
-  pull_request:
-    paths:
-      - 'remote_worker_gui/**'
   push:
     branches: [main]
     paths:
-      - 'remote_worker_gui/**'
+      - 'remote_worker_gui/package.json'
+      - 'remote_worker_gui/package-lock.json'
+      - 'remote_worker_gui/public/**'
+      - 'remote_worker_gui/src-tauri/Cargo.toml'
+      - 'remote_worker_gui/src-tauri/Cargo.lock'
+      - 'remote_worker_gui/src-tauri/build.rs'
+      - 'remote_worker_gui/src-tauri/src/**'
+      - 'remote_worker_gui/src-tauri/capabilities/**'
+      - 'remote_worker_gui/src-tauri/icons/**'
+      - 'remote_worker_gui/src-tauri/tauri.conf.json'
+      - 'remote_worker_gui/src-tauri/gen/android/**'
+      - 'remote_worker_gui/src-tauri/android/**'
+  pull_request:
+    paths:
+      - 'remote_worker_gui/package.json'
+      - 'remote_worker_gui/package-lock.json'
+      - 'remote_worker_gui/public/**'
+      - 'remote_worker_gui/src-tauri/Cargo.toml'
+      - 'remote_worker_gui/src-tauri/Cargo.lock'
+      - 'remote_worker_gui/src-tauri/build.rs'
+      - 'remote_worker_gui/src-tauri/src/**'
+      - 'remote_worker_gui/src-tauri/capabilities/**'
+      - 'remote_worker_gui/src-tauri/icons/**'
+      - 'remote_worker_gui/src-tauri/tauri.conf.json'
+      - 'remote_worker_gui/src-tauri/gen/android/**'
+      - 'remote_worker_gui/src-tauri/android/**'
 
 permissions:
   contents: read
@@ -15,11 +39,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: worker-platforms-${{ github.event.pull_request.number || github.ref }}
+  group: worker-build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  changes:
+  detect:
     runs-on: ubuntu-24.04
     outputs:
       linux: ${{ steps.select.outputs.linux }}
@@ -28,10 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Needed to compare a previously built source commit with current HEAD.
           fetch-depth: 0
-      - uses: dorny/paths-filter@v4
-        id: filter
+      - id: filter
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             shared:
@@ -43,8 +66,8 @@ jobs:
               - 'remote_worker_gui/src-tauri/build.rs'
               - 'remote_worker_gui/src-tauri/src/**'
               - 'remote_worker_gui/src-tauri/capabilities/**'
-              - 'remote_worker_gui/src-tauri/tauri.conf.json'
               - 'remote_worker_gui/src-tauri/icons/icon.png'
+              - 'remote_worker_gui/src-tauri/tauri.conf.json'
             linux:
               - 'remote_worker_gui/src-tauri/gen/linux/**'
               - 'remote_worker_gui/src-tauri/linux/**'
@@ -54,13 +77,13 @@ jobs:
             windows:
               - 'remote_worker_gui/src-tauri/gen/windows/**'
               - 'remote_worker_gui/src-tauri/windows/**'
-              # Windows resource file only: do not rebuild Linux/Android for ICO-only edits.
               - 'remote_worker_gui/src-tauri/icons/icon.ico'
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
-      - name: Select changed platforms, reusing previous proven builds
+      - name: Select only changed platforms (reuse verified PR artifacts)
         id: select
+        shell: bash
         env:
           SHARED: ${{ steps.filter.outputs.shared }}
           LINUX: ${{ steps.filter.outputs.linux }}
@@ -69,88 +92,103 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/reuse_worker_artifacts.py
 
-  desktop:
-    needs: changes
-    # Paused by user decision #225 / branch-synchronization Issue #227.
-    # Keep this matrix job intact; re-enable only through a reviewed PR.
-    if: ${{ false && (needs.changes.outputs.linux == 'true' || needs.changes.outputs.windows == 'true') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-          - os: windows-2022
-            platform: windows
-    runs-on: ${{ matrix.os }}
+  linux:
+    needs: detect
+    # Temporarily paused by Issue #225. Keep the complete job for later review.
+    # To resume: remove 'false &&' in a dedicated PR.
+    if: ${{ false && needs.detect.outputs.linux == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 70
     defaults:
       run:
         working-directory: remote_worker_gui
     steps:
-      - name: Skip unchanged platform
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux != 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows != 'true')
-        # The skipped matrix platform does not run checkout; its app workdir is absent.
-        working-directory: .
-        run: echo "No relevant changes"
       - uses: actions/checkout@v6
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
       - uses: actions/setup-node@v6
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
       - uses: swatinem/rust-cache@v2
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
         with:
           workspaces: remote_worker_gui/src-tauri
-          key: ${{ matrix.platform }}
-      - name: Linux Tauri system libraries
-        if: matrix.platform == 'linux' && needs.changes.outputs.linux == 'true'
+          key: linux
+      - name: Install Tauri Linux libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf
-      - name: Build desktop executable (no installer signing)
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
+      - name: Build Linux executable
         run: |
           npm ci
           npx tauri build --no-bundle
-      - name: Stage Linux binary
-        if: matrix.platform == 'linux' && needs.changes.outputs.linux == 'true'
-        run: |
           mkdir -p dist
+          test -s src-tauri/target/release/ai-chess-arena-worker
           cp src-tauri/target/release/ai-chess-arena-worker dist/ai-chess-arena-worker-linux
-          sha256sum dist/* > dist/SHA256SUMS
-      - name: Stage Windows binary
-        if: matrix.platform == 'windows' && needs.changes.outputs.windows == 'true'
+          (cd dist && sha256sum ai-chess-arena-worker-linux > SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: worker-linux-unsigned
+          path: remote_worker_gui/dist/
+          retention-days: 90
+          if-no-files-found: error
+
+  windows:
+    needs: detect
+    # Temporarily paused by Issue #225. Keep the complete job for later review.
+    # To resume: remove 'false &&' in a dedicated PR.
+    if: ${{ false && needs.detect.outputs.windows == 'true' }}
+    runs-on: windows-2022
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: remote_worker_gui/src-tauri
+          key: windows
+      - name: Build Windows executable
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist
-          Copy-Item src-tauri/target/release/ai-chess-arena-worker.exe dist/ai-chess-arena-worker-windows.exe
-          (Get-FileHash dist/ai-chess-arena-worker-windows.exe -Algorithm SHA256).Hash | Set-Content dist/SHA256.txt
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx tauri build --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $source = 'src-tauri/target/release/ai-chess-arena-worker.exe'
+          if (!(Test-Path $source) -or (Get-Item $source).Length -le 0) { throw 'Missing Windows binary' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $source dist/ai-chess-arena-worker-windows.exe
+          $hash = (Get-FileHash dist/ai-chess-arena-worker-windows.exe -Algorithm SHA256).Hash
+          "$hash  ai-chess-arena-worker-windows.exe" | Set-Content dist/SHA256SUMS
       - uses: actions/upload-artifact@v6
-        if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: worker-${{ matrix.platform }}-unsigned
+          name: worker-windows-unsigned
           path: remote_worker_gui/dist/
-          retention-days: 7
+          retention-days: 90
           if-no-files-found: error
 
   android:
-    needs: changes
-    # Pull requests never receive the historical signing keystore.
-    if: needs.changes.outputs.android == 'true' && github.event_name == 'pull_request'
+    needs: detect
+    # Pull requests are always untrusted: NEVER forward signing secrets.
+    if: needs.detect.outputs.android == 'true' && github.event_name == 'pull_request'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
 
   android_signed:
-    needs: changes
-    # Only trusted pushes to main may pass private signing Secrets.
-    if: needs.changes.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: detect
+    # Release signing is available only to a trusted push on main.
+    if: needs.detect.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
@@ -158,3 +196,18 @@ jobs:
       WORKER_ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
       WORKER_ANDROID_DEBUG_STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
       WORKER_ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
+
+  prune:
+    needs: [detect, linux, windows, android, android_signed]
+    # The elevated token is never exposed to application builds or pull requests.
+    if: always() && needs.detect.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Keep only the newest successful main artifact per built platform
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/prune_worker_ci_artifacts.py
