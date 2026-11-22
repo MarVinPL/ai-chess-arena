@@ -1791,6 +1791,38 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/job-result':
+            # The phone submits UCI, not a new FEN or authoritative chess move.
+            # Validation and durable inbox happen in Arena. Game checkpoint
+            # and move application remain exclusively the tournament runner's.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid result request')
+                worker_id, token, nonce, result = (
+                    payload.get('worker_id'), payload.get('token'),
+                    payload.get('nonce'), payload.get('result'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid inference result nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_inference_delivery import WorkerInferenceDelivery
+                acknowledgement = WorkerInferenceDelivery(DB).submit_inference_result(
+                    worker_id, result)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce, **acknowledgement,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowy lub nieaktualny wynik ruchu'}, 409)
+            except Exception:
+                self.send_json({'error': 'Nie można zapisać wyniku Workera'}, 500)
+            return
         if path == '/api/remote-workers/job-poll':
             # A Worker can read only its OWN already-assigned inference job.
             # This path cannot assign, renew, cancel or mark a game finished.
