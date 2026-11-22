@@ -22,7 +22,7 @@ pub(crate) enum InstallPhase {
 pub(crate) enum InstallEvidence {
     AuthenticatedReservation,
     DurableSessionCreated,
-    SessionCommitted,
+    CommitAccepted,
     PendingUserAction,
     OsInstalledVersionAndSigningVerified,
     OsCancelledSessionVerified,
@@ -42,7 +42,7 @@ pub(crate) fn next_phase(
     match (current, evidence) {
         (VerifiedStaged, AuthenticatedReservation) => Ok(CoordinatorReserved),
         (CoordinatorReserved, DurableSessionCreated) => Ok(SessionCreated),
-        (SessionCreated, SessionCommitted) => Ok(SessionCommitted),
+        (SessionCreated, CommitAccepted) => Ok(SessionCommitted),
         (SessionCommitted, PendingUserAction) => Ok(AwaitingUserConsent),
         (SessionCommitted | AwaitingUserConsent | ResultUnknown,
             OsInstalledVersionAndSigningVerified) => Ok(InstalledConfirmed),
@@ -100,7 +100,7 @@ mod tests {
         assert!(!may_request_system_install(phase, false, true, true, true, true));
         assert!(may_request_system_install(phase, true, true, true, true, true));
         phase = next_phase(phase, DurableSessionCreated).unwrap();
-        phase = next_phase(phase, SessionCommitted).unwrap();
+        phase = next_phase(phase, CommitAccepted).unwrap();
         assert!(!may_request_hold_release(phase));
         phase = next_phase(phase, PendingUserAction).unwrap();
         assert!(!may_request_hold_release(phase));
@@ -133,7 +133,7 @@ mod tests {
             let terminal = next_phase(ResultUnknown, event).unwrap();
             assert_eq!(terminal, expected);
             assert!(may_request_hold_release(terminal));
-            assert!(next_phase(terminal, SessionCommitted).is_err());
+            assert!(next_phase(terminal, CommitAccepted).is_err());
         }
     }
 
@@ -141,7 +141,7 @@ mod tests {
     fn forged_and_out_of_order_events_cannot_skip_reservation() {
         use InstallEvidence::*;
         use InstallPhase::*;
-        for event in [DurableSessionCreated, SessionCommitted, PendingUserAction,
+        for event in [DurableSessionCreated, CommitAccepted, PendingUserAction,
             OsInstalledVersionAndSigningVerified, OsCancelledSessionVerified,
             OsFailedSessionVerified, RestartWithoutConclusiveEvidence] {
             assert!(next_phase(VerifiedStaged, event).is_err());
