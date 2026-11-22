@@ -52,6 +52,15 @@ def test_phone_start_pause_stop_are_honest_and_foreground_only():
     assert "Pauza po ruchu" in UI
 
 
+def test_local_model_probe_and_ready_auth_are_required_before_dispatch():
+    assert "pub(crate) async fn probe_local_model_alias()" in LOCAL
+    assert 'format!("{LOCAL_SERVER}/v1/models")' in LOCAL
+    assert 'let model_alias = android_local_llama::probe_local_model_alias().await?' in LIB
+    assert 'android_update_coordinator::announce_phone_ready(' in LIB
+    assert 'async fn announce_phone_ready(' in COORD
+    assert 'register_local_ready(' in DELIVERY
+
+
 def test_results_once_submitted_are_not_recomputed():
     assert 'SELECT 1 FROM worker_inference_results' in DELIVERY
     assert '"state": "awaiting_arena"' in DELIVERY
