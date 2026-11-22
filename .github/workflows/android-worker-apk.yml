@@ -30,6 +30,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # The legacy SDK 'tools' package was removed from Google's repository.
+          # v3 still defaults to requesting it unless packages is overridden.
+          packages: 'platform-tools'
       - name: Install SDK and NDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
