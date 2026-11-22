@@ -58,3 +58,9 @@ and invalidates the registry on revocation. This remains an integration
 prototype: coordinator recovery, concurrent writers, cross-store atomicity,
 and live scheduler wiring are not yet complete. Do not expose persisted
 `idle_confirmed` as permission to install until these are resolved.
+
+Concurrent assignment is now guarded by SQLite `BEGIN IMMEDIATE`, and
+`recover_after_restart()` invalidates all persisted idle/running assertions.
+**Startup integration is mandatory and not wired:** the actual coordinator
+must call recovery before accepting traffic, and reconcile its active jobs.
+Until that happens, the HTTP endpoint must continue to return `unknown`.

@@ -38,6 +38,8 @@ class DurableWorkerJobs:
             raise ValueError('Invalid timeout')
         now = int(self.clock())
         with self._db() as db:
+            # Serialize read-check-write across independent coordinator processes.
+            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
@@ -68,6 +70,17 @@ class DurableWorkerJobs:
         if row[0] == 'running' and (row[1] is None or row[1] <= int(self.clock())):
             return 'unknown'
         return row[0]
+
+    def recover_after_restart(self):
+        """Invalidate every persisted idle/running claim on coordinator boot.
+
+        Call before accepting new worker traffic. A fresh coordinator must
+        explicitly reconcile jobs before any worker can be declared idle.
+        """
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("""UPDATE worker_job_safety SET state='unknown',
+                job_id=NULL, deadline=NULL, updated_at=?""", (int(self.clock()),))
 
     def invalidate(self, worker_id):
         """Coordinator restart/revocation/uncertain state: never infer idle."""

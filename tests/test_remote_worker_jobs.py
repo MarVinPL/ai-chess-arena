@@ -50,3 +50,41 @@ def test_session_coordinator_updates_durable_state(tmp_path):
     assert DurableWorkerJobs(path, clock=lambda: now[0]).state(worker) == 'idle_confirmed'
     sessions.revoke(worker)
     assert durable.state(worker) == 'unknown'
+
+
+def test_concurrent_assignment_allows_only_one(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    path = tmp_path / 'jobs.db'
+    worker = 'worker_12345678'
+    first = DurableWorkerJobs(path, clock=lambda: 100)
+    # Explicitly reconcile the worker before allowing another assignment.
+    first.assign(worker, 'job_12345678', timeout_seconds=90)
+    first.complete(worker, 'job_12345678')
+
+    def attempt(i):
+        try:
+            DurableWorkerJobs(path, clock=lambda: 100).assign(
+                worker, f'job_{i:08d}', timeout_seconds=90)
+            return True
+        except ValueError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(attempt, range(8)))
+    assert outcomes.count(True) == 1
+    assert DurableWorkerJobs(path, clock=lambda: 100).state(worker) == 'running'
+
+
+def test_restart_invalidates_persisted_idle_and_running(tmp_path):
+    path = tmp_path / 'jobs.db'
+    jobs = DurableWorkerJobs(path, clock=lambda: 100)
+    jobs.assign('worker_12345678', 'job_12345678', timeout_seconds=90)
+    jobs.assign('worker_87654321', 'job_87654321', timeout_seconds=90)
+    jobs.complete('worker_87654321', 'job_87654321')
+    restarted = DurableWorkerJobs(path, clock=lambda: 110)
+    assert restarted.state('worker_87654321') == 'idle_confirmed'
+    restarted.recover_after_restart()
+    assert restarted.state('worker_12345678') == 'unknown'
+    assert restarted.state('worker_87654321') == 'unknown'
+    with pytest.raises(ValueError):
+        restarted.assign('worker_87654321', 'job_99999999', timeout_seconds=90)
