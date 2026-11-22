@@ -82,3 +82,15 @@ headless Xvfb alone is not sufficient to test persistent storage. On Linux,
 macOS and Windows, real OS-keychain integration needs a user-session smoke test.
 Removing the local secret does not revoke a server-side credential; server-side
 revocation is a separate required feature.
+
+### Durable coordinator-issued tokens (offline component)
+
+`remote_worker_tokens.py` implements a SQLite-backed worker token registry.
+An authenticated administrator can issue a random 256-bit token with bounded
+TTL (default 30 days), rotate it, or revoke it. The database stores only a
+SHA-256 digest, not plaintext; authentication uses constant-time comparison.
+Reopening the registry after a process restart retains valid credentials.
+Only issue the token over an administrator-authenticated channel, and protect
+the SQLite file with OS permissions and backups. **No HTTP API is exposed by
+this module**; authentication, authorization, TLS, rate limiting, audit logging
+and wiring into the arena scheduler still need integration and testing.
