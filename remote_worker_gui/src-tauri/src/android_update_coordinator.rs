@@ -452,6 +452,54 @@ mod tests {
     }
 
     #[test]
+    fn stop_poll_requires_exact_authenticated_instruction_and_nonce() {
+        let reply = json!({
+            "authenticated": true, "source": "coordinator",
+            "worker_id": "worker_12345678", "nonce": NONCE,
+            "install_allowed": false,
+            "instruction": {
+                "action": "stop_checkpoint",
+                "job_id": "job_12345678", "request_id": "a".repeat(32)
+            },
+        });
+        assert_eq!(
+            verify_pause_poll_reply(&reply, "worker_12345678", NONCE).unwrap(),
+            StopInstruction::StopCheckpoint {
+                job_id: "job_12345678".into(), request_id: "a".repeat(32)
+            }
+        );
+        for (key, forged) in [
+            ("authenticated", json!(false)),
+            ("source", json!("worker")),
+            ("worker_id", json!("worker_87654321")),
+            ("nonce", json!("f".repeat(32))),
+            ("install_allowed", json!(true)),
+        ] {
+            let mut r = reply.clone();
+            r[key] = forged;
+            assert!(verify_pause_poll_reply(&r, "worker_12345678", NONCE).is_err());
+        }
+        for forged in [
+            json!({"action": "stop_checkpoint", "job_id": "invalid",
+                   "request_id": "a".repeat(32)}),
+            json!({"action": "stop_checkpoint", "job_id": "job_12345678",
+                   "request_id": "not-a-request"}),
+            json!({"action": "resume", "job_id": "job_12345678"}),
+            json!({"action": "none", "hold_token": "secret"}),
+        ] {
+            let mut r = reply.clone();
+            r["instruction"] = forged;
+            assert!(verify_pause_poll_reply(&r, "worker_12345678", NONCE).is_err());
+        }
+        for action in ["none", "await_reconciliation", "blocked"] {
+            let mut r = reply.clone();
+            r["instruction"] = json!({"action": action});
+            assert!(verify_pause_poll_reply(&r, "worker_12345678", NONCE).is_ok());
+        }
+        assert!(coordinator_endpoint("https://arena.example/", "update-pause-poll").is_ok());
+    }
+
+    #[test]
     fn random_nonce_uses_os_rng_and_is_correctly_encoded() {
         let a = random_nonce().unwrap();
         let b = random_nonce().unwrap();
