@@ -139,20 +139,56 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
     if !model_alias_matches(&models, expected) {
         return Err("Załadowany lokalny model nie zgadza się z SHA-256 przydziału (alias)".into());
     }
-    // No uploaded checkpoints, board changes or user-provided local paths.
-    // Arena alone validates legality and records the game.
-    let prompt = format!(
-        "You are an AI playing chess. Reply with exactly one move in UCI notation (e.g. e2e4 or a7a8q), without explanation, markup or punctuation.\n\
-         Position FEN: {fen}\nUCI move:"
-    );
+    // Arena supplies an exact canonical list of legal moves in protocol v2.
+    // Restrict the LOCAL language model with llama.cpp GBNF, then recheck the
+    // answer here. Arena independently verifies legality once again.
+    let version = job.get("version").and_then(Value::as_u64)
+        .ok_or("Brak wersji zadania")?;
+    let legal_moves: Vec<&str> = if version == 2 {
+        let list = job.get("legal_moves").and_then(Value::as_array)
+            .ok_or("Arena nie podała legalnych ruchów")?;
+        if list.is_empty() || list.len() > 256 {
+            return Err("Nieprawidłowa liczba legalnych ruchów".into());
+        }
+        let moves = list.iter().map(|item| item.as_str()
+            .ok_or("Nieprawidłowy ruch z Areny".to_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if moves.iter().any(|uci| parse_exact_uci_answer(uci).is_err()) {
+            return Err("Arena przesłała nieprawidłowy format UCI".into());
+        }
+        moves
+    } else if version == 1 {
+        Vec::new()
+    } else {
+        return Err("Nieobsługiwana wersja zadania".into());
+    };
+    let prompt = if legal_moves.is_empty() {
+        format!(
+            "You are playing chess. Output exactly one UCI move with no explanation.\\nFEN: {fen}\\nUCI:"
+        )
+    } else {
+        format!(
+            "You are playing chess. Choose exactly ONE move from this legal list and output only its UCI.\\nFEN: {fen}\\nLegal UCI moves: {}\\nUCI:",
+            legal_moves.join(", "),
+        )
+    };
+    let mut request = json!({
+        "prompt": prompt,
+        "n_predict": tokens.min(64),
+        "temperature": 0.0,
+        "stream": false,
+        "stop": ["\\n"],
+    });
+    if !legal_moves.is_empty() {
+        let grammar = format!(
+            "root ::= {}",
+            legal_moves.iter().map(|mv| format!("\\\"{mv}\\\""))
+                .collect::<Vec<_>>().join(" | "),
+        );
+        request["grammar"] = json!(grammar);
+    }
     let response = client.post(format!("{LOCAL_SERVER}/completion"))
-        .json(&json!({
-            "prompt": prompt,
-            "n_predict": tokens.min(64),
-            "temperature": 0.0,
-            "stream": false,
-            "stop": ["\n"],
-        }))
+        .json(&request)
         .send().await.map_err(|_| "Lokalna inferencja nie zakończyła się w limicie")?;
     if !response.status().is_success() {
         return Err("Silnik telefonu odrzucił żądanie inferencji".into());
@@ -166,7 +202,11 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
         .map_err(|_| "Silnik zwrócił nieprawidłowy JSON".to_owned())?;
     let generated = result.get("content").and_then(Value::as_str)
         .ok_or("Silnik nie zwrócił tekstu ruchu")?;
-    parse_exact_uci_answer(generated)
+    let proposed = parse_exact_uci_answer(generated)?;
+    if !legal_moves.is_empty() && !legal_moves.contains(&proposed.as_str()) {
+        return Err("Lokalny model wybrał ruch poza listą legalnych ruchów Areny".into());
+    }
+    Ok(proposed)
 }
 
 #[cfg(test)]
