@@ -99,3 +99,10 @@ leaves the job uncommitted; regression tests cover both transitions. Metrics
 are best-effort after the durable transition. This is not an atomic result
 commit or a complete reconciliation protocol: the two SQLite registries remain
 independent, and neither is wired to a production remote-job scheduler.
+
+GUI regression tests now distinguish read-only outbound HTTPS verification
+from prohibited remote job execution. `localStorage` may contain only update
+check preferences/timestamps; worker credentials must remain in the OS keyring.
+This is a static-code regression guard, not a substitute for runtime security
+review. The two durable registries still need a single authoritative scheduler
+and reconciliation policy before live remote execution.

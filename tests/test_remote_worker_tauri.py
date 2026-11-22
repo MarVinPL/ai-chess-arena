@@ -18,7 +18,10 @@ def test_no_remote_commands_enabled():
     code = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
     assert 'worker_status' in code
     assert 'std::process::Command' not in code
-    assert 'reqwest' not in code
+    assert 'reqwest' in code  # HTTPS authentication/status checks only
+    assert 'verify_worker_connection' in code
+    assert 'check_update_safety' in code
+    assert 'Command::new' not in code
 
 
 def test_local_status_bridge_is_read_only():
@@ -35,9 +38,12 @@ def test_token_onboarding_does_not_persist_plaintext():
     assert 'Token dostępu' in html
     assert 'id="code" type="password"' in html
     assert 'id="rememberToken"' in html
-    assert 'localStorage' not in html
+    assert 'localStorage.setItem(updatePrefKey' in html
+    assert 'localStorage.setItem(updateLastKey' in html
+    assert 'localStorage.setItem(token' not in html
+    assert 'localStorage.setItem(field.value' not in html
     assert 'sessionStorage' not in html
-    assert 'id="pair" disabled' in html
+    assert 'id="pair" type="button"' in html
 
 
 def test_native_token_storage_never_exposes_secret():
@@ -49,4 +55,6 @@ def test_native_token_storage_never_exposes_secret():
     assert 'forget_worker_token' in rust
     assert "invoke('store_worker_token',{token:field.value})" in html
     assert "invoke('forget_worker_token')" in html
-    assert 'localStorage' not in html
+    assert 'localStorage.setItem(token' not in html
+    assert 'localStorage.setItem(field.value' not in html
+    assert 'sessionStorage' not in html

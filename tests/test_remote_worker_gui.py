@@ -17,8 +17,11 @@ class WorkerGuiTests(unittest.TestCase):
 
     def test_unimplemented_actions_fail_closed(self):
         html = HTML.read_text(encoding='utf-8')
-        for action in ('pair', 'start', 'pause', 'stop', 'disconnect'):
+        for action in ('start', 'pause', 'stop', 'disconnect'):
             self.assertRegex(html, rf'id="{action}"[^>]*disabled')
+        self.assertIn('id="pair" type="button"', html)
+        self.assertIn("invoke('verify_worker_connection'", html)
+        self.assertNotIn("invoke('start')", html)
         self.assertNotIn('fetch(', html)
         self.assertNotIn('WebSocket(', html)
 
