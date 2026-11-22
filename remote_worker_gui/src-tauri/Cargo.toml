@@ -22,3 +22,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde_json = "1"
 # Already in Cargo.lock transitively; pin the verified 0.10 API for streaming APK SHA-256.
 sha2 = "=0.10.9"
+
+# Android-only PackageManager inspection of staged APK and installed package.
+# Both crates are already present in Cargo.lock.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "=0.21.1"
+ndk-context = "=0.1.1"
