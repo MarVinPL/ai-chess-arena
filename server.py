@@ -1648,6 +1648,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
+        # Opt-in Android Worker API, independent from phone tournament dispatch.
+        # No browser/admin session is accepted here: authenticate each machine
+        # request using the existing SQLite WorkerTokenStore.
+        from remote_worker_phone_api import ROUTES, handle_phone_request
+        if path in ROUTES:
+            if os.environ.get('ARENA_PHONE_WORKER_API_ENABLED') != '1':
+                self.send_json({'error': 'Android Worker API nie jest jeszcze włączone'}, 503)
+                return
+            with live_lock:
+                worker_live_snapshot = dict(live_status)
+            handle_phone_request(self, path, DB, worker_live_snapshot)
+            return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
                 self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
