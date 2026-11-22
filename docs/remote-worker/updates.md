@@ -391,3 +391,16 @@ the adapted listener. Internal CA TLS is suitable for a local smoke test,
 not remote worker deployment; external trust, identity and transport
 requirements remain unresolved. No Caddy reload or production service
 change was made.
+
+### Isolated HTTPS-to-SQLite smoke test
+
+`tests/test_remote_worker_https_smoke.py` starts a temporary Caddy instance
+with its own config, internal TLS CA and loopback listener, plus a temporary
+loopback intake service and SQLite database. A real HTTPS request reaches the
+intake endpoint, authenticates the worker and stages one legal chess move.
+Invalid credentials and duplicate submissions are rejected. The test tears
+down both services; no production Caddy config or process is reloaded.
+The test uses `curl -k` **only** for a self-signed loopback smoke test; real
+worker deployment must verify the server certificate and hostname. This is
+not production network authorization, and production runner integration is
+still pending.
