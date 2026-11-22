@@ -399,11 +399,21 @@ document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
  try{
   // Recheck the coordinator after the APK installer has reconciled its hold.
   const state=await invoke('inspect_worker_resume_readiness',{server,workerId});
-  const safety=await invoke('check_update_safety',{server,workerId});
   const authenticated=await invoke('verify_worker_connection',{server,workerId});
   const supported=authenticated&&await invoke('phone_inference_supported');
-  if(state!=='no_checkpoint'||safety!=='idle_confirmed'||!supported){
-   throw Error('Niepotwierdzony stan Workera lub rezerwacji aktualizacji');
+  if(state!=='no_checkpoint'||!supported){
+   throw Error('Checkpoint lub autoryzacja Workera blokuje wznowienie');
+  }
+  // The old idle lease is UNKNOWN after APK installation. Only the trusted
+  // hold-release receipt plus freshly probed on-device model may restore it.
+  // This native command never runs inference or touches Arena's checkpoint.
+  const reconciled=await invoke('reconcile_idle_phone_after_update',{server,workerId});
+  if(reconciled!=='ready'){
+   throw Error('Arena nie potwierdziła bezczynności po aktualizacji');
+  }
+  const safety=await invoke('check_update_safety',{server,workerId});
+  if(safety!=='idle_confirmed'){
+   throw Error('Nadal brak potwierdzonej bezczynności Workera');
   }
   phoneSupported=true;phonePaired=true;
   if(!activatePhoneJobPolling())throw Error('Nie udało się włączyć odbioru zadań');
