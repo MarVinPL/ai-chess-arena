@@ -30,13 +30,17 @@ jobs:
           run_result="$(gh api repos/MarVinPL/ai-chess-arena/actions/runs/45018325702 --jq '.conclusion')"
           test "$run_sha" = '2c8e6660202e8cab032e7533c2b1c9ed507d6a47'
           test "$run_result" = success
-      - uses: actions/download-artifact@v4
-        with:
-          repository: MarVinPL/ai-chess-arena
-          run-id: 45018325702
-          name: ai-chess-arena-worker-arm64-debug
-          path: input
-          github-token: ${{ github.token }}
+      - name: Download pinned APK from original CI run using built-in GitHub CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          gh run download 45018325702 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name ai-chess-arena-worker-arm64-debug \
+            --dir input
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -140,10 +144,17 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: worker-v0.1.0-test1-original-key-verified
-          path: dist
+      - name: Download verified signed APK using built-in GitHub CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name worker-v0.1.0-test1-original-key-verified \
+            --dir dist
       - name: Publish an explicitly marked, immutable test prerelease
         shell: bash
         env:
