@@ -16,6 +16,7 @@ from remote_worker_phone_sandbox import (
     prepare_sandbox, SANDBOX_TOURNAMENT_ID,
 )
 from remote_worker_tokens import WorkerTokenStore
+from remote_worker_update_pause import WorkerUpdatePause
 
 WORKER = "android_test_12345678"
 NONCE = "0123456789abcdef0123456789abcdef"
@@ -138,3 +139,79 @@ def test_failed_checkpoint_keeps_result_and_running_lease(sandbox):
         ).fetchone()[0] == 1
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
     assert finalize_one_result(path, WORKER) == "d2d4"
+
+
+def test_stop_instruction_repeats_without_ack_or_checkpoint_mutation(sandbox):
+    """A durable STOP request is not a STOP ACK or a chess result."""
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA}) == (
+        200, {**{"authenticated": True, "source": "coordinator",
+                  "worker_id": WORKER, "nonce": NONCE}, "state": "ready"}
+    )
+    job_id = arm_one_job(path, WORKER)
+    assert post("job-poll", who)[1]["state"] == "assigned"
+    before = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    pause = WorkerUpdatePause(path)
+    request_id = pause.request(WORKER, job_id)
+    assert len(request_id) == 32
+
+    for _ in range(3):
+        code, message = post("update-pause-poll", who)
+        assert code == 200
+        assert message["install_allowed"] is False
+        assert message["instruction"] == {
+            "action": "stop_checkpoint",
+            "job_id": job_id,
+            "request_id": request_id,
+        }
+    assert post("update-pause-poll", {**who, "nonce": "invalid"})[0] == 400
+    assert post("update-pause-poll", auth("invalid-credentials-0000"))[0] == 401
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[0] == 400
+
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,)
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results"
+        ).fetchone()[0] == 0
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == before
+
+
+def test_late_or_invalid_move_after_stop_cannot_commit_or_release(sandbox):
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    request_id = WorkerUpdatePause(path).request(WORKER, job_id)
+    initial = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    for uci in ("e2e4", "e2e5"):
+        code, _ = post("job-result", {**who, "result": {
+            "version": 1, "job_id": job_id, "uci": uci
+        }})
+        assert code == 409
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+    with pytest.raises(ValueError):
+        arm_one_job(path, WORKER)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == initial
+    assert WorkerUpdatePause(path).pending(WORKER) == {
+        "job_id": job_id, "request_id": request_id, "phase": "requested"
+    }
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone() == ("running", job_id)
+        assert db.execute("SELECT COUNT(*) FROM worker_inference_results").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,)
+        ).fetchone() == ("requested", None)
