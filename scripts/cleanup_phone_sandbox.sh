@@ -55,5 +55,7 @@ case "$release" in
 esac
 rm -f "$db"
 rmdir "$dir"
+# Remove only the staging user's explicit traverse ACL, preserving all others.
+setfacl -x u:arena-phone-test /home/debian
 userdel arena-phone-test
 echo "SANDBOX_DATA_PURGED, PRODUCTION_UNCHANGED"

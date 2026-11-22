@@ -76,6 +76,11 @@ runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin arena-phone-test
 chown -R arena-phone-test:arena-phone-test "$stage_root"
+# The home directory has an ACL overriding the group traversal bit.
+# Grant only this service UID the ability to TRAVERSE, not list /home/debian.
+setfacl -m u:arena-phone-test:--x /home/debian
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
 
 installed_unit=0
 installed_caddy=0
