@@ -9,6 +9,8 @@ on:
       - "fix/**"
   workflow_dispatch:
 
+# Use GitHub-approved Node 24 actions (checkout and setup-python v7).
+# Repository Actions allowlist must permit both pinned major versions.
 permissions:
   contents: read
 
