@@ -22,9 +22,15 @@ Pauza po ruchu oraz Stop po ruchu wyłączają kolejne zadania, lecz nie przeryw
 
 - Alias SHA-256 w llama-server pomaga uniknąć pomyłki modelu, ale NIE potwierdza kryptograficznie bajtów GGUF. Wydanie produkcyjne wymaga dodatkowej kontroli rzeczywistego pliku modelu.
 - Nie ma jeszcze pobierania i usuwania modeli na żądanie ani samodzielnego silnika GGUF w APK.
-- Domyślny runner turnieju na VPS nie jest jeszcze podłączony do dispatchera zadań telefonu; nadal wybiera wykonanie lokalne na VPS.
+- Domyślnie turniej dalej używa obliczeń na VPS. Eksperymentalny adapter telefonu działa tylko po jawnym ustawieniu zmiennej ARENA_PHONE_INFERENCE_ENABLED=1 **w środowisku uruchomienia Areny**. Gdy włączony, Arena wybiera dla każdego ruchu gotowy telefon z pasującym modelem SHA-256; gdy go brak, nie uruchamia po cichu innego modelu na VPS. Zapis szachownicy i checkpointów pozostaje w Arenie.
 - Wznawianie zadania po aktualizacji i zatrzymanie modelu podczas obliczeń wymagają osobnej integracji.
 - Wymagany jest rzeczywisty test na Androidzie 16 i sprawdzenie wyników CI.
 - Wszystko bazuje na darmowym, otwartym oprogramowaniu.
 
 Komenda testowa nie wymaga instalowania żadnej płatnej usługi ani przesyłania GGUF do VPS.
+
+## Testowe włączenie dispatchera po stronie Areny
+
+Najpierw uruchom odpowiednio przygotowany lokalny model telefonu i użyj Start lokalnie w APK. Dopiero po sprawdzeniu połączenia, testów i przypisania właściwego modelu administrator może ustawić zmienną ARENA_PHONE_INFERENCE_ENABLED=1 dla procesu Areny. Nie jest ona włączona automatycznie w systemd ani w produkcyjnej usłudze. Zmiana tej opcji dotyczy wyboru wykonawcy ruchu; **nie przejmuje checkpointów i nie tworzy drugiego silnika partii na telefonie**.
+
+W trybie eksperymentalnym Arena musi mieć gotowy lokalny model na telefonie dla każdego gracza, którego ruch ma być obliczany zdalnie. Brak gotowości powoduje jawny błąd, bez niekontrolowanego powrotu do obliczeń na VPS. Obecnie zarządzanie pobieraniem GGUF i sprawdzaniem rzeczywistych bajtów modelu na telefonie pozostaje nieukończone.
