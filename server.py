@@ -1763,12 +1763,24 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Invalid payload')
                 worker_id = payload.get('worker_id')
                 token = payload.get('token')
+                nonce = payload.get('nonce')
+                # Random nonce binds this *authenticated* coordinator snapshot
+                # to one requester. Never mint/echo a nonce on auth failure.
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid update-safety nonce')
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'error': 'Brak autoryzacji'}, 401)
                     return
-                state = remote_worker_job_registry.WorkerJobRegistry(DB).state(worker_id)
-                self.send_json({'state': state, 'install_allowed': False,
-                                'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu i wersji'})
+                registry = remote_worker_job_registry.WorkerJobRegistry(DB)
+                state, active_tasks = registry.update_safety_snapshot(worker_id)
+                self.send_json({
+                    'state': state, 'authenticated': True,
+                    'source': 'coordinator', 'worker_id': worker_id,
+                    'nonce': nonce, 'active_tasks': active_tasks,
+                    'checked_at_unix_ms': int(time.time() * 1000),
+                    'install_allowed': False,
+                    'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu, wersji i ponownego stanu zadań',
+                })
             except (ValueError, UnicodeError, json.JSONDecodeError):
                 self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
             except Exception:
