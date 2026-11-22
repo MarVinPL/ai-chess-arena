@@ -172,6 +172,9 @@ async function reconcileInstalledApkAtStartup(){
   }
  }catch(error){
   apkStatus.textContent='Nie udało się uzgodnić instalacji po uruchomieniu: '+String(error);
+ }finally{
+  // Only check resume readiness after the update hold has been reconciled.
+  await refreshWorkerResumeReadiness();
  }
 }
 void reconcileInstalledApkAtStartup();
@@ -203,7 +206,6 @@ document.getElementById('resumeWorkerGame').addEventListener('click',()=>{
  // No executable resume lease exists yet; never fake a running game.
  document.getElementById('resumeWorkerStatus').textContent='Wykonawca partii nie jest jeszcze podłączony.';
 });
-void refreshWorkerResumeReadiness();
 
 document.getElementById('checkUpdateSafety').addEventListener('click',async()=>{
  const button=document.getElementById('checkUpdateSafety');
