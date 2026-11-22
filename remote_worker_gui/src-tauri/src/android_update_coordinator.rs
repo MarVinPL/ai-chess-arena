@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -313,6 +313,72 @@ pub(crate) fn verify_pause_poll_reply(
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// The Arena owns chess state. Return the FEN only when the authenticated
+/// coordinator explicitly binds it to THIS worker's active job. A general
+/// /api/live snapshot is deliberately not accepted.
+#[allow(dead_code)]
+pub(crate) async fn fetch_worker_board_view(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<Value, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let endpoint = coordinator_endpoint(base, "board-view")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+        }))
+        .send().await.map_err(|_| "Brak połączenia z podglądem Areny")?;
+    if !response.status().is_success() {
+        return Err("Arena odmówiła podglądu partii".into());
+    }
+    let body: Value = response.json().await
+        .map_err(|_| "Nieprawidłowy podgląd partii".to_owned())?;
+    if body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
+        return Err("Odpowiedź podglądu nie należy do Workera".into());
+    }
+    match body.get("active").and_then(Value::as_bool) {
+        Some(false) => {
+            // Never forward an unexpected FEN or job when no job is active.
+            if body.get("fen").is_some() || body.get("job_id").is_some() {
+                return Err("Nieaktywny podgląd zawiera cudzą partię".into());
+            }
+            Ok(serde_json::json!({"active": false, "state": "inactive"}))
+        }
+        Some(true) => {
+            let fen = body.get("fen").and_then(Value::as_str)
+                .ok_or("Brak pozycji aktywnej partii")?;
+            let job = body.get("job_id").and_then(Value::as_str)
+                .ok_or("Brak identyfikatora aktywnej partii")?;
+            if !valid_worker_id(job) || fen.len() > 120 || fen.split(' ').count() != 6
+                || !fen.bytes().all(|b| b.is_ascii_alphanumeric()
+                    || matches!(b, b'/' | b' ' | b'-')) {
+                return Err("Nieprawidłowe dane aktywnej partii".into());
+            }
+            let str_field = |key: &str| -> String {
+                body.get(key).and_then(Value::as_str).unwrap_or("")
+                    .chars().take(96).collect()
+            };
+            let last = str_field("last_move_uci");
+            let last = if (4..=5).contains(&last.len()) && last.bytes().all(|b|
+                b.is_ascii_lowercase() || (b'1'..=b'8').contains(&b)) {
+                last
+            } else { String::new() };
+            Ok(serde_json::json!({
+                "active": true, "fen": fen, "job_id": job,
+                "white": str_field("white"), "black": str_field("black"),
+                "model": str_field("model"), "stage": str_field("stage"),
+                "last_move_uci": last,
+            }))
+        }
+        _ => Err("Nieprawidłowy status partii Workera".into()),
     }
 }
 
