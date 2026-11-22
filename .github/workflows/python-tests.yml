@@ -2,7 +2,8 @@ name: Python test suite
 
 on:
   pull_request:
-    branches: [main]
+    # Temporary integration target for stacked updater PR #197; remove before main.
+    branches: [main, feat/issue-194-worker-defaults]
   push:
     branches:
       - "feat/**"
