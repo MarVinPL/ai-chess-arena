@@ -81,7 +81,9 @@ def test_linux_png_sizes_and_same_exact_source_graphic():
         for y in range(size):
             for x in range(size):
                 pos = (y * size + x) * 4
-                master_pos = ((y * step) * 512 + (x * step)) * 4
+                # Pillow nearest-neighbor downsampling samples each source
+                # block at its center, not necessarily its first pixel.
+                master_pos = ((y * step + step // 2) * 512 + (x * step + step // 2)) * 4
                 assert pixels[pos:pos + 4] == full[master_pos:master_pos + 4]
 
 
