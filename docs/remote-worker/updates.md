@@ -618,3 +618,13 @@ an idle worker, and cannot automatically reconcile unfinished jobs. This is
 only a coordinator-side persistence building block: there is no public
 heartbeat endpoint, active liveness challenge, worker capacity attestation,
 or production dispatch activation yet.
+
+### Loopback heartbeat intake
+
+The opt-in loopback HTTP gateway accepts authenticated
+`POST /internal/remote-worker/heartbeat` with exactly `worker_id` and `token`.
+The request shares existing JSON/body-size/read-timeout/rate-limit controls;
+invalid or revoked credentials are rejected. Heartbeats update only
+`worker_heartbeats`, never `worker_job_safety`. No external Caddy route or
+production listener was enabled. Fresh heartbeat is not an authorization to
+reassign unknown or in-flight jobs.

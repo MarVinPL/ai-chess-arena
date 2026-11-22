@@ -14,6 +14,7 @@ READ_TIMEOUT = 5
 
 from remote_worker_authenticated_ingest import AuthenticatedResultIngest
 from remote_worker_job_delivery import AuthenticatedJobDelivery
+from remote_worker_heartbeat import WorkerHeartbeatStore
 
 MAX_BODY = 2048
 
@@ -50,6 +51,7 @@ def make_handler(db_path, *, limiter=None):
     limiter = limiter or RateLimiter()
     ingest = AuthenticatedResultIngest(db_path)
     delivery = AuthenticatedJobDelivery(db_path)
+    heartbeats = WorkerHeartbeatStore(db_path)
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -57,7 +59,8 @@ def make_handler(db_path, *, limiter=None):
             self.connection.settimeout(READ_TIMEOUT)
 
         def do_POST(self):
-            if self.path not in ('/internal/remote-worker/result', '/internal/remote-worker/job'):
+            if self.path not in ('/internal/remote-worker/result', '/internal/remote-worker/job',
+                                  '/internal/remote-worker/heartbeat'):
                 return self.reply(404)
             peer = self.client_address[0]
             if not limiter.allow(peer):
@@ -74,6 +77,11 @@ def make_handler(db_path, *, limiter=None):
                 body = json.loads(self.rfile.read(length).decode('utf-8'))
                 if not isinstance(body, dict):
                     raise ValueError('Invalid payload')
+                if self.path == '/internal/remote-worker/heartbeat':
+                    if set(body) != {'worker_id', 'token'}:
+                        raise ValueError('Invalid payload')
+                    heartbeats.record(body['worker_id'], body['token'])
+                    return self.reply(202)
                 if self.path == '/internal/remote-worker/job':
                     if set(body) != {'worker_id', 'token'}:
                         raise ValueError('Invalid payload')
