@@ -94,3 +94,23 @@ Ta funkcja **nie wznawia przerwanego ruchu** i nie stanowi jeszcze pełnego
 STOP/ACK przy aktualizacji wykonywanej podczas inferencji. W takich
 przypadkach checkpoint Areny pozostaje nietknięty i konieczne jest
 osobne, potwierdzone uzgodnienie przydziału.
+
+
+## Wczesna obsługa STOP (bez fałszywego ACK)
+
+Natywna komenda Androida odpytuje uwierzytelniony
+`/api/remote-workers/update-pause-poll` **przed rozpoczęciem i po zakończeniu**
+lokalnego wywołania `llama.cpp`. Odpowiedź jest związana z nonce,
+tokenem i identyfikatorem Workera. Żądanie `stop_checkpoint`,
+`await_reconciliation`, `blocked` lub błąd sieci zatrzymuje
+przekazanie ruchu do Areny i nie oznacza zadania jako wykonanego.
+Błędny identyfikator joba także blokuje przesłanie UCI.
+Przed instalacją APK sprawdzana jest dodatkowo lokalna blokada
+`generation_active()`, a Arena atomowo sprawdza brak aktywnego lease.
+
+**To nie jest jeszcze STOP/ACK.** Jeżeli STOP nadejdzie w trakcie
+nieprzerywalnego żądania inferencji, telefon wykryje go po jego
+zakończeniu. Nie wysyła automatycznego ACK ani nie zezwala na
+instalację. Arena przechowuje checkpoint i zachowuje blokadę przydziału,
+dopóki nie zostanie wprowadzony zaufany mechanizm potwierdzenia
+bezpiecznego zakończenia lokalnych obliczeń.
