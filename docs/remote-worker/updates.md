@@ -570,3 +570,13 @@ single-host protection: all other checkpoint-writing paths and any future
 remote runner must participate in the same lock protocol before remote
 execution can be enabled. It is not a distributed lock or worker liveness
 attestation; no production service or remote dispatch was activated.
+
+### Worker eligibility prerequisite (not a heartbeat)
+
+`remote_worker_readiness.py` adds a fail-closed coordinator-side eligibility
+check: an active non-revoked token, a durably idle worker, no staged/unapplied
+result and an explicitly supplied fresh liveness verification are required.
+It does **not** establish liveness itself and must not be treated as a
+remote heartbeat or a substitute for a single atomic assignment transaction.
+The actual production tournament remains local-only; worker handshake,
+identity binding, and remote scheduling are pending.
