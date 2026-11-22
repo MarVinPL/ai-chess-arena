@@ -71,6 +71,34 @@ class DurableWorkerJobs:
             return 'unknown'
         return row[0]
 
+    def update_safety_snapshot(self, worker_id, *, max_idle_age_seconds=30):
+        """Coordinator-owned evidence: stale terminal state must not imply idle.
+
+        Return a snapshot only. This cannot reserve idle, block job assignment,
+        or authorize installation. A new assignment may begin immediately.
+        """
+        self._id(worker_id)
+        if type(max_idle_age_seconds) not in (int, float) or not 0 < max_idle_age_seconds <= 30:
+            raise ValueError('Invalid idle evidence lifetime')
+        with self._db() as db:
+            row = db.execute(
+                'SELECT state,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+        now = self.clock()
+        if not row:
+            return 'unknown', None
+        state, deadline, updated_at = row
+        if state == 'running':
+            return ('running', 1) if deadline is not None and deadline > now else ('unknown', None)
+        # Only a recently committed terminal result can prove idle. Never
+        # refresh an old DB row merely because a read-only API was called.
+        if state == 'idle_confirmed' and updated_at is not None and (
+            0 <= now - updated_at <= max_idle_age_seconds
+        ):
+            return 'idle_confirmed', 0
+        return 'unknown', None
+
     def recover_after_restart(self):
         """Invalidate every persisted idle/running claim on coordinator boot.
 
