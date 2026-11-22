@@ -8,8 +8,10 @@ import json
 import sqlite3
 import time
 
+import chess
+
 from remote_worker_jobs import DurableWorkerJobs
-from remote_worker_protocol import validate_job
+from remote_worker_protocol import validate_job, validate_result
 
 MAX_JOB_BYTES = 16_384
 
@@ -25,6 +27,12 @@ class WorkerInferenceDelivery:
                 job_id TEXT NOT NULL UNIQUE,
                 job_json TEXT NOT NULL,
                 created_at REAL NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_inference_results (
+                worker_id TEXT NOT NULL,
+                job_id TEXT PRIMARY KEY,
+                result_json TEXT NOT NULL,
+                received_at REAL NOT NULL
             )""")
 
     def assign_from_arena(self, worker_id, job):
@@ -109,3 +117,53 @@ class WorkerInferenceDelivery:
         if payload["job_id"] != row[0]:
             return {"state": "blocked"}
         return {"state": "assigned", "job": payload}
+
+    def submit_inference_result(self, worker_id, result):
+        """Validate a proposed UCI using Arena's authoritative FEN.
+
+        This stores only the result in Arena's database. Applying a move and
+        committing a chess checkpoint belong to the trusted tournament runner,
+        NOT this Worker HTTP endpoint. Duplicate acknowledgments are safe.
+        """
+        self.jobs._id(worker_id)
+        if not isinstance(result, dict):
+            raise ValueError("Invalid inference result")
+        now = self.clock()
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            self.jobs._reject_pending_pause(db, worker_id)
+            self.jobs._reject_pending_resume(db, worker_id)
+            row = db.execute(
+                "SELECT job_id,job_json FROM worker_inference_assignments WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            lease = db.execute(
+                "SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            if not row or not lease or lease[0] != row[0] or (
+                lease[1] != "running" or lease[2] is None or lease[2] <= now
+            ):
+                raise ValueError("Inference result has no valid execution lease")
+            job = validate_job(json.loads(row[1]))
+            if job["job_id"] != row[0]:
+                raise ValueError("Inference job was changed")
+            move = validate_result(result, job, chess.Board(job["fen"]))
+            canonical = json.dumps(
+                {"version": 1, "job_id": job["job_id"], "uci": move.uci()},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            )
+            existing = db.execute(
+                "SELECT worker_id,result_json FROM worker_inference_results WHERE job_id=?",
+                (job["job_id"],),
+            ).fetchone()
+            if existing:
+                if existing != (worker_id, canonical):
+                    raise ValueError("Conflicting inference result for same job")
+                return {"state": "already_received", "job_id": job["job_id"]}
+            db.execute(
+                "INSERT INTO worker_inference_results VALUES (?,?,?,?)",
+                (worker_id, job["job_id"], canonical, now),
+            )
+        return {"state": "received_not_applied", "job_id": job["job_id"]}
