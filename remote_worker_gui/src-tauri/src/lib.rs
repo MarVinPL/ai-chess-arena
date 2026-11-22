@@ -19,6 +19,47 @@ use std::time::Duration;
 const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
 const TOKEN_ACCOUNT: &str = "worker-token";
 
+// A pending coordinator hold requires the *original* machine token for
+// explicit authenticated release. Never let webview rotation/deletion orphan it.
+fn ensure_no_pending_update() -> Result<(), String> {
+    match android_update_recovery::load_pending() {
+        Ok(None) => Ok(()),
+        Ok(Some(_)) => Err(
+            "Trwa uzgadnianie rezerwacji aktualizacji. Nie zmieniaj tokenu Workera.".into()
+        ),
+        Err(_) => Err(
+            "Nie można ustalić stanu rezerwacji aktualizacji. Zmiana tokenu zablokowana.".into()
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct UpdateRecoveryStatus {
+    pending: bool,
+    blocked: bool,
+    message: &'static str,
+}
+
+/// Read-only diagnostic: neither hold secret, worker id nor server URL leaves
+/// Rust. Corrupt/unavailable keyring is displayed as BLOCKED, not empty.
+#[tauri::command]
+fn update_recovery_status() -> UpdateRecoveryStatus {
+    match android_update_recovery::load_pending() {
+        Ok(None) => UpdateRecoveryStatus {
+            pending: false, blocked: false,
+            message: "Brak oczekującej rezerwacji aktualizacji.",
+        },
+        Ok(Some(_)) => UpdateRecoveryStatus {
+            pending: true, blocked: true,
+            message: "Wykryto niezakończoną rezerwację. Przydziały pozostają zablokowane do uzgodnienia z koordynatorem.",
+        },
+        Err(_) => UpdateRecoveryStatus {
+            pending: false, blocked: true,
+            message: "Stan rezerwacji jest niedostępny lub uszkodzony. Aktualizacja i zmiana tokenu zablokowane.",
+        },
+    }
+}
+
 fn token_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
         .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
@@ -26,6 +67,7 @@ fn token_entry() -> Result<keyring::Entry, String> {
 
 #[tauri::command]
 fn store_worker_token(token: String) -> Result<(), String> {
+    ensure_no_pending_update()?;
     // Never return, log, or serialize the secret back to the frontend.
     if token.len() < 24 || token.len() > 512 || !token.is_ascii()
         || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
@@ -43,6 +85,7 @@ fn has_saved_worker_token() -> bool {
 
 #[tauri::command]
 fn forget_worker_token() -> Result<(), String> {
+    ensure_no_pending_update()?;
     let entry = token_entry()?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -406,7 +449,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
