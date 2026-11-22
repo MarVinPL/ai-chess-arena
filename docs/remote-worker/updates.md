@@ -182,3 +182,16 @@ closed. Recovery preserves staged results while invalidating worker idle claims.
 This is deliberately **not wired** to `WorkerSessions` or the live chess
 scheduler: result application, its acknowledgement, and recovery reconciliation
 still require an idempotent scheduler transaction before production use.
+
+### Atomic scheduler application adapter (prototype)
+
+`WorkerResultJournal.apply_atomically(job_id, callback)` executes a caller's
+scheduler-state update and the result acknowledgement inside **one SQLite
+transaction**. Replays after acknowledgement are no-ops; a callback failure
+rolls back both writes and leaves the result pending. The callback must write
+through the supplied SQLite connection only, perform no external side effects,
+and independently validate the job-to-game mapping and expected board state.
+Tests use a disposable `demo_moves` table, **not** the live tournament
+checkpoint. The actual chess runner still uses a separate checkpoint writer;
+production remote dispatch remains NO-GO until that writer and result journal
+are integrated transactionally and restart-tested.

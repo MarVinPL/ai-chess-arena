@@ -16,7 +16,7 @@ class WorkerResultJournal(DurableWorkerJobs):
             db.execute('''CREATE TABLE IF NOT EXISTS worker_result_journal (
                 job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL,
                 result_json TEXT NOT NULL, state TEXT NOT NULL
-                CHECK(state='pending_application'), created_at REAL NOT NULL)''')
+                CHECK(state IN ('pending_application','applied')), created_at REAL NOT NULL)''')
 
     def stage_validated(self, worker_id, job_id, result):
         """Only call after validating result against the assigned board/job.
@@ -53,3 +53,27 @@ class WorkerResultJournal(DurableWorkerJobs):
             rows = db.execute('''SELECT job_id,worker_id,result_json FROM worker_result_journal
                 WHERE state='pending_application' ORDER BY created_at,job_id''').fetchall()
         return [(job, worker, json.loads(payload)) for job, worker, payload in rows]
+
+    def apply_atomically(self, job_id, apply_in_transaction):
+        """Apply staged result and acknowledge it in the same SQLite transaction.
+
+        Callback receives (db, worker_id, result). It MUST use this connection
+        for all durable scheduler updates and avoid external side effects.
+        This adapter is not connected to the production tournament runner.
+        """
+        self._id(job_id)
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT worker_id,result_json,state FROM worker_result_journal WHERE job_id=?', (job_id,)).fetchone()
+            if row is None:
+                raise ValueError('Unknown staged result')
+            worker_id, payload, state = row
+            if state == 'applied':
+                return False
+            if state != 'pending_application':
+                raise ValueError('Invalid result state')
+            apply_in_transaction(db, worker_id, json.loads(payload))
+            updated = db.execute("UPDATE worker_result_journal SET state='applied' WHERE job_id=? AND state='pending_application'", (job_id,))
+            if updated.rowcount != 1:
+                raise ValueError('Result application race')
+            return True
