@@ -1,16 +1,8 @@
 name: Android Worker ARM64 APK
 
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'remote_worker_gui/**'
-      - '.github/workflows/android-worker-apk.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'remote_worker_gui/**'
-      - '.github/workflows/android-worker-apk.yml'
 
 permissions:
   contents: read
