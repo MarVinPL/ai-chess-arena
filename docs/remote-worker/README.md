@@ -132,3 +132,15 @@ Before production enablement: enforce TLS at the proxy, apply per-client and
 per-worker rate limits, test real HTTP integration and wire a native desktop
 HTTPS client. The endpoint is not a scheduler/job transport, and no production
 configuration was changed.
+
+### Desktop HTTPS token check (work in progress)
+
+The Tauri 2 UI includes a worker identifier and a **Sprawdź połączenie HTTPS**
+button. Its Rust command reads the previously stored token from the OS
+credential store and POSTs to `/api/remote-workers/authenticate` over HTTPS.
+It rejects non-HTTPS URLs, embedded credentials, non-root paths, custom ports,
+redirects, and malformed worker identifiers; it never returns the token to JS.
+This verifies credentials only: it does **not** start inference or connect to
+the tournament scheduler. Android credential storage and Android builds remain
+future work. Do not expose the server endpoint publicly until rate limiting,
+TLS proxy checks and HTTP integration tests are complete.

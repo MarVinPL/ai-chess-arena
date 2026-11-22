@@ -17,3 +17,6 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
