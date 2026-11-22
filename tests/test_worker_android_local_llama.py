@@ -65,3 +65,12 @@ def test_results_once_submitted_are_not_recomputed():
     assert 'SELECT 1 FROM worker_inference_results' in DELIVERY
     assert '"state": "awaiting_arena"' in DELIVERY
     assert '"awaiting_arena"' in COORD
+
+
+def test_phone_model_is_restricted_to_arenas_canonical_legal_moves():
+    assert 'job.get("legal_moves").and_then(Value::as_array)' in LOCAL
+    assert '"Legal UCI moves:' in LOCAL
+    assert 'request["grammar"] = json!(grammar)' in LOCAL
+    assert 'legal_moves.contains(&proposed.as_str())' in LOCAL
+    assert 'matches!((version, job.len()), (1, 6) | (2, 7))' in COORD
+    assert 'let legal = job.get("legal_moves").and_then(Value::as_array)' in COORD
