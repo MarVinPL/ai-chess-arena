@@ -657,3 +657,12 @@ HTTP runner integration test sends an authenticated heartbeat, confirms
 durable idle state, reserves the job, retrieves it over loopback HTTP,
 submits the move, and commits the checkpoint exactly once. Production
 `server.py` still selects the local runner; this is not a deployment.
+
+### Offline remote-worker failure matrix
+
+Regression coverage now checks a lost worker connection (stale heartbeat
+while a job remains reserved), heartbeat expiry before a new reservation,
+and coordinator restart followed by a fresh worker heartbeat. All scenarios
+fail closed: no duplicate job is created, existing checkpoint persists, and
+unknown jobs require manual reconciliation. These are deterministic SQLite
+failure simulations, not live process-kill or network partition tests.
