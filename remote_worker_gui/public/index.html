@@ -165,8 +165,10 @@ async function reconcileInstalledApkAtStartup(){
   const state=await invoke('reconcile_installed_worker_update');
   if(state==='installed_confirmed'){
    apkStatus.textContent='Android potwierdził zainstalowanie nowej wersji. Przerwaną partię można wznowić po uzgodnieniu z Areną.';
+  }else if(state==='installation_cancelled'){
+   apkStatus.textContent='Android potwierdził nieudaną lub anulowaną instalację. Oryginalna aplikacja działa; koordynator uzgodnił zwolnienie blokady.';
   }else if(state==='not_confirmed'){
-   apkStatus.textContent='Instalacja nie jest potwierdzona: uruchomiona wersja Workera nie jest wersją docelową.';
+   apkStatus.textContent='Instalacja nie jest potwierdzona: wynik Androida lub uruchomiona wersja Workera nie pozwala zakończyć aktualizacji.';
   }
  }catch(error){
   apkStatus.textContent='Nie udało się uzgodnić instalacji po uruchomieniu: '+String(error);
