@@ -351,3 +351,28 @@ def test_hold_reconciliation_is_read_only_and_never_exposes_secret_to_ui():
     assert "Rezerwacja wygasła, ale nadal blokuje przydziały" in ui
     assert "hold_token" not in ui
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+
+
+def test_android_package_installer_lifecycle_cannot_skip_user_consent_or_hold():
+    root = ROOT / "remote_worker_gui/src-tauri/src"
+    policy = (root / "android_update_install_state.rs").read_text(encoding="utf-8")
+    lib = (root / "lib.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert "mod android_update_install_state;" in lib
+    for required in (
+        "CoordinatorReserved", "SessionCreated", "SessionCommitted",
+        "AwaitingUserConsent", "ResultUnknown", "InstalledConfirmed",
+        "CancelledConfirmed", "FailedConfirmed",
+        "OsInstalledVersionAndSigningVerified",
+        "OsCancelledSessionVerified", "OsFailedSessionVerified",
+        "RestartWithoutConclusiveEvidence",
+        "coordinator_hold_valid", "sha256_matches",
+        "android_signature_matches", "version_increased", "os_permission",
+        "fn interrupted_installer_does_not_allow_hold_release_or_retry()",
+        "fn forged_and_out_of_order_events_cannot_skip_reservation()",
+    ):
+        assert required in policy
+    assert "may_request_hold_release(unknown)" in policy
+    assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
+    assert "install_worker_apk" not in lib
+    assert "install_worker_apk" not in ui
