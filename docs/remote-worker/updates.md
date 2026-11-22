@@ -545,3 +545,17 @@ execution and checkpoint writer, while making the future switch point visible
 and testable. The remote factory and remote enable flag are intentionally
 absent: remote mode cannot activate in production from this change. The
 single-writer ownership and full remote deployment remain pending.
+
+### Scoped remote game coordinator ownership
+
+`remote_worker_execution_session.py` adds an opt-in `RemoteGameSession`
+context manager that acquires the shared POSIX coordinator lock before
+selecting the remote runner and holds it until the game scope exits. The
+session fails closed unless remote execution is explicitly enabled and the
+worker is declared ready; no local fallback is constructed. Lock cleanup is
+verified for selection errors, runner factory failures and game exceptions.
+This is an offline integration building block only: production `server.py`
+continues to select the local runner. The lock is advisory, so every
+checkpoint-writing coordinator must participate before remote execution
+can safely be enabled. Remote worker liveness attestation and recovery
+of unknown in-flight jobs are not implemented by this session.
