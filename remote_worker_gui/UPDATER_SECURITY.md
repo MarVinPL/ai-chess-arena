@@ -433,3 +433,31 @@ obowiązujące, a instalator nadal wyłączony.
 W szczególności nie wolno "upraszczać" aktualizacji przez zakończenie
 running job w bazie bez potwierdzenia zatrzymania Workera i zapisu
 checkpointu. Sam timeout lub odłączenie urządzenia nie wystarczają.
+
+## 2026-11-22 — trwałe żądanie przerwania zadania
+
+`remote_worker_update_pause.py` wprowadza trwały koordynatorowy
+rejestr `worker_update_pause_requests` z `request_id`, `job_id`,
+`worker_id` i fazami `requested` / `acknowledged`.
+Żądanie może być zapisane wyłącznie dla faktycznie aktywnego,
+niewygasłego zadania, atomowo w SQLite (`BEGIN IMMEDIATE`), i
+przetrwa restart koordynatora. Druga prośba i ACK dla innego
+zadania/request_id są odrzucane.
+
+`acknowledge` wymaga od przyszłej, zaufanej integracji wykonawcy
+**dwóch oddzielnych dowodów:** Worker faktycznie zatrzymał inference
+oraz checkpoint został zweryfikowany i trwale zapisany. Zbyt późny
+ACK po wygaśnięciu lease jest odrzucany. To wyłącznie rejestr
+protokołu — **nie ma jeszcze transportu STOP/ACK ani rzeczywistego
+checkpointu zdalnego wykonawcy**. Dlatego nawet faza
+`acknowledged` **NIE zmienia** wpisu `worker_job_safety` z
+`running` na `idle_confirmed` i nie pozwala uzyskać rezerwacji
+aktualizacji. Trzeba dopiero w jednej transakcji uzgodnić trwały
+checkpoint, zwolnienie dzierżawy bieżącego wykonawcy i oddzielną
+blokadę przydziału dla aktualizacji.
+
+Dzięki temu użytkownik może żądać aktualizacji także podczas
+aktywnego zadania — wykonawca zatrzyma się przy najbliższym
+bezpiecznym punkcie i po restarcie wznowi od checkpointu albo
+rozpocznie to zadanie od nowa. W obecnym prototypie nie wolno
+deklarować, że przerwanie lub wznowienie już działa.
