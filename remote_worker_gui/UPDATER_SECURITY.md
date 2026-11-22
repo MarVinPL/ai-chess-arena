@@ -38,3 +38,23 @@ fizycznym Androidzie.
 Branch PR #197 jest starszą gałęzią zależną od #195; przy integracji z
 bieżącym Workerem należy rozstrzygnąć różnice w GUI i release channels.
 Nie deklarować kompletnej instalacji ani PASS bez uruchomienia Rust/Android CI.
+
+## 2026-11-22 — zgodność ze współczesnym workflow Android
+
+Workflow `android-worker-apk.yml` został ujednolicony z przetestowanym
+wariantem z `main`: `actions/checkout@v7`, `setup-node@v7`,
+`setup-java@v6`, `upload-artifact@v7`, oficjalny Android CLI 22.0
+ze sprawdzanym SHA-256, Android 16 API 36 i NDK 27.2.12479018.
+Nie używa `sdkmanager`. Wersja `setup-python@v7` jest również
+zapisana w `python-tests.yml`; w repozytorium została dopuszczona do
+allowlisty.
+
+Walidator wybiera **tylko stabilne wydania** `worker-vX.Y.Z`
+(`draft=false`, `prerelease=false`). Testy regresyjne sprawdzają
+również odrzucenie brakujących flag oraz tagów `-rc` i innych
+niekanonicznych wersji. Istniejący kanał GUI Pre-release służy
+wyłącznie do odczytu informacji o wydaniu; jego obsługa przez
+instalator jest osobnym zagadnieniem i **nie jest włączona**.
+
+Powyższe zmiany nie przesądzają wyniku CI gałęzi #197, która jest
+stacked PR z bazą #195, ani nie upoważniają do instalacji APK.
