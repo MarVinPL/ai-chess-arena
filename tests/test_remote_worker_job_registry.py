@@ -166,3 +166,42 @@ def test_recovery_prevents_late_completion(tmp_path):
     with pytest.raises(ValueError):
         jobs.complete('worker_12345678', 'job_12345678')
     assert WorkerJobRegistry(path, clock=lambda: 100).state('worker_12345678') == 'unknown'
+
+
+def test_api_and_scheduler_concurrent_assignments_are_serialized(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'jobs.sqlite'
+    worker = 'worker_12345678'
+    clock = lambda: 100
+    initial = DurableWorkerJobs(path, clock=clock)
+    initial.assign(worker, 'job_00000000', timeout_seconds=30)
+    initial.complete(worker, 'job_00000000')
+
+    def attempt(i):
+        try:
+            if i % 2:
+                WorkerJobRegistry(path, clock=clock).record_assignment(
+                    worker, f'job_{i:08d}', deadline=130)
+            else:
+                DurableWorkerJobs(path, clock=clock).assign(
+                    worker, f'job_{i:08d}', timeout_seconds=30)
+            return True
+        except ValueError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(pool.map(attempt, range(1, 13)))
+    assert sum(results) == 1
+    assert WorkerJobRegistry(path, clock=clock).state(worker) == 'running'
+
+
+def test_restart_rejects_late_result_from_previous_coordinator(tmp_path):
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'jobs.sqlite'
+    jobs = DurableWorkerJobs(path, clock=lambda: 100)
+    jobs.assign('worker_12345678', 'job_12345678', timeout_seconds=30)
+    WorkerJobRegistry(path, clock=lambda: 110).recover_after_restart()
+    with pytest.raises(ValueError):
+        jobs.complete('worker_12345678', 'job_12345678')
+    assert WorkerJobRegistry(path, clock=lambda: 110).state('worker_12345678') == 'unknown'

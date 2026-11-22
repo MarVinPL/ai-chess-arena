@@ -121,3 +121,12 @@ processes are not fenced by an ownership epoch or exclusive process lease.
 A second coordinator boot could invalidate another coordinator's active work.
 Do not enable remote execution or updater installation until process ownership,
 job reconciliation and durable result commit are designed and tested.
+
+Review regression tests verify that concurrent assignments through the API
+facade and the scheduler registry serialize to exactly one accepted job, and
+that coordinator restart invalidates late completion of a pre-restart job.
+**Deployment limitation:** SQLite transaction serialization does not enforce
+single-coordinator ownership. A second coordinator process restarting while
+another serves traffic could invalidate live claims; no distributed lease or
+leader election is implemented. Keep remote job dispatch disabled until
+single-writer process ownership and reconciliation are designed and tested.
