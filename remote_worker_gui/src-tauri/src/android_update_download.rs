@@ -168,6 +168,14 @@ pub(crate) async fn stage_candidate(
 mod tests {
     use super::*;
     #[test]
+    fn only_one_staging_transfer_can_hold_the_lock() {
+        let first = DownloadSlot::acquire().unwrap();
+        assert!(DownloadSlot::acquire().is_err());
+        drop(first);
+        assert!(DownloadSlot::acquire().is_ok());
+    }
+
+    #[test]
     fn redirect_restrictions_reject_insecure_or_non_github_destinations() {
         for raw in [
             "http://release-assets.githubusercontent.com/a",
