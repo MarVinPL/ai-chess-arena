@@ -150,3 +150,23 @@ Multiprocess tests verify rejection and acquisition after exit. This only
 protects cooperating processes on one host/local filesystem: it is not a
 cross-host fencing token, does not repair orphaned jobs, and does not make
 remote execution or updater installation production-ready.
+
+### Crash-recovery and result-commit audit (NO-GO)
+
+The canonical `worker_job_safety` table persists only worker/job IDs, state,
+lease deadline and update time. `WorkerSessions.accept()` validates a UCI move,
+then commits `idle_confirmed` through `DurableWorkerJobs.complete()` before
+returning the move to its caller. A crash between these operations loses the
+accepted move: neither the FEN, result payload nor scheduler application is
+committed in the same SQLite transaction. `WorkerMetrics` writes a separate,
+best-effort table and cannot serve as a replayable result log. Restart recovery
+intentionally invalidates claims but cannot reconstruct lost moves. The live
+server has no `WorkerSessions` scheduler integration.
+
+Required before production remote chess jobs: a coordinator-owned durable
+assignment/result journal, atomic transition from validated result to
+replayable pending-application state, idempotent scheduler application with a
+stable job ID, and crash/restart tests at every transaction boundary. The
+local `flock` prevents concurrent cooperating server processes on one host,
+but does not supply distributed fencing. Update installation and remote job
+dispatch remain disabled until these conditions are verified.
