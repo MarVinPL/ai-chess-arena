@@ -575,18 +575,16 @@ class TournamentPreflightError(RuntimeError):
 def tournament_preflight(tournament_id):
     """Check metadata, license decision, and runtime; local weights are lazy-cached."""
     entries = league.tournament_entry_status(tournament_id)
-    try:
-        sync = model_allowlist.check_repository_sync(ROOT)
-        if not sync.get('in_sync'):
-            raise model_allowlist.AllowlistError(
-                'allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
-        admission = {item['model_id']: item for item in model_allowlist.load_allowlist()['models']}
-        allowlist_error = None
-    except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
-        admission = {}
-        allowlist_error = str(exc)
     with league.connect() as connection:
-        tournament = connection.execute('SELECT format FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
+        try:
+            admission = {item['model_id']: item for item in
+                         model_allowlist.load_allowlist(connection)['models']}
+            allowlist_error = None
+        except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
+            admission = {}
+            allowlist_error = str(exc)
+        tournament = connection.execute('SELECT format FROM tournaments WHERE id=?',
+                                         (tournament_id,)).fetchone()
     tournament_format = tournament['format'] if tournament else ''
     # The VPS needs Llamafile only for local model execution. Explicitly
     # selected phone mode requires a freshly ready on-device model for every
@@ -1649,9 +1647,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(exc)}, 503)
         elif path == '/api/model-admission':
             try:
-                sync = model_allowlist.check_repository_sync(ROOT)
-                if not sync.get('in_sync'):
-                    raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
                 with league.connect() as c:
                     self.send_json(model_admission.list_decisions(c))
             except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
@@ -2168,31 +2163,23 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         hf_candidate_audit.AUDIT_LOCK.release()
                 elif path == '/api/model-review-submissions/action':
-                    sync = model_allowlist.check_repository_sync(ROOT)
-                    if not sync.get('in_sync'):
-                        raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
-                    current_allowlist = model_allowlist.load_allowlist()
-                    allowed_ids = {item['model_id'] for item in current_allowlist['models'] if item.get('status') not in {'blocked'}}
-                    allowed_ids.discard(6)
                     with league.connect() as c:
+                        allowed_ids = {
+                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
+                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
+                        }
                         result = model_review_submissions.apply_action(
                             c, submission_id=payload.get('submission_id'), action=payload.get('action'),
                             actor='arena', reason=payload.get('reason', ''), payload=payload.get('proposal'),
                             allowed_model_ids=allowed_ids)
                 elif path == '/api/model-review-submissions':
-                    sync = model_allowlist.check_repository_sync(ROOT)
-                    if not sync.get('in_sync'):
-                        raise model_allowlist.AllowlistError('Allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
-                    current_allowlist = model_allowlist.load_allowlist()
-                    allowed_ids = {item['model_id'] for item in current_allowlist['models'] if item.get('status') not in {'blocked'}}
-                    # Bielik v3 Terms require users to be at least 18; do not expose a review action for it here.
-                    allowed_ids.discard(6)
                     with league.connect() as c:
+                        allowed_ids = {
+                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
+                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
+                        }
                         result = model_review_submissions.submit(c, payload, allowed_model_ids=allowed_ids)
                 elif path in ('/api/model-admission/admit','/api/model-admission/revoke'):
-                    sync = model_allowlist.check_repository_sync(ROOT)
-                    if not sync.get('in_sync'):
-                        raise model_allowlist.AllowlistError('allowlista nie pochodzi z czystego, zsynchronizowanego origin/main')
                     with league.connect() as c:
                         result = model_admission.apply_decision(
                             c, model_id=int(payload.get('model_id', 0)),

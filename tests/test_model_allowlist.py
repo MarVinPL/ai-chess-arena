@@ -1,235 +1,106 @@
-import copy
+"""DB-only allowlist: fail closed on a missing/revoked/stale decision."""
 import json
-import subprocess
-import tempfile
+import sqlite3
 import unittest
-from pathlib import Path
 
-from model_allowlist import (
-    AllowlistError, check_allowlist_sync, compare_allowlists, is_runtime_ready,
-    load_allowlist, validate_allowlist, check_repository_sync, tournament_admission_blockers,
-)
-from model_manifest import load_manifest
+from model_allowlist import load_allowlist, tournament_admission_blockers, is_runtime_ready
 
 
-class ModelAllowlistTests(unittest.TestCase):
+class DatabaseAllowlistTests(unittest.TestCase):
     def setUp(self):
-        self.allowlist = load_allowlist()
-        self.manifest = load_manifest()
+        self.db = sqlite3.connect(':memory:')
+        self.db.executescript('''
+            CREATE TABLE league_models(id INTEGER PRIMARY KEY,name TEXT,active INTEGER,format TEXT);
+            CREATE TABLE model_versions(id INTEGER PRIMARY KEY,model_id INTEGER,license TEXT,
+                license_verified INTEGER,filename TEXT,sha256 TEXT,size_bytes INTEGER,
+                source TEXT,metadata_json TEXT);
+            CREATE TABLE model_admission_decisions(model_id INTEGER PRIMARY KEY,status TEXT,
+                repo_id TEXT,revision TEXT,snapshot_json TEXT);
+        ''')
+        self.revision = 'a' * 40
+        self.repo = 'org/testmodel'
+        self.src = 'https://huggingface.co/' + self.repo
+        self.metadata = {'repo_id': self.repo, 'revision': self.revision,
+                         'download_url': self.src + '/resolve/' + self.revision + '/test.gguf'}
+        self.snapshot = {'model_id': 1, 'repo_id': self.repo, 'revision': self.revision,
+                         'status': 'eligible', 'admission_scope': ['PURE_AI'],
+                         'license': 'apache-2.0', 'technical_readiness': 'not_evaluated',
+                         'technical_blockers': ['history: not evaluated']}
+        self.db.execute("INSERT INTO league_models VALUES(1,'Example model',1,'PURE_AI')")
+        self.db.execute("INSERT INTO model_versions VALUES(1,1,'apache-2.0',1,'test.gguf',?,1024,?,?)",
+                        ('b'*64,self.src,json.dumps(self.metadata)))
+        self.db.execute("INSERT INTO model_admission_decisions VALUES(1,'admitted',?,?,?)",
+                        (self.repo,self.revision,json.dumps(self.snapshot)))
+        self.db.commit()
 
-    def test_checked_in_allowlist_is_complete_and_non_activating(self):
-        validate_allowlist(self.allowlist, self.manifest)
-        self.assertEqual(len(self.allowlist['models']), len(self.manifest['models']))
-        for item in self.allowlist['models']:
-            self.assertEqual(item['admission_scope'], ['PURE_AI'])
-            self.assertEqual(item['owner_admission'], 'issue-259-2026-11-22')
-            self.assertTrue(item['license_requirements']['license_verified_required'])
-            self.assertEqual(item['technical_readiness'], 'not_evaluated')
-            self.assertIn(item['status'], {'eligible', 'restricted'})
-            self.assertIsNone(item['block_reason'])
-        self.assertEqual([x['model_id'] for x in self.allowlist['models']], list(range(1, 9)))
-        self.assertFalse({9, 10} & {x['model_id'] for x in self.allowlist['models']})
+    def tearDown(self):
+        self.db.close()
 
-    def test_owner_decision_is_restricted_to_exact_pinned_revisions(self):
-        for field, value in (('revision', '0' * 40),
-                             ('repo_id', 'wrong/model'),
-                             ('owner_admission', 'unapproved-override')):
-            broken = copy.deepcopy(self.allowlist)
-            broken['models'][1][field] = value
-            with self.subTest(field=field), self.assertRaises(AllowlistError):
-                validate_allowlist(broken, self.manifest)
+    def entries(self):
+        return load_allowlist(self.db)['models']
 
-    def test_qualified_manifest_audit_status_is_preserved(self):
-        self.assertEqual(self.manifest['models'][1]['license_review_status'], 'review_required')
-        self.assertEqual(self.allowlist['models'][1]['technical_readiness'], 'not_evaluated')
-        self.assertEqual(self.allowlist['models'][5]['status'], 'restricted')
-        self.assertTrue(any('18' in restriction for restriction in self.allowlist['models'][5]['restrictions']))
+    def test_only_sqlite_is_read_even_without_git_checkout_or_json(self):
+        entry = self.entries()[0]
+        self.assertEqual(entry['status'], 'eligible')
+        self.assertEqual(entry['decision_status'], 'admitted')
+        self.assertEqual(entry['admission_scope'], ['PURE_AI'])
+        self.assertEqual(load_allowlist(self.db)['source'], 'sqlite')
+        self.assertIsNone(entry['block_reason'])
 
-    def test_revision_mismatch_is_rejected(self):
-        broken = copy.deepcopy(self.allowlist)
-        broken['models'][0]['revision'] = '0' * 40
+    def test_missing_decision_cannot_appear_in_allowlist(self):
+        self.db.execute("DELETE FROM model_admission_decisions")
+        self.assertEqual(self.entries(), [])
+        self.assertTrue(tournament_admission_blockers(
+            None, model_id=1, repo_id=self.repo, revision=self.revision,
+            license_name='apache-2.0',license_verified=True,tournament_format='PURE_AI'))
+
+    def test_revoke_blocks_without_deleting_audit(self):
+        self.db.execute("UPDATE model_admission_decisions SET status='revoked'")
+        entry=self.entries()[0]
+        self.assertEqual(entry['status'], 'blocked')
+        self.assertTrue(entry['block_reason'])
+        self.assertTrue(entry['can_restore'])
+
+    def test_version_pin_change_blocks_even_if_db_decision_still_admitted(self):
+        self.metadata['revision'] = 'c' * 40
+        self.db.execute("UPDATE model_versions SET metadata_json=?", (json.dumps(self.metadata),))
+        entry = self.entries()[0]
+        self.assertEqual(entry['status'], 'blocked')
+        self.assertIn('rewizja', entry['block_reason'])
+
+    def test_unverified_license_blocks_without_changing_admission_decision(self):
+        self.db.execute("UPDATE model_versions SET license_verified=0")
+        self.assertEqual(self.entries()[0]['status'], 'blocked')
+
+    def test_mismatched_snapshot_identity_blocks(self):
+        self.snapshot['revision'] = 'c' * 40
+        self.db.execute("UPDATE model_admission_decisions SET snapshot_json=?", (json.dumps(self.snapshot),))
+        self.assertEqual(self.entries()[0]['status'], 'blocked')
+
+    def test_corrupt_json_fails_closed(self):
+        self.db.execute("UPDATE model_admission_decisions SET snapshot_json='broken'")
+        from model_allowlist import AllowlistError
         with self.assertRaises(AllowlistError):
-            validate_allowlist(broken, self.manifest)
+            self.entries()
 
-    def test_duplicate_model_or_repository_is_rejected(self):
-        for field in ('model_id', 'repo_id'):
-            broken = copy.deepcopy(self.allowlist)
-            broken['models'][1][field] = broken['models'][0][field]
-            with self.subTest(field=field), self.assertRaises(AllowlistError):
-                validate_allowlist(broken, self.manifest)
+    def test_tournament_accepts_database_admission_without_runtime_pass(self):
+        entry=self.entries()[0]
+        kwargs={'model_id':1,'repo_id':self.repo,'revision':self.revision,
+                'license_name':'apache-2.0','license_verified':True,'tournament_format':'PURE_AI'}
+        self.assertEqual(tournament_admission_blockers(entry, **kwargs), [])
+        self.assertTrue(tournament_admission_blockers(entry, **{**kwargs, 'revision': 'f'*40}))
+        self.assertTrue(tournament_admission_blockers(entry, **{**kwargs, 'license_verified':False}))
+        self.assertFalse(is_runtime_ready(entry, license_verified=True,
+                                           local_file_verified=True,runtime_healthy=True))
 
-    def test_missing_entry_or_evidence_is_rejected(self):
-        missing = copy.deepcopy(self.allowlist)
-        missing['models'].pop()
-        with self.assertRaises(AllowlistError):
-            validate_allowlist(missing, self.manifest)
-        no_evidence = copy.deepcopy(self.allowlist)
-        no_evidence['models'][0]['evidence'] = []
-        with self.assertRaises(AllowlistError):
-            validate_allowlist(no_evidence, self.manifest)
-
-    def test_eligible_and_restricted_decisions_require_matching_audit_status(self):
-        approved = copy.deepcopy(self.allowlist)
-        eligible = approved['models'][0]
-        eligible['status'] = 'eligible'
-        eligible['admission_scope'] = ['PURE_AI']
-        eligible['block_reason'] = None
-        restricted = approved['models'][5]
-        restricted['status'] = 'restricted'
-        restricted['admission_scope'] = ['PURE_AI']
-        restricted['block_reason'] = None
-        restricted['restrictions'] = ['Licencja ma dodatkowe warunki.']
-        restricted['license_requirements']['obligations'] = ['Wymagane spełnienie warunków licencji.']
-        validate_allowlist(approved, self.manifest)
-
-    def test_unreviewed_model_cannot_be_marked_eligible_or_restricted(self):
-        for status in ('eligible', 'restricted'):
-            broken = copy.deepcopy(self.allowlist)
-            item = broken['models'][1]  # Manifest review_required cannot be promoted without owner decision.
-            item.pop('owner_admission')
-            item['status'] = status
-            item['admission_scope'] = ['PURE_AI']
-            item['block_reason'] = None
-            item['restrictions'] = ['review'] if status == 'restricted' else []
-            if status == 'restricted':
-                item['license_requirements']['obligations'] = ['restriction']
-            with self.subTest(status=status), self.assertRaises(AllowlistError):
-                validate_allowlist(broken, self.manifest)
-
-    def test_removed_oversized_models_are_absent_from_active_allowlist(self):
-        repos = {item['repo_id'] for item in self.allowlist['models']}
-        self.assertNotIn('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF', repos)
-        self.assertNotIn('mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF', repos)
-        validate_allowlist(self.allowlist, self.manifest)
-
-    def test_add_update_and_withdrawal_are_explicit_diffs(self):
-        previous = {'models': [copy.deepcopy(self.allowlist['models'][0]),
-                               copy.deepcopy(self.allowlist['models'][1])]}
-        current = {'models': [copy.deepcopy(previous['models'][0]),
-                              copy.deepcopy(previous['models'][1]),
-                              {'model_id': 11, 'status': 'review_required'}]}
-        current['models'][1]['block_reason'] = 'Updated review reason'
-        delta = compare_allowlists(previous, current)
-        self.assertEqual(delta, {'added': [11], 'updated': [2], 'withdrawn': []})
-        withdrawn = {'models': [copy.deepcopy(current['models'][0])]}
-        self.assertEqual(compare_allowlists(current, withdrawn),
-                         {'added': [], 'updated': [], 'withdrawn': [2, 11]})
-
-    def test_withdrawal_of_admission_is_a_blocked_status(self):
-        withdrawn = copy.deepcopy(self.allowlist)
-        item = withdrawn['models'][0]
-        item['status'] = 'blocked'
-        item.pop('owner_admission')
-        item['admission_scope'] = []
-        item['block_reason'] = 'Wycofano decyzję; wymaga ponownego przeglądu.'
-        validate_allowlist(withdrawn, self.manifest)
-
-    def test_allowlist_decision_does_not_automatically_mean_runtime_ready(self):
-        candidate = copy.deepcopy(self.allowlist['models'][0])
-        candidate['status'] = 'eligible'
-        candidate['admission_scope'] = ['PURE_AI']
-        candidate['block_reason'] = None
-        validate_allowlist({**self.allowlist, 'models': [candidate] + self.allowlist['models'][1:]}, self.manifest)
-        self.assertFalse(is_runtime_ready(candidate, license_verified=True,
-                                          local_file_verified=True, runtime_healthy=True))
-        candidate['technical_readiness'] = 'ready'
-        candidate['technical_blockers'] = []
-        self.assertTrue(is_runtime_ready(candidate, license_verified=True,
-                                         local_file_verified=True, runtime_healthy=True))
-        self.assertFalse(is_runtime_ready(candidate, license_verified=False,
-                                          local_file_verified=True, runtime_healthy=True))
-
-    def test_tournament_admission_requires_allowlist_license_and_exact_version(self):
-        candidate = copy.deepcopy(self.allowlist['models'][0])
-        candidate.update(status='eligible', admission_scope=['PURE_AI'],
-                         block_reason=None, technical_readiness='ready',
-                         technical_blockers=[])
-        args = dict(model_id=1, repo_id=candidate['repo_id'],
-                    revision=candidate['revision'], license_name='Apache-2.0',
-                    license_verified=True, tournament_format='PURE_AI')
-        self.assertEqual(tournament_admission_blockers(candidate, **args), [])
-        self.assertTrue(tournament_admission_blockers(
-            {**candidate, 'status': 'review_required', 'admission_scope': []}, **args))
-        # Explicit owner admission skips the *repeat pre-qualification* test.
-        self.assertEqual(tournament_admission_blockers(
-            {**candidate, 'technical_readiness': 'not_evaluated',
-             'technical_blockers': ['No recent runtime test']}, **args), [])
-        self.assertTrue(tournament_admission_blockers(
-            {**candidate, 'owner_admission': None,
-             'technical_readiness': 'not_evaluated'}, **args))
-        self.assertTrue(tournament_admission_blockers(
-            candidate, **{**args, 'revision': '0' * 40}))
-        self.assertTrue(tournament_admission_blockers(
-            candidate, **{**args, 'repo_id': 'other/model'}))
-        self.assertTrue(tournament_admission_blockers(
-            candidate, **{**args, 'license_verified': False}))
-        self.assertTrue(tournament_admission_blockers(
-            candidate, **{**args, 'tournament_format': 'AI_ENGINE'}))
-
-    def test_exact_repository_exclusion_is_independent_of_manifest_id(self):
-        args = dict(revision='a' * 40, license_name='Apache-2.0',
-                    license_verified=True, tournament_format='PURE_AI')
-        self.assertTrue(tournament_admission_blockers(None, model_id=11,
-            repo_id='repo/model', **args))
-        eligible = {'model_id': 9, 'status': 'eligible',
-                    'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready',
-                    'technical_blockers': [], 'repo_id': 'repo/model',
-                    'revision': 'a' * 40, 'license_requirements': {'manifest_license': 'Apache-2.0'}}
-        self.assertEqual(tournament_admission_blockers(eligible, model_id=9,
-            repo_id='repo/model', **args), [])
-        for repo in ('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
-                     'mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF'):
-            self.assertTrue(tournament_admission_blockers(eligible, model_id=123,
-                repo_id=repo, **args))
-
-    def test_sync_check_detects_stale_and_dirty_consumer_without_mutating(self):
-        commit = 'a' * 40
-        self.assertTrue(check_allowlist_sync(commit, commit, True)['in_sync'])
-        stale = check_allowlist_sync('b' * 40, commit, True)
-        dirty = check_allowlist_sync(commit, commit, False)
-        self.assertFalse(stale['in_sync'])
-        self.assertFalse(dirty['in_sync'])
-        self.assertFalse(stale['mutated'])
-        self.assertFalse(dirty['mutated'])
-
-    def test_repository_sync_check_is_read_only_and_detects_dirty_or_stale_checkout(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subprocess.run(['git', 'init', '-b', 'main', str(root)], check=True, capture_output=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
-            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
-            target = root / 'manifests' / 'model-allowlist.json'
-            target.parent.mkdir()
-            target.write_text('{}\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'manifests/model-allowlist.json'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-m', 'initial'], check=True, capture_output=True)
-            head = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
-            subprocess.run(['git', '-C', str(root), 'update-ref', 'refs/remotes/origin/main', head], check=True)
-            self.assertTrue(check_repository_sync(root)['in_sync'])
-            target.write_text('{"local":true}\n', encoding='utf-8')
-            before = target.read_text(encoding='utf-8')
-            dirty = check_repository_sync(root)
-            self.assertFalse(dirty['in_sync'])
-            self.assertEqual(target.read_text(encoding='utf-8'), before)
-            target.write_text('{}\n', encoding='utf-8')
-            (root / 'other.txt').write_text('new commit\n', encoding='utf-8')
-            subprocess.run(['git', '-C', str(root), 'add', 'other.txt'], check=True)
-            subprocess.run(['git', '-C', str(root), 'commit', '-m', 'advance local'], check=True, capture_output=True)
-            stale = check_repository_sync(root)
-            self.assertFalse(stale['in_sync'])
-            self.assertFalse(stale['mutated'])
-
-    def test_load_rejects_invalid_json_and_missing_source_manifest(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'bad.json'
-            path.write_text('{broken', encoding='utf-8')
-            with self.assertRaises(AllowlistError):
-                load_allowlist(path, Path(tmp) / 'manifest.json')
-        broken = copy.deepcopy(self.allowlist)
-        broken['source_manifest'] = 'somewhere-else.json'
-        with self.assertRaises(AllowlistError):
-            validate_allowlist(broken, self.manifest)
+    def test_restricted_terms_stay_in_snapshot(self):
+        self.snapshot['status']='restricted'
+        self.snapshot['restrictions']=['Tylko użycie zgodne z warunkami licencji']
+        self.db.execute("UPDATE model_admission_decisions SET snapshot_json=?", (json.dumps(self.snapshot),))
+        entry=self.entries()[0]
+        self.assertEqual(entry['status'],'restricted')
+        self.assertEqual(entry['restrictions'],self.snapshot['restrictions'])
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()

@@ -40,3 +40,7 @@ Dokument utrwala **decyzję właściciela**. Zgodność kodu aplikacji, lokalnej
 - `docs/model-audit/smollm2-360m-provenance-2026-11-16.md`
 - `docs/model-license-qualification-policy.md`
 - `manifests/huggingface-models.json` wraz z dowodami `license_audit.evidence`
+
+## Aktualizacja #266: autorytatywna baza
+
+Lista dopuszczonych wersji modeli pochodzi teraz z SQLite, z model_admission_decisions oraz przypiętych model_versions. Poprzedni plik allowlisty został usunięty z kodu wykonywalnego, a z Gitem nie wykonuje się żadnej blokującej kontroli synchronizacji. Decyzje, ograniczenia i historia pozostają zapisane w bazie. Wzmianki o dawnym pliku powyżej są wyłącznie historyczne.
