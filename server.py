@@ -761,6 +761,14 @@ def _exclusive_tournament_coordinator(run):
 
     @wraps(run)
     def locked_run(*args, **kwargs):
+        # The main server already holds the same flock for its lifetime.
+        # flock on a second descriptor would conflict even in this process.
+        process_lock = globals().get('_coordinator_lock')
+        if process_lock is not None:
+            if process_lock._fd is None:
+                raise RuntimeError('Process coordinator lock was released')
+            return run(*args, **kwargs)
+        # Direct invocation (tests/CLI) still requires exclusive ownership.
         with CoordinatorLock(DB):
             return run(*args, **kwargs)
     return locked_run

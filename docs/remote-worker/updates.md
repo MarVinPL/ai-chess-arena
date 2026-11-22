@@ -580,3 +580,12 @@ It does **not** establish liveness itself and must not be treated as a
 remote heartbeat or a substitute for a single atomic assignment transaction.
 The actual production tournament remains local-only; worker handshake,
 identity binding, and remote scheduling are pending.
+
+### Process/tournament coordinator lock nesting
+
+The production server acquires `CoordinatorLock(DB)` at startup and retains
+it for its lifetime. The decorated tournament loop must reuse that ownership:
+trying to acquire a second `flock` on a different file descriptor would fail
+against the server's own lock. Direct invocations without the startup owner
+still acquire their own scoped lock. A regression test checks this distinction.
+No remote mode is enabled by this change.
