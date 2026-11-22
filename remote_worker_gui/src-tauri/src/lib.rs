@@ -115,22 +115,27 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(8))
         .build().map_err(|_| "Błąd klienta HTTPS")?;
-    let response = client.get("https://api.github.com/repos/MarVinPL/ai-chess-arena/releases/latest")
+    // The repository also publishes non-Worker releases. Inspect a bounded
+    // list rather than GitHub's /latest, which may belong to the server.
+    let response = client.get("https://api.github.com/repos/MarVinPL/ai-chess-arena/releases?per_page=100")
         .header(reqwest::header::USER_AGENT, "ai-chess-arena-worker-update-check")
         .send().await.map_err(|_| "Nie udało się sprawdzić wydań")?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
-    }
-    if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniu".into()); }
-    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydania")?;
-    let tag = data.get("tag_name").and_then(|v| v.as_str()).ok_or("Brak numeru wersji wydania")?;
-    // Arena releases may belong to the server or other components.
-    // Only dedicated worker-vX.Y.Z releases are eligible for worker notices.
-    let Some(worker_tag) = tag.strip_prefix("worker-v") else {
+    if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniach".into()); }
+    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydań")?;
+    let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
+    let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
+    let candidate = releases.iter()
+        .filter(|release| release.get("draft").and_then(|v| v.as_bool()) == Some(false)
+            && release.get("prerelease").and_then(|v| v.as_bool()) == Some(false))
+        .filter_map(|release| {
+            let tag = release.get("tag_name")?.as_str()?;
+            let version = numeric_version(tag.strip_prefix("worker-v")?)?;
+            Some((version, tag, release))
+        })
+        .max_by_key(|(version, _, _)| *version);
+    let Some((latest, tag, data)) = candidate else {
         return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
     };
-    let latest = numeric_version(worker_tag).ok_or("Nieobsługiwany format wersji Workera")?;
-    let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
     let notes = data.get("html_url").and_then(|v| v.as_str())
         .and_then(|raw| reqwest::Url::parse(raw).ok())
         .filter(|url| url.scheme() == "https" && url.host_str() == Some("github.com")
