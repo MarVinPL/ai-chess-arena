@@ -155,7 +155,10 @@ if(updateToggle.checked && window.__TAURI__?.core?.invoke){
 }
 const tokenMessage=document.getElementById('backendStatus');
 let verifiedJobPreviewConnection=null;
+let connectionRevision=0;
+let checkingConnection=false;
 function invalidateJobPreview(){
+ connectionRevision++;
  verifiedJobPreviewConnection=null;
  document.getElementById('previewJob').disabled=true;
 }
@@ -175,6 +178,7 @@ document.getElementById('saveToken').addEventListener('click',async()=>{
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
   if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
+  invalidateJobPreview(); // Invalidate any pending HTTPS verification before changing the secret.
   try {
     await invoke('store_worker_token',{token:field.value});
     field.value='';
@@ -185,6 +189,7 @@ document.getElementById('saveToken').addEventListener('click',async()=>{
 document.getElementById('forgetToken').addEventListener('click',async()=>{
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke){tokenMessage.textContent='Usuwanie tokenu wymaga aplikacji desktopowej.';return;}
+  invalidateJobPreview(); // Pending HTTPS checks must never restore an authenticated preview.
   try{
     await invoke('forget_worker_token');
     document.getElementById('code').value='';
@@ -198,18 +203,34 @@ document.getElementById('forgetToken').addEventListener('click',async()=>{
 });
 refreshTokenState();
 document.getElementById('pair').addEventListener('click',async()=>{
+ if(checkingConnection)return;
  const invoke=window.__TAURI__?.core?.invoke;
  if(!invoke){tokenMessage.textContent='Połączenie wymaga aplikacji desktopowej.';return;}
+ const button=document.getElementById('pair');
  const server=document.getElementById('server').value.trim();
  const workerId=document.getElementById('workerId').value.trim();
+ invalidateJobPreview();
+ const revision=connectionRevision;
+ checkingConnection=true;
+ button.disabled=true;
+ tokenMessage.textContent='Sprawdzanie połączenia HTTPS…';
  try{
   const ok=await invoke('verify_worker_connection',{server,workerId});
+  // Reject delayed responses after the address, ID, or stored token changes.
+  if(revision!==connectionRevision ||
+     server!==document.getElementById('server').value.trim() ||
+     workerId!==document.getElementById('workerId').value.trim())return;
   verifiedJobPreviewConnection=ok?{server,workerId}:null;
   document.getElementById('previewJob').disabled=!ok;
   tokenMessage.textContent=ok?'Token zaakceptowany przez VPS (test połączenia, bez uruchamiania obliczeń).':'VPS odrzucił token.';
  }catch(_){
-  invalidateJobPreview();
-  tokenMessage.textContent='Błąd połączenia lub konfiguracji HTTPS. Sprawdź adres i token.';
+  if(revision===connectionRevision){
+   invalidateJobPreview();
+   tokenMessage.textContent='Błąd połączenia lub konfiguracji HTTPS. Sprawdź adres i token.';
+  }
+ }finally{
+  checkingConnection=false;
+  button.disabled=false;
  }
 });
 document.getElementById('previewJob').addEventListener('click',async()=>{
