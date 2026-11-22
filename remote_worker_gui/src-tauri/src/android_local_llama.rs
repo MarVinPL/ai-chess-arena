@@ -164,11 +164,11 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
     };
     let prompt = if legal_moves.is_empty() {
         format!(
-            "You are playing chess. Output exactly one UCI move with no explanation.\\nFEN: {fen}\\nUCI:"
+            "You are playing chess. Output exactly one UCI move with no explanation.\nFEN: {fen}\nUCI:"
         )
     } else {
         format!(
-            "You are playing chess. Choose exactly ONE move from this legal list and output only its UCI.\\nFEN: {fen}\\nLegal UCI moves: {}\\nUCI:",
+            "You are playing chess. Choose exactly ONE move from this legal list and output only its UCI.\nFEN: {fen}\nLegal UCI moves: {}\nUCI:",
             legal_moves.join(", "),
         )
     };
@@ -177,12 +177,12 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
         "n_predict": tokens.min(64),
         "temperature": 0.0,
         "stream": false,
-        "stop": ["\\n"],
+        "stop": ["\n"],
     });
     if !legal_moves.is_empty() {
         let grammar = format!(
             "root ::= {}",
-            legal_moves.iter().map(|mv| format!("\\\"{mv}\\\""))
+            legal_moves.iter().map(|mv| format!("\"{mv}\""))
                 .collect::<Vec<_>>().join(" | "),
         );
         request["grammar"] = json!(grammar);
