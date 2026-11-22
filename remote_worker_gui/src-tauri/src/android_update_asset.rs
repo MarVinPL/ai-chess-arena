@@ -14,6 +14,7 @@ pub(crate) struct ApkCandidate {
     pub(crate) name: String,
     pub(crate) download_url: String,
     pub(crate) size: u64,
+    pub(crate) expected_sha256: String,
 }
 
 fn safe_name(name: &str) -> bool {
@@ -65,12 +66,20 @@ pub(crate) fn select_apk_candidate(release: &Value, expected_tag: &str)
         if !(MIN_APK_BYTES..=MAX_APK_BYTES).contains(&size) { return None; }
         // GitHub must mark an asset as uploaded, not a partially staged draft.
         if asset.get("state")?.as_str()? != "uploaded" { return None; }
+        // GitHub release asset digest only detects transfer corruption; it
+        // does NOT replace Android signing certificate verification.
+        let digest = asset.get("digest")?.as_str()?.strip_prefix("sha256:")?;
+        if digest.len() != 64 || !digest.bytes().all(|c|
+            c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+            return None;
+        }
         let raw = asset.get("browser_download_url")?.as_str()?;
         if !exact_release_download_url(raw, expected_tag, name) { return None; }
         Some(ApkCandidate {
             name: name.to_owned(),
             download_url: raw.to_owned(),
             size,
+            expected_sha256: digest.to_owned(),
         })
     });
     let candidate = candidates.next()?;
@@ -92,6 +101,7 @@ mod tests {
                 "name": "ai-chess-arena-worker-aarch64.apk",
                 "size": 2097152,
                 "state": "uploaded",
+                "digest": format!("sha256:{}", "a".repeat(64)),
                 "browser_download_url":
                     "https://github.com/MarVinPL/ai-chess-arena/releases/download/worker-v1.2.3/ai-chess-arena-worker-aarch64.apk"
             }]
@@ -102,6 +112,7 @@ mod tests {
     fn identifies_one_exact_official_arm64_apk() {
         let selected = select_apk_candidate(&release(), "worker-v1.2.3").unwrap();
         assert_eq!(selected.size, 2097152);
+        assert_eq!(selected.expected_sha256, "a".repeat(64));
         assert_eq!(selected.name, "ai-chess-arena-worker-aarch64.apk");
     }
 
@@ -135,6 +146,19 @@ mod tests {
             data["assets"][0]["size"] = json!(size);
             assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
         }
+    }
+
+    #[test]
+    fn rejects_missing_or_malformed_sha256_digest() {
+        for digest in ["", "sha512:xyz", "sha256:bad",
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] {
+            let mut data = release();
+            data["assets"][0]["digest"] = json!(digest);
+            assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
+        }
+        let mut data = release();
+        data["assets"][0].as_object_mut().unwrap().remove("digest");
+        assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
     }
 
     #[test]
