@@ -468,3 +468,16 @@ legal move reaches the durable journal, stops the transient unit and checks
 that it is inactive. The test does not install, enable or change any
 production unit. This tests actual systemd process management, not the
 full production service template or external HTTPS deployment.
+
+### Authenticated assigned-job retrieval (loopback only)
+
+`remote_worker_job_delivery.py` exposes a read-only coordinator-assigned
+job lookup for an authenticated worker. The opt-in HTTP gateway now accepts
+`POST /internal/remote-worker/job` with worker ID and token, returning the
+existing job ID and bound FEN, or `null` if none is eligible. It never assigns
+jobs, modifies worker state, or leaks another worker's job. Token revocation,
+lease expiry, checkpoint integrity and pairing are checked. This is a local
+integration step only: the existing Caddy example deliberately exposes only
+the result endpoint, so the job endpoint is **not externally reachable**.
+Production dispatch, access policy and coordinator single-writer handoff
+remain prerequisites for enabling remote execution.

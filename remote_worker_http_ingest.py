@@ -13,6 +13,7 @@ MAX_PEERS = 1024
 READ_TIMEOUT = 5
 
 from remote_worker_authenticated_ingest import AuthenticatedResultIngest
+from remote_worker_job_delivery import AuthenticatedJobDelivery
 
 MAX_BODY = 2048
 
@@ -48,6 +49,7 @@ class RateLimiter:
 def make_handler(db_path, *, limiter=None):
     limiter = limiter or RateLimiter()
     ingest = AuthenticatedResultIngest(db_path)
+    delivery = AuthenticatedJobDelivery(db_path)
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -55,7 +57,7 @@ def make_handler(db_path, *, limiter=None):
             self.connection.settimeout(READ_TIMEOUT)
 
         def do_POST(self):
-            if self.path != '/internal/remote-worker/result':
+            if self.path not in ('/internal/remote-worker/result', '/internal/remote-worker/job'):
                 return self.reply(404)
             peer = self.client_address[0]
             if not limiter.allow(peer):
@@ -70,7 +72,14 @@ def make_handler(db_path, *, limiter=None):
                 return self.reply(415)
             try:
                 body = json.loads(self.rfile.read(length).decode('utf-8'))
-                if not isinstance(body, dict) or set(body) != {'worker_id', 'token', 'result'}:
+                if not isinstance(body, dict):
+                    raise ValueError('Invalid payload')
+                if self.path == '/internal/remote-worker/job':
+                    if set(body) != {'worker_id', 'token'}:
+                        raise ValueError('Invalid payload')
+                    job = delivery.retrieve(body['worker_id'], body['token'])
+                    return self.reply(200, {'job': job})
+                if set(body) != {'worker_id', 'token', 'result'}:
                     raise ValueError('Invalid payload')
                 ingest.accept(body['worker_id'], body['token'], body['result'])
             except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
@@ -83,8 +92,8 @@ def make_handler(db_path, *, limiter=None):
                 return self.reply(503)
             return self.reply(202)
 
-        def reply(self, status):
-            payload = json.dumps({'accepted': status == 202}).encode('ascii')
+        def reply(self, status, data=None):
+            payload = json.dumps(data if data is not None else {'accepted': status == 202}).encode('ascii')
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Cache-Control', 'no-store')
