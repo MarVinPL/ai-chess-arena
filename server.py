@@ -20,6 +20,7 @@ import runtime_factory
 import adjudication
 import passkey_test
 import tournament_checkpoint
+import remote_worker_tokens
 import arena_auth
 import model_permissions
 import remote_worker_metrics
@@ -1673,6 +1674,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+        if path == '/api/remote-workers/authenticate':
+            # Token-only authentication; token issuance is admin-only and offline.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid payload')
+                worker_id, token = payload.get('worker_id'), payload.get('token')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'authenticated': False}, 401)
+                    return
+                self.send_json({'authenticated': True, 'worker_id': worker_id})
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except Exception:
+                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
+            return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
                 self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
