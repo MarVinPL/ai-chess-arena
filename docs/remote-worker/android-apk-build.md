@@ -41,3 +41,14 @@ Do not commit keystores or passwords. Verify the final APK signature with
 approval. Android updates must be initiated through the platform installer;
 no silent installation or security bypasses. Keep production dispatch local
 until server and client integration pass the security review.
+
+## VPS preflight (22 Nov 2026)
+
+Installed the free Debian `openjdk-21-jdk-headless` package and verified
+`javac 21.0.13.1`. The VPS has approximately 7.7 GiB free after installation,
+so the remaining Android SDK/NDK and Gradle dependencies need a disk-space
+budget before installation. Avoid downloading full Android Studio or creating
+large build caches on the production filesystem without checking capacity.
+The desktop `keyring` configuration is not Android-ready; producing a build
+must not be mistaken for a secure, usable worker until Android Keystore and
+network integration are verified.

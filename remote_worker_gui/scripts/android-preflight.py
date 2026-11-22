@@ -23,6 +23,10 @@ sdk = next((Path(value) for name in ('ANDROID_HOME', 'ANDROID_SDK_ROOT')
             if (value := os.environ.get(name)) and Path(value).is_dir()), None)
 checks['Android SDK'] = str(sdk) if sdk else None
 checks['Android NDK'] = str(Path(os.environ['NDK_HOME'])) if os.environ.get('NDK_HOME') and Path(os.environ['NDK_HOME']).is_dir() else None
+free_gib = shutil.disk_usage(ROOT).free / (1024 ** 3)
+print(f'Free disk: {free_gib:.1f} GiB')
+if free_gib < 6:
+    print('WARNING: low disk space for Android SDK, NDK and Gradle build caches')
 for name, found in checks.items():
     print(f'{name}: {found or "MISSING"}')
 if not all(checks.values()):
