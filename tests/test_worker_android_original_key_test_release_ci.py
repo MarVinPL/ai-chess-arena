@@ -22,7 +22,9 @@ def test_manual_main_only_trusted_signing_and_permissions():
     assert "contents: write" in publish
     assert "secrets.WORKER_ANDROID_DEBUG" not in publish
     assert "secrets: inherit" not in text
-    assert "actions/download-artifact@v4" in signed
+    assert "gh run download 45018325702" in signed
+    assert 'gh run download "$GITHUB_RUN_ID"' in publish
+    assert "actions/download-artifact@v4" not in text
     assert "actions/upload-artifact@v4" in signed
     assert "npx tauri android build" not in text
     assert "gradle" not in text.lower()
@@ -34,7 +36,7 @@ def test_manual_main_only_trusted_signing_and_permissions():
 
 def test_pinned_provenance_and_verify_before_upload():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "run-id: 45018325702" in text
+    assert "gh run download 45018325702" in text
     assert COMMIT in text
     assert SOURCE in text
     assert CERT in text
