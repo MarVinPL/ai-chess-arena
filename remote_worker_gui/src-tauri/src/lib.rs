@@ -12,6 +12,8 @@ mod android_update_identity;
 mod android_update_package_manager;
 mod android_update_coordinator;
 mod android_update_recovery;
+#[allow(dead_code)]
+mod android_update_install_state;
 
 use serde::Serialize;
 use std::time::Duration;
