@@ -606,6 +606,56 @@ async fn get_my_worker_board(
     ).await
 }
 
+/// Recover only an EMPTY, previously idle phone update. Arena stores a
+/// one-time proof created after exact update-hold release; it is consumed
+/// by an authenticated local-model readiness. This never resumes an in-flight
+/// chess move or reads a checkpoint payload.
+#[tauri::command]
+async fn reconcile_idle_phone_after_update(
+    server: String, worker_id: String,
+) -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (server, worker_id);
+        Err("Uzgodnienie telefonu wymaga Androida".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        if android_update_recovery::load_pending()?.is_some()
+            || android_update_install_journal::load()?.is_some() {
+            return Err("Niezakończona instalacja APK blokuje wznowienie".into());
+        }
+        if android_local_llama::generation_active() {
+            return Err("Telefon nadal wykonuje inferencję".into());
+        }
+        let token = token_entry()?.get_password()
+            .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+        let resume = android_update_coordinator::fetch_resume_status(
+            &server, &worker_id, &token,
+        ).await?;
+        if resume != "no_checkpoint" {
+            return Err("Przerwane zadanie wymaga oddzielnego ACK Areny".into());
+        }
+        let assignment = android_update_coordinator::fetch_my_inference_job(
+            &server, &worker_id, &token,
+        ).await?;
+        if assignment.get("state").and_then(serde_json::Value::as_str)
+            != Some("none") {
+            return Err("Worker ma już przydział lub nierozliczoną partię".into());
+        }
+        // A local llama.cpp SHA alias is a routing check, NOT byte-level GGUF
+        // attestation. No new inference job is started by this command.
+        let digest = android_local_llama::probe_local_model_alias().await?;
+        let status = android_update_coordinator::announce_phone_ready(
+            &server, &worker_id, &token, &digest,
+        ).await?;
+        if status != "ready" {
+            return Err("Arena nie potwierdziła bezczynnego Workera".into());
+        }
+        Ok("ready")
+    }
+}
+
 /// Read coordinator resume readiness after an Android update. A checkpoint
 /// without a real inference executor does not permit launching a game.
 #[tauri::command]
@@ -797,7 +847,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
