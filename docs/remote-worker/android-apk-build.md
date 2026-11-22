@@ -52,3 +52,16 @@ large build caches on the production filesystem without checking capacity.
 The desktop `keyring` configuration is not Android-ready; producing a build
 must not be mistaken for a secure, usable worker until Android Keystore and
 network integration are verified.
+
+## Storage and toolchain safety gate
+
+The read-only preflight now requires at least **10 GiB free** on the filesystem
+hosting the project before proceeding with an Android build, in addition to
+SDK platforms, an NDK LLVM toolchain, `apksigner`, and an installed Rust Android
+target. This is a conservative operational safety threshold, not an estimate
+of exact APK build size. On the current VPS, about 7.6 GiB is available, so
+preflight exits with status 3 and does **not** install SDK/NDK. The Debian
+`android-sdk` package is not a substitute for checking compatible Android
+platform/NDK versions required by Tauri 2. No existing build caches or other
+project files have been deleted. Prefer a separate free build environment or
+approved additional disk capacity rather than risking production disk space.
