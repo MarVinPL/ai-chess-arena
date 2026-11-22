@@ -39,6 +39,10 @@ class UpstreamRuntimePlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             UpstreamLlamaServerProfile(threads=0).build_argv("model.gguf")
 
+    def test_candidate_profile_requires_dedicated_port_8089(self):
+        with self.assertRaises(ValueError):
+            UpstreamLlamaServerProfile(port=8088).validate()
+
     def test_candidate_profile_rejects_non_gguf(self):
         with self.assertRaises(ValueError):
             UpstreamLlamaServerProfile().build_argv("model.bin")

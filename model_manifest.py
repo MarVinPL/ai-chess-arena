@@ -20,7 +20,6 @@ _ALLOWED_LICENSES = {"apache-2.0", "llama3.1", "llama3.2", "cc-by-nc-4.0"}
 _LICENSE_REVIEW_STATUSES = {"verified_permissive", "verified_restricted", "review_required", "incompatible", "evidence_missing"}
 _LICENSE_AUDIT_REPORT = "docs/model-audit/license-review-2026-11-14.md"
 _AUDIT_MODEL_IDS = frozenset(range(1, 9))
-_EXCLUDED_MODEL_IDS = frozenset({9, 10})
 
 
 class ManifestError(ValueError):
@@ -66,19 +65,22 @@ def validate_manifest(payload: dict) -> None:
         review_status = item.get("license_review_status")
         if review_status not in _LICENSE_REVIEW_STATUSES:
             raise ManifestError("Nieznany status audytu licencji")
-        if model_id in _EXCLUDED_MODEL_IDS:
-            admission = item.get("arena_admission")
-            expected_exclusion = {
-                "status": "excluded", "issue": 71, "download_allowed": False,
-                "runtime_allowed": False, "allowlist_allowed": False,
-                "tournament_allowed": False,
-            }
-            if review_status != "review_required" or not isinstance(admission, dict) or any(
-                admission.get(key) != value for key, value in expected_exclusion.items()
-            ) or not isinstance(admission.get("reason"), str) or not admission["reason"].strip():
-                raise ManifestError("Wpisy 9–10 muszą pozostać wyłączone i review_required (#71)")
-        elif "arena_admission" in item:
-            raise ManifestError("Wyłączenie #71 może dotyczyć wyłącznie wpisów 9–10")
+        admission = item.get("arena_admission")
+        if admission is not None:
+            if not isinstance(admission, dict):
+                raise ManifestError("Nieprawidłowy obiekt arena_admission")
+            if review_status != "review_required":
+                raise ManifestError("Wpis z nieprzyznanymi uprawnieniami musi wymagać przeglądu licencji")
+            if admission.get("status") not in {"not_admitted", "excluded"}:
+                raise ManifestError("Wpis bez decyzji dopuszczenia musi mieć status not_admitted lub excluded")
+            permission_fields = ("download_allowed", "runtime_allowed", "allowlist_allowed", "tournament_allowed")
+            if any(admission.get(field) is not False for field in permission_fields):
+                raise ManifestError("Brak decyzji dopuszczenia nie może przyznawać żadnych uprawnień")
+            if not isinstance(admission.get("reason"), str) or not admission["reason"].strip():
+                raise ManifestError("Wpis bez decyzji dopuszczenia wymaga uzasadnienia")
+            issue = admission.get("issue")
+            if issue is not None and (isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0):
+                raise ManifestError("Nieprawidłowe powiązanie issue w arena_admission")
         if review_status in {"verified_permissive", "verified_restricted", "incompatible"}:
             audit = item.get("license_audit")
             if not isinstance(audit, dict) or audit.get("status") != review_status:
@@ -117,8 +119,8 @@ def apply_manifest(db_path: str | Path, payload: dict | None = None,
 
     Updates existing registry versions only. It refuses missing/ambiguous rows and
     wraps only audit-scope records (model IDs 1–8) in one SQLite transaction.
-    Entries 9–10 are preserved verbatim for the separate Issue #71. The existing
-    model row's license_verified flag is always forced to 0. Even a revision-bound
+    Other registry entries are preserved verbatim. The existing model row's
+    license_verified flag is always forced to 0. Even a revision-bound
     verified_restricted audit is not owner approval to use or distribute weights.
     """
     payload = payload or load_manifest()

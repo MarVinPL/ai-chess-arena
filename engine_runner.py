@@ -41,13 +41,14 @@ class LlamafileRuntime:
     def __init__(self, binary: Path = LLAMAFILE, api_base: str = API_BASE,
                  threads: int = 2, context: int = 2048, startup_timeout: float = 90,
                  popen: Callable = subprocess.Popen, on_status: Callable | None = None,
-                 monitor_interval: float = 30):
+                 monitor_interval: float = 30, urlopen: Callable | None = None):
         self.binary = Path(binary)
         self.api_base = api_base.rstrip('/')
         self.threads = max(1, int(threads))
         self.context = max(512, int(context))
         self.startup_timeout = startup_timeout
         self._popen = popen
+        self._urlopen = urlopen
         self._process = None
         self._model_path: Path | None = None
         self._draft_model_path: Path | None = None
@@ -75,7 +76,7 @@ class LlamafileRuntime:
     def _healthy(self) -> bool:
         try:
             req = urllib.request.Request(self.api_base + '/health')
-            with urllib.request.urlopen(req, timeout=1.5) as response:
+            with (self._urlopen or urllib.request.urlopen)(req, timeout=1.5) as response:
                 return response.status == 200
         except Exception:
             return False
@@ -277,7 +278,7 @@ class LlamafileRuntime:
             payload = json.dumps(payload_data).encode()
             request = urllib.request.Request(self.api_base + '/v1/chat/completions', data=payload,
                                              headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(request, timeout=None) as response:
+            with (self._urlopen or urllib.request.urlopen)(request, timeout=None) as response:
                 raw_response = response.read()
             # A stop requested during inference invalidates this in-flight answer.
             # Never let it become a committed chess move; resume from the last checkpoint.

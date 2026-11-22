@@ -46,6 +46,7 @@ The default backend listens on `127.0.0.1:8090`. Keep it bound to loopback; use 
 - Model artifacts are downloaded by the VPS directly from the upstream source after a separate explicit approval; they are not downloaded through a developer workstation and are never stored in Git. The VPS must use the reviewed immutable revision, verify expected size and SHA-256 before activation, and store files only in the Arena-owned `managed-models/` directory. `/home/debian/ai-agent/models` is outside the Arena boundary and must never be used as a source, destination, or fallback.
 - A positive licence review is necessary for the download workflow but does not trigger a download. Each selected model/artifact requires separate approval; failed or incomplete source, revision, licence, size, or checksum verification must fail closed. Adding a model to the catalogue does not automatically download or run it.
 - The runner handles one model process at a time. Tournament games have no hard response-time limit; inference time is recorded in results.
+- Minimum model technical admission is based on successful runtime startup and the ability to produce legal chess moves through the Arena runner. Slow inference and weak-but-legal strategy are recorded, not rejection grounds; Passkey remains a separate three-question supplemental test. See [`docs/model-technical-admission-policy.md`](docs/model-technical-admission-policy.md).
 
 ## Llamafile watchdog
 

@@ -25,7 +25,8 @@ class ModelAllowlistTests(unittest.TestCase):
             self.assertTrue(item['license_requirements']['license_verified_required'])
             self.assertEqual(item['technical_readiness'], 'blocked' if item['status'] == 'blocked' else 'not_evaluated')
             self.assertIn(item['status'], {'review_required', 'blocked'})
-        self.assertEqual({x['model_id'] for x in self.allowlist['models'] if x['status'] == 'blocked'}, {9, 10})
+        self.assertEqual([x['model_id'] for x in self.allowlist['models']], list(range(1, 9)))
+        self.assertFalse({9, 10} & {x['model_id'] for x in self.allowlist['models']})
 
     def test_revision_mismatch_is_rejected(self):
         broken = copy.deepcopy(self.allowlist)
@@ -77,18 +78,11 @@ class ModelAllowlistTests(unittest.TestCase):
             with self.subTest(status=status), self.assertRaises(AllowlistError):
                 validate_allowlist(broken, self.manifest)
 
-    def test_excluded_models_cannot_be_promoted(self):
-        for status in ('eligible', 'restricted', 'review_required'):
-            broken = copy.deepcopy(self.allowlist)
-            item = next(x for x in broken['models'] if x['model_id'] == 9)
-            item['status'] = status
-            if status in ('eligible', 'restricted'):
-                item['admission_scope'] = ['PURE_AI']
-                item['restrictions'] = ['condition']
-                item['license_requirements']['obligations'] = ['condition']
-                item['block_reason'] = None
-            with self.subTest(status=status), self.assertRaises(AllowlistError):
-                validate_allowlist(broken, self.manifest)
+    def test_removed_oversized_models_are_absent_from_active_allowlist(self):
+        repos = {item['repo_id'] for item in self.allowlist['models']}
+        self.assertNotIn('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF', repos)
+        self.assertNotIn('mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF', repos)
+        validate_allowlist(self.allowlist, self.manifest)
 
     def test_add_update_and_withdrawal_are_explicit_diffs(self):
         previous = {'models': [copy.deepcopy(self.allowlist['models'][0]),
@@ -148,16 +142,21 @@ class ModelAllowlistTests(unittest.TestCase):
         self.assertTrue(tournament_admission_blockers(
             candidate, **{**args, 'tournament_format': 'AI_ENGINE'}))
 
-    def test_missing_and_permanently_excluded_models_fail_closed(self):
-        args = dict(repo_id='repo/model', revision='a' * 40,
-                    license_name='Apache-2.0', license_verified=True,
-                    tournament_format='PURE_AI')
-        self.assertTrue(tournament_admission_blockers(None, model_id=11, **args))
-        for model_id in (9, 10):
-            self.assertTrue(tournament_admission_blockers(
-                {'model_id': model_id, 'status': 'eligible',
-                 'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready'},
-                model_id=model_id, **args))
+    def test_exact_repository_exclusion_is_independent_of_manifest_id(self):
+        args = dict(revision='a' * 40, license_name='Apache-2.0',
+                    license_verified=True, tournament_format='PURE_AI')
+        self.assertTrue(tournament_admission_blockers(None, model_id=11,
+            repo_id='repo/model', **args))
+        eligible = {'model_id': 9, 'status': 'eligible',
+                    'admission_scope': ['PURE_AI'], 'technical_readiness': 'ready',
+                    'technical_blockers': [], 'repo_id': 'repo/model',
+                    'revision': 'a' * 40, 'license_requirements': {'manifest_license': 'Apache-2.0'}}
+        self.assertEqual(tournament_admission_blockers(eligible, model_id=9,
+            repo_id='repo/model', **args), [])
+        for repo in ('JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
+                     'mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF'):
+            self.assertTrue(tournament_admission_blockers(eligible, model_id=123,
+                repo_id=repo, **args))
 
     def test_sync_check_detects_stale_and_dirty_consumer_without_mutating(self):
         commit = 'a' * 40
