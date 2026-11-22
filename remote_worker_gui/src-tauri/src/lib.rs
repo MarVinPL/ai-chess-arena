@@ -256,6 +256,7 @@ async fn download_worker_apk(app: tauri::AppHandle) -> Result<(), String> {
 #[derive(Serialize)]
 struct WorkerApkIdentityResult {
     verified: bool,
+    installer_permission: bool,
     reason: &'static str,
 }
 
@@ -298,8 +299,14 @@ async fn verify_downloaded_worker_apk(app: tauri::AppHandle) -> Result<WorkerApk
         drop(file);
         let identity = android_update_package_manager::inspect_staged_worker_apk(&apk)?;
         let verified = identity == android_update_identity::IdentityCheck::Verified;
+        // This permission may be absent even when the APK identity matches.
+        // A permission alone NEVER authorizes install, and never changes
+        // update_installation_readiness(false).
+        let installer_permission = android_update_package_manager::
+            can_request_package_installation().unwrap_or(false);
         Ok(WorkerApkIdentityResult {
             verified,
+            installer_permission,
             reason: if verified {
                 "Podpis, pakiet i versionCode zgodne; instalacja nadal wyłączona"
             } else {
