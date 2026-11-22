@@ -247,3 +247,25 @@ def test_native_coordinator_reservation_reply_is_not_install_authorization():
     # These parsers are private and still cannot enable Tauri installation.
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
     assert "reserve_worker_for_install" not in lib
+
+
+def test_coordinator_reservation_transport_is_native_and_not_exposed_to_webview():
+    lib = LIB.read_text(encoding="utf-8")
+    coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    for api in ("update-reserve", "update-release"):
+        assert f'coordinator_endpoint(base, "{api}")?' in coordinator
+    assert 'reqwest::redirect::Policy::none()' in coordinator
+    assert "verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)" in coordinator
+    assert "verify_release_reply(&body, worker_id, &nonce)" in coordinator
+    assert '"hold_token": hold_token' in coordinator
+    assert 'pub(crate) async fn reserve_update(' in coordinator
+    assert 'pub(crate) async fn release_update(' in coordinator
+    assert 'fn authenticated_update_transport_rejects_untrusted_destinations()' in coordinator
+    # Secret capabilities are never passed back to JavaScript. Until native
+    # installer + cleanup are complete, no reserve button is allowed.
+    assert "reserve_worker_update" not in lib
+    assert "release_worker_update" not in lib
+    assert "hold_token" not in ui
+    assert "update_installation_readiness() -> UpdateReadiness" in lib
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
