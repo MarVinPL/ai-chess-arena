@@ -296,7 +296,7 @@ class WorkerUpdatePause:
         elif worker != ("unknown", None) or pause != ("acknowledged",):
             state = "blocked"
         else:
-            state = "awaiting_executor"
+            state = "awaiting_local_engine"
         return {
             "state": state,
             "resume_available": False,
