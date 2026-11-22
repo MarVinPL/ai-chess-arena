@@ -141,3 +141,37 @@ nie jest już niewywoływany; jednak `verify_apk_stream` **wciąż**
 nie jest podłączony do rzeczywiście pobranego pliku. Pobieranie,
 postęp, podpis APK, `packageName`, `versionCode`, trwałe idle i
 systemowy instalator nadal **NOT IMPLEMENTED/NO-GO**.
+
+## 2026-11-22 — pobieranie prywatnego APK (prototyp podłączony)
+
+Dla Androida GUI teraz oferuje **Pobierz APK** tylko gdy natywna
+weryfikacja metadanych wykryła nowszy stabilny APK ARM64. Komenda
+`download_worker_apk` nie przyjmuje od JS adresu, hasha, nazwy pliku
+ani katalogu: ponownie odczytuje oficjalne wydania z GitHub i wybiera
+własny kandydat `select_apk_candidate`, by zapobiec zmianie wersji lub
+URL między sprawdzeniem a pobieraniem.
+
+Moduł `android_update_download.rs` ogranicza dozwolone przekierowania
+do HTTPS `release-assets.githubusercontent.com` i
+`objects.githubusercontent.com` (maksymalnie 3 przekierowania),
+bez danych uwierzytelniających w URL. Odpowiedź jest pobierana porcjami
+z limitem 200 MiB; deklarowana liczba bajtów i SHA-256 są sprawdzane
+przed zakończeniem. Plik tymczasowy powstaje przez `create_new`
+w prywatnym `app_cache_dir/worker-apk-updates`; błąd usuwa częściowy
+plik. Po pozytywnej weryfikacji integralności wykonywana jest zmiana
+nazwy pliku. Postęp jest przekazywany jako zdarzenie Tauri, bez
+ujawniania ścieżki pliku lub tokenu w JS.
+
+**Status rzeczywisty:** kod jest podłączony od GUI do komendy Tauri,
+jednak nie potwierdzono działania na Android 16 ani wyników
+Rust/Android CI na aktualnym HEAD. Walidacja samego SHA-256
+**nie weryfikuje tożsamości podpisującego**. Plik **nie jest instalowany,
+przekazywany systemowemu instalatorowi ani uznawany za zaufany**.
+Nadal brakuje zweryfikowania certyfikatu APK względem zainstalowanej
+aplikacji, `packageName`, wyższego `versionCode`, świeżego
+koordynatorowego `idle`, obsługi błędów na fizycznym Android 16 oraz
+systemowego instalatora z potwierdzeniem. **Issue #196 pozostaje NO-GO**.
+
+Starsze wpisy w tej dokumentacji odzwierciedlają stan historyczny na
+podanym commicie; w aktualnym kodzie dostępne jest pobieranie do
+prywatnej pamięci, ale **nie aktualizacja z instalacją**.
