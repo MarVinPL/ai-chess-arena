@@ -106,3 +106,10 @@ check preferences/timestamps; worker credentials must remain in the OS keyring.
 This is a static-code regression guard, not a substitute for runtime security
 review. The two durable registries still need a single authoritative scheduler
 and reconciliation policy before live remote execution.
+
+The API compatibility facade `WorkerJobRegistry` now delegates to
+`DurableWorkerJobs`, using **only** `worker_job_safety` as the authoritative
+SQLite table. Legacy `remote_worker_job_state` rows are ignored rather than
+migrated as trusted idle assertions. Server startup performs one canonical
+recovery. This does not create a production scheduler or reconcile in-flight
+remote jobs; installation remains disabled.

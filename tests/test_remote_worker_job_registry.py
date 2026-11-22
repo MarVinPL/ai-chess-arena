@@ -13,7 +13,7 @@ def test_unknown_until_coordinator_assigns_and_confirms_terminal(tmp_path):
     # The coordinator must establish a trustworthy initial idle state before
     # assignment; no API currently performs this transition.
     with registry._connect() as conn:
-        conn.execute("INSERT INTO remote_worker_job_state VALUES (?, NULL, 'idle_confirmed', NULL, ?)", (worker, now[0]))
+        conn.execute("INSERT INTO worker_job_safety VALUES (?, NULL, 'idle_confirmed', NULL, ?)", (worker, now[0]))
     registry.record_assignment(worker, job, deadline=200)
     assert WorkerJobRegistry(db, clock=lambda: now[0]).state(worker) == 'running'
     with pytest.raises(ValueError):
@@ -69,7 +69,7 @@ def test_isolated_server_boot_invalidates_real_sqlite_before_listener(tmp_path):
     registry = WorkerJobRegistry(path)
     worker = 'worker_12345678'
     with registry._connect() as db:
-        db.execute("INSERT INTO remote_worker_job_state VALUES (?, NULL, 'idle_confirmed', NULL, ?)",
+        db.execute("INSERT INTO worker_job_safety VALUES (?, NULL, 'idle_confirmed', NULL, ?)",
                    (worker, 100.0))
     source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
     module = ast.parse(source)
@@ -103,3 +103,29 @@ def test_isolated_server_boot_invalidates_real_sqlite_before_listener(tmp_path):
          globals_for_boot)
     assert executed == ['db_init', 'thread', 'listener']
     assert registry.state(worker) == 'unknown'
+
+
+def test_api_and_scheduler_share_canonical_registry(tmp_path):
+    from remote_worker_jobs import DurableWorkerJobs
+    path = tmp_path / 'jobs.sqlite'
+    now = lambda: 100
+    scheduler = DurableWorkerJobs(path, clock=now)
+    api = WorkerJobRegistry(path, clock=now)
+    scheduler.assign('worker_12345678', 'job_12345678', timeout_seconds=30)
+    assert api.state('worker_12345678') == 'running'
+    api.record_terminal('worker_12345678', 'job_12345678')
+    assert scheduler.state('worker_12345678') == 'idle_confirmed'
+    api.recover_after_restart()
+    assert scheduler.state('worker_12345678') == 'unknown'
+
+
+def test_legacy_idle_state_is_never_trusted(tmp_path):
+    import sqlite3
+    path = tmp_path / 'jobs.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE remote_worker_job_state (worker_id TEXT PRIMARY KEY, job_id TEXT, state TEXT, deadline REAL, updated_at REAL)')
+        db.execute("INSERT INTO remote_worker_job_state VALUES ('worker_12345678', NULL, 'idle_confirmed', NULL, 100)")
+    api = WorkerJobRegistry(path, clock=lambda: 100)
+    assert api.state('worker_12345678') == 'unknown'
+    with pytest.raises(ValueError):
+        api.record_terminal('worker_12345678', 'job_12345678')

@@ -1931,7 +1931,6 @@ if __name__ == '__main__':
     db_init()
     # Invalidate stale worker state before any background worker or HTTP listener starts.
     remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
-    remote_worker_jobs.DurableWorkerJobs(DB).recover_after_restart()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()
