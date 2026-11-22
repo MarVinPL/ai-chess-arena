@@ -1786,6 +1786,40 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/board-view':
+            # Read-only view of Arena-owned FEN, bound to the authenticated
+            # worker's *current* lease and matching live worker/job identity.
+            # Never return the public global /api/live payload to a Worker.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid board-view request')
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid board-view nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_jobs import DurableWorkerJobs
+                from remote_worker_board_view import worker_board_snapshot
+                # Initialize schema consistently with other coordinator paths.
+                DurableWorkerJobs(DB)
+                view = worker_board_snapshot(DB, worker_id, get_live())
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce,
+                    **view,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie podglądu'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można pobrać podglądu partii'}, 500)
+            return
         if path == '/api/remote-workers/update-resume-status':
             # Machine-token authenticated, read-only resume readiness.
             # Never issues a job lease or exposes an unverified checkpoint.
