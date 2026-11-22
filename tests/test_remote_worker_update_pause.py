@@ -91,3 +91,89 @@ def test_pause_cleanup_never_marks_worker_idle(tmp_path):
     pause.clear(WORKER, req)
     assert pause.pending(WORKER) is None
     assert jobs.state(WORKER) == "running"
+
+
+def test_pending_pause_blocks_both_assignment_paths_and_idle_snapshot(tmp_path):
+    from remote_worker_job_registry import WorkerJobRegistry
+
+    db = tmp_path / "pause-scheduler.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    # The old task may complete concurrently. Its completion must not turn
+    # the worker into an assignable resource while STOP/ACK is outstanding.
+    jobs.complete(WORKER, JOB)
+    assert jobs.state(WORKER) == "idle_confirmed"
+    assert jobs.update_safety_snapshot(WORKER) == ("unknown", None)
+    with pytest.raises(ValueError, match="pause"):
+        jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+    with pytest.raises(ValueError, match="pause"):
+        WorkerJobRegistry(db, clock=lambda: now[0]).record_assignment(
+            WORKER, "job_87654321", deadline=now[0] + 60
+        )
+    with pytest.raises(ValueError, match="pause"):
+        jobs.reserve_update(WORKER)
+    assert pause.pending(WORKER)["request_id"] == request_id
+    # A controlled cleanup is separate from update authorization.
+    pause.clear(WORKER, request_id)
+    assert jobs.update_safety_snapshot(WORKER) == ("idle_confirmed", 0)
+    jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+
+
+def test_pending_pause_survives_restart_and_blocks_all_schedulers(tmp_path):
+    from remote_worker_job_registry import WorkerJobRegistry
+
+    db = tmp_path / "pause-restart.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    jobs.recover_after_restart()
+    new_jobs = DurableWorkerJobs(db, clock=lambda: now[0])
+    new_pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    assert new_pause.pending(WORKER)["request_id"] == request_id
+    assert new_jobs.state(WORKER) == "unknown"
+    with pytest.raises(ValueError, match="pause"):
+        new_jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+    with pytest.raises(ValueError, match="pause"):
+        WorkerJobRegistry(db, clock=lambda: now[0]).record_assignment(
+            WORKER, "job_87654321", deadline=now[0] + 60
+        )
+    assert new_jobs.update_safety_snapshot(WORKER) == ("unknown", None)
+
+
+def test_pause_request_and_complete_assignment_race_remains_serialized(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    db = tmp_path / "pause-race.db"
+    now = [100.]
+    running_registry(db, now)
+    request = WorkerUpdatePause(db, clock=lambda: now[0])
+
+    def complete_and_assign():
+        jobs = DurableWorkerJobs(db, clock=lambda: now[0])
+        jobs.complete(WORKER, JOB)
+        try:
+            jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+            return "assigned"
+        except ValueError:
+            return "blocked"
+
+    def ask_pause():
+        try:
+            return request.request(WORKER, JOB)
+        except ValueError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        a = executor.submit(ask_pause)
+        b = executor.submit(complete_and_assign)
+        pause_id, outcome = a.result(), b.result()
+
+    state = DurableWorkerJobs(db, clock=lambda: now[0])
+    if pause_id is not None:
+        assert outcome == "blocked"
+        assert state.update_safety_snapshot(WORKER) == ("unknown", None)
+    else:
+        assert outcome == "assigned"
