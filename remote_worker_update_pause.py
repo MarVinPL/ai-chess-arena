@@ -93,10 +93,12 @@ class WorkerUpdatePause:
                 (worker_id,),
             ).fetchone()
             active = db.execute(
-                """SELECT job_id,state FROM worker_job_safety WHERE worker_id=?""",
+                """SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?""",
                 (worker_id,),
             ).fetchone()
-            if row != (job_id, request_id, "requested") or active != (job_id, "running"):
+            if (row != (job_id, request_id, "requested")
+                    or not active or active[:2] != (job_id, "running")
+                    or active[2] is None or active[2] <= self.clock()):
                 raise ValueError("Stale pause acknowledgment")
             db.execute(
                 """UPDATE worker_update_pause_requests
