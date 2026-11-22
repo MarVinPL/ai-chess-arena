@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -188,6 +188,47 @@ pub(crate) async fn reserve_update(
         return Err("Koordynator nie potwierdził zapisanego tokenu rezerwacji".into());
     }
     Ok(verified)
+}
+
+/// Read-only recovery of an uncertain coordinator hold after app restart.
+/// Uses the secret in the native keyring; never exposes the capability to JS.
+/// Even "absent" is only server evidence, NOT proof the Android installer
+/// finished, so it must not trigger automatic release or a new assignment.
+pub(crate) async fn inspect_pending_update(machine_token: &str) -> Result<&'static str, String> {
+    if machine_token.is_empty() {
+        return Err("Brak tokenu maszyny do uzgodnienia rezerwacji".into());
+    }
+    let pending = crate::android_update_recovery::load_pending()?
+        .ok_or("Brak oczekującej rezerwacji".to_string())?;
+    if !valid_worker_id(&pending.worker_id) {
+        return Err("Nieprawidłowa tożsamość rezerwacji".into());
+    }
+    let endpoint = coordinator_endpoint(&pending.server, "update-hold-status")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": pending.worker_id, "token": machine_token,
+            "nonce": nonce, "hold_token": pending.hold_token
+        }))
+        .send().await.map_err(|_| "Nie udało się uzgodnić rezerwacji")?;
+    if !response.status().is_success() {
+        return Err("Koordynator nie potwierdził stanu rezerwacji".into());
+    }
+    let body: Value = response.json().await
+        .map_err(|_| "Nieprawidłowa odpowiedź koordynatora".to_string())?;
+    if body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(&pending.worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(&nonce)
+        || body.get("install_allowed").and_then(Value::as_bool) != Some(false) {
+        return Err("Niepotwierdzony status rezerwacji".into());
+    }
+    match body.get("state").and_then(Value::as_str) {
+        Some("active") => Ok("active"),
+        Some("expired") => Ok("expired"),
+        Some("absent") => Ok("absent"),
+        _ => Err("Nieznany stan rezerwacji".into()),
+    }
 }
 
 /// Explicit hold release after a cancelled/completed update transaction.
@@ -329,6 +370,7 @@ mod tests {
         ] {
             assert!(coordinator_endpoint(base, "update-reserve").is_err(), "{base}");
         }
+        assert!(coordinator_endpoint("https://arena.example/", "update-hold-status").is_ok());
         assert!(coordinator_endpoint("https://arena.example/", "install").is_err());
         assert!(!valid_worker_id("invalid"));
         assert!(valid_worker_id("worker_12345678"));
