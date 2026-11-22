@@ -132,3 +132,43 @@ def test_reservation_rejects_running_and_unknown_states(tmp_path):
     jobs.invalidate(WORKER)
     with pytest.raises(ValueError, match="freshly"):
         jobs.reserve_update(WORKER)
+
+
+def test_read_only_hold_inspection_distinguishes_active_expired_absent(tmp_path):
+    db = tmp_path / "inspection.db"
+    now = [100.]
+    jobs = initial_idle(db, now)
+    token = jobs.reserve_update(WORKER, ttl_seconds=30)
+    assert jobs.inspect_update_hold(WORKER, token) == "active"
+    assert jobs.inspect_update_hold("worker_87654321", token) == "absent"
+    other = "a" * 64 if token != "a" * 64 else "b" * 64
+    with pytest.raises(ValueError, match="mismatch"):
+        jobs.inspect_update_hold(WORKER, other)
+    now[0] = 131.
+    assert jobs.inspect_update_hold(WORKER, token) == "expired"
+    assert jobs.inspect_update_hold(WORKER, token) == "expired"
+    with pytest.raises(ValueError, match="reserved"):
+        jobs.assign(WORKER, "job_12345678", timeout_seconds=60)
+    jobs.release_update_hold(WORKER, token)
+    assert jobs.inspect_update_hold(WORKER, token) == "absent"
+    assert jobs.state(WORKER) == "unknown"
+
+
+def test_recovery_inspection_never_mutates_state(tmp_path):
+    db = tmp_path / "read-only.db"
+    now = [100.]
+    jobs = initial_idle(db, now)
+    token = jobs.reserve_update(WORKER, ttl_seconds=60)
+    with sqlite3.connect(db) as conn:
+        before = conn.execute(
+            "SELECT hold_token,created_at,expires_at FROM worker_update_holds WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone()
+    assert jobs.inspect_update_hold(WORKER, token) == "active"
+    assert jobs.inspect_update_hold(WORKER, token) == "active"
+    with sqlite3.connect(db) as conn:
+        after = conn.execute(
+            "SELECT hold_token,created_at,expires_at FROM worker_update_holds WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone()
+    assert before == after
