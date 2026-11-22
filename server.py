@@ -24,6 +24,7 @@ import arena_auth
 import model_permissions
 import remote_worker_metrics
 import remote_worker_tokens
+import remote_worker_job_registry
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -1700,9 +1701,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
         if path == '/api/remote-workers/update-safety':
-            # Fail closed: the persistent token store does not yet share a
-            # durable job registry with WorkerSessions. Never infer idle from
-            # an empty process-local queue or a successful authentication.
+            # Fail closed: durable job state is advisory, not install permission.
+            # No worker-facing API can initialize idle or mark jobs terminal.
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 2048:
@@ -1716,8 +1716,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'error': 'Brak autoryzacji'}, 401)
                     return
-                self.send_json({'state': 'unknown', 'install_allowed': False,
-                                'reason': 'Brak trwałego potwierdzenia stanu zadań'})
+                state = remote_worker_job_registry.WorkerJobRegistry(DB).state(worker_id)
+                self.send_json({'state': state, 'install_allowed': False,
+                                'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu i wersji'})
             except (ValueError, UnicodeError, json.JSONDecodeError):
                 self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
             except Exception:

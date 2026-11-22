@@ -61,6 +61,6 @@ def test_update_safety_endpoint_fails_closed_without_durable_job_registry():
     endpoint = source.split("if path == '/api/remote-workers/update-safety':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
     assert "length <= 2048" in endpoint
-    assert "'state': 'unknown'" in endpoint
+    assert 'WorkerJobRegistry(DB).state(worker_id)' in endpoint
     assert "'install_allowed': False" in endpoint
     assert "'token': token" not in endpoint

@@ -30,3 +30,14 @@ The authenticated `POST /api/remote-workers/update-safety` endpoint currently re
 5. Windows, Linux, macOS and Android paths are tested separately on actual supported targets.
 
 **Current state:** design specification only. No updater endpoint, release signing key, auto-install action or production deployment has been configured.
+
+## Durable coordinator state (prototype)
+
+`remote_worker_job_registry.py` stores job assignments and coordinator-confirmed
+terminal transitions in SQLite. Unknown workers and expired unresolved jobs are
+`unknown`, including across process restarts. The authenticated
+`/api/remote-workers/update-safety` endpoint exposes this advisory state, but
+always returns `install_allowed: false`. No worker-facing route can mark a job
+terminal or initialize an idle state. The production scheduler is **not yet
+wired** to these writes; do not treat the registry as operational evidence of
+idle until scheduler integration, restart recovery and concurrency tests pass.
