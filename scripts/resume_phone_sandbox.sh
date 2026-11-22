@@ -75,11 +75,11 @@ trap rollback EXIT
 setfacl -m "u:$test_user:--x" /home/debian
 acl_added=1
 install -m 0600 -o root -g root /dev/null "$acl_marker"
-runuser -u "$test_user" -- test -x /home/debian
-runuser -u "$test_user" -- test ! -r /home/debian
-runuser -u "$test_user" -- test -r "$work/remote_worker_phone_sandbox.py"
+runuser -u "$test_user" -g "$test_user" -G debian -- test -x /home/debian
+runuser -u "$test_user" -g "$test_user" -G debian -- test ! -r /home/debian
+runuser -u "$test_user" -g "$test_user" -G debian -- test -r "$work/remote_worker_phone_sandbox.py"
 # Limit only the STAGING verifier, never the production token.
-runuser -u "$test_user" -- "$python" - "$db" <<'PY'
+runuser -u "$test_user" -g "$test_user" -G debian -- "$python" - "$db" <<'PY'
 import sqlite3,sys,time
 with sqlite3.connect(sys.argv[1]) as c:
     cutoff=int(time.time())+3600
