@@ -1,19 +1,32 @@
-name: Verify Android APK workflow changes
+name: Verify Android CLI SDK workflow
 
-# Unlike the selective app-source workflow, validate SDK tooling changes
-# directly by building an unsigned ARM64 APK on untrusted pull requests.
+# The Worker app sources remain in PR #193, not main. Validate the
+# SDK bootstrap independently whenever the APK workflow changes.
 on:
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/android-worker-apk.yml'
       - '.github/workflows/android-cli-smoke.yml'
+      - 'scripts/install_android_sdk_cli.sh'
 
 permissions:
   contents: read
 
 jobs:
-  android:
-    uses: ./.github/workflows/android-worker-apk.yml
-    permissions:
-      contents: read
+  android-sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          accept-android-sdk-licenses: 'false'
+          packages: ''
+      - name: Verify official Android CLI SDK and NDK bootstrap
+        run: bash scripts/install_android_sdk_cli.sh
