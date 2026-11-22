@@ -1791,6 +1791,37 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/ready':
+            # Machine-authenticated local model readiness. This does not
+            # award a job lease and never discloses the Worker's token.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid ready request')
+                worker_id, token, nonce, model_sha256 = (
+                    payload.get('worker_id'), payload.get('token'),
+                    payload.get('nonce'), payload.get('model_sha256'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid readiness nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_inference_delivery import WorkerInferenceDelivery
+                status = WorkerInferenceDelivery(DB).register_local_ready(
+                    worker_id, model_sha256)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce, 'state': status,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowa gotowość Workera'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić gotowości Workera'}, 500)
+            return
         if path == '/api/remote-workers/job-result':
             # The phone submits UCI, not a new FEN or authoritative chess move.
             # Validation and durable inbox happen in Arena. Game checkpoint
