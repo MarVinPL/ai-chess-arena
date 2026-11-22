@@ -458,3 +458,13 @@ temporary `.service` file and runs `systemd-analyze verify`, then checks the
 independent gateway entrypoint and restart, resource, loopback and hardening
 settings. This is a syntax/static policy test, **not** a systemd-managed
 runtime test. No unit was installed, enabled or started on the VPS.
+
+### Disposable systemd lifecycle integration test
+
+`tests/test_remote_worker_systemd_transient.py` starts the gateway using a
+randomly named **transient user-systemd unit**, with a temporary SQLite DB,
+random loopback port and no restart policy. It verifies an authenticated
+legal move reaches the durable journal, stops the transient unit and checks
+that it is inactive. The test does not install, enable or change any
+production unit. This tests actual systemd process management, not the
+full production service template or external HTTPS deployment.
