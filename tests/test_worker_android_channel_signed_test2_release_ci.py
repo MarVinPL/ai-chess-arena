@@ -44,7 +44,7 @@ def test_untrusted_pr_source_compiles_without_signing_secrets():
     assert "actions/upload-artifact@v6" in build
     assert "actions/download-artifact@v4" in sign
     assert "actions/download-artifact@v4" in publish
-    assert sign.index("sha256sum -c SHA256SUMS") < sign.index("KEYSTORE_B64:")
+    assert sign.index("name: Verify exact build artifact before restoring the keystore") < sign.index("name: Re-sign using isolated original debug key")
     assert "No signing" not in build  # no misleading success claim
 
 
