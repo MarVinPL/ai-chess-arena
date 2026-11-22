@@ -754,6 +754,19 @@ def _select_tournament_pairing(tournament_id, draft_enabled):
     return None, None
 
 
+def _exclusive_tournament_coordinator(run):
+    """Keep one coordinator owner throughout tournament checkpoint writes."""
+    from functools import wraps
+    from remote_worker_coordinator_lock import CoordinatorLock
+
+    @wraps(run)
+    def locked_run(*args, **kwargs):
+        with CoordinatorLock(DB):
+            return run(*args, **kwargs)
+    return locked_run
+
+
+@_exclusive_tournament_coordinator
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the

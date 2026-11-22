@@ -559,3 +559,14 @@ continues to select the local runner. The lock is advisory, so every
 checkpoint-writing coordinator must participate before remote execution
 can safely be enabled. Remote worker liveness attestation and recovery
 of unknown in-flight jobs are not implemented by this session.
+
+### Production tournament-loop coordinator ownership
+
+The `server.py` tournament loop now holds `CoordinatorLock(DB)` across the
+entire tournament execution, including checkpoint writes, using a narrow
+wrapper around the existing loop. The lock is released on normal exit and
+exceptions. The runner remains explicitly local-only. This is advisory
+single-host protection: all other checkpoint-writing paths and any future
+remote runner must participate in the same lock protocol before remote
+execution can be enabled. It is not a distributed lock or worker liveness
+attestation; no production service or remote dispatch was activated.
