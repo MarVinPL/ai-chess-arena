@@ -83,6 +83,13 @@ def test_expired_or_inactive_assignment_never_displays_board(tmp_path):
     assert not worker_board_snapshot(path, live["worker_id"], live, now=now)["active"]
 
 
+def test_live_events_never_inherit_previous_worker_identity():
+    # The public Arena live state is shared. Every event must explicitly
+    # claim the current worker/job or the private Android board is hidden.
+    assert "for identity_key in ('worker_id', 'job_id'):" in SERVER
+    assert "live_status.pop(identity_key, None)" in SERVER
+
+
 def test_endpoint_requires_machine_token_and_matching_nonce():
     section = SERVER.split("if path == '/api/remote-workers/board-view':", 1)[1].split(
         "if path == '/api/remote-workers/update-resume-status':", 1
