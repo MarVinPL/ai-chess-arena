@@ -317,3 +317,36 @@ sesja `PackageInstaller` z `USER_ACTION_REQUIRED`, jej wynik i
 anulowanie, powiązanie rezerwacji koordynatora z całym procesem
 oraz odzyskiwanie po restarcie. Nie wolno traktować samego
 `canRequestPackageInstalls()` jako zgody na bezobsługową instalację.
+
+## 2026-11-22 — odzyskiwanie rezerwacji po utracie odpowiedzi
+
+Dotychczas serwer generował `hold_token` dopiero przy rezerwacji.
+Jeśli odpowiedź HTTPS ginęła po zatwierdzeniu transakcji SQLite,
+aplikacja nie znała tokenu potrzebnego do zwolnienia blokady.
+
+Protokół jest teraz **write-before-reserve**: natywna aplikacja Rust
+losuje 256 bitów z systemowego RNG, zapisuje token razem z
+`worker_id` i adresem koordynatora do prywatnego systemowego magazynu
+poświadczeń (keyring; osobne konto `coordinator-update-hold-v1`),
+weryfikuje odczyt i **dopiero potem** wysyła uwierzytelnione żądanie
+HTTPS `update-reserve` z tym samym tokenem. Serwer sprawdza format
+64 małych znaków szesnastkowych i zatwierdza go w trwałej transakcji
+wymagającej świeżego idle. Odpowiedź musi potwierdzić **dokładnie**
+zapisany wcześniej token. Wszelkie niepowodzenia pozostawiają rekord
+do wyjaśnienia; nowej rezerwacji nie można nadpisać.
+
+`update-release` pobiera token **z keyring**, nie z JavaScript,
+weryfikuje `worker_id` i adres serwera, a po uwierzytelnionym
+potwierdzeniu zwolnienia usuwa lokalny sekret. Błąd uwierzytelnienia,
+sieci, magazynu lub niezgodne potwierdzenie nigdy nie kasują sekretu
+i nie zwalniają blokady w sposób domniemany.
+
+Po restarcie sam wpis w keyring **nie jest** powodem do automatycznego
+zwolnienia: instalator Android może nadal działać. Przed
+zwolnieniem należy uzgodnić faktyczny stan PackageInstaller i Workera.
+Wywołania są nadal **wyłącznie wewnętrzne**, bez komend frontendowych:
+brak kompletnej obsługi stanu systemowego instalatora i odzyskiwania,
+więc NIE jest jeszcze dozwolone uruchamianie aktualizacji z GUI.
+
+Nie wymaga żadnej płatnej usługi i **nie modyfikuje certyfikatu** z
+`WORKER_ANDROID_DEBUG_KEYSTORE_B64`.
