@@ -23,7 +23,7 @@ Pauza po ruchu oraz Stop po ruchu wyłączają kolejne zadania, lecz nie przeryw
 - Alias SHA-256 w llama-server pomaga uniknąć pomyłki modelu, ale NIE potwierdza kryptograficznie bajtów GGUF. Wydanie produkcyjne wymaga dodatkowej kontroli rzeczywistego pliku modelu.
 - Nie ma jeszcze pobierania i usuwania modeli na żądanie ani samodzielnego silnika GGUF w APK.
 - Domyślnie turniej dalej używa obliczeń na VPS. Eksperymentalny adapter telefonu działa tylko po jawnym ustawieniu zmiennej ARENA_PHONE_INFERENCE_ENABLED=1 **w środowisku uruchomienia Areny**. Gdy włączony, Arena wybiera dla każdego ruchu gotowy telefon z pasującym modelem SHA-256; gdy go brak, nie uruchamia po cichu innego modelu na VPS. Zapis szachownicy i checkpointów pozostaje w Arenie.
-- Wznawianie zadania po aktualizacji i zatrzymanie modelu podczas obliczeń wymagają osobnej integracji.
+- Po aktualizacji APK przycisk **Wznów** może ponownie uruchomić odbieranie **nowych** zadań wyłącznie po potwierdzeniu tokenu, `idle_confirmed` i braku oczekującego checkpointu wznowienia. Wznowienie **przerwanego zadania** z checkpointu i zatrzymanie trwającej inferencji wymagają osobnej integracji STOP/ACK.
 - Wymagany jest rzeczywisty test na Androidzie 16 i sprawdzenie wyników CI.
 - Wszystko bazuje na darmowym, otwartym oprogramowaniu.
 
