@@ -486,3 +486,35 @@ restart koordynatora nie usuwa prośby.
 Te zabezpieczenia są już w bazie danych i mają testy wyścigów.
 Faktyczny STOP/checkpoint/ACK wykonawcy i późniejsze wznowienie
 nadal wymagają podłączenia do transportu Workera.
+
+## 2026-11-22 — atomowe zapisanie zweryfikowanego checkpointu i rezerwacji
+
+Dodano wewnętrzne `WorkerUpdatePause.finalize_verified_pause` oraz
+trwałą tabelę `worker_update_resume`. Operacja używa `BEGIN IMMEDIATE`
+i `synchronous=FULL`: potwierdzone przez zaufany transport zatrzymanie,
+wcześniejszy ACK, aktywna dzierżawa, poprawny identyfikator job/request,
+zaufany walidator checkpointu, jego kanoniczny JSON, SHA-256 i blokada
+aktualizacji trafiają do jednego zatwierdzenia. Stan zadania zmienia się
+z `running` na **`unknown`**, nie na `idle_confirmed`.
+Przypadkowy nowy przydział nie jest możliwy, ponieważ istnieje hold
+i nadal obecne żądanie pauzy.
+
+Checkpoint jest ograniczony do 1 MiB, ma wersjonowany schemat,
+identyfikator zadania i tryb `resume` / `restart`; po zapisie
+jest odczytywany w transakcji, porównywany i haszowany. Odczyt po
+restarcie ponownie weryfikuje SHA-256. Zepsuty checkpoint
+blokuje wznowienie; zwykłe zwolnienie hold **nie usuwa** checkpointu,
+a `clear` odrzuca czyszczenie przy oczekującym stanie wznowienia.
+
+**Granica zaufania:** SHA-256 chroni spójność lokalnego zapisu, nie
+uwierzytelnia Workera ani nie waliduje sensu stanu modelu. Operacja
+jest wewnętrznym API koordynatora wymagającym zaufanego
+`checkpoint_verifier` i potwierdzenia STOP z prawdziwego transportu.
+Nie dodano publicznego endpointu, przycisku ani bezwarunkowego
+`checkpoint_verified=True`. Istniejący prototyp Workera jeszcze nie
+dostarcza takich dowodów, więc mechanizm nie jest aktywowany produkcyjnie.
+
+Dalszy krok: podłączyć transport STOP/checkpoint/ACK oraz
+weryfikator domenowy (np. legalną historię ruchów szachowych),
+potem odczyt checkpointu i kontrolowane wznowienie bez podwójnych
+wyników. Nadal nie uruchamiać instalatora APK bez zgody Androida.
