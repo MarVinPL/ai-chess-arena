@@ -220,6 +220,24 @@ async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<
     Ok(reply.job)
 }
 
+// Read untrusted HTTPS JSON with a strict memory budget, including chunked
+// responses and inaccurate Content-Length values. Never allow a remote host
+// to allocate unlimited memory on an Android device.
+async fn bounded_json_response(mut response: reqwest::Response, limit: usize)
+    -> Result<serde_json::Value, String> {
+    if response.content_length().map(|n| n > limit as u64).unwrap_or(false) {
+        return Err("Zbyt duża odpowiedź HTTPS".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > limit - bytes.len() {
+            return Err("Zbyt duża odpowiedź HTTPS".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Nieprawidłowy JSON HTTPS".into())
+}
+
 // Advisory only: the server currently returns unknown until its durable
 // coordinator job registry is wired. Never interpret an error as idle.
 #[tauri::command]
@@ -243,7 +261,7 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         "worker_id": worker_id, "token": token
     })).send().await.map_err(|_| "Nie udało się sprawdzić stanu zadań")?;
     if !response.status().is_success() { return Err("Nie udało się potwierdzić stanu zadań".into()); }
-    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
+    let data: serde_json::Value = bounded_json_response(response, 4096).await?;
     let state = data.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
     // This command does not authorize installation; unknown fields fail closed.
     match state {
@@ -332,7 +350,7 @@ async fn check_worker_release(channel: String) -> Result<ReleaseInfo, String> {
     if !response.status().is_success() {
         return Err("GitHub nie udostępnił informacji o wydaniach".into());
     }
-    let data: serde_json::Value = response.json().await
+    let data: serde_json::Value = bounded_json_response(response, 1024 * 1024).await
         .map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
