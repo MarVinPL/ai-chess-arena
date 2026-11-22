@@ -121,3 +121,14 @@ the agent. CPU/GPU usage is intentionally zero until a trusted measurement
 source is integrated. Existing session pairing is still an in-memory prototype;
 there is no remote worker transport or live scheduler hookup yet. Do not treat
 this integration test as evidence that real remote tasks are running.
+
+### Worker HTTPS authentication endpoint (not deployed)
+
+`POST /api/remote-workers/authenticate` accepts JSON `worker_id` and `token`
+(maximum 2048-byte request body), verifies the durable credential registry,
+and returns only authentication status and worker ID. It does not require an
+admin browser cookie. It is intended **only behind an HTTPS reverse proxy**.
+Before production enablement: enforce TLS at the proxy, apply per-client and
+per-worker rate limits, test real HTTP integration and wire a native desktop
+HTTPS client. The endpoint is not a scheduler/job transport, and no production
+configuration was changed.

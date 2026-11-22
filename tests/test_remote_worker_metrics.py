@@ -43,3 +43,13 @@ def test_panel_is_auth_gated_and_no_secret_exposure():
     assert 'worker_id' in html
     assert 'token_digest' not in html
     assert 'Zdalne komputery' in (root / 'index.html').read_text()
+
+
+def test_machine_auth_endpoint_has_bounded_body_and_no_echo():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
+    endpoint = source.split("if path == '/api/remote-workers/authenticate':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
+    assert "length <= 2048" in endpoint
+    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
+    assert "'authenticated': True" in endpoint
+    assert "'token': token" not in endpoint
