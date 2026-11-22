@@ -38,7 +38,10 @@ jobs:
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
+          # Synced from main PR #220: use stable SDK 36, not nonexistent android-37.
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
