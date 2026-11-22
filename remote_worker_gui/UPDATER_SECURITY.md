@@ -639,3 +639,27 @@ zakończenia inference; wymóg wiarygodnego STOP i ACK pozostaje
 osobny. Istniejący prototyp Workera nie ma jeszcze podłączonego
 wykonawcy/modelu, dlatego ten kod nie rozpoczyna automatycznej
 instalacji ani faktycznych rozgrywek na telefonie.
+
+## 2026-11-22 — prostsza decyzja: przerwanie partii w dowolnym momencie
+
+Zgodnie z decyzją użytkownika aktualizacja Android Workera nie musi
+czekać na koniec partii ani na powstanie nowego checkpointu. Po
+**faktycznym zakończeniu poprzedniego wykonawcy i unieważnieniu jego
+dzierżawy**, przy ponownym uruchomieniu zadania:
+
+- jeśli istnieje ostatni trwale zapisany checkpoint tej samej partii,
+  którego historia ruchów UCI jest legalna i zgadza się z FEN, należy
+  wznowić od niego;
+- jeśli takiego checkpointu nie ma, jest uszkodzony lub dotyczy
+  innego job_id, rozpocząć **tę partię od początku**;
+- nie zapisywać niedokończonej odpowiedzi modelu jako ruchu i nie
+  modyfikować wyników wcześniej ukończonych partii.
+
+`remote_worker_checkpoint_verifier.choose_interrupted_game_checkpoint`
+wykonuje bezpieczny wybór `resume` / `restart` i nie zmienia źródłowego
+checkpointu. To tylko logika wyboru danych. Nie jest to dowód
+zatrzymania procesu ani kompletny dispatcher. Wymagane są nadal
+fencing dzierżawy, brak równoległego wykonawcy tego samego job_id,
+integracja z wykonawcą Android oraz potwierdzenie wyniku
+PackageInstaller. Bez tych warunków nie należy deklarować, że
+automatyczne aktualizowanie i wznowienie już działa.
