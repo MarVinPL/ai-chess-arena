@@ -771,3 +771,20 @@ ręczne `Wznów`. Nie wymaga automatycznego wznowienia.
 Ta decyzja określa docelowy mechanizm; obecny PR
 **nie ma jeszcze** kompletnego, trwałego dziennika identyfikatora
 instalacji ani procedury uzgadniającej przy starcie.
+
+
+## Nazewnictwo wersjonowanych APK w workflow Android
+
+Workflow `.github/workflows/android-worker-apk.yml` odczytuje `versionName`
+z **faktycznie zbudowanego APK** za pomocą Android `aapt dump badging`,
+odrzuca nieoczekiwany format i zapisuje artefakt APK w postaci
+`ai-chess-arena-worker-vX.Y.Z-preN-arm64.apk`, gdzie `N` to
+`GITHUB_RUN_NUMBER`. Przykład: `ai-chess-arena-worker-v0.1.0-pre123-arm64.apk`.
+Plik `SHA256SUMS` jest tworzony dla tej samej nazwy i sprawdzany.
+
+To nazwa **przedpremierowego pliku APK**. Nie zastępuje wersji Android
+`versionCode` ani certyfikatu podpisującego. Samo kolejne `preN`
+nie czyni APK aktualizacją, jeżeli numer wersji Androida nie wzrósł.
+Docelowe stabilne wydanie może mieć nazwę `ai-chess-arena-worker-vX.Y.Z-arm64.apk`
+w osobnym zatwierdzonym workflow publikacji. Nazwa zbiorczego artefaktu
+GitHub Actions pozostaje bez zmian dla zgodności ze starszymi odwołaniami.
