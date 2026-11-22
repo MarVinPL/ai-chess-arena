@@ -1786,6 +1786,49 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path in ('/api/remote-workers/update-reserve', '/api/remote-workers/update-release'):
+            # These are coordinator transactions, not an APK installer.
+            # The device must authenticate with its existing machine token.
+            # The server NEVER permits installation or exposes signing keys.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid payload')
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid update transaction nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                registry = remote_worker_job_registry.WorkerJobRegistry(DB)
+                if path == '/api/remote-workers/update-reserve':
+                    hold_token = registry.reserve_update(worker_id)
+                    self.send_json({
+                        'state': 'reserved', 'authenticated': True,
+                        'source': 'coordinator', 'worker_id': worker_id,
+                        'nonce': nonce, 'hold_token': hold_token,
+                        'expires_at_unix_ms': int((time.time() + 300) * 1000),
+                        'install_allowed': False,
+                    })
+                else:
+                    hold_token = payload.get('hold_token')
+                    registry.release_update_hold(worker_id, hold_token)
+                    self.send_json({
+                        'state': 'unknown', 'released': True,
+                        'authenticated': True, 'source': 'coordinator',
+                        'worker_id': worker_id, 'nonce': nonce,
+                        'install_allowed': False,
+                    })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowy stan rezerwacji lub żądanie'}, 409)
+            except Exception:
+                self.send_json({'error': 'Nie można zmienić rezerwacji aktualizacji'}, 500)
+            return
         if path == '/api/auth/logout':
             if not arena_auth.origin_allowed(self.headers.get('Origin')):
                 self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
