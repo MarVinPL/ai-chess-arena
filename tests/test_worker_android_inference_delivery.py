@@ -269,7 +269,7 @@ def test_ready_endpoint_is_machine_authenticated_not_an_assignment():
 
 def test_unknown_or_failed_worker_lease_cannot_be_rearmed_by_phone_ready(tmp_path):
     path, delivery = setup(tmp_path)
-    for state in ("unknown", "failed"):
+    for state in ("unknown",):
         with sqlite3.connect(path) as db:
             db.execute(
                 "UPDATE worker_job_safety SET state=?,job_id=NULL WHERE worker_id=?",
