@@ -404,3 +404,16 @@ The test uses `curl -k` **only** for a self-signed loopback smoke test; real
 worker deployment must verify the server certificate and hostname. This is
 not production network authorization, and production runner integration is
 still pending.
+
+### Live checkpoint shape compatibility test
+
+`tests/test_remote_worker_production_checkpoint_shape.py` runs the actual
+`SequentialChessRunner` with the offline remote bridge against a checkpoint
+containing the same metadata fields as the production server payload:
+`tournament`, `entries`, `schedule`, `pairing`, both player snapshots,
+`game_started`, `moves`, `move_times`, `fen`, `side_to_move`, `updated_at`.
+The test commits a legal remote move and asserts immutable metadata is
+preserved and the staged journal is empty. This validates the payload
+contract only; `server.py` still uses its local move provider and its
+independent checkpoint writer. A single-writer handoff and authenticated
+network dispatch remain prerequisites before any production enablement.
