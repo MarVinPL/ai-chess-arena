@@ -31,10 +31,16 @@ def _mapping(message: Any, keys: set[str]) -> dict:
 
 def validate_job(message: Any) -> dict:
     """Validate a strictly typed inference task before dispatch to a worker."""
-    data = _mapping(message, {'version', 'job_id', 'fen', 'model_sha256',
-                              'max_tokens', 'timeout_seconds'})
-    if type(data['version']) is not int or data['version'] != 1:
+    if not isinstance(message, dict) or type(message.get('version')) is not int:
         raise ProtocolError('Unsupported protocol version')
+    version = message['version']
+    required = {'version', 'job_id', 'fen', 'model_sha256',
+                'max_tokens', 'timeout_seconds'}
+    if version == 2:
+        required.add('legal_moves')
+    elif version != 1:
+        raise ProtocolError('Unsupported protocol version')
+    data = _mapping(message, required)
     if not isinstance(data['job_id'], str) or not _ID.fullmatch(data['job_id']):
         raise ProtocolError('Invalid job ID')
     if not isinstance(data['model_sha256'], str) or not _SHA.fullmatch(data['model_sha256']):
@@ -51,6 +57,12 @@ def validate_job(message: Any) -> dict:
             raise ProtocolError('Invalid board state')
     except ValueError as exc:
         raise ProtocolError('Invalid FEN') from exc
+    if version == 2:
+        moves = data['legal_moves']
+        expected = sorted(move.uci() for move in board.legal_moves)
+        if (not isinstance(moves, list) or not 1 <= len(moves) <= 256
+                or moves != expected):
+            raise ProtocolError('Legal moves differ from Arena board position')
     return dict(data)
 
 
