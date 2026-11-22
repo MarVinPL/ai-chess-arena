@@ -67,14 +67,25 @@ class WorkerInferenceDelivery:
                 "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
-            if row and (row[1] is not None or row[0] == "running"):
+            if row is not None and row != ("idle_confirmed", None):
+                # An UNKNOWN, FAILED or RUNNING lease is NOT made idle just
+                # because the phone claims that a model is loaded. The old
+                # job must first be reconciled by Arena.
                 return "blocked"
-            db.execute(
-                """INSERT INTO worker_job_safety VALUES (?,NULL,'idle_confirmed',NULL,?)
-                ON CONFLICT(worker_id) DO UPDATE SET
-                state='idle_confirmed',job_id=NULL,deadline=NULL,updated_at=excluded.updated_at""",
-                (worker_id, now),
-            )
+            if row is None:
+                # Fresh authenticated Worker: no previous Arena job exists.
+                db.execute(
+                    """INSERT INTO worker_job_safety
+                    (worker_id,job_id,state,deadline,updated_at)
+                    VALUES (?,NULL,'idle_confirmed',NULL,?)""",
+                    (worker_id, now),
+                )
+            else:
+                db.execute(
+                    """UPDATE worker_job_safety SET updated_at=?
+                    WHERE worker_id=? AND state='idle_confirmed' AND job_id IS NULL""",
+                    (now, worker_id),
+                )
             db.execute(
                 """INSERT INTO worker_inference_capabilities VALUES (?,?,?)
                 ON CONFLICT(worker_id) DO UPDATE SET
