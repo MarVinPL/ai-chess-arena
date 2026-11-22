@@ -78,6 +78,23 @@ pub(crate) fn check_platform_apk_identity(
     IdentityCheck::Verified
 }
 
+/// Independently confirm the installed APK after an updater-triggered
+/// restart. An app version string or webview-provided value is never proof.
+#[allow(dead_code)]
+pub(crate) fn installed_update_matches_journal(
+    installed: &PlatformApkIdentity,
+    previous_version_code: u64,
+    target_version_code: u64,
+) -> bool {
+    previous_version_code > 0
+        && target_version_code > previous_version_code
+        && installed.package_name == WORKER_PACKAGE_ID
+        && installed.long_version_code == target_version_code
+        && installed.platform_signing_verified
+        && installed.current_signer_count == 1
+        && installed.certificate_sha256 == WORKER_SIGNING_CERT_SHA256
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +107,23 @@ mod tests {
             platform_signing_verified: true,
             current_signer_count: 1,
         }
+    }
+
+    #[test]
+    fn confirms_update_from_android_installed_version_and_original_signer() {
+        assert!(installed_update_matches_journal(&record(1001), 1000, 1001));
+        assert!(!installed_update_matches_journal(&record(1000), 1000, 1001));
+        assert!(!installed_update_matches_journal(&record(1002), 1000, 1001));
+        assert!(!installed_update_matches_journal(&record(1001), 1001, 1001));
+        let mut unsigned = record(1001);
+        unsigned.platform_signing_verified = false;
+        assert!(!installed_update_matches_journal(&unsigned, 1000, 1001));
+        let mut wrong = record(1001);
+        wrong.certificate_sha256 = "a".repeat(64);
+        assert!(!installed_update_matches_journal(&wrong, 1000, 1001));
+        wrong = record(1001);
+        wrong.package_name = "pl.other.worker".into();
+        assert!(!installed_update_matches_journal(&wrong, 1000, 1001));
     }
 
     #[test]
