@@ -827,3 +827,25 @@ i nie stanowi sam w sobie dowodu zainstalowania APK.
 Przy podpisywaniu używać wyłącznie oryginalnego certyfikatu z
 GitHub Secrets; nie generować nowego. Napis `preN` w nazwie APK
 nie zmienia Android `versionCode`.
+
+
+## 2026-11-22 — bezpieczne sprawdzenie dostępności wznowienia
+
+Po aktualizacji Androida komenda Tauri
+`inspect_worker_resume_readiness` odpytuje nowy endpoint
+`/api/remote-workers/update-resume-status` po HTTPS i z tokenem
+maszyny oraz losowym `nonce`. Serwer weryfikuje tożsamość Workera,
+a następnie czyta istniejący trwały checkpoint ze sprawdzeniem
+SHA-256 oraz spójność blokady aktualizacji, fazy pauzy i stanu
+wykonawcy. Nie zwraca do UI sekretu rezerwacji, treści checkpointu
+ani `request_id`. W interfejsie jest jeden przycisk `Wznów`, ale
+**pozostaje nieaktywny**, dopóki rzeczywisty wykonawca inference
+nie jest podłączony i nie potwierdzi nowej dzierżawy zadania.
+Status `awaiting_executor` oznacza zapisany checkpoint, **nie**
+gotowość do obliczeń.
+
+Ta zmiana nie wdraża jeszcze wykonania inferencji ani endpointu
+wznawiającego grę; `resume_available=false` jest obecnie stałą
+zabezpieczającą, a nie sukcesem. Nie należy scalać #197 jako
+kompletnego wznowienia przed dodaniem transportu do wykonawcy,
+zweryfikowanego ACK oraz testu end-to-end na urządzeniu.
