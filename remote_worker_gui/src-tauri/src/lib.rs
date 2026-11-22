@@ -60,6 +60,19 @@ fn update_recovery_status() -> UpdateRecoveryStatus {
     }
 }
 
+// Recovery is read-only: the private hold capability is used inside Rust,
+// never returned to the webview. No reservation is released automatically.
+#[tauri::command]
+async fn inspect_update_hold() -> Result<String, String> {
+    if android_update_recovery::load_pending()?.is_none() {
+        return Err("Brak oczekującej rezerwacji".into());
+    }
+    let machine_token = token_entry()?.get_password()
+        .map_err(|_| "Brak oryginalnego tokenu Workera".to_string())?;
+    let status = android_update_coordinator::inspect_pending_update(&machine_token).await?;
+    Ok(status.to_owned())
+}
+
 fn token_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
         .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
@@ -449,7 +462,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
