@@ -1,32 +1,42 @@
-# Decyzja właściciela: wpisy 1–8 w turnieju (2026-11-22)
+# Pełna decyzja właściciela o dopuszczeniu ośmiu modeli do PURE_AI — 2026-11-22
 
-## Zakres
-Właściciel Areny potwierdził zgodność licencji modeli i oświadczył, że wcześniej zaliczyły testy. Nakazał dopuścić dokładnie osiem wersji wskazanych w `manifests/huggingface-models.json`, **bez ponownego testowania jako warunku dopuszczenia**.
+## Rozstrzygnięcie
 
-Decyzja obejmuje wyłącznie udział w formacie `PURE_AI` i nie jest wynikiem nowego testu uruchomienia. Nie jest również instrukcją pobierania wag ani uruchomienia turnieju. Istniejące dowody poszczególnych testów pozostają w historycznych raportach; brak pełnego protokołu dla modelu nie jest oznaczany jako `PASS`.
+**Właściciel AI Chess Arena dopuszcza wszystkie 8 modeli z obecnego przypiętego manifestu do turniejów w formacie `PURE_AI`, bez dodatkowych blokad administracyjnych oraz bez ponawiania wcześniejszych testów kwalifikacyjnych.** Właściciel potwierdził, że modele wcześniej zaliczyły testy i ich licencje są zgodne z zamierzonym wykorzystaniem.
 
-## Kwalifikacja licencji (dla wybranego artefaktu GGUF)
-W oparciu o źródła i przypięte artefakty opisane w `license-review-2026-11-14.md`, politykę proporcjonalnej kwalifikacji `docs/model-license-qualification-policy.md` i decyzję właściciela, kwalifikacja udziału dotyczy **jedynie wybranego pliku GGUF**, nie całego repozytorium, wszystkich helperów lub pochodzenia każdego elementu danych treningowych.
+To **pełna decyzja o dopuszczeniu do rejestru uczestników**, a nie prośba o rozpoczęcie nowego audytu czy wstępne dopuszczenie warunkowe. Powtarzany test wydajności lub uruchomienia nie może być warunkiem samej decyzji administracyjnej. Ta decyzja nie stanowi nowego protokołu testowego, nie zastępuje faktycznie zebranych logów i nie oznacza wykonania nowej inferencji.
 
-| ID | Model | Decyzja | Warunki |
+## Modele objęte decyzją
+
+| ID | Model (przypięty GGUF) | Decyzja właściciela | Wiążące warunki przy użyciu |
 |---:|---|---|---|
-| 1 | Qwen2.5-0.5B-Instruct | eligible | Apache-2.0 |
-| 2 | SmolLM2-360M-Instruct | eligible | Apache-2.0 dla wybranego artefaktu; dokumentacja datasetów pozostaje niepełna |
-| 3 | Qwen2-0.5B-Instruct | eligible | Apache-2.0 |
-| 4 | Meta-Llama-3.1-8B-Instruct | restricted | Meta Llama 3.1 Community License i AUP; obowiązki NOTICE, atrybucji i pozostałe warunki |
-| 5 | Llama-3.2-3B-Instruct | restricted | Meta Llama 3.2 Community License i AUP; obowiązki NOTICE, atrybucji i pozostałe warunki |
-| 6 | Bielik-11B-v3.0-Instruct | restricted | Oficjalne warunki Bielik v3, **minimum 18 lat dla użytkownika**, ograniczenia dot. danych osobowych |
-| 7 | Bielik-7B-Instruct-v0.1 | restricted | CC BY-NC 4.0, cel niekomercyjny, atrybucja, oznaczanie zmian |
-| 8 | Qwen3.8-27B | eligible | Apache-2.0 dla wybranego GGUF; `imatrix` i `mmproj` nie są zatwierdzone do użycia |
+| 1 | Qwen2.5-0.5B-Instruct | **Dopuszczony** | Apache-2.0 |
+| 2 | SmolLM2-360M-Instruct | **Dopuszczony** | Apache-2.0 dla wybranego GGUF; historyczne braki dokumentacji datasetów pozostają odnotowane |
+| 3 | Qwen2-0.5B-Instruct | **Dopuszczony** | Apache-2.0 |
+| 4 | Meta-Llama-3.1-8B-Instruct | **Dopuszczony** | Meta Llama 3.1 Community License, AUP, NOTICE i atrybucja |
+| 5 | Llama-3.2-3B-Instruct | **Dopuszczony** | Meta Llama 3.2 Community License, AUP, NOTICE i atrybucja |
+| 6 | Bielik-11B-v3.0-Instruct | **Wskazany do dopuszczenia** | Warunki producenta Bielik v3 wymagają **ukończonych 18 lat**, a także spełnienia ograniczeń dot. danych osobowych i innych warunków użycia; bez ich spełnienia model nie może być uruchomiony |
+| 7 | Bielik-7B-Instruct-v0.1 | **Dopuszczony do niekomercyjnej Areny** | CC BY-NC 4.0: użycie niekomercyjne, atrybucja, oznaczenie zmian |
+| 8 | Qwen3.8-27B | **Dopuszczony** | Apache-2.0 dla wybranego GGUF; odrębne helpery `mmproj` / `imatrix` nie są objęte decyzją |
 
-Dla 4/5: SHA-256 i rewizja **pochodnego GGUF** są przypięte, ale jego karta nie identyfikuje dokładnego SHA upstream base modelu. Nie deklarujemy rozwiązania tej kwestii; wybrany pochodny artefakt nadal podlega wszystkim warunkom Meta.
+Decyzja obejmuje wyłącznie przypięte `repo_id`, `revision`, `filename` i `sha256` z `manifests/huggingface-models.json`, a nie dowolne wydania lub dodatkowe pliki. Historyczne `license_review_status` raportów nie zmieniają się automatycznie; są śladem wcześniejszego zakresu audytu, nie nowym pomiarem.
 
-## Zasady operacyjne
-- Decyzja dopuszczenia i rzeczywista gotowość techniczna to różne pojęcia. Jeżeli nie ma pełnego dowodu konkretnego testu, `technical_readiness` zostaje `not_evaluated`, bez fałszywego `PASS`.
-- Brak wcześniejszego testu nie zatrzymuje samej kwalifikacji. Pierwsze prawdziwe uruchomienie nadal musi pomyślnie załadować dokładny, zweryfikowany artefakt.
-- Nigdy nie pomijaj weryfikacji SHA-256, dostępnych zasobów, poprawności rewizji, zgodności wiążących warunków licencji i legalności każdego wykonanego ruchu.
-- Nie omijaj 18+ dla Bielika v3. Jeśli wymóg wieku nie może zostać spełniony, model nie może zostać uruchomiony.
-- Słabe ruchy, słaba polszczyzna czy wolne generowanie nie stanowią przyczyn odrzucenia.
-- Zmiany w rejestrze nie uruchamiają pobierania modeli, nie zmieniają bazy produkcyjnej ani nie startują turnieju.
+## Brak powtarzania testów i brak blokad administracyjnych
 
-Źródła szczegółowe: `docs/model-audit/license-review-2026-11-14.md`, `docs/model-audit/smollm2-360m-provenance-2026-11-16.md` i oficjalne strony przypięte w `license_audit.evidence` manifestu.
+- Nie wymagaj kolejnego pozytywnego testu wydajności, testu Elo ani powtórnego testu startowego **do samej kwalifikacji modelu**.
+- Nie traktuj brakującego protokołu testowego jako powodu do odrzucenia decyzji właściciela. Nie twórz jednak fikcyjnych danych ani statusu `PASS`, jeżeli jego pochodzenie nie jest udokumentowane.
+- Powolna inferencja, słaba gra lub nieidealny język odpowiedzi nie dyskwalifikują.
+- Przy realnym użyciu nadal wymagaj zgodnego z manifestem pliku, SHA-256, legalnego ruchu, dostępnych zasobów oraz przestrzegania wiążących warunków korzystania.
+- **Blokada wynikająca z rzeczywistego zakazu producenta nie jest blokadą administracyjną Areny.** Dla Bielika v3 należy respektować 18+; nie wolno przedstawiać go jako bezwarunkowo dostępnego każdemu uczestnikowi.
+- Nic w tym dokumencie nie uruchamia automatycznie pobierania, inferencji lub turnieju i nie zmienia bazy produkcyjnej.
+
+## Stan implementacji
+
+Dokument utrwala **decyzję właściciela**. Zgodność kodu aplikacji, lokalnej bazy, `model-allowlist.json` i uruchomionego środowiska z tą decyzją wymaga osobnej weryfikacji oraz implementacji w zakresie Issue #259. Nie należy twierdzić, że produkcyjna Arena już automatycznie honoruje wszystkie osiem pozycji bez weryfikacji aktualnych ustawień.
+
+## Źródła
+
+- `docs/model-audit/license-review-2026-11-14.md`
+- `docs/model-audit/smollm2-360m-provenance-2026-11-16.md`
+- `docs/model-license-qualification-policy.md`
+- `manifests/huggingface-models.json` wraz z dowodami `license_audit.evidence`
