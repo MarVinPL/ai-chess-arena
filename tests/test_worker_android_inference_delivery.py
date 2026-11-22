@@ -140,3 +140,81 @@ def test_transport_endpoint_has_no_worker_control_actions():
     assert '"job-poll"' in transport
     assert "async fn poll_my_inference_job(" in native
     assert "fetch_my_inference_job(" in native
+
+
+def test_legal_move_is_received_but_not_applied_to_arena(tmp_path):
+    path, delivery = setup(tmp_path)
+    delivery.assign_from_arena(WORKER, JOB)
+    result = {"version": 1, "job_id": JOB["job_id"], "uci": "e2e4"}
+    assert delivery.submit_inference_result(WORKER, result) == {
+        "state": "received_not_applied", "job_id": JOB["job_id"]
+    }
+    assert delivery.submit_inference_result(WORKER, result) == {
+        "state": "already_received", "job_id": JOB["job_id"]
+    }
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT result_json FROM worker_inference_results WHERE job_id=?",
+            (JOB["job_id"],),
+        ).fetchone()[0] == json.dumps(
+            result, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        # Only Arena's tournament runner may apply UCI and close its lease.
+        assert db.execute(
+            "SELECT state FROM worker_job_safety WHERE worker_id=?", (WORKER,)
+        ).fetchone()[0] == "running"
+
+
+def test_illegal_wrong_or_changed_result_cannot_replace_first_move(tmp_path):
+    path, delivery = setup(tmp_path)
+    delivery.assign_from_arena(WORKER, JOB)
+    for invalid in (
+        {"version": 1, "job_id": JOB["job_id"], "uci": "e2e5"},
+        {"version": 1, "job_id": "game_othergame", "uci": "e2e4"},
+        {"version": 1, "job_id": JOB["job_id"], "uci": "e9e4"},
+        {"version": 1, "job_id": JOB["job_id"], "uci": "e2e4", "fen": JOB["fen"]},
+    ):
+        with pytest.raises(ValueError):
+            delivery.submit_inference_result(WORKER, invalid)
+    good = {"version": 1, "job_id": JOB["job_id"], "uci": "e2e4"}
+    delivery.submit_inference_result(WORKER, good)
+    with pytest.raises(ValueError):
+        delivery.submit_inference_result(
+            WORKER, {"version": 1, "job_id": JOB["job_id"], "uci": "d2d4"}
+        )
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT count(*) FROM worker_inference_results"
+        ).fetchone()[0] == 1
+
+
+def test_expired_lease_and_update_barriers_reject_submissions(tmp_path):
+    path, delivery = setup(tmp_path)
+    delivery.assign_from_arena(WORKER, JOB)
+    late = WorkerInferenceDelivery(path, clock=lambda: 1100.0)
+    good = {"version": 1, "job_id": JOB["job_id"], "uci": "e2e4"}
+    with pytest.raises(ValueError):
+        late.submit_inference_result(WORKER, good)
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO worker_update_holds VALUES (?,?,?,?)",
+            (WORKER, "b" * 64, 1000.0, 1300.0),
+        )
+    with pytest.raises(ValueError):
+        delivery.submit_inference_result(WORKER, good)
+
+
+def test_result_api_is_authenticated_and_never_applies_moves():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    server = (root / "server.py").read_text(encoding="utf-8")
+    rust = (root / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    block = server.split("if path == '/api/remote-workers/job-result':", 1)[1].split(
+        "if path == '/api/remote-workers/job-poll':", 1
+    )[0]
+    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in block
+    assert "submit_inference_result(" in block
+    assert "set_live(" not in block
+    assert "board.push" not in block
+    assert '"job-result"' in rust
+    assert "submit_my_inference_move(" in rust
