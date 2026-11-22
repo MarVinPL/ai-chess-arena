@@ -35,6 +35,14 @@ class DurableWorkerJobs:
                 created_at REAL NOT NULL,
                 acknowledged_at REAL
             )''')
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_update_resume (
+                worker_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                checkpoint_json TEXT NOT NULL,
+                checkpoint_sha256 TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )''')
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -45,6 +53,17 @@ class DurableWorkerJobs:
     def _id(value):
         if not isinstance(value, str) or not _ID.fullmatch(value):
             raise ValueError('Invalid identifier')
+
+    def _reject_pending_resume(self, db, worker_id):
+        # A locally stored resumable job remains owned by the coordinator
+        # even after Android completed and the update hold was released.
+        # Never start an unrelated assignment or a second installer before
+        # the interrupted job has been reconciled by the resume dispatcher.
+        if db.execute(
+            'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+            (worker_id,)
+        ).fetchone():
+            raise ValueError('Worker resume checkpoint pending; assignment blocked')
 
     def _reject_pending_pause(self, db, worker_id):
         # A requested or ACKed pause is not idle. Block assignment even if
@@ -88,6 +107,7 @@ class DurableWorkerJobs:
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
             self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
             row = db.execute('''SELECT state,job_id,deadline,updated_at
                                 FROM worker_job_safety WHERE worker_id=?''',
                              (worker_id,)).fetchone()
@@ -167,6 +187,7 @@ class DurableWorkerJobs:
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
             self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
             row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
@@ -220,10 +241,14 @@ class DurableWorkerJobs:
                 'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            resume = db.execute(
+                'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
         now = self.clock()
         # An in-flight stop request is never fresh idle evidence, even if
         # another process has just committed a terminal job result.
-        if not row or hold or pause:
+        if not row or hold or pause or resume:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
