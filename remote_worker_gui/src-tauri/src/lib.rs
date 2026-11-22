@@ -135,6 +135,8 @@ struct ReleaseInfo {
     latest_version: Option<String>,
     update_available: bool,
     release_notes_url: Option<String>,
+    // Read-only indicator: candidate metadata is not an installable APK.
+    apk_asset_available: bool,
 }
 
 fn numeric_version(version: &str) -> Option<[u64; 3]> {
@@ -171,12 +173,26 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
         .header(reqwest::header::USER_AGENT, "ai-chess-arena-worker-update-check")
         .send().await.map_err(|_| "Nie udało się sprawdzić wydań")?;
     if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniach".into()); }
-    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowe metadane wydań")?;
+    // Read bounded GitHub metadata; reject oversized bodies before parsing.
+    let mut response = response;
+    const MAX_RELEASE_JSON: usize = 1024 * 1024;
+    if response.content_length().map(|length| length > MAX_RELEASE_JSON as u64).unwrap_or(false) {
+        return Err("Zbyt duże metadane wydań".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu wydań")? {
+        if chunk.len() > MAX_RELEASE_JSON - body.len() {
+            return Err("Zbyt duże metadane wydań".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let data: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
     let candidate = newest_worker_release(releases);
     let Some((latest, tag, data)) = candidate else {
-        return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None });
+        return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None, apk_asset_available: false });
     };
     let notes = data.get("html_url").and_then(|v| v.as_str())
         .and_then(|raw| reqwest::Url::parse(raw).ok())
@@ -185,7 +201,11 @@ async fn check_worker_release() -> Result<ReleaseInfo, String> {
             && url.query().is_none() && url.fragment().is_none()
             && url.username().is_empty() && url.password().is_none())
         .map(|url| url.to_string());
-    Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes })
+    // The update candidate selector is now used in the native release-check
+    // path. This is metadata only, never a download/install authorization.
+    let apk_asset_available = latest > installed
+        && android_update_asset::select_apk_candidate(data, tag).is_some();
+    Ok(ReleaseInfo { current_version: current, latest_version: Some(tag.to_owned()), update_available: latest > installed, release_notes_url: notes, apk_asset_available })
 }
 
 // Fail closed: a missing coordinator confirmation is not an idle worker.
