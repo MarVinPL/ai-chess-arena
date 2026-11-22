@@ -222,3 +222,100 @@ def test_phone_mode_skips_vps_download_but_preserves_local_mode(monkeypatch):
         server._prepare_game_execution_assets(
             {"model_sha256": "bad"}, b, phone_inference_enabled=True,
         )
+
+
+def test_crash_during_checkpoint_commit_rolls_back_lease_and_chess(
+    tmp_path, monkeypatch,
+):
+    db, delivery = prepare(tmp_path)
+    previous = initialize_arena_checkpoint(db)
+    job = {
+        "version": 1, "job_id": "move_crash_test_1",
+        "fen": chess.STARTING_FEN, "model_sha256": MODEL,
+        "max_tokens": 16, "timeout_seconds": 600,
+    }
+    delivery.assign_from_arena(WORKER, job)
+    delivery.submit_inference_result(
+        WORKER, {"version": 1, "job_id": job["job_id"], "uci": "e2e4"}
+    )
+    upcoming, record = next_arena_checkpoint(previous, "e2e4")
+    original = tournament_checkpoint.save_in_transaction
+
+    def fail_after_writing(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("Simulated process failure before SQLite commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tournament_checkpoint, "save_in_transaction",
+                      fail_after_writing)
+        with pytest.raises(RuntimeError):
+            delivery.finalize_arena_result(
+                WORKER, job["job_id"], "e2e4",
+                tournament_id=1, checkpoint=upcoming,
+            )
+    # Both the new checkpoint and idle transition must roll back.
+    assert tournament_checkpoint.load(db, 1) == previous
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job["job_id"])
+        assert conn.execute(
+            "SELECT count(*) FROM worker_inference_results WHERE job_id=?",
+            (job["job_id"],),
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM worker_inference_assignments WHERE job_id=?",
+            (job["job_id"],),
+        ).fetchone()[0] == 1
+    # Retrying the identical Arena checkpoint commit works exactly once.
+    delivery.finalize_arena_result(
+        WORKER, job["job_id"], "e2e4", tournament_id=1, checkpoint=upcoming
+    )
+    assert tournament_checkpoint.load(db, 1) == upcoming
+
+
+def test_mismatched_or_skipped_arena_checkpoint_never_releases_phone(tmp_path):
+    db, delivery = prepare(tmp_path)
+    old = initialize_arena_checkpoint(db)
+    job = {
+        "version": 1, "job_id": "move_wrong_cp_1",
+        "fen": chess.STARTING_FEN, "model_sha256": MODEL,
+        "max_tokens": 16, "timeout_seconds": 600,
+    }
+    delivery.assign_from_arena(WORKER, job)
+    delivery.submit_inference_result(
+        WORKER, {"version": 1, "job_id": job["job_id"], "uci": "e2e4"}
+    )
+    good, _record = next_arena_checkpoint(old, "e2e4")
+    for bad in (
+        {**good, "fen": chess.STARTING_FEN},
+        {**good, "moves": []},
+        {**good, "pairing": {"id": 99}},
+        {**good, "move_times": []},
+        {**good, "moves": [{**good["moves"][0], "uci": "d2d4"}]},
+    ):
+        with pytest.raises(ValueError):
+            delivery.finalize_arena_result(
+                WORKER, job["job_id"], "e2e4",
+                tournament_id=1, checkpoint=bad,
+            )
+        assert tournament_checkpoint.load(db, 1) == old
+        with sqlite3.connect(db) as conn:
+            assert conn.execute(
+                "SELECT state FROM worker_job_safety WHERE worker_id=?",
+                (WORKER,),
+            ).fetchone()[0] == "running"
+
+
+def test_server_publishes_remote_move_via_atomic_checkpoint_commit():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "server.py").read_text(encoding="utf-8")
+    delivery = (root / "remote_worker_inference_delivery.py").read_text(
+        encoding="utf-8")
+    assert "phone_move_provider.commit_checkpoint_for_record(" in source
+    assert "tournament_checkpoint.save_in_transaction(" in delivery
+    assert "db.execute(\"BEGIN IMMEDIATE\")" in delivery
+    assert "worker_inference_results" in delivery
+    assert "state='idle_confirmed'" in delivery
