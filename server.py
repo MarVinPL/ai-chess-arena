@@ -1786,6 +1786,37 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/update-resume-status':
+            # Machine-token authenticated, read-only resume readiness.
+            # Never issues a job lease or exposes an unverified checkpoint.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid resume status request')
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid resume status nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_update_pause import WorkerUpdatePause
+                snapshot = WorkerUpdatePause(DB).resume_status(worker_id)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce,
+                    'resume_available': False,
+                    **snapshot,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie wznowienia'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić wznowienia'}, 500)
+            return
         if path == '/api/remote-workers/update-pause-poll':
             # Read-only STOP instruction transport; no client-supplied ACK,
             # checkpoint, idle transition, hold release or install permission.
