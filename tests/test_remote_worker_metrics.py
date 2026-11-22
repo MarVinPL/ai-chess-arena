@@ -61,6 +61,15 @@ def test_update_safety_endpoint_fails_closed_without_durable_job_registry():
     endpoint = source.split("if path == '/api/remote-workers/update-safety':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
     assert "length <= 2048" in endpoint
-    assert 'WorkerJobRegistry(DB).state(worker_id)' in endpoint
+    # API must rely on the coordinator's fresh durable snapshot, not a
+    # bare historical idle row or an optimistic default.
+    assert 'WorkerJobRegistry(DB)' in endpoint
+    assert 'registry.update_safety_snapshot(worker_id)' in endpoint
+    assert "re.fullmatch(r'[0-9a-f]{32}', nonce)" in endpoint
+    assert "'authenticated': True" in endpoint
+    assert "'source': 'coordinator'" in endpoint
+    assert "'nonce': nonce" in endpoint
+    assert "'active_tasks': active_tasks" in endpoint
+    assert "'checked_at_unix_ms': int(time.time() * 1000)" in endpoint
     assert "'install_allowed': False" in endpoint
     assert "'token': token" not in endpoint
