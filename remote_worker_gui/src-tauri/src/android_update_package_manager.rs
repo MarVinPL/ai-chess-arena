@@ -65,6 +65,23 @@ fn read_android_identity(
     })
 }
 
+/// Report whether Android currently allows *this installed app* to request
+/// a user-confirmed package installation. This is only a diagnostic: the
+/// package-install permission does NOT verify the APK, coordinator, or grant
+/// silent installation. Errors (including unsupported APIs) fail closed.
+pub(crate) fn can_request_package_installation() -> Result<bool, String> {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(java_error)?;
+    let mut env = vm.attach_current_thread().map_err(java_error)?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let pm = env.call_method(&context, "getPackageManager",
+        "()Landroid/content/pm/PackageManager;", &[])
+        .map_err(java_error)?.l().map_err(java_error)?;
+    if pm.is_null() { return Err("Brak Android PackageManager".into()); }
+    env.call_method(&pm, "canRequestPackageInstalls", "()Z", &[])
+        .map_err(java_error)?.z().map_err(java_error)
+}
+
 /// Obtain *both* identities via Android PackageManager. The caller supplies
 /// only a private staged path, never a JavaScript URL or a user-chosen file.
 /// On any API error, ambiguity, missing cert or downgrade return a denial.
