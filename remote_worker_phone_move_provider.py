@@ -53,9 +53,10 @@ class ArenaPhoneMoveProvider:
             raise PhoneMoveUnavailable("Unsupported model token budget")
         job_id = "move_" + secrets.token_hex(16)
         job = {
-            "version": 1,
+            "version": 2,
             "job_id": job_id,
             "fen": board.fen(),
+            "legal_moves": sorted(move.uci() for move in board.legal_moves),
             "model_sha256": digest,
             "max_tokens": tokens,
             "timeout_seconds": self.timeout_seconds,
