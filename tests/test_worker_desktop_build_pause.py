@@ -17,7 +17,10 @@ def test_linux_windows_jobs_are_paused_without_deleting_job_steps():
 
 def test_android_remains_active_and_requires_real_source_changes():
     src = WORKFLOW.read_text(encoding="utf-8")
-    assert "  android:\n    needs: detect\n    if: needs.detect.outputs.android == 'true'" in src
+    assert "  android:\n    needs: detect" in src
+    assert "  android_signed:\n    needs: detect" in src
+    assert "github.event_name == 'pull_request'" in src
+    assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in src
     assert "    paths:" in src
     assert "workflow_dispatch:" not in src
     assert "remote_worker_gui/src-tauri/gen/android/**" in src

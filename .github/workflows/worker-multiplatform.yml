@@ -175,13 +175,26 @@ jobs:
 
   android:
     needs: detect
-    if: needs.detect.outputs.android == 'true'
+    # Pull requests are always untrusted: NEVER forward signing secrets.
+    if: needs.detect.outputs.android == 'true' && github.event_name == 'pull_request'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
 
+  android_signed:
+    needs: detect
+    # Release signing is available only to a trusted push on main.
+    if: needs.detect.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/android-worker-apk.yml
+    permissions:
+      contents: read
+    secrets:
+      WORKER_ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
+      WORKER_ANDROID_DEBUG_STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
+      WORKER_ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
+
   prune:
-    needs: [detect, linux, windows, android]
+    needs: [detect, linux, windows, android, android_signed]
     # The elevated token is never exposed to application builds or pull requests.
     if: always() && needs.detect.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
