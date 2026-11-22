@@ -36,8 +36,10 @@ def test_reservation_blocks_both_scheduler_apis_and_only_explicit_release_unlock
     assert jobs.state(WORKER) == "idle_confirmed"  # reservation, not mutated job status
     jobs.release_update_hold(WORKER, token)
     assert not jobs.validate_update_hold(WORKER, token)
-    jobs.assign(WORKER, "job_12345678", timeout_seconds=60)
-    assert jobs.state(WORKER) == "running"
+    assert jobs.state(WORKER) == "unknown"
+    # Clearing the reservation never claims the restarted Worker is idle.
+    with pytest.raises(ValueError, match="confirmed idle"):
+        jobs.assign(WORKER, "job_12345678", timeout_seconds=60)
 
 
 def test_stale_idle_and_missing_registry_cannot_acquire_hold(tmp_path):
