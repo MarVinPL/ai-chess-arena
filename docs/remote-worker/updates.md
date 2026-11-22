@@ -608,3 +608,13 @@ staged result, or require manual reconciliation. Corrupt or changed
 checkpoints are flagged for manual review, never automatically replayed.
 The inventory does not mutate worker state, grant liveness, acknowledge
 results, or restart jobs. Production dispatch remains disabled.
+
+### Authenticated worker heartbeat storage (offline)
+
+`remote_worker_heartbeat.py` records an authenticated worker presence signal
+with transactional token revalidation, bounded freshness checks and no changes
+to worker safety state. Heartbeats cannot turn an unknown or busy worker into
+an idle worker, and cannot automatically reconcile unfinished jobs. This is
+only a coordinator-side persistence building block: there is no public
+heartbeat endpoint, active liveness challenge, worker capacity attestation,
+or production dispatch activation yet.
