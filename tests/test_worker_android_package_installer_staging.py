@@ -32,6 +32,9 @@ def test_native_session_stages_bytes_and_commits_with_explicit_os_callback():
     assert '"getIntentSender"' in MODULE
     assert 'WorkerInstallStatusReceiver' in MODULE
     assert 'FLAG_MUTABLE' in MODULE
-    assert "stage_verified_apk_session" not in LIB
+    assert "stage_verified_apk_session" in LIB
+    assert "commit_staged_session(session_id)" in LIB
+    assert "android_update_install_journal::save(&journal)" in LIB
+    assert LIB.index("android_update_install_journal::save(&journal)") < LIB.index("commit_staged_session(session_id)")
     assert "fn update_installation_readiness()" in LIB
     assert "VerifiedTaskState::Unknown, false, false" in LIB
