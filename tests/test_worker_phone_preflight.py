@@ -21,13 +21,13 @@ def preflight_stubs(monkeypatch, ready_sha):
     monkeypatch.setattr(server.league, "tournament_entry_status", lambda _: [
         dict(x) for x in entries
     ])
-    monkeypatch.setattr(
-        server.model_allowlist, "check_repository_sync",
-        lambda _: {"in_sync": True},
-    )
+    # Admission is now read exclusively from the SQLite connection opened
+    # by tournament_preflight; repository JSON drift checks no longer exist.
     monkeypatch.setattr(
         server.model_allowlist, "load_allowlist",
-        lambda: {"models": [{"model_id": 1}, {"model_id": 2}]},
+        lambda connection: {"source": "sqlite", "models": [
+            {"model_id": 1}, {"model_id": 2},
+        ]},
     )
     monkeypatch.setattr(
         server.model_allowlist, "tournament_admission_blockers", lambda *args, **kwargs: [],
