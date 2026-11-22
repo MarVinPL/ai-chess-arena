@@ -845,7 +845,14 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
 
-        game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
+        # Remote execution is not enabled in the production scheduler yet.
+        # Explicit selection prevents accidental activation and never constructs
+        # a second checkpoint writer alongside the local tournament runner.
+        from remote_worker_runner_selection import select_game_runner
+        game_runner = select_game_runner(
+            'local',
+            local_factory=lambda: engine_runner.SequentialChessRunner(tournament_runtime),
+        )
         while True:
             if tournament_stop_event.is_set():
                 break

@@ -536,3 +536,12 @@ ownership. Only the selected runner is constructed, and remote failures never
 implicitly construct a local fallback. The **production server.py still uses
 the existing local runner**. Wiring this selector into production requires
 explicit lifecycle ownership, checkpoint writer replacement and restart tests.
+
+### Production server selection seam (local-only)
+
+`server.py` now constructs its tournament runner through the explicit
+`select_game_runner('local', ...)` selector. This preserves the existing local
+execution and checkpoint writer, while making the future switch point visible
+and testable. The remote factory and remote enable flag are intentionally
+absent: remote mode cannot activate in production from this change. The
+single-writer ownership and full remote deployment remain pending.
