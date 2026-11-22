@@ -162,10 +162,20 @@ pub(crate) async fn reserve_update(
         return Err("Brak zaufanej tożsamości Workera".into());
     }
     let endpoint = coordinator_endpoint(base, "update-reserve")?;
+    let mut secret = [0u8; 32];
+    getrandom::getrandom(&mut secret)
+        .map_err(|_| "Brak losowego tokenu rezerwacji")?;
+    let hold_token: String = secret.iter().map(|b| format!("{b:02x}")).collect();
+    let pending = crate::android_update_recovery::PendingHold {
+        server: base.to_owned(), worker_id: worker_id.to_owned(), hold_token,
+    };
+    // The journal MUST be recoverable before the coordinator sees the request.
+    crate::android_update_recovery::save_pending(&pending)?;
     let nonce = random_nonce()?;
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({
-            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+            "hold_token": pending.hold_token
         }))
         .send().await.map_err(|_| "Brak potwierdzenia rezerwacji")?;
     if !response.status().is_success() {
@@ -173,7 +183,11 @@ pub(crate) async fn reserve_update(
     }
     let body: Value = response.json().await.map_err(|_|
         "Nieprawidłowa odpowiedź koordynatora")?;
-    verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)
+    let verified = verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)?;
+    if verified.token != pending.hold_token {
+        return Err("Koordynator nie potwierdził zapisanego tokenu rezerwacji".into());
+    }
+    Ok(verified)
 }
 
 /// Explicit hold release after a cancelled/completed update transaction.
@@ -181,19 +195,22 @@ pub(crate) async fn reserve_update(
 /// If release fails, durable coordinator hold stays in force (fail closed).
 #[allow(dead_code)]
 pub(crate) async fn release_update(
-    base: &str, worker_id: &str, machine_token: &str, hold_token: &str,
+    base: &str, worker_id: &str, machine_token: &str,
 ) -> Result<(), String> {
-    if !valid_worker_id(worker_id) || machine_token.is_empty()
-        || hold_token.len() != 64 || !hold_token.bytes().all(|c|
-            c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
         return Err("Nieprawidłowe dane zwolnienia rezerwacji".into());
+    }
+    let pending = crate::android_update_recovery::load_pending()?
+        .ok_or("Brak rezerwacji do uzgodnienia")?;
+    if pending.server != base || pending.worker_id != worker_id {
+        return Err("Rezerwacja dotyczy innego Workera lub koordynatora".into());
     }
     let endpoint = coordinator_endpoint(base, "update-release")?;
     let nonce = random_nonce()?;
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({
             "worker_id": worker_id, "token": machine_token,
-            "nonce": nonce, "hold_token": hold_token
+            "nonce": nonce, "hold_token": pending.hold_token
         }))
         .send().await.map_err(|_| "Brak potwierdzenia zwolnienia rezerwacji")?;
     if !response.status().is_success() {
@@ -202,7 +219,7 @@ pub(crate) async fn release_update(
     let body: Value = response.json().await.map_err(|_|
         "Nieprawidłowa odpowiedź o zwolnieniu rezerwacji")?;
     if verify_release_reply(&body, worker_id, &nonce) {
-        Ok(())
+        crate::android_update_recovery::clear_pending(&pending)
     } else {
         Err("Koordynator nie potwierdził zwolnienia rezerwacji".into())
     }
