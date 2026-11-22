@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
   group: worker-platforms-${{ github.event.pull_request.number || github.ref }}
@@ -26,6 +27,9 @@ jobs:
       android: ${{ steps.select.outputs.android }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Needed to compare a previously built source commit with current HEAD.
+          fetch-depth: 0
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -36,6 +40,7 @@ jobs:
               - 'remote_worker_gui/public/**'
               - 'remote_worker_gui/src-tauri/Cargo.toml'
               - 'remote_worker_gui/src-tauri/Cargo.lock'
+              - 'remote_worker_gui/src-tauri/build.rs'
               - 'remote_worker_gui/src-tauri/src/**'
               - 'remote_worker_gui/src-tauri/capabilities/**'
               - 'remote_worker_gui/src-tauri/tauri.conf.json'
@@ -54,23 +59,15 @@ jobs:
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
-      - name: Select platforms
+      - name: Select changed platforms, reusing previous proven builds
         id: select
         env:
           SHARED: ${{ steps.filter.outputs.shared }}
           LINUX: ${{ steps.filter.outputs.linux }}
           WINDOWS: ${{ steps.filter.outputs.windows }}
           ANDROID: ${{ steps.filter.outputs.android }}
-        run: |
-          for platform in linux windows android; do
-            upper="${platform^^}"
-            value="${!upper}"
-            if [[ "$SHARED" == true || "$value" == true ]]; then
-              echo "$platform=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$platform=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/reuse_worker_artifacts.py
 
   desktop:
     needs: changes
