@@ -438,11 +438,11 @@ pub(crate) async fn fetch_my_inference_job(
         Some("assigned") => {
             let job = body.get("job").and_then(Value::as_object)
                 .ok_or("Brak zatwierdzonego zadania".to_owned())?;
-            if job.len() != 6 {
-                return Err("Niezgodny format zadania".into());
-            }
             let version = job.get("version").and_then(Value::as_u64)
                 .ok_or("Brak wersji protokołu".to_owned())?;
+            if !matches!((version, job.len()), (1, 6) | (2, 7)) {
+                return Err("Niezgodny format zadania".into());
+            }
             let job_id = job.get("job_id").and_then(Value::as_str)
                 .ok_or("Brak ID zadania".to_owned())?;
             let fen = job.get("fen").and_then(Value::as_str)
@@ -453,7 +453,7 @@ pub(crate) async fn fetch_my_inference_job(
                 .ok_or("Brak limitu tokenów".to_owned())?;
             let timeout = job.get("timeout_seconds").and_then(Value::as_u64)
                 .ok_or("Brak limitu czasu".to_owned())?;
-            if version != 1 || !valid_worker_id(job_id)
+            if !valid_worker_id(job_id)
                 || fen.len() > 120 || fen.split(' ').count() != 6
                 || !fen.bytes().all(|b| b.is_ascii_alphanumeric()
                     || matches!(b, b'/' | b' ' | b'-'))
@@ -462,6 +462,30 @@ pub(crate) async fn fetch_my_inference_job(
                 || !(1..=1024).contains(&max_tokens)
                 || !(1..=600).contains(&timeout) {
                 return Err("Arena przysłała nieprawidłowe zadanie".into());
+            }
+            if version == 2 {
+                let legal = job.get("legal_moves").and_then(Value::as_array)
+                    .ok_or("Arena nie podała legalnych ruchów")?;
+                if legal.is_empty() || legal.len() > 256 {
+                    return Err("Nieprawidłowa liczba ruchów z Areny".into());
+                }
+                let mut previous: Option<&str> = None;
+                for item in legal {
+                    let uci = item.as_str()
+                        .ok_or("Nieprawidłowy typ legalnego ruchu")?;
+                    let b = uci.as_bytes();
+                    if !(b.len() == 4 || b.len() == 5)
+                        || !(b'a'..=b'h').contains(&b[0])
+                        || !(b'1'..=b'8').contains(&b[1])
+                        || !(b'a'..=b'h').contains(&b[2])
+                        || !(b'1'..=b'8').contains(&b[3])
+                        || (b.len() == 5
+                            && !matches!(b[4], b'q' | b'r' | b'b' | b'n'))
+                        || previous.is_some_and(|p| p >= uci) {
+                        return Err("Nieprawidłowa lista ruchów z Areny".into());
+                    }
+                    previous = Some(uci);
+                }
             }
             Ok(serde_json::json!({
                 "state": "assigned", "job": job,
