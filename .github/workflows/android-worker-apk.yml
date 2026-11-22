@@ -60,7 +60,8 @@ jobs:
       - name: Initialize Android Worker
         run: |
           npm ci
-          npx tauri android init --ci
+          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          npx tauri android init --ci --skip-targets-install
       - name: Restore original Android test signing key
         # Never provide the keystore to pull_request or untrusted source builds.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
