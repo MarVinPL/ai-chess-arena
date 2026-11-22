@@ -19,7 +19,8 @@ on:
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
   pull_request:
-    branches: [main]
+    # Temporary integration target for stacked updater PR #197; remove before main.
+    branches: [main, feat/issue-194-worker-defaults]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'
