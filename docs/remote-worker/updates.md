@@ -417,3 +417,12 @@ preserved and the staged journal is empty. This validates the payload
 contract only; `server.py` still uses its local move provider and its
 independent checkpoint writer. A single-writer handoff and authenticated
 network dispatch remain prerequisites before any production enablement.
+
+### Accepted service separation decision
+
+The owner approved deploying the Remote Worker Gateway as a **separate
+systemd-managed service** on the existing VPS. Architecture, operational
+boundaries, single-writer requirement, default-off policy and zero-cost
+constraints are recorded in
+[`service-architecture-decision.md`](service-architecture-decision.md).
+This is a documented decision only; no unit has been installed or started.
