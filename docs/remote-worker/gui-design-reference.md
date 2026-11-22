@@ -1,10 +1,12 @@
 # AI Chess Arena Worker — GUI design reference
 
-![Wizualizacja GUI dla Windows, Linux i Android](gui-windows-linux-android-concept.svg)
+![Zatwierdzona wizualizacja GUI: Windows, Linux i Android](a_composite_ui_mockup_showing_the_same_ai_chess_a.png)
 
-W repozytorium zapisano **wektorowe odtworzenie** zatwierdzonego projektu. Oryginalny render PNG z rozmowy nie został przesłany do GitHub. Obraz SVG jest referencją wyglądu, a nie zrzutem działającej aplikacji.
+[Otwórz oryginalną wizualizację PNG](a_composite_ui_mockup_showing_the_same_ai_chess_a.png)
 
-Approved concept (22 Nov 2026): a three-panel image showing Windows 11, Linux (Ubuntu) and Android. The concept image was generated in the project conversation; the original binary has not yet been transferred into this repository. **Do not claim that the PNG is committed.**
+Oryginalny render PNG został przesłany do gałęzi PR #193. Jest zatwierdzoną referencją wyglądu, a nie zrzutem działającej aplikacji. Wcześniejsze odtworzenie SVG pozostaje wyłącznie pomocniczym materiałem.
+
+Approved concept (22 Nov 2026): a three-panel image showing Windows 11, Linux (Ubuntu) and Android. The concept image was generated in the project conversation; the original PNG is committed in this repository on the PR branch.
 
 ## Shared visual direction
 
