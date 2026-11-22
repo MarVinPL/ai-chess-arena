@@ -100,5 +100,23 @@ class BoundWorkerResults(WorkerResultJournal):
                 raise ValueError('Board mismatch')
             if checkpoint.get('pairing') != old.get('pairing') or checkpoint.get('tournament_id') != tournament_id or checkpoint.get('phase') != 'game':
                 raise ValueError('Checkpoint identity mismatch')
+            # A remote move may update only game progress. Never permit the
+            # result path to silently rewrite participants, schedule or rules.
+            mutable = {'moves', 'move_times', 'fen', 'side_to_move', 'updated_at'}
+            if set(checkpoint) != set(old) or any(checkpoint[key] != old[key] for key in old if key not in mutable):
+                raise ValueError('Immutable checkpoint metadata changed')
+            if type(new_moves[-1].get('ply')) is not int or new_moves[-1]['ply'] != len(new_moves):
+                raise ValueError('Invalid move number')
+            if new_moves[-1].get('color') != ('white' if not board.turn else 'black'):
+                raise ValueError('Invalid move color')
+            if new_moves[-1].get('fen') != board.fen():
+                raise ValueError('Move record board mismatch')
+            old_times, new_times = old.get('move_times'), checkpoint.get('move_times')
+            if not isinstance(old_times, list) or not isinstance(new_times, list) or new_times[:-1] != old_times or len(new_times) != len(old_times) + 1:
+                raise ValueError('Invalid timing append')
+            if type(new_times[-1]) not in (int, float) or not 0 <= new_times[-1] <= 3600:
+                raise ValueError('Invalid move duration')
+            if new_moves[-1].get('seconds') != new_times[-1]:
+                raise ValueError('Move timing mismatch')
             save_in_transaction(db, tournament_id, checkpoint, expected_sha256=digest)
         return self.apply_atomically(job_id, apply)

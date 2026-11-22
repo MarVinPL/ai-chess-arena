@@ -12,7 +12,7 @@ def setup_game(tmp_path):
         db.execute('INSERT INTO tournaments VALUES (1)')
     tournament_checkpoint.ensure_schema(path)
     board = chess.Board()
-    old = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game', 'pairing': {'id': 7}, 'moves': [], 'fen': board.fen(), 'side_to_move': 'white'}
+    old = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game', 'pairing': {'id': 7}, 'moves': [], 'move_times': [], 'fen': board.fen(), 'side_to_move': 'white'}
     digest = tournament_checkpoint.save(path, 1, old)['sha256']
     journal = BoundWorkerResults(path, clock=lambda: 100)
     return path, journal, old, digest
@@ -28,7 +28,7 @@ def test_bound_result_survives_restart_and_applies_once(tmp_path):
     restarted = BoundWorkerResults(path, clock=lambda: 110)
     board = chess.Board(old['fen'])
     board.push_uci('e2e4')
-    new = {**old, 'moves': [{'uci': 'e2e4'}], 'fen': board.fen(), 'side_to_move': 'black'}
+    new = {**old, 'moves': [{'uci': 'e2e4', 'ply': 1, 'color': 'white', 'fen': board.fen(), 'seconds': 0.1}], 'move_times': [0.1], 'fen': board.fen(), 'side_to_move': 'black'}
     assert restarted.apply_bound(job, new)
     assert not restarted.apply_bound(job, new)
     assert tournament_checkpoint.load(path, 1) == new
@@ -68,3 +68,21 @@ def test_same_position_cannot_be_assigned_while_result_waits_for_application(tmp
         journal.assign_bound('worker_87654321', 'job_87654321', tournament_id=1,
                              pairing_id=7, expected_sha256=digest, timeout_seconds=90)
     assert len(journal.pending()) == 1
+
+
+def test_bound_result_cannot_rewrite_tournament_metadata(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign_bound(worker, job, tournament_id=1, pairing_id=7,
+                         expected_sha256=digest, timeout_seconds=90)
+    journal.stage_validated(worker, job, {'version': 1, 'job_id': job, 'uci': 'e2e4'})
+    board = chess.Board(old['fen'])
+    board.push_uci('e2e4')
+    valid = {**old, 'moves': [{'uci': 'e2e4', 'ply': 1, 'color': 'white',
+              'fen': board.fen(), 'seconds': 0.1}], 'move_times': [0.1],
+              'fen': board.fen(), 'side_to_move': 'black'}
+    with pytest.raises(ValueError, match='Immutable checkpoint metadata'):
+        journal.apply_bound(job, {**valid, 'schedule': [{'winner_model_id': 999}]})
+    assert tournament_checkpoint.load(path, 1) == old
+    assert len(journal.pending()) == 1
+    assert journal.apply_bound(job, valid)

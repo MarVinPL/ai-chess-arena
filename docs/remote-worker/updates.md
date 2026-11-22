@@ -283,3 +283,15 @@ unchanged. Stale jobs remain blocked pending explicit coordinator
 reconciliation; automatic retry/reassignment is intentionally not enabled.
 Production remote execution remains NO-GO pending authenticated transport,
 reconciliation and live server single-writer integration.
+
+### Checkpoint metadata protection
+
+Bound result application now rejects changes to immutable checkpoint fields,
+including tournament configuration, schedule, entries and player identities.
+The only permitted changes are a single validated move, one matching move
+duration, resulting FEN/turn and checkpoint update timestamp. Move ply,
+color, record FEN and duration must match the legal move. A negative test
+confirms that a forged schedule field cannot be committed or acknowledged.
+
+The live production server remains on the local runner path. Authenticated
+transport and safe post-restart worker reconciliation remain outstanding.
