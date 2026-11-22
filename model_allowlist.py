@@ -16,6 +16,32 @@ ALLOWLIST_PATH = Path(__file__).resolve().parent / 'manifests' / 'model-allowlis
 MANIFEST_PATH = Path(__file__).resolve().parent / 'manifests' / 'huggingface-models.json'
 STATUSES = frozenset({'eligible', 'restricted', 'blocked', 'review_required'})
 ADMISSION_SCOPES = frozenset({'PURE_AI', 'AI_ENGINE'})
+# Explicit owner decision applies only to these immutable artifact repository snapshots.
+# This is an admission decision, not a runtime test result or an age/licence waiver.
+OWNER_ADMISSION_KEY = 'issue-259-2026-11-22'
+OWNER_ADMISSION_IDENTITIES = {
+    1: ('Qwen/Qwen2.5-0.5B-Instruct-GGUF', '9217f5db79a29953eb74d5343926648285ec7e67'),
+    2: ('QuantFactory/SmolLM2-360M-Instruct-GGUF', '25eef036a8d245a5a188b1b45d4b240a39bc9f24'),
+    3: ('Qwen/Qwen2-0.5B-Instruct-GGUF', '198f08841147e5196a6a69bd0053690fb1fd3857'),
+    4: ('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF', 'bf5b95e96dac0462e2a09145ec66cae9a3f12067'),
+    5: ('unsloth/Llama-3.2-3B-Instruct-GGUF', 'e7d0997e49c9cb00d88b4c1a6a16aa894b0bbc31'),
+    6: ('speakleash/Bielik-11B-v3.0-Instruct-GGUF', 'a68a2b6c7064a23446d9bb6f0cf3a051972c9ac7'),
+    7: ('speakleash/Bielik-7B-Instruct-v0.1-GGUF', 'b482400d6d36fa02167bc32f5f7b2d368271b4a1'),
+    8: ('unsloth/Qwen3.8-27B-GGUF', '4af51b3542f775b0a8e4b310bfb3f17e01c306c9'),
+}
+
+
+def is_owner_admitted(entry: dict | None, source: dict | None = None) -> bool:
+    """Check the exact revision-pinned decision from Issue #259, not audit readiness."""
+    if not isinstance(entry, dict) or entry.get('owner_admission') != OWNER_ADMISSION_KEY:
+        return False
+    expected = OWNER_ADMISSION_IDENTITIES.get(entry.get('model_id'))
+    if expected is None or (entry.get('repo_id'), entry.get('revision')) != expected:
+        return False
+    if source is not None and (source.get('repo_id'), source.get('revision')) != expected:
+        return False
+    return entry.get('status') in {'eligible', 'restricted'} and 'PURE_AI' in (entry.get('admission_scope') or [])
+
 _SHA = re.compile(r'^[0-9a-f]{40}$')
 _REPO = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
 
@@ -60,6 +86,8 @@ def validate_allowlist(payload: dict, manifest: dict | None = None) -> None:
         if not isinstance(revision, str) or not _SHA.fullmatch(revision):
             raise AllowlistError('Rewizja musi być pełnym SHA commita')
         status = item.get('status')
+        if item.get('owner_admission') is not None and not is_owner_admitted(item):
+            raise AllowlistError(f'Nieprawidłowa decyzja właściciela dla model_id={model_id}')
         if status not in STATUSES:
             raise AllowlistError('Nieznany status decyzji')
         scope = item.get('admission_scope')
@@ -117,9 +145,13 @@ def validate_allowlist(payload: dict, manifest: dict | None = None) -> None:
                 raise AllowlistError(f'Status audytu allowlisty nie zgadza się z manifestem dla model_id={model_id}')
             if is_excluded_model_identity(source=f'https://huggingface.co/{repo}', metadata={'repo_id': repo}) and status != 'blocked':
                 raise AllowlistError(f'Wykluczone repozytorium {repo} musi mieć status blocked')
-            if status == 'eligible' and source.get('license_review_status') != 'verified_permissive':
+            # The owner explicitly accepted the exact selected GGUF versions for
+            # tournament admission. Preserve original audit statuses in the
+            # manifest: decision is not independent audit evidence.
+            explicit_owner_decision = is_owner_admitted(item, source)
+            if status == 'eligible' and source.get('license_review_status') != 'verified_permissive' and not explicit_owner_decision:
                 raise AllowlistError(f'Model {model_id} nie ma audytu verified_permissive')
-            if status == 'restricted' and source.get('license_review_status') != 'verified_restricted':
+            if status == 'restricted' and source.get('license_review_status') != 'verified_restricted' and not explicit_owner_decision:
                 raise AllowlistError(f'Model {model_id} nie ma audytu verified_restricted')
         seen_ids.add(model_id)
         seen_repos.add(repo)
@@ -174,7 +206,10 @@ def tournament_admission_blockers(entry: dict | None, *, model_id: int,
         reasons.append('model nie ma jawnej decyzji dopuszczenia (status allowlisty: %s)' % entry.get('status', 'brak'))
     if tournament_format not in (entry.get('admission_scope') or []):
         reasons.append('allowlista nie dopuszcza modelu do tego formatu turnieju')
-    if entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers'):
+    # Owner-admitted entries have already been approved for the roster: no
+    # redundant qualifying runtime test. The real runtime still checks the
+    # model and every legal move at execution time.
+    if not is_owner_admitted(entry) and (entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers')):
         reasons.append('gotowość techniczna modelu nie została zatwierdzona')
     if not isinstance(repo_id, str) or repo_id != entry.get('repo_id'):
         reasons.append('repozytorium wersji nie zgadza się z allowlistą')
