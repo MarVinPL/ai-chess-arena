@@ -271,3 +271,15 @@ confirm that the durable worker reservation remains running, the checkpoint
 is unchanged, and restart marks the worker unknown. There is still no
 production-grade authenticated worker reconciliation; this does not enable
 remote dispatch.
+
+### Single outstanding job per chess position
+
+The durable binding now rejects a second assignment for the same tournament,
+pairing and checkpoint digest while an earlier job is running or its staged
+result awaits application. This prevents competing workers from generating
+moves against the same authoritative FEN. A simulated inference transport
+failure leaves the job in flight, the worker non-idle, and the checkpoint
+unchanged. Stale jobs remain blocked pending explicit coordinator
+reconciliation; automatic retry/reassignment is intentionally not enabled.
+Production remote execution remains NO-GO pending authenticated transport,
+reconciliation and live server single-writer integration.

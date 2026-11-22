@@ -46,3 +46,25 @@ def test_binding_rejects_wrong_pairing_and_changed_board(tmp_path):
     with pytest.raises(ValueError, match='Source checkpoint changed'):
         journal.apply_bound(job, old)
     assert len(journal.pending()) == 1
+
+
+def test_same_position_cannot_be_assigned_twice_while_running(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    journal.assign_bound('worker_12345678', 'job_12345678', tournament_id=1,
+                         pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    with pytest.raises(ValueError, match='outstanding remote job'):
+        journal.assign_bound('worker_87654321', 'job_87654321', tournament_id=1,
+                             pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    assert journal.state('worker_87654321') == 'unknown'
+
+
+def test_same_position_cannot_be_assigned_while_result_waits_for_application(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    journal.assign_bound('worker_12345678', 'job_12345678', tournament_id=1,
+                         pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    journal.stage_validated('worker_12345678', 'job_12345678',
+                            {'version': 1, 'job_id': 'job_12345678', 'uci': 'e2e4'})
+    with pytest.raises(ValueError, match='outstanding remote job'):
+        journal.assign_bound('worker_87654321', 'job_87654321', tournament_id=1,
+                             pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    assert len(journal.pending()) == 1

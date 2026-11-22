@@ -85,3 +85,26 @@ def test_transport_failure_keeps_worker_reserved_and_bridge_blocked(tmp_path):
     assert tournament_checkpoint.load(path, 1) == initial
     bridge.journal.recover_after_restart()
     assert DurableWorkerJobs(path, clock=lambda: 110).state('worker_12345678') == 'unknown'
+
+
+def test_transport_failure_does_not_release_worker_or_advance_checkpoint(tmp_path):
+    import pytest
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    original = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game',
+                'pairing': {'id': 7}, 'moves': [], 'move_times': [],
+                'fen': chess.Board().fen(), 'side_to_move': 'white'}
+    tournament_checkpoint.save(path, 1, original)
+
+    def broken_infer(job, board, player):
+        raise ConnectionError('Worker disconnected')
+
+    bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', broken_infer, clock=lambda: 100)
+    with pytest.raises(ConnectionError, match='disconnected'):
+        bridge.provide(chess.Board(), {'name': 'White'}, None, {})
+    assert bridge.inflight is not None
+    assert bridge.journal.state('worker_12345678') == 'running'
+    assert tournament_checkpoint.load(path, 1) == original

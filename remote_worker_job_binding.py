@@ -42,6 +42,17 @@ class BoundWorkerResults(WorkerResultJournal):
                 raise ValueError('Invalid checkpoint board')
             if db.execute('SELECT 1 FROM remote_job_binding WHERE job_id=?', (job_id,)).fetchone():
                 raise ValueError('Duplicate job')
+            # A staged result still owns its source position until applied.
+            # Never dispatch a competing job to another worker for that FEN.
+            conflict = db.execute('''SELECT 1 FROM remote_job_binding b
+                LEFT JOIN worker_result_journal r ON r.job_id=b.job_id
+                LEFT JOIN worker_job_safety s ON s.worker_id=b.worker_id AND s.job_id=b.job_id
+                WHERE b.tournament_id=? AND b.pairing_id=? AND b.checkpoint_sha256=?
+                AND (r.state='pending_application' OR
+                     (r.job_id IS NULL AND s.state IN ('running','unknown')))
+                LIMIT 1''', (tournament_id, pairing_id, expected_sha256)).fetchone()
+            if conflict:
+                raise ValueError('Position already has an outstanding remote job')
             state = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if state and state[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
