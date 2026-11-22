@@ -504,6 +504,21 @@ async fn install_downloaded_worker_apk(
     }
 }
 
+/// Read coordinator resume readiness after an Android update. A checkpoint
+/// without a real inference executor does not permit launching a game.
+#[tauri::command]
+async fn inspect_worker_resume_readiness(
+    server: String, worker_id: String,
+) -> Result<&'static str, String> {
+    if android_update_recovery::load_pending()?.is_some()
+        || android_update_install_journal::load()?.is_some() {
+        return Ok("waiting_update_reconciliation");
+    }
+    let token = token_entry()?.get_password()
+        .map_err(|_| "Brak tokenu Workera".to_owned())?;
+    android_update_coordinator::fetch_resume_status(&server, &worker_id, &token).await
+}
+
 /// Read OS install callback only for the journaled session. This does not
 /// release the coordinator hold or claim an installed update.
 #[tauri::command]
@@ -680,7 +695,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
