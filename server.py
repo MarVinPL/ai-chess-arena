@@ -28,6 +28,7 @@ def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
     return urlsplit(request_target).path
 
+
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
 DB = ROOT / 'arena.sqlite3'
@@ -1631,8 +1632,9 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         path = _route_path(self.path)
+        global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if path == '/api/remote-workers/authenticate':
-            # Credential-only endpoint. Worker tokens are issued offline by an administrator.
+            # Token-only authentication; token issuance is admin-only and offline.
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 2048:
@@ -1651,7 +1653,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
-        global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
                 self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
