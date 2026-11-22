@@ -216,9 +216,14 @@ class DurableWorkerJobs:
                 'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            pause = db.execute(
+                'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
         now = self.clock()
-        # A reserved worker is not available for fresh idle authorization.
-        if not row or hold:
+        # An in-flight stop request is never fresh idle evidence, even if
+        # another process has just committed a terminal job result.
+        if not row or hold or pause:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
