@@ -12,7 +12,7 @@
 
 ## Safe lifecycle
 
-- Default to notifying about an available update; permit the user to disable automatic checking. Never start installation while a chess task is running.
+- The GUI now checks for releases at startup at most once per 24 hours by default (locally stored opt-out; manual check remains available). This is read-only and does not install anything. Default to notifying about an available update; permit the user to disable automatic checking. Never start installation while a chess task is running.
 - When busy, show `Update ready — waiting for task completion`; allow installation only after a coordinator-confirmed terminal state and safe checkpoint. A crash or unknown job state must not be interpreted as completion.
 - Preserve token credentials and user preferences across normal updates; test migration before release. Provide release notes, current version, progress and actionable error states.
 - Rate-limit periodic checks and avoid update checks in the hot path of inference. No paid hosting or update service is required.
