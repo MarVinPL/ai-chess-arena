@@ -40,6 +40,8 @@ function refreshPhoneButtons(){
  phoneStartButton.disabled=!phoneSupported||!phonePaired||phoneWorkerEnabled;
  phonePauseButton.disabled=!phoneWorkerEnabled;
  phoneStopButton.disabled=!phoneWorkerEnabled;
+ const resume=document.getElementById('resumeWorkerGame');
+ if(resume)resume.disabled=phoneWorkerEnabled||resumeReadinessState!=='no_checkpoint';
 }
 async function processOnePhoneMove(){
  const invoke=window.__TAURI__?.core?.invoke;
@@ -342,7 +344,7 @@ async function reconcileInstalledApkAtStartup(){
  try{
   const state=await invoke('reconcile_installed_worker_update');
   if(state==='installed_confirmed'){
-   apkStatus.textContent='Android potwierdził zainstalowanie nowej wersji. Przerwaną partię można wznowić po uzgodnieniu z Areną.';
+   apkStatus.textContent='Android potwierdził nową wersję. Odbieranie nowych zadań można wznowić po kontroli Areny; przerwany checkpoint wymaga osobnego uzgodnienia.';
   }else if(state==='installation_cancelled'){
    apkStatus.textContent='Android potwierdził nieudaną lub anulowaną instalację. Oryginalna aplikacja działa; koordynator uzgodnił zwolnienie blokady.';
   }else if(state==='not_confirmed'){
@@ -373,7 +375,7 @@ async function refreshWorkerResumeReadiness(){
   });
   resumeReadinessState=state;
   const supported=await invoke('phone_inference_supported');
-  button.disabled=!(state==='no_checkpoint'&&supported===true);
+  button.disabled=!(state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled);
   label.textContent=state==='no_checkpoint'
    ?'Nie ma przerwanego checkpointu. Możesz bezpiecznie wznowić odbieranie zadań Areny.'
    :state==='waiting_update_reconciliation'
