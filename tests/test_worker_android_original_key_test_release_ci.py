@@ -41,9 +41,8 @@ def test_pinned_provenance_and_verify_before_upload():
     assert "sha256sum -c SHA256SUMS" in text
     assert "versionCode='1000' versionName='0.1.0'" in text
     assert "native-code: 'arm64-v8a'" in text
-    assert "apksigner\" verify" not in text  # all calls use Android SDK path
     assert '"$tools/apksigner" verify --verbose "$apk"' in text
-    assert "zipalign\" -c" not in text
+    assert '"$tools/zipalign" -c -p 4 "$apk"' in text
     assert "trap 'rm -f \"$ks\"' EXIT" in text
     assert text.index('test "$certificate" = ' + CERT) < text.index('actions/upload-artifact@v4')
     assert "worker-v0.1.0-test.1" in text
