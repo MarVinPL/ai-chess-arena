@@ -87,7 +87,7 @@ def test_single_button_does_not_claim_game_resumed_without_executor():
     assert "invoke('inspect_worker_resume_readiness'" in GUI
     assert "button.disabled=true" in GUI
     assert "Checkpoint przerwanego zadania jest zachowany w Arenie." in GUI
-    assert "resumeReadinessState==='no_checkpoint'" in GUI
+    assert "state==='no_checkpoint'&&supported===true" in GUI
     assert "state!=='no_checkpoint'||safety!=='idle_confirmed'||!supported" in GUI
     assert "const authenticated=await invoke('verify_worker_connection'" in GUI
     assert "if(!activatePhoneJobPolling())" in GUI
