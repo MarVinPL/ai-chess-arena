@@ -182,6 +182,89 @@ class WorkerInferenceDelivery:
             return {"state": "blocked"}
         return {"state": "assigned", "job": payload}
 
+    def read_arena_result(self, worker_id, job_id):
+        """Trusted coordinator consumer. Read result without applying chess."""
+        self.jobs._id(worker_id)
+        self.jobs._id(job_id)
+        with self.jobs._db() as db:
+            row = db.execute(
+                "SELECT job_json FROM worker_inference_assignments WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            ).fetchone()
+            result = db.execute(
+                "SELECT result_json FROM worker_inference_results WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            ).fetchone()
+            lease = db.execute(
+                "SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+        if row is None or not lease or lease[0] != "running" or lease[1] != job_id:
+            raise ValueError("Worker job lease is not active")
+        if lease[2] is None or lease[2] <= self.clock():
+            raise ValueError("Worker result deadline expired")
+        if result is None:
+            return None
+        job = validate_job(json.loads(row[0]))
+        move = validate_result(json.loads(result[0]), job, chess.Board(job["fen"]))
+        return move.uci()
+
+    def finalize_arena_result(self, worker_id, job_id, uci):
+        """Trusted Arena runner only, after accepting a particular legal UCI.
+
+        This does NOT write tournament checkpoints. The server-owned runner
+        applies the move and saves the only checkpoint after this returns.
+        If the process crashes before that, replay starts from the previous
+        authoritative checkpoint; no speculative phone state is used.
+        """
+        self.jobs._id(worker_id)
+        self.jobs._id(job_id)
+        if not isinstance(uci, str) or len(uci) not in (4, 5):
+            raise ValueError("Invalid UCI finalization")
+        now = self.clock()
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            self.jobs._reject_pending_pause(db, worker_id)
+            self.jobs._reject_pending_resume(db, worker_id)
+            row = db.execute(
+                "SELECT job_json FROM worker_inference_assignments WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            ).fetchone()
+            received = db.execute(
+                "SELECT result_json FROM worker_inference_results WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            ).fetchone()
+            lease = db.execute(
+                "SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            if not row or not received or not lease or lease[0] != "running" or (
+                lease[1] != job_id or lease[2] is None or lease[2] <= now
+            ):
+                raise ValueError("No live result to finalize")
+            job = validate_job(json.loads(row[0]))
+            move = validate_result(json.loads(received[0]), job, chess.Board(job["fen"]))
+            if move.uci() != uci:
+                raise ValueError("Arena attempted to finalize a different UCI")
+            db.execute(
+                "DELETE FROM worker_inference_results WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            )
+            db.execute(
+                "DELETE FROM worker_inference_assignments WHERE worker_id=? AND job_id=?",
+                (worker_id, job_id),
+            )
+            status = db.execute(
+                """UPDATE worker_job_safety SET state='idle_confirmed',
+                job_id=NULL,deadline=NULL,updated_at=?
+                WHERE worker_id=? AND job_id=? AND state='running' AND deadline>?""",
+                (now, worker_id, job_id, now),
+            )
+            if status.rowcount != 1:
+                raise ValueError("Concurrent Worker lease change")
+        return move
+
     def submit_inference_result(self, worker_id, result):
         """Validate a proposed UCI using Arena's authoritative FEN.
 
