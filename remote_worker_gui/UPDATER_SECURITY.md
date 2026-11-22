@@ -215,3 +215,30 @@ autoryzować instalacji. **Klucz prywatny zostaje wyłącznie w GitHub
 Secrets; do aplikacji wpisujemy jedynie publiczny odcisk SHA-256.**
 Weryfikacji samego digestu GitHub Release nie wolno mylić z
 weryfikacją tożsamości podpisującego APK.
+
+## 2026-11-22 — odczyt Android PackageManager przez JNI (PR #197)
+
+Rozwiązanie nie edytuje generowanych źródeł Tauri `gen/android`.
+W `android_update_package_manager.rs` używa Android Context/JNI
+(wersje `jni=0.21.1` i `ndk-context=0.1.1`, już zapisane w lockfile)
+do odczytu `PackageInfo` z **zainstalowanego Workera** i
+`getPackageArchiveInfo` z pliku APK w prywatnym cache. Odczytuje
+`packageName`, `getLongVersionCode` i `SigningInfo`
+(`getApkContentsSigners`), liczy SHA-256 bajtów certyfikatu
+przez `Signature.toByteArray()`. Brak certyfikatu, kilku sygnatariuszy
+lub błąd JNI → odmowa.
+
+Komenda `verify_downloaded_worker_apk`, wywoływana po pobraniu,
+**ponownie** wybiera oficjalny asset, sprawdza plik cache, jego
+rozmiar i SHA-256, następnie porównuje obie tożsamości w
+`android_update_identity::check_platform_apk_identity` z przypiętym
+odciskiem certyfikatu **pochodzącego z GitHub Secret**, a nie z APK.
+Widok pokazuje wynik, ale **nie ujawnia ścieżki pliku** i nie
+wywołuje instalatora.
+
+Pozostaje: sprawdzenie na prawdziwym Android 16, potwierdzony CI
+dla aktualnego HEAD, niezależny świeży i uwierzytelniony stan
+idle koordynatora oraz systemowy instalator z zgodą użytkownika.
+Nawet pozytywne `PackageManager` oraz SHA-256 nie pozwalają
+pominąć późniejszej kontroli Android PackageInstaller. **NO-GO
+dla instalacji i zamknięcia Issue #196**.
