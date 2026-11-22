@@ -31,3 +31,31 @@ def test_invalid_or_expired_result_never_stages(tmp_path):
         journal.stage_validated(worker, job, {'job_id': job, 'uci': 'e2e4'})
     assert journal.pending() == []
     assert journal.state(worker) == 'unknown'
+
+
+def test_failed_journal_insert_rolls_back_worker_terminal_state(tmp_path):
+    import sqlite3
+    path = tmp_path / 'jobs.sqlite'
+    journal = WorkerResultJournal(path, clock=lambda: 100)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign(worker, job, timeout_seconds=90)
+    # Simulate a database failure after the safety UPDATE but before INSERT.
+    with sqlite3.connect(path) as db:
+        db.execute('''CREATE TRIGGER reject_result BEFORE INSERT ON worker_result_journal
+                      BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END''')
+    with pytest.raises(sqlite3.IntegrityError, match='simulated disk failure'):
+        journal.stage_validated(worker, job, {'job_id': job, 'uci': 'e2e4'})
+    assert journal.state(worker) == 'running'
+    assert journal.pending() == []
+
+
+def test_pending_results_remain_replayable_after_multiple_restarts(tmp_path):
+    path = tmp_path / 'jobs.sqlite'
+    journal = WorkerResultJournal(path, clock=lambda: 100)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign(worker, job, timeout_seconds=90)
+    result = {'job_id': job, 'uci': 'e2e4'}
+    journal.stage_validated(worker, job, result)
+    for now in (110, 120, 130):
+        DurableWorkerJobs(path, clock=lambda now=now: now).recover_after_restart()
+        assert WorkerResultJournal(path, clock=lambda now=now: now).pending() == [(job, worker, result)]
