@@ -400,3 +400,21 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
     for unsafe_action in ('createSession', 'openSession', 'abandonSession', 'commit(', 'startActivity'):
         assert unsafe_action not in executable
     assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
+
+
+def test_authenticated_stop_poll_is_wired_to_tauri_but_cannot_ack_or_install():
+    rust = LIB.read_text(encoding="utf-8")
+    coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert 'async fn poll_worker_update_pause(server: String, worker_id: String)' in rust
+    assert 'android_update_recovery::load_pending()?.is_some()' in rust
+    assert 'android_update_coordinator::poll_pause_instruction(' in rust
+    assert 'StopInstruction::StopCheckpoint { .. } => Ok("stop_checkpoint")' in rust
+    assert 'poll_worker_update_pause, update_installation_readiness' in rust
+    assert 'coordinator_endpoint(base, "update-pause-poll")?' in coordinator
+    assert 'verify_pause_poll_reply(&body, worker_id, &nonce)' in coordinator
+    assert "invoke('poll_worker_update_pause'" in ui
+    assert 'STOP nie został wykonany.' in ui
+    assert 'Brak STOP/ACK; instalacja zablokowana.' in ui
+    assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in rust
+    assert 'install_worker_apk' not in rust
