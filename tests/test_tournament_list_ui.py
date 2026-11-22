@@ -19,6 +19,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("tournament-status", self.renderer)
         self.assertIn("tournament-card__fields", self.renderer)
         self.assertIn("addField(fields,'Format'", self.renderer)
+        self.assertIn("addField(fields,'Uczestnicy',Number(t.players??0))", self.renderer)
         self.assertIn("addField(fields,'Postęp partii'", self.renderer)
         self.assertIn("addField(fields,'Awans do draftu'", self.renderer)
         self.assertIn("addField(fields,'Checkpoint'", self.renderer)
@@ -32,26 +33,65 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn('data-status="failed"', HTML)
 
     def test_existing_actions_and_visibility_conditions_are_preserved(self):
-        for action in ("Tabela i drabinka", "Sprawdź gotowość", "Uruchom turniej", "Wznów turniej", "Zatrzymaj turniej"):
+        for action in ("Tabela i drabinka", "Dlaczego nie startuje?", "Ponów diagnostykę", "Start zablokowany", "Uruchom turniej", "Wznów turniej", "Zatrzymaj turniej"):
             self.assertIn(action, self.renderer)
         self.assertIn("loadTournamentView(t.id)", self.renderer)
-        self.assertIn("if(t.status==='planned'){", self.renderer)
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
+        self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
+        self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
+        self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
+        self.assertIn("Przygotuj propozycję do audytu · model '+e.model_id", self.renderer)
+        self.assertIn("Brak lokalnego GGUF nie blokuje startu", self.renderer)
         self.assertIn("'/api/tournaments/start'", self.renderer)
         self.assertIn("'/api/tournaments/stop'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", self.renderer)
         self.assertIn("wznowienie zablokowane — wymagany przegląd", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
 
-    def test_readiness_action_is_limited_to_unstarted_planned_tournaments(self):
-        check_start = self.renderer.index("if(t.status==='planned'){")
-        check_end = self.renderer.index("if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked)", check_start)
-        readiness_block = self.renderer[check_start:check_end]
-        self.assertIn("Sprawdź gotowość", readiness_block)
-        self.assertIn("actions.appendChild(check)", readiness_block)
-        self.assertNotIn("Sprawdź gotowość", self.renderer[check_end:])
+    def test_preflight_review_action_tracks_all_models_supported_by_review_form(self):
+        self.assertIn("const reviewSelect=$('review-model-id')", self.renderer)
+        self.assertIn("Array.from(reviewSelect.options).some(option=>option.value===String(e.model_id))", self.renderer)
+        self.assertIn("if(reviewSupported)", self.renderer)
+        self.assertIn("Propozycja dotyczy dokładnej rewizji '+e.revision", self.renderer)
+        self.assertNotIn("if([1,2,3].includes(Number(e.model_id)))", self.renderer)
+
+    def test_preflight_admission_action_targets_the_matching_allowlist_card(self):
+        self.assertIn("const openModelAdmission=(modelId)=>", self.renderer)
+        self.assertIn("$('model-admission-'+modelId)", self.renderer)
+        self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
+        self.assertIn("b.onclick=()=>openModelAdmission(e.model_id)", self.renderer)
+        self.assertIn("card.id='model-admission-'+item.model_id", HTML)
+        self.assertIn("card.dataset.modelId=String(item.model_id)", HTML)
+
+    def test_diagnostics_are_available_for_unstarted_and_failed_tournaments(self):
+        self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
+        self.assertIn("check.textContent='Dlaczego nie startuje?'", self.renderer)
+        self.assertIn("check.onclick=showPreflight", self.renderer)
+        self.assertIn("if(t.status==='planned')showPreflight()", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
+
+    def test_prestart_addition_and_poststart_elimination_controls_are_present(self):
+        self.assertIn("Dodaj nowych zawodników bez limitu przed startem", HTML)
+        self.assertIn("'/api/tournaments/entries'", HTML)
+        self.assertIn("Kandydaci do osobnej eliminacji", HTML)
+        self.assertIn("'/api/tournaments/admissions'", HTML)
+        self.assertIn("co najmniej jedno zwycięstwo", HTML)
+        self.assertIn("Historia kwalifikacji nowych zawodników", HTML)
+        self.assertIn("capacity_exhausted", HTML)
+
+    def test_roster_counters_are_rendered_under_first_chess_arena_heading(self):
+        heading = HTML.index('<span class="board-kicker">Chess Arena Pro</span>')
+        counters = HTML.index('id="tournament-roster-counters"')
+        self.assertGreater(counters, heading)
+        self.assertLess(counters, HTML.index('id="white"'))
+        self.assertIn("function renderTournamentRosterCounts(counts)", HTML)
+        self.assertIn("Wyeliminowani: ", HTML)
+        self.assertIn("Pozostali: ", HTML)
+        self.assertIn("Brak aktywnego turnieju", HTML)
+        self.assertIn("renderTournamentRosterCounts(d.roster_counts)", HTML)
 
     def test_empty_list_state_is_preserved(self):
         self.assertIn("if(!rows.length){host.textContent='Brak turniejów.';return}", self.renderer)

@@ -10887,6 +10887,62 @@
         "text-generation"
       ],
       "technical_readiness": "not_evaluated"
+    },
+    {
+      "catalog_id": "hf:QuantFactory/SmolLM2-1.7B-Instruct-GGUF",
+      "arena_model_id": null,
+      "display_name": "SmolLM2-1.7B-Instruct-GGUF",
+      "repo_id": "QuantFactory/SmolLM2-1.7B-Instruct-GGUF",
+      "audited_revision": null,
+      "revision": "6702e34d1eebb7d21caaa1658c98e9d481e69732",
+      "last_modified": "2024-11-01T11:57:57.000Z",
+      "tags": [
+        "transformers",
+        "gguf",
+        "en",
+        "license:apache-2.0",
+        "endpoints_compatible",
+        "region:us",
+        "conversational"
+      ],
+      "declared_license_tag": "apache-2.0",
+      "pipeline_tag": "conversational",
+      "gated": false,
+      "discovered_at": "2026-11-14T17:22:00Z",
+      "last_verified_at": "2026-11-14T17:22:00Z",
+      "source_status": "active",
+      "metadata_status": "review_required",
+      "license_review_status": "review_required",
+      "license_verified": false,
+      "technical_readiness": "not_evaluated",
+      "admission_status": "not_admitted",
+      "admission_scope": [],
+      "inference_run": false,
+      "selected_artifact": {
+        "filename": "SmolLM2-1.7B-Instruct.Q4_K_M.gguf",
+        "source_path": "SmolLM2-1.7B-Instruct.Q4_K_M.gguf",
+        "revision": "d6802b513a12fa4da4e5ab8f3d8c2c65dba1091d",
+        "repository_revision": "6702e34d1eebb7d21caaa1658c98e9d481e69732",
+        "size_bytes": 1055609536,
+        "sha256": "bc8986d129483f44768b5fcc2bd2f148d6af000282cdb9ec7a92122226fa7921",
+        "xet_hash": "bcd82788bee56c24e07ee66317f7538cc5696ad00d1c2a50aaea9898e7e8c91f",
+        "download_url": "https://huggingface.co/QuantFactory/SmolLM2-1.7B-Instruct-GGUF/resolve/6702e34d1eebb7d21caaa1658c98e9d481e69732/SmolLM2-1.7B-Instruct.Q4_K_M.gguf"
+      },
+      "base_model": {
+        "repo_id": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+        "revision": "31b70e2e869a7173562077fd711b654946d38674",
+        "declared_license": "apache-2.0"
+      },
+      "review_report": "docs/model-audit/candidate-issue-132-smollm2-1.7b.md",
+      "block_reason": "Licencja artefaktu GGUF i modelu bazowego jest deklarowana jako Apache-2.0, ale pochodzenie i warunki danych treningowych wymagają odrębnego przeglądu. Nie wykonano niezależnego testu runtime. Kandydat nie ma wpisu w rejestrze zawodników ani zakresu dopuszczenia.",
+      "history": [
+        {
+          "at": "2026-11-14T17:22:00Z",
+          "event": "manually_added_review_candidate",
+          "revision": "6702e34d1eebb7d21caaa1658c98e9d481e69732",
+          "artifact_revision": "d6802b513a12fa4da4e5ab8f3d8c2c65dba1091d"
+        }
+      ]
     }
   ],
   "provider": "Hugging Face",

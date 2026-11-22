@@ -252,58 +252,6 @@
       "technical_blockers": [
         "Nie wykonano niezależnego testu lokalnego artefaktu i runtime."
       ]
-    },
-    {
-      "model_id": 9,
-      "repo_id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
-      "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18",
-      "status": "blocked",
-      "admission_scope": [],
-      "license_requirements": {
-        "manifest_license": "apache-2.0",
-        "manifest_audit_status": "review_required",
-        "license_verified_required": true,
-        "obligations": []
-      },
-      "evidence": [
-        {
-          "path": "docs/model-audit/model-exclusions-issue-71.md",
-          "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18"
-        }
-      ],
-      "reviewed_at": "2026-11-14",
-      "restrictions": [],
-      "block_reason": "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady.",
-      "technical_readiness": "blocked",
-      "technical_blockers": [
-        "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady."
-      ]
-    },
-    {
-      "model_id": 10,
-      "repo_id": "mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF",
-      "revision": "be0e37087303291b3967f8cd19a193ea04cdc150",
-      "status": "blocked",
-      "admission_scope": [],
-      "license_requirements": {
-        "manifest_license": "apache-2.0",
-        "manifest_audit_status": "review_required",
-        "license_verified_required": true,
-        "obligations": []
-      },
-      "evidence": [
-        {
-          "path": "docs/model-audit/model-exclusions-issue-71.md",
-          "revision": "be0e37087303291b3967f8cd19a193ea04cdc150"
-        }
-      ],
-      "reviewed_at": "2026-11-14",
-      "restrictions": [],
-      "block_reason": "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady.",
-      "technical_readiness": "blocked",
-      "technical_blockers": [
-        "Trwale wyłączony z AI Chess Arena na mocy Issue #71; deklaracja licencji repozytorium pochodnego nie omija blokady."
-      ]
     }
   ]
 }

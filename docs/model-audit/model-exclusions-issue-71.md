@@ -22,3 +22,8 @@ Wyłączenie jest niezależne od deklaracji licencji repozytorium pochodnego. Ta
 - Nie są pobierane wagi, nie jest uruchamiana inferencja i nie są zmieniane dane produkcyjne.
 
 To jest techniczna polityka dopuszczenia do AI Chess Arena, a nie opinia prawna o licencji ani ogólna ocena modelu poza projektem.
+
+
+## 2026-11-19 – wycofanie z aktywnego katalogu
+
+Właściciel zdecydował o usunięciu modeli 9–10 z aktywnego manifestu i allowlisty z powodu rozmiaru artefaktów (ok. 16,81 GB i 15,83 GB) w relacji do zasobów obecnego VPS (3,7 GiB RAM, 2 vCPU). Nie pobierano wag ani nie uruchamiano modeli. Historyczne raporty pozostają jako ślad audytowy. Zmiana manifestu nie usuwa ani nie modyfikuje istniejących rekordów w bazie danych; nie wykonano migracji ani deployu.

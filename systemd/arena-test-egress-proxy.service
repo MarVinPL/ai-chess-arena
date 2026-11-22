@@ -1,0 +1,28 @@
+[Unit]
+Description=Restricted HTTPS CONNECT proxy for arena-test downloads
+Documentation=file:/usr/local/share/doc/arena-test/arena-test-controlled-egress.md
+After=network.target
+ConditionPathExists=/usr/local/libexec/arena-test-egress-proxy.py
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/bin/python3 /usr/local/libexec/arena-test-egress-proxy.py --listen 10.203.181.1 --client 10.203.181.2 --port 18765
+Restart=no
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

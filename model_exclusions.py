@@ -1,4 +1,4 @@
-"""Hard exclusions for catalog entries that are not admitted to the Arena."""
+"""Exact repository safety exclusions, independent of manifest IDs."""
 from __future__ import annotations
 import json
 from urllib.parse import urlsplit
@@ -7,7 +7,6 @@ EXCLUDED_HF_REPOSITORIES = frozenset({
     "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
     "mradermacher/JonathanColetti-Qwen3.8-27B-Uncensored-GGUF",
 })
-EXCLUDED_MANIFEST_IDS = frozenset({9, 10})
 
 
 def is_excluded_model_identity(*, name: str = "", source: str = "", metadata=None) -> bool:

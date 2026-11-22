@@ -12,6 +12,7 @@ Group=debian
 WorkingDirectory=/home/debian/ai-chess-arena
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/ai-chess-arena/auth.env
 ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py
 Restart=on-failure
 RestartSec=5s

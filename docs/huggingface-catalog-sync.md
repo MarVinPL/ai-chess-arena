@@ -1,33 +1,26 @@
-# Weekly Hugging Face candidate catalog sync
+# Hugging Face metadata check for existing models
 
-The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` runs every Monday at 04:17 UTC and supports manual dispatch. It uses the public Hugging Face model metadata API and the standard GitHub Actions token; no paid service is required.
+The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` runs every Monday at 04:17 UTC and can also be started manually. It uses only the public Hugging Face model metadata API and the standard GitHub Actions token. No paid service is required.
 
-## Discovery and verification scope
+## Strict scope
 
-- The sync discovers public repositories tagged for GGUF and text-generation/conversational tasks using the Hugging Face listing API (sorted by recent modification and downloads).
-- It also verifies the exact repository endpoints for the eight pinned model IDs 1–8 in `manifests/huggingface-models.json`.
-- Model IDs 9–10 are not admitted or enabled by this workflow; they remain separately excluded under Issue #71.
-- Candidate metadata is stored in `manifests/huggingface-candidates.json`. The catalog is informational and is not the tournament admission allowlist.
-- Repository/tag exclusions are applied conservatively and fail-closed, including the shared model identity exclusion rules.
+- The check is limited to the eight repository IDs already present as model IDs 1–8 in `manifests/huggingface-models.json`.
+- It queries each of those eight exact repository endpoints. It does not query the public model listing, search for new models, or add any new repository.
+- Model IDs 9–10 are not included; they are managed separately under Issue #71.
+- Results are stored separately in `manifests/huggingface-existing-models-metadata.json`. The existing candidate catalog is not overwritten or mixed with this check's schema.
 
-## Review and change handling
+## Change handling
 
-- Newly discovered repositories are recorded as `review_required`, `license_verified=false`, `technical_readiness=not_evaluated`, and `admission_status=not_admitted`.
-- Existing pinned repositories retain their separate identity and audit history. Changed revisions invalidate prior license review; missing, moved, gated, private, disabled, or excluded sources are recorded for human review or blocked as appropriate.
-- A draft PR is opened only when tracked catalog metadata changes. It is never merged automatically and requires human review.
-- API errors, rate limits, empty/malformed responses, or invalid manifests abort the update. The previous catalog is preserved and an error report is written for the Actions artifact.
-- The workflow does not approve licenses, technical readiness, or tournament admission, and does not alter the admission allowlist.
+- A matching source revision preserves the existing license-audit state.
+- A changed revision, missing repository, moved repository, or private/disabled/gated source is retained with a history event and marked `review_required`.
+- A changed revision invalidates the previous license-review status. The workflow cannot approve licenses, technical readiness, or tournament admission.
+- An unchanged weekly check does not rewrite the metadata manifest and therefore does not create a PR.
+- An API error, rate limit, empty/malformed response, or invalid manifest aborts the update. The previous manifest is preserved and the error report is uploaded as an Actions artifact.
+- A draft PR is opened only when tracked metadata changes. It is never merged automatically and requires human review.
 
 ## Safety boundaries
 
-- Metadata only: no model weights, tokenizer files, datasets, or model binaries are downloaded; no inference is run.
-- No production database, active tournament, roster, model file, or allowlist is changed.
-- The workflow runs on GitHub-hosted runners and does not access or modify the VPS.
-
-## Local validation
-
-```bash
-python -m pytest -q tests/test_huggingface_catalog_sync.py
-python -m pytest -q tests/
-python scripts/sync_huggingface_catalog.py
-```
+- Metadata only: no weights, tokenizer files, datasets, or model binaries are downloaded; no inference is run.
+- No public model discovery is performed.
+- No production database, active tournament, roster, model file, pinned manifest, or admission allowlist is changed.
+- The informational existing-model metadata manifest is not an admission decision.

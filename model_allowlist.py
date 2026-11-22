@@ -10,6 +10,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 from model_manifest import validate_manifest
+from model_exclusions import is_excluded_model_identity
 
 ALLOWLIST_PATH = Path(__file__).resolve().parent / 'manifests' / 'model-allowlist.json'
 MANIFEST_PATH = Path(__file__).resolve().parent / 'manifests' / 'huggingface-models.json'
@@ -114,9 +115,8 @@ def validate_allowlist(payload: dict, manifest: dict | None = None) -> None:
                 raise AllowlistError(f'Licencja allowlisty nie zgadza się z manifestem dla model_id={model_id}')
             if license_info.get('manifest_audit_status') != source.get('license_review_status'):
                 raise AllowlistError(f'Status audytu allowlisty nie zgadza się z manifestem dla model_id={model_id}')
-            admission = source.get('arena_admission') or {}
-            if admission.get('status') == 'excluded' and status != 'blocked':
-                raise AllowlistError(f'Wykluczony model {model_id} musi mieć status blocked')
+            if is_excluded_model_identity(source=f'https://huggingface.co/{repo}', metadata={'repo_id': repo}) and status != 'blocked':
+                raise AllowlistError(f'Wykluczone repozytorium {repo} musi mieć status blocked')
             if status == 'eligible' and source.get('license_review_status') != 'verified_permissive':
                 raise AllowlistError(f'Model {model_id} nie ma audytu verified_permissive')
             if status == 'restricted' and source.get('license_review_status') != 'verified_restricted':
@@ -156,6 +156,37 @@ def is_runtime_ready(entry: dict, *, license_verified: bool,
         entry.get('technical_readiness') == 'ready' and not entry.get('technical_blockers') and
         license_verified is True and local_file_verified is True and runtime_healthy is True
     )
+
+
+def tournament_admission_blockers(entry: dict | None, *, model_id: int,
+                                  repo_id: str | None, revision: str | None,
+                                  license_name: str | None, license_verified: bool,
+                                  tournament_format: str) -> list[str]:
+    """Fail-closed admission gate for one exact model version and tournament scope."""
+    reasons = []
+    if is_excluded_model_identity(source=f'https://huggingface.co/{repo_id}' if isinstance(repo_id, str) else '', metadata={'repo_id': repo_id}):
+        return ['repozytorium modelu jest wyłączone z AI Chess Arena na podstawie reguły bezpieczeństwa']
+    if not isinstance(entry, dict):
+        return ['brak decyzji modelu w allowliście']
+    if entry.get('model_id') != model_id:
+        reasons.append('niezgodny identyfikator modelu w allowliście')
+    if entry.get('status') not in {'eligible', 'restricted'}:
+        reasons.append('model nie ma jawnej decyzji dopuszczenia (status allowlisty: %s)' % entry.get('status', 'brak'))
+    if tournament_format not in (entry.get('admission_scope') or []):
+        reasons.append('allowlista nie dopuszcza modelu do tego formatu turnieju')
+    if entry.get('technical_readiness') != 'ready' or entry.get('technical_blockers'):
+        reasons.append('gotowość techniczna modelu nie została zatwierdzona')
+    if not isinstance(repo_id, str) or repo_id != entry.get('repo_id'):
+        reasons.append('repozytorium wersji nie zgadza się z allowlistą')
+    if not isinstance(revision, str) or revision != entry.get('revision'):
+        reasons.append('rewizja wersji nie zgadza się z allowlistą')
+    expected_license = (entry.get('license_requirements') or {}).get('manifest_license')
+    if not isinstance(license_name, str) or license_name.casefold() != str(expected_license or '').casefold():
+        reasons.append('deklaracja licencji wersji nie zgadza się z allowlistą')
+    if license_verified is not True:
+        reasons.append('licencja tej wersji nie została niezależnie zatwierdzona')
+    return reasons
+
 
 def check_allowlist_sync(local_commit: str, main_commit: str,
                          allowlist_worktree_clean: bool) -> dict:
