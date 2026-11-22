@@ -238,15 +238,71 @@ def check_allowlist_sync(local_commit: str, main_commit: str,
     }
 
 
+# A release can lag unrelated changes on main. Protect the *actual policy
+# inputs* instead of requiring the entire deployed commit to equal main.
+# A changed policy file still fails closed until the matching release is used.
+ADMISSION_POLICY_PATHS = (
+    'manifests/model-allowlist.json',
+    'manifests/huggingface-models.json',
+    'model_allowlist.py',
+    'model_admission.py',
+    'model_manifest.py',
+    'model_exclusions.py',
+)
+
+
 def check_repository_sync(repo_root: str | Path) -> dict:
-    """Read local Git refs/status only. No fetch, checkout, merge, or file writes."""
+    """Verify a clean, main-derived release with identical admission policy.
+
+    This check intentionally performs no fetch, checkout, reset, or writes.
+    A stale but previously released main commit is accepted only when every
+    admission policy file has the exact same Git blob as current origin/main.
+    """
     root = Path(repo_root)
+
     def git(*args: str) -> str:
-        return subprocess.check_output(['git', '-C', str(root), *args], text=True, stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(
+            ['git', '-C', str(root), *args],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+
     try:
-        local_commit = git('rev-parse', 'HEAD')
-        main_commit = git('rev-parse', 'origin/main')
-        dirty = bool(git('status', '--porcelain', '--', 'manifests/model-allowlist.json'))
-    except (OSError, subprocess.CalledProcessError):
+        local_commit = git('rev-parse', '--verify', 'HEAD')
+        main_commit = git('rev-parse', '--verify', 'origin/main')
+        dirty = bool(git('status', '--porcelain', '--', *ADMISSION_POLICY_PATHS))
+        if not (_SHA.fullmatch(local_commit) and _SHA.fullmatch(main_commit)):
+            raise ValueError('invalid_git_ref')
+
+        # No feature branch or diverged history may impersonate a main release.
+        ancestor = subprocess.run(
+            ['git', '-C', str(root), 'merge-base', '--is-ancestor',
+             local_commit, main_commit],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0
+
+        identical_policy = all(
+            git('rev-parse', '--verify', f'HEAD:{path}') ==
+            git('rev-parse', '--verify', f'origin/main:{path}')
+            for path in ADMISSION_POLICY_PATHS
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError):
         return check_allowlist_sync('', '', False) | {'reason': 'git_ref_unavailable'}
-    return check_allowlist_sync(local_commit, main_commit, not dirty)
+
+    in_sync = not dirty and ancestor and identical_policy
+    if in_sync:
+        reason = 'synchronized' if local_commit == main_commit else 'identical_policy_on_main_history'
+    elif dirty:
+        reason = 'locally_modified_policy'
+    elif not ancestor:
+        reason = 'not_on_main_history'
+    else:
+        reason = 'admission_policy_changed'
+    return {
+        'in_sync': in_sync,
+        'local_commit': local_commit,
+        'main_commit': main_commit,
+        'allowlist_worktree_clean': not dirty,
+        'reason': reason,
+        'mutated': False,
+    }
