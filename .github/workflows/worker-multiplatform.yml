@@ -25,8 +25,8 @@ jobs:
       windows: ${{ steps.select.outputs.windows }}
       android: ${{ steps.select.outputs.android }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -94,9 +94,9 @@ jobs:
         # The skipped matrix platform does not run checkout; its app workdir is absent.
         working-directory: .
         run: echo "No relevant changes"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
         with:
           node-version: '22'
@@ -132,7 +132,7 @@ jobs:
           New-Item -ItemType Directory -Force dist
           Copy-Item src-tauri/target/release/ai-chess-arena-worker.exe dist/ai-chess-arena-worker-windows.exe
           (Get-FileHash dist/ai-chess-arena-worker-windows.exe -Algorithm SHA256).Hash | Set-Content dist/SHA256.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: (matrix.platform == 'linux' && needs.changes.outputs.linux == 'true') || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true')
         with:
           name: worker-${{ matrix.platform }}-unsigned
