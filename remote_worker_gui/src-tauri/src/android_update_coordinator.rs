@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -313,6 +313,43 @@ pub(crate) fn verify_pause_poll_reply(
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// Announce a locally active model to Arena without claiming any active job.
+/// The response is bound to this Worker's token and a fresh nonce.
+#[allow(dead_code)]
+pub(crate) async fn announce_phone_ready(
+    base: &str, worker_id: &str, machine_token: &str, model_sha256: &str,
+) -> Result<&'static str, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty()
+        || model_sha256.len() != 64 || !model_sha256.bytes().all(|b|
+            b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err("Nieprawidłowa gotowość lokalnego modelu".into());
+    }
+    let endpoint = coordinator_endpoint(base, "ready")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+            "model_sha256": model_sha256,
+        }))
+        .send().await.map_err(|_| "Arena jest niedostępna podczas zgłoszenia gotowości")?;
+    if !response.status().is_success() {
+        return Err("Arena odmówiła przyjęcia gotowości lokalnego Workera".into());
+    }
+    let value: Value = response.json().await
+        .map_err(|_| "Nieprawidłowe potwierdzenie gotowości".to_owned())?;
+    if value.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || value.get("source").and_then(Value::as_str) != Some("coordinator")
+        || value.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || value.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
+        return Err("Nieautoryzowana odpowiedź o gotowości Workera".into());
+    }
+    match value.get("state").and_then(Value::as_str) {
+        Some("ready") => Ok("ready"),
+        Some("blocked") => Ok("blocked"),
+        _ => Err("Nieznana gotowość Workera".into()),
     }
 }
 
