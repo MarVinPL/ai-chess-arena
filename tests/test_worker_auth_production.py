@@ -17,5 +17,5 @@ def test_token_issue_and_revoke(tmp_path):
 
 def test_server_auth_endpoint_is_present():
     source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
-    assert "if self.path == '/api/remote-workers/authenticate':" in source
+    assert "if path == '/api/remote-workers/authenticate':" in source
     assert 'WorkerTokenStore(DB).authenticate(worker_id, token)' in source
