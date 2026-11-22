@@ -235,6 +235,95 @@ class WorkerUpdatePause:
         return {"job_id": job_id, "request_id": request_id,
                 "checkpoint": checkpoint, "sha256": digest}
 
+    def reconcile_resume(self, worker_id, job_id, request_id, *,
+                         checkpoint_sha256, timeout_seconds,
+                         worker_ready_verified, resume_accepted_verified,
+                         checkpoint_verifier):
+        """Commit a trusted worker's acceptance of the interrupted job.
+
+        No remote transport is implemented here. The authenticated dispatcher
+        must check installed version/signature, send exactly this checkpoint
+        to the same worker, and obtain a durable, idempotent acceptance ACK
+        before passing trusted evidence. Merely being online is insufficient.
+        This CAS transaction simultaneously restores the active job lease and
+        removes both pause/resume gates. Replays cannot reassign twice.
+        """
+        self.jobs._id(worker_id)
+        self.jobs._id(job_id)
+        if not isinstance(request_id, str) or not (
+            len(request_id) == 32 and all(c in "0123456789abcdef" for c in request_id)
+        ):
+            raise ValueError("Invalid pause request ID")
+        if not isinstance(checkpoint_sha256, str) or not (
+            len(checkpoint_sha256) == 64 and
+            all(c in "0123456789abcdef" for c in checkpoint_sha256)
+        ):
+            raise ValueError("Invalid checkpoint digest")
+        if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 86400:
+            raise ValueError("Invalid resumed execution lease")
+        if worker_ready_verified is not True or resume_accepted_verified is not True:
+            raise ValueError("Trusted Worker resume acceptance required")
+        if not callable(checkpoint_verifier):
+            raise ValueError("Trusted checkpoint verifier missing")
+        now = self.clock()
+        with self.jobs._db() as db:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            row = db.execute(
+                "SELECT job_id,request_id,checkpoint_json,checkpoint_sha256 "
+                "FROM worker_update_resume WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            if row is None or row[:2] != (job_id, request_id) or (
+                not secrets.compare_digest(row[3], checkpoint_sha256)
+            ):
+                raise ValueError("Resume checkpoint mismatch or already consumed")
+            if hashlib.sha256(row[2].encode("utf-8")).hexdigest() != row[3]:
+                raise ValueError("Corrupted resume checkpoint")
+            try:
+                checkpoint = json.loads(row[2])
+            except (TypeError, json.JSONDecodeError) as error:
+                raise ValueError("Invalid resume checkpoint JSON") from error
+            if not isinstance(checkpoint, dict) or (
+                checkpoint.get("schema_version") != 1 or
+                checkpoint.get("job_id") != job_id or
+                checkpoint.get("resume_mode") not in ("resume", "restart") or
+                not isinstance(checkpoint.get("payload"), dict)
+            ):
+                raise ValueError("Wrong resume checkpoint identity")
+            if checkpoint_verifier(checkpoint) is not True:
+                raise ValueError("Coordinator rejected resume checkpoint")
+            pause = db.execute(
+                "SELECT job_id,request_id,phase "
+                "FROM worker_update_pause_requests WHERE worker_id=?",
+                (worker_id,)
+            ).fetchone()
+            worker = db.execute(
+                "SELECT job_id,state FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,)
+            ).fetchone()
+            if pause != (job_id, request_id, "acknowledged") or worker != (None, "unknown"):
+                raise ValueError("Worker state not reconciled after update")
+            updated = db.execute(
+                "UPDATE worker_job_safety SET job_id=?,state='running',"
+                "deadline=?,updated_at=? "
+                "WHERE worker_id=? AND job_id IS NULL AND state='unknown'",
+                (job_id, now + timeout_seconds, now, worker_id)
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Worker execution lease was concurrently changed")
+            db.execute(
+                "DELETE FROM worker_update_resume WHERE worker_id=? "
+                "AND job_id=? AND request_id=? AND checkpoint_sha256=?",
+                (worker_id, job_id, request_id, checkpoint_sha256)
+            )
+            db.execute(
+                "DELETE FROM worker_update_pause_requests WHERE worker_id=? "
+                "AND job_id=? AND request_id=? AND phase='acknowledged'",
+                (worker_id, job_id, request_id)
+            )
+        return {"worker_id": worker_id, "job_id": job_id, "state": "running"}
+
     def clear(self, worker_id, request_id):
         """Explicit cleanup after completed reconciliation; not automatic resume."""
         self.jobs._id(worker_id)
