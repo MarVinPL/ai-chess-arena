@@ -1,0 +1,5 @@
+# Issue #275: isolated, short-lived Android Worker E2E over free HTTPS.
+# Only sandbox endpoints on the loopback server; no production proxying.
+arena-worker-test.148-113-182-137.sslip.io {
+    reverse_proxy 127.0.0.1:8191
+}
