@@ -130,3 +130,20 @@ def test_download_is_real_native_command_with_private_verified_staging():
     assert "Instalacja nadal wyłączona" in ui
     assert "install_update" not in source
     assert "PackageInstaller" not in source
+
+
+def test_existing_worker_signing_certificate_is_pinned_in_native_identity_gate():
+    identity = (ROOT / "remote_worker_gui/src-tauri/src/android_update_identity.rs").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/android-worker-apk.yml").read_text(encoding="utf-8")
+    configuration = (ROOT / "remote_worker_gui/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    expected = "3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12"
+    assert expected in identity and expected in workflow
+    assert 'WORKER_SIGNING_CERT_SHA256' in identity
+    assert 'pl.marvin.aichessarena.worker' in identity
+    assert 'pl.marvin.aichessarena.worker' in configuration
+    assert "installed.certificate_sha256 != WORKER_SIGNING_CERT_SHA256" in identity
+    assert "candidate.certificate_sha256 != WORKER_SIGNING_CERT_SHA256" in identity
+    assert "fn rejects_two_matching_but_untrusted_certificates()" in identity
+    assert "fn rejects_when_only_installed_certificate_differs_from_pinned_key()" in identity
+    # Platform record is not yet populated from PackageManager; no install gate bypass.
+    assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in LIB.read_text(encoding="utf-8")
