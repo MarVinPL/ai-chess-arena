@@ -33,6 +33,7 @@ class WorkerJobRegistry(DurableWorkerJobs):
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
             row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker has unresolved job state')
