@@ -19,6 +19,8 @@
 
 The Rust prototype includes a **fail-closed installation gate** (`may_install_update`) with unit tests and a read-only `update_installation_readiness` Tauri command. This command always returns `can_install=false` until authenticated scheduler idle state and signature verification are integrated. It cannot install updates; no scheduler-verified idle signal or signature verifier is connected yet.
 
+The authenticated `POST /api/remote-workers/update-safety` endpoint currently returns `state: unknown` and `install_allowed: false` for valid worker tokens. This is deliberate: the live server does not yet have a durable coordinator job registry to confirm idle after restarts. The in-memory `WorkerSessions.update_safety_state` helper is not sufficient for a production installation decision.
+
 ## Acceptance tests before enabling
 
 1. Valid signed newer release is discovered; user can choose install/defer.

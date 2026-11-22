@@ -1699,6 +1699,30 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
+        if path == '/api/remote-workers/update-safety':
+            # Fail closed: the persistent token store does not yet share a
+            # durable job registry with WorkerSessions. Never infer idle from
+            # an empty process-local queue or a successful authentication.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid payload')
+                worker_id = payload.get('worker_id')
+                token = payload.get('token')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                self.send_json({'state': 'unknown', 'install_allowed': False,
+                                'reason': 'Brak trwałego potwierdzenia stanu zadań'})
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
+            return
         if path == '/api/auth/logout':
             if not arena_auth.origin_allowed(self.headers.get('Origin')):
                 self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
