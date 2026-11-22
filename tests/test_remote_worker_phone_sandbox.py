@@ -138,3 +138,60 @@ def test_failed_checkpoint_keeps_result_and_running_lease(sandbox):
         ).fetchone()[0] == 1
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
     assert finalize_one_result(path, WORKER) == "d2d4"
+
+
+def test_stop_request_fences_http_result_without_fake_ack_or_checkpoint(sandbox):
+    """Issue #288: HTTP STOP delivery is NOT a worker STOP ACK."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    old_checkpoint = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    pause = WorkerUpdatePause(path)
+    request_id = pause.request(WORKER, job_id)
+    assert len(request_id) == 32
+
+    # A malicious client with the wrong credential or nonce cannot read STOP.
+    assert post("update-pause-poll", auth("not-a-real-token-00000000000"))[0] == 401
+    assert post("update-pause-poll", {**who, "nonce": "invalid"})[0] == 400
+
+    for _ in range(2):
+        code, response = post("update-pause-poll", who)
+        assert code == 200
+        assert response["instruction"] == {
+            "action": "stop_checkpoint",
+            "job_id": job_id,
+            "request_id": request_id,
+        }
+        assert response["install_allowed"] is False
+
+    # Even a perfectly legal but late UCI is rejected after STOP was queued.
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    status, reply = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4",
+    }})
+    assert status == 409 and "error" in reply
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[0] == 400
+    with pytest.raises(ValueError):
+        arm_one_job(path, WORKER)
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+
+    # STOP request alone neither confirms stopping nor advances chess state.
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == old_checkpoint
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT job_id,phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,)
+        ).fetchone() == (job_id, "requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone()[0] == 0
