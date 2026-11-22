@@ -441,3 +441,12 @@ against the actual production environment before installation. The gateway
 currently receives results only; outbound job delivery and coordinator
 single-writer integration remain pending. Tests verify fail-closed startup
 and template guardrails on the existing VPS.
+
+### Standalone process lifecycle smoke test
+
+`tests/test_remote_worker_service.py` now launches the actual gateway
+entrypoint in an independent subprocess with a temporary SQLite database and
+an ephemeral loopback port. It checks invalid token rejection, authenticated
+legal move intake, duplicate rejection, durable result staging, and graceful
+SIGTERM exit. The process is always cleaned up after the test. This does not
+install or enable the systemd unit and does not touch production data.
