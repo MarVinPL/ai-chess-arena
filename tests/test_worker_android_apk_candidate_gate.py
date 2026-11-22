@@ -147,3 +147,41 @@ def test_existing_worker_signing_certificate_is_pinned_in_native_identity_gate()
     assert "fn rejects_when_only_installed_certificate_differs_from_pinned_key()" in identity
     # Platform record is not yet populated from PackageManager; no install gate bypass.
     assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in LIB.read_text(encoding="utf-8")
+
+
+def test_android_packagemanager_verifies_real_downloaded_apk_before_reporting_success():
+    lib = LIB.read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    bridge = (ROOT / "remote_worker_gui/src-tauri/src/android_update_package_manager.rs").read_text(encoding="utf-8")
+    manifest = (ROOT / "remote_worker_gui/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    lock = (ROOT / "remote_worker_gui/src-tauri/Cargo.lock").read_text(encoding="utf-8")
+    assert 'jni = "=0.21.1"' in manifest
+    assert 'ndk-context = "=0.1.1"' in manifest
+    assert '"jni"' in lock and '"ndk-context"' in lock
+    assert '#[cfg(target_os = "android")]\nmod android_update_package_manager;' in lib
+    assert 'verify_downloaded_worker_apk, check_update_safety' in lib
+    start = lib.index("async fn verify_downloaded_worker_apk(")
+    end = lib.index("// Fail closed: a missing coordinator confirmation", start)
+    command = lib[start:end]
+    for required in (
+        "fetch_worker_releases().await?",
+        "select_apk_candidate(release, tag)",
+        "app.path().app_cache_dir()",
+        "std::fs::symlink_metadata(&apk)",
+        "verify_apk_stream(&mut file, &candidate)",
+        "inspect_staged_worker_apk(&apk)",
+        "identity == android_update_identity::IdentityCheck::Verified",
+    ):
+        assert required in command
+    assert 'getPackageManager' in bridge
+    assert 'getPackageInfo' in bridge
+    assert 'getPackageArchiveInfo' in bridge
+    assert 'getLongVersionCode' in bridge
+    assert 'getApkContentsSigners' in bridge
+    assert 'hasMultipleSigners' in bridge
+    assert 'GET_SIGNING_CERTIFICATES: i32 = 0x08000000' in bridge
+    assert 'check_platform_apk_identity(&installed_identity, &candidate_identity)' in bridge
+    assert "invoke('verify_downloaded_worker_apk')" in ui
+    assert "Instalacja nadal wyłączona" in ui
+    assert "install_update" not in bridge
+    assert "PackageInstaller" not in bridge
