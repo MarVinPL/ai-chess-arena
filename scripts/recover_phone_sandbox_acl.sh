@@ -29,6 +29,12 @@ getent passwd arena-phone-test >/dev/null || { echo 'Staging identity missing' >
 staged=$(runuser -u debian -- git -C "$link" rev-parse HEAD)
 runuser -u debian -- git -C "$repo" merge-base --is-ancestor "$staged" "$sha" ||
   { echo 'Unreviewed staging source' >&2; exit 2; }
+# The earlier staging worktree still contains the old reviewed source.
+# Upgrade it to the NEW, reviewed merged main commit without rebuilding or
+# overwriting its separate SQLite DB and without touching production.
+[[ -z $(runuser -u debian -- git -C "$link" status --porcelain) ]] ||
+  { echo 'Staging tree contains local changes' >&2; exit 2; }
+runuser -u debian -- git -C "$link" reset --hard "$sha"
 
 systemctl is-active --quiet ai-chess-arena.service ||
   { echo 'Production service unhealthy' >&2; exit 2; }
