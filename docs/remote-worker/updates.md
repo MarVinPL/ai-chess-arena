@@ -170,3 +170,15 @@ stable job ID, and crash/restart tests at every transaction boundary. The
 local `flock` prevents concurrent cooperating server processes on one host,
 but does not supply distributed fencing. Update installation and remote job
 dispatch remain disabled until these conditions are verified.
+
+### Prototype durable result staging
+
+`remote_worker_result_journal.py` adds a coordinator-only staging journal.
+`stage_validated()` must be called **only after** independently validating a
+worker result against its original job and board. It atomically records a
+replayable JSON result and transitions the worker safety lease to terminal.
+Identical retries are idempotent; conflicting retries and expired leases fail
+closed. Recovery preserves staged results while invalidating worker idle claims.
+This is deliberately **not wired** to `WorkerSessions` or the live chess
+scheduler: result application, its acknowledgement, and recovery reconciliation
+still require an idempotent scheduler transaction before production use.
