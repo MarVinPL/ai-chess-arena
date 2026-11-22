@@ -9,20 +9,33 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
+MAX_PEERS = 1024
+READ_TIMEOUT = 5
+
 from remote_worker_authenticated_ingest import AuthenticatedResultIngest
 
 MAX_BODY = 2048
 
 
 class RateLimiter:
-    def __init__(self, limit=20, window=60, clock=time.monotonic):
+    def __init__(self, limit=20, window=60, clock=time.monotonic, max_peers=MAX_PEERS):
         self.limit, self.window, self.clock = limit, window, clock
+        self.max_peers = max_peers
         self.events = {}
         self.lock = Lock()
 
     def allow(self, peer):
         now = self.clock()
         with self.lock:
+            # Evict expired peers, preventing unbounded state growth under
+            # many unique source addresses.
+            for key, history in list(self.events.items()):
+                while history and history[0] <= now - self.window:
+                    history.popleft()
+                if not history:
+                    del self.events[key]
+            if peer not in self.events and len(self.events) >= self.max_peers:
+                return False
             events = self.events.setdefault(peer, deque())
             while events and events[0] <= now - self.window:
                 events.popleft()
@@ -37,6 +50,10 @@ def make_handler(db_path, *, limiter=None):
     ingest = AuthenticatedResultIngest(db_path)
 
     class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(READ_TIMEOUT)
+
         def do_POST(self):
             if self.path != '/internal/remote-worker/result':
                 return self.reply(404)
@@ -59,6 +76,9 @@ def make_handler(db_path, *, limiter=None):
             except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
                 # Never disclose worker existence, token validity, job IDs or FEN.
                 return self.reply(401)
+            except (TimeoutError, OSError):
+                # A stalled client cannot occupy a handler indefinitely.
+                return
             except Exception:
                 return self.reply(503)
             return self.reply(202)

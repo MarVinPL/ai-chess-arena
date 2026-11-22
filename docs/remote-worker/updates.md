@@ -368,3 +368,13 @@ limits, then shuts down the listener. No route is added to `server.py`.
 worker enrollment and delivery, multi-process rate limiting, server runner
 integration, and restart reconciliation still require review. This listener
 must not be exposed to a public interface.
+
+### HTTP listener resource limits
+
+The opt-in loopback listener now applies a five-second socket read timeout to
+avoid indefinitely stalled request handlers. Its in-memory per-IP rate limiter
+caps distinct active peers at 1024 and evicts expired entries. A test covers
+peer saturation and expiry. These protections do **not** replace TLS, reverse
+proxy connection limits, production request accounting, or safe worker
+reconciliation. The listener remains disabled by default and is not wired to
+`server.py`.

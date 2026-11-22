@@ -43,3 +43,16 @@ def test_loopback_http_ingest_limits_and_authenticated_result(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_rate_limiter_bounds_unique_peer_state_and_reclaims_expired():
+    current = [100]
+    limiter = RateLimiter(limit=2, window=10, clock=lambda: current[0], max_peers=2)
+    assert limiter.allow('a')
+    assert limiter.allow('b')
+    assert not limiter.allow('c')
+    assert limiter.allow('a')
+    assert not limiter.allow('a')
+    current[0] = 111
+    assert limiter.allow('c')
+    assert len(limiter.events) == 1
