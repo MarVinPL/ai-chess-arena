@@ -148,3 +148,28 @@ def test_arena_production_runner_is_phone_opt_in_only_and_keeps_its_checkpoint()
     assert "set_live(" in source and "worker_id=worker_id, job_id=job_id, fen=fen" in source
     assert "tournament_checkpoint.save(DB, tournament_id" in source
     assert "if self.move_provider is None:" in runner
+
+
+def test_phone_mode_skips_vps_download_but_preserves_local_mode(monkeypatch):
+    import server
+    local_called = []
+    monkeypatch.setattr(
+        server, "_prepare_game_models",
+        lambda white, black: local_called.append((white, black))
+        or ({"path": "/vps/white.gguf", "draft_path": None},
+            {"path": "/vps/black.gguf", "draft_path": None}),
+    )
+    a, b = {"model_sha256": MODEL}, {"model_sha256": "b" * 64}
+    remote = server._prepare_game_execution_assets(a, b, phone_inference_enabled=True)
+    assert remote == (
+        {"path": None, "draft_path": None},
+        {"path": None, "draft_path": None},
+    )
+    assert not local_called
+    local = server._prepare_game_execution_assets(a, b, phone_inference_enabled=False)
+    assert local[0]["path"] == "/vps/white.gguf"
+    assert len(local_called) == 1
+    with pytest.raises(ValueError):
+        server._prepare_game_execution_assets(
+            {"model_sha256": "bad"}, b, phone_inference_enabled=True,
+        )
