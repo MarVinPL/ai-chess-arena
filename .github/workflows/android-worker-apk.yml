@@ -21,17 +21,17 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # Apply the SDK package fix already merged into main as PR #212.
           packages: 'platform-tools'
@@ -71,7 +71,7 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/ai-chess-arena-worker-arm64-debug.apk
           cp apk-sha256.txt dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ai-chess-arena-worker-arm64-debug
           path: remote_worker_gui/dist/
