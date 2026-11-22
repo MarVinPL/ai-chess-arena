@@ -74,3 +74,43 @@ komendą Tauri.** Nie jest uwierzytelnieniem wydawcy: digest z GitHub
 Release nie zastępuje podpisu APK ani kontroli `packageName`,
 `versionCode` i świeżego idle z koordynatora. Brak podłączonego
 stagingu, verifiera certyfikatu i instalatora: instalacja nadal **NO-GO**.
+
+## Audyt akceptacji Issue #196 (2026-11-22, kod PR #197)
+
+Poniższe statusy wynikają z przeglądu konkretnych wywołań i punktów
+integracji — sama obecność nazwy funkcji lub testu statycznego
+**nie jest dowodem działania funkcjonalności**.
+
+| Warunek Issue #196 | Ocena | Dowód i brakująca integracja |
+|---|---|---|
+| Wykrywanie stabilnego `worker-vX.Y.Z` | IMPLEMENTED (bez CI na HEAD) | `lib.rs::check_worker_release` czyta metadane GitHub i filtruje wersje; brak release feedu dla autoryzowanego instalatora |
+| Oficjalny URL, ARM64, limit rozmiaru, digest metadanych | IMPLEMENTED (bez CI na HEAD) | `android_update_asset.rs::select_apk_candidate`; **nigdzie nie wywołano tej funkcji w ścieżce aktualizacji UI** |
+| SHA-256 rzeczywistych bajtów pobranego APK | PARTIAL | `verify_apk_stream` liczy digest czytanego strumienia, testy Rust używają danych w pamięci; **brak pobierania pliku i wywołania tej funkcji na pliku APK** |
+| Pobieranie APK przez HTTPS do prywatnego katalogu + postęp | NOT IMPLEMENTED | Brak funkcji transferu, tymczasowego pliku, raportowania postępu do Tauri/GUI |
+| Podpis APK równy podpisowi zainstalowanej aplikacji | NOT IMPLEMENTED | Istnieje weryfikacja artefaktu w GitHub CI, ale **nie ma kontroli certyfikatu w aplikacji na Androidzie** |
+| `packageName` i wyższy `versionCode` | NOT IMPLEMENTED | `tauri.conf.json` zawiera identyfikator aplikacji; brak odczytu i porównania metadanych kandydata APK |
+| Koordynatorowe, uwierzytelnione i świeże `idle` przed instalacją | NOT IMPLEMENTED | `update_installation_readiness` celowo zawsze zwraca `can_install=false`; brak połączenia weryfikacji z instalatorem |
+| Systemowy Android FileProvider/PackageInstaller + potwierdzenie użytkownika | NOT IMPLEMENTED | Brak komendy Tauri, mostu Android i intencji instalatora |
+| Przycisk „Pobierz aktualizację” i pasek postępu | NOT IMPLEMENTED | Stary `public/index.html` zawiera jedynie „Sprawdź aktualizacje”; przycisk „Aktualizuj” i kanały Latest/Pre-release są w **nowszej gałęzi PR #193**, nie w bazie tego PR |
+| Testy pozytywne/negatywne Android 16 | PARTIAL | Istnieją jednostkowe testy Rust metadanych i strumienia oraz statyczne Python; **brak uruchomionego Android e2e** |
+| Brak root/płatnych usług i odmowa instalacji przy błędach | PARTIAL / SAFE BLOCKED | Instalacja w całości zablokowana; kompletnej obsługi błędów, pobierania i instalatora jeszcze nie ma |
+
+**Wniosek: NO-GO dla scalenia Issue #196 jako zakończonego.** W szczególności
+żaden test kodu, który nie jest wywoływany przez GUI/Android, nie
+upoważnia do oznaczenia wymagania jako `DONE`. Na badanym HEAD nie
+ma potwierdzonego przebiegu Python/Rust/Android CI. Weryfikacja APK przez
+GitHub Actions to kontrola buildu, **nie kontrola kandydata na telefonie**.
+
+### Warunki faktycznego zamknięcia Issue
+
+- Prześledzić pełną wywoływaną ścieżkę:
+  `GUI → Tauri → GitHub Release → prywatny download z postępem →
+  SHA-256 pliku → certyfikat/package/versionCode → świeże idle →
+  systemowy instalator z potwierdzeniem`.
+- Udowodnić testami integracyjnymi przypadki: poprawna aktualizacja,
+  zły podpis/hash/package/versionCode, obcy URL/przekierowanie, brak
+  miejsca, przerwane pobieranie, nieznany/aktywny job, restart procesu.
+- Potwierdzić testy na Android 16 oraz brak regresji przy wyborze kanału
+  Latest/Pre-release na aktualnej gałęzi Workera.
+- Sprawdzić wynik GitHub CI **konkretnego HEAD** po integracji z aktualnym
+  Workerem. PR #197 pozostaje draft do spełnienia tych kryteriów.
