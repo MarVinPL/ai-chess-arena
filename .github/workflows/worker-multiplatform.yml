@@ -49,6 +49,8 @@ jobs:
             windows:
               - 'remote_worker_gui/src-tauri/gen/windows/**'
               - 'remote_worker_gui/src-tauri/windows/**'
+              # Windows executable resources are part of the Windows app source.
+              - 'remote_worker_gui/src-tauri/icons/**'
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
