@@ -83,7 +83,43 @@ def test_native_release_checker_actually_uses_candidate_gate_and_displays_result
     assert "serde_json::from_slice(&body)" in release_command
     assert "info.apk_asset_available===true" in ui
     assert "Brak kwalifikującego się pliku APK ARM64" in ui
-    assert "Pobieranie i instalacja nie są jeszcze dostępne." in ui
+    assert "Instalacja pozostaje wyłączona." in ui
+    assert "invoke('download_worker_apk')" in ui
+    assert "invoke('install_update')" not in ui
     assert "invoke('check_worker_release')" in ui
     assert "invoke('download_update')" not in ui
     assert "invoke('install_update')" not in ui
+
+
+def test_download_is_real_native_command_with_private_verified_staging():
+    lib = LIB.read_text(encoding="utf-8")
+    source = (ROOT / "remote_worker_gui/src-tauri/src/android_update_download.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    start = lib.index("async fn download_worker_apk(app:")
+    end = lib.index("// Fail closed: a missing coordinator confirmation", start)
+    command = lib[start:end]
+    assert "mod android_update_download;" in lib
+    assert "download_worker_apk, check_update_safety" in lib
+    assert "let releases = fetch_worker_releases().await?" in command
+    assert "android_update_asset::select_apk_candidate(release, tag)" in command
+    assert "android_update_download::stage_candidate(&app, candidate, tag).await" in command
+    assert '#[cfg(target_os = "android")]' in command
+    assert "async fn download_apk_to_private_dir" in source
+    assert "app.path().app_cache_dir()" in source
+    assert "OpenOptions::new().write(true).create_new(true)" in source
+    assert "verify_apk_stream(&mut staged, candidate)" in source
+    assert 'fs::rename(&temporary, target)' in source
+    assert "if result.is_err()" in source
+    assert "fs::remove_file(&temporary)" in source
+    assert "if received > candidate.size" in source
+    assert "received != candidate.size" in source
+    assert "release-assets.githubusercontent.com" in source
+    assert "objects.githubusercontent.com" in source
+    assert "attempt.previous().len() > 3" in source
+    assert "Pobierz APK" in ui
+    assert "apkDownloadProgress" in ui
+    assert "worker-apk-download-progress" in ui
+    assert "download_worker_apk" in ui
+    assert "Instalacja nadal wyłączona" in ui
+    assert "install_update" not in source
+    assert "PackageInstaller" not in source
