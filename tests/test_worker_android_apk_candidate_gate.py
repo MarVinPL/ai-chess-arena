@@ -376,3 +376,26 @@ def test_android_package_installer_lifecycle_cannot_skip_user_consent_or_hold():
     assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
     assert "install_worker_apk" not in lib
     assert "install_worker_apk" not in ui
+
+
+def test_package_installer_own_sessions_are_read_only_and_never_confirm_install():
+    source = (ROOT / "remote_worker_gui/src-tauri/src/android_update_package_installer.rs").read_text(encoding="utf-8")
+    lib = LIB.read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    assert '#[cfg(target_os = "android")]\nmod android_update_package_installer;' in lib
+    for method in ('getPackageInstaller', 'getMySessions', 'getInstallerPackageName',
+                   'getAppPackageName', 'getSessionId', 'isCommitted'):
+        assert f'"{method}"' in source
+    assert 'if count < 0 || count > 1' in source
+    assert 'if count == 0 { return Ok(SessionObservation::NoVisibleSession); }' in source
+    assert 'target.as_deref() != Some(WORKER_PACKAGE_ID)' in source
+    assert 'owner.as_deref() != Some(WORKER_PACKAGE_ID)' in source
+    assert 'fn observation_is_terminal(_observation: SessionObservation) -> bool' in source
+    assert 'fn inspect_android_install_sessions() -> Result<&\'static str, String>' in lib
+    assert 'android_update_recovery::load_pending()?.is_none()' in lib
+    assert 'inspect_android_install_sessions, update_installation_readiness' in lib
+    assert "invoke('inspect_android_install_sessions')" in ui
+    assert "Brak widocznej sesji: to NIE potwierdza zakończenia instalacji" in ui
+    for unsafe_action in ('createSession', 'openSession', 'abandonSession', 'commit(', 'startActivity'):
+        assert unsafe_action not in source
+    assert 'may_install_update(VerifiedTaskState::Unknown, false, false)' in lib
