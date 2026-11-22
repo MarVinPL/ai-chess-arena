@@ -305,7 +305,9 @@ def test_update_recovery_status_never_exposes_hold_and_prevents_token_rotation()
     assert "struct UpdateRecoveryStatus" in lib
     assert "pending: bool" in lib
     assert "blocked: bool" in lib
-    assert "update_recovery_status, update_installation_readiness" in lib
+    registered = lib.split("tauri::generate_handler![", 1)[1].split("]", 1)[0]
+    for command in ("update_recovery_status", "inspect_update_hold", "update_installation_readiness"):
+        assert command in registered
     guard = lib.split("fn ensure_no_pending_update()", 1)[1].split("fn token_entry()", 1)[0]
     assert "android_update_recovery::load_pending()" in guard
     assert "Ok(Some(_)) => Err(" in guard
