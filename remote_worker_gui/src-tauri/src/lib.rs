@@ -90,6 +90,38 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
     Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
 }
 
+// Advisory only: the server currently returns unknown until its durable
+// coordinator job registry is wired. Never interpret an error as idle.
+#[tauri::command]
+async fn check_update_safety(server: String, worker_id: String) -> Result<String, String> {
+    if worker_id.len() < 8 || worker_id.len() > 96 ||
+        !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Nieprawidłowy identyfikator komputera".into());
+    }
+    let url = reqwest::Url::parse(&server).map_err(|_| "Nieprawidłowy adres serwera")?;
+    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() ||
+        url.password().is_some() || url.query().is_some() || url.fragment().is_some() ||
+        url.path() != "/" || url.port().is_some() {
+        return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
+    }
+    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(12)).build().map_err(|_| "Błąd klienta HTTPS")?;
+    let endpoint = url.join("api/remote-workers/update-safety")
+        .map_err(|_| "Nieprawidłowy endpoint")?;
+    let response = client.post(endpoint).json(&serde_json::json!({
+        "worker_id": worker_id, "token": token
+    })).send().await.map_err(|_| "Nie udało się sprawdzić stanu zadań")?;
+    if !response.status().is_success() { return Err("Nie udało się potwierdzić stanu zadań".into()); }
+    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
+    let state = data.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
+    // This command does not authorize installation; unknown fields fail closed.
+    match state {
+        "idle_confirmed" | "running" | "unknown" => Ok(state.to_string()),
+        _ => Ok("unknown".into()),
+    }
+}
+
 // Read-only release discovery. GitHub metadata is never treated as permission
 // to install: signed Tauri artifacts and a verified idle state are required.
 #[derive(Serialize)]
@@ -240,7 +272,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, update_installation_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, check_update_safety, update_installation_readiness])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
