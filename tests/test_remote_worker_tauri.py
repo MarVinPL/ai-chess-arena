@@ -75,3 +75,18 @@ def test_android_uses_native_keystore_with_no_plaintext_fallback():
     assert 'spawn_blocking' in rust
     # Only our backend commands see the token. Do not grant JS broad plugin IPC.
     assert 'keyring-store:default' not in capabilities['permissions']
+
+
+def test_keystore_deletion_is_scoped_to_single_worker_account():
+    rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
+    caps = json.loads((ROOT / 'src-tauri' / 'capabilities' / 'default.json').read_text())
+    assert 'const TOKEN_ACCOUNT: &str = "worker-token";' in rust
+    assert rust.count('.store.delete(') == 1
+    assert '.store.delete(TOKEN_ACCOUNT)' in rust
+    assert 'forget_worker_token(app: tauri::AppHandle)' in rust
+    assert not any(method in rust for method in (
+        '.store.clear(', '.store.reset(', '.store.delete_all(',
+        '.store.delete_passwords(', 'KeyStore.deleteEntry(',
+    ))
+    # Webview must not obtain broad permission to mutate the native keyring.
+    assert not any('keyring-store' in entry for entry in caps['permissions'])
