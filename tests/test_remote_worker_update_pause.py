@@ -177,3 +177,128 @@ def test_pause_request_and_complete_assignment_race_remains_serialized(tmp_path)
         assert state.update_safety_snapshot(WORKER) == ("unknown", None)
     else:
         assert outcome == "assigned"
+
+
+def _stopped_checkpoint():
+    # The trusted coordinator verifier is deliberately separate from the
+    # transport ACK and the SHA-256 storage integrity check.
+    checkpoint = {
+        "schema_version": 1, "job_id": JOB,
+        "resume_mode": "resume", "payload": {"fen": "example", "moves": []}
+    }
+    verifier = lambda data: data["payload"] == {"fen": "example", "moves": []}
+    return checkpoint, verifier
+
+
+def test_atomic_verified_pause_persists_checkpoint_and_holds_assignment(tmp_path):
+    db = tmp_path / "atomic-pause.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    checkpoint, verifier = _stopped_checkpoint()
+    hold = "a" * 64
+    result = pause.finalize_verified_pause(
+        WORKER, JOB, request_id, hold_token=hold, checkpoint=checkpoint,
+        worker_stopped_verified=True, checkpoint_verifier=verifier,
+    )
+    assert result["job_id"] == JOB
+    assert len(result["sha256"]) == 64
+    assert jobs.state(WORKER) == "unknown"
+    assert jobs.validate_update_hold(WORKER, hold)
+    assert jobs.update_safety_snapshot(WORKER) == ("unknown", None)
+    with pytest.raises(ValueError, match="reserved"):
+        jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+    recovered = WorkerUpdatePause(db, clock=lambda: now[0])
+    assert recovered.read_resume_checkpoint(WORKER)["checkpoint"] == checkpoint
+    with pytest.raises(ValueError, match="pending"):
+        recovered.clear(WORKER, request_id)
+    with pytest.raises(ValueError, match="reserved"):
+        recovered.finalize_verified_pause(
+            WORKER, JOB, request_id, hold_token="b" * 64,
+            checkpoint=checkpoint, worker_stopped_verified=True,
+            checkpoint_verifier=verifier,
+        )
+    jobs.release_update_hold(WORKER, hold)
+    assert not jobs.validate_update_hold(WORKER, hold)
+    assert recovered.read_resume_checkpoint(WORKER)["checkpoint"] == checkpoint
+    with pytest.raises(ValueError, match="pause"):
+        jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
+
+
+def test_verified_pause_requires_real_stopped_ack_and_trusted_checkpoint(tmp_path):
+    db = tmp_path / "invalid-ack.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    checkpoint, verifier = _stopped_checkpoint()
+    fields = dict(hold_token="a" * 64, checkpoint=checkpoint,
+                  worker_stopped_verified=True, checkpoint_verifier=verifier)
+    with pytest.raises(ValueError, match="ACK"):
+        pause.finalize_verified_pause(WORKER, JOB, request_id, **fields)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    with pytest.raises(ValueError, match="STOP"):
+        pause.finalize_verified_pause(
+            WORKER, JOB, request_id, **{**fields, "worker_stopped_verified": False})
+    with pytest.raises(ValueError, match="verified"):
+        pause.finalize_verified_pause(
+            WORKER, JOB, request_id, **{**fields, "checkpoint_verifier": lambda _: False})
+    with pytest.raises(ValueError, match="Invalid resume"):
+        pause.finalize_verified_pause(
+            WORKER, JOB, request_id, **{**fields, "checkpoint": {
+                **checkpoint, "job_id": "job_wrong00",
+            }})
+    with pytest.raises(ValueError, match="Invalid client"):
+        pause.finalize_verified_pause(
+            WORKER, JOB, request_id, **{**fields, "hold_token": "a" * 63})
+    assert jobs.state(WORKER) == "running"
+    assert pause.read_resume_checkpoint(WORKER) is None
+    assert pause.pending(WORKER)["phase"] == "acknowledged"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM worker_update_holds").fetchone()[0] == 0
+
+
+def test_verified_pause_expired_lease_and_bad_checkpoint_are_atomic(tmp_path):
+    db = tmp_path / "expiry.db"
+    now = [100.]
+    running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    checkpoint, verifier = _stopped_checkpoint()
+    now[0] = 401.
+    with pytest.raises(ValueError, match="lease"):
+        pause.finalize_verified_pause(
+            WORKER, JOB, request_id, hold_token="a" * 64,
+            checkpoint=checkpoint, worker_stopped_verified=True,
+            checkpoint_verifier=verifier,
+        )
+    assert pause.read_resume_checkpoint(WORKER) is None
+    assert DurableWorkerJobs(db, clock=lambda: now[0]).state(WORKER) == "unknown"
+
+
+def test_checkpoint_corruption_blocks_resume_and_does_not_delete_hold(tmp_path):
+    db = tmp_path / "corrupt.db"
+    now = [100.]
+    jobs = running_registry(db, now)
+    pause = WorkerUpdatePause(db, clock=lambda: now[0])
+    request_id = pause.request(WORKER, JOB)
+    pause.acknowledge(WORKER, JOB, request_id,
+                      worker_stopped=True, checkpoint_verified=True)
+    checkpoint, verifier = _stopped_checkpoint()
+    hold = "f" * 64
+    pause.finalize_verified_pause(
+        WORKER, JOB, request_id, hold_token=hold, checkpoint=checkpoint,
+        worker_stopped_verified=True, checkpoint_verifier=verifier,
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_update_resume SET checkpoint_json='{}' WHERE worker_id=?",
+                     (WORKER,))
+    with pytest.raises(ValueError, match="Corrupted"):
+        WorkerUpdatePause(db, clock=lambda: now[0]).read_resume_checkpoint(WORKER)
+    assert jobs.validate_update_hold(WORKER, hold)
