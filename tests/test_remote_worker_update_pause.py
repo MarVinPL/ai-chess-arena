@@ -78,9 +78,7 @@ def test_outdated_or_duplicate_pause_is_rejected(tmp_path):
     now[0] += 400
     with pytest.raises(ValueError, match="Stale"):
         pause.acknowledge(WORKER, JOB, req, worker_stopped=True,
-                          checkpoint_verified=True) if jobs.state(WORKER) != "unknown" else (
-            (_ for _ in ()).throw(ValueError("Stale pause acknowledgment"))
-        )
+                          checkpoint_verified=True)
     assert jobs.state(WORKER) == "unknown"
 
 
