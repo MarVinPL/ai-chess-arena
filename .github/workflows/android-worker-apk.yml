@@ -45,14 +45,7 @@ jobs:
           accept-android-sdk-licenses: 'false'
           packages: ''
       - name: Install SDK and NDK with Android CLI
-        run: |
-          set -euo pipefail
-          command -v android
-          # Keep Android 16 API 36, Build Tools 36 and NDK r27c pinned.
-          android --sdk="$ANDROID_HOME" sdk install platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
-          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
-          test -d "$ANDROID_HOME/ndk/27.2.12479018"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+        run: bash ../scripts/install_android_sdk_cli.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
