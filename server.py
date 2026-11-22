@@ -10,6 +10,7 @@ import engine_runner
 import adjudication
 import passkey_test
 import tournament_checkpoint
+import remote_worker_tokens
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
@@ -1383,6 +1384,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
         else: self.send_error(404)
     def do_POST(self):
+        if self.path == '/api/remote-workers/authenticate':
+            # Credential-only endpoint. Worker tokens are issued offline by an administrator.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid payload')
+                worker_id, token = payload.get('worker_id'), payload.get('token')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'authenticated': False}, 401)
+                    return
+                self.send_json({'authenticated': True, 'worker_id': worker_id})
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except Exception:
+                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
+            return
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if self.path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop'):
             try:
