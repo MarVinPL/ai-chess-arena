@@ -516,3 +516,13 @@ This is an isolated proof of the coordinator/worker boundary, **not** a
 production `server.py` dispatch integration, an external TLS deployment, or
 a real LLM worker execution. Production single-writer ownership and restart
 reconciliation still require implementation/review.
+
+### Fail-closed dispatch policy (not yet connected to server.py)
+
+`remote_worker_dispatch_policy.py` defines an explicit local/remote mode gate.
+Remote selection requires an opt-in flag, coordinator ownership, a ready
+worker and exclusive remote checkpoint-writer ownership. It never silently
+falls back to local if a remote job is unavailable or fails. The current
+production `server.py` still uses the local runner; wiring the mode switch
+requires an explicit lifecycle design for acquiring/releasing coordinator
+ownership and avoiding its existing direct `tournament_checkpoint.save` path.
