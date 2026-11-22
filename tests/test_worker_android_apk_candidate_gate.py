@@ -325,3 +325,27 @@ def test_update_recovery_status_never_exposes_hold_and_prevents_token_rotation()
     assert "document.getElementById('forgetToken').disabled=true" in ui
     assert "hold_token" not in ui
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+
+
+def test_hold_reconciliation_is_read_only_and_never_exposes_secret_to_ui():
+    lib = LIB.read_text(encoding="utf-8")
+    coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
+    jobs = (ROOT / "remote_worker_jobs.py").read_text(encoding="utf-8")
+    server = (ROOT / "server.py").read_text(encoding="utf-8")
+    assert 'def inspect_update_hold(self, worker_id, token):' in jobs
+    assert "'active' if self.clock() < row[1] else 'expired'" in jobs
+    assert "secrets.compare_digest(row[0], token)" in jobs
+    assert "update-hold-status" in server
+    assert "registry.inspect_update_hold(worker_id, hold_token)" in server
+    assert "'install_allowed': False" in server
+    assert 'pub(crate) async fn inspect_pending_update(' in coordinator
+    assert 'coordinator_endpoint(&pending.server, "update-hold-status")?' in coordinator
+    assert 'load_pending()?' in coordinator
+    assert 'match body.get("state").and_then(Value::as_str)' in coordinator
+    assert 'async fn inspect_update_hold() -> Result<String, String>' in lib
+    assert "inspect_update_hold, update_installation_readiness" in lib
+    assert "invoke('inspect_update_hold')" in ui
+    assert "Rezerwacja wygasła, ale nadal blokuje przydziały" in ui
+    assert "hold_token" not in ui
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
