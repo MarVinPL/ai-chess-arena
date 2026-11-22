@@ -338,3 +338,17 @@ identity (not only the now-cleared job ID), so an unresolved worker continues
 to block a second worker from receiving the same checkpoint/FEN. A regression
 test verifies that a restart followed by a competing assignment fails closed.
 This is a guard, not an automated worker reconciliation or production enablement.
+
+### Authenticated result intake (internal only)
+
+`remote_worker_authenticated_ingest.py` provides a coordinator-only
+`AuthenticatedResultIngest.accept()` path. It authenticates a worker's
+SQLite-backed token, verifies durable worker/job binding and unexpired lease,
+reconstructs the board from the committed checkpoint, validates legal UCI,
+rechecks token validity inside the SQLite write transaction, and atomically
+stages the result while transitioning worker safety state. Negative tests
+cover invalid/revoked credentials, foreign jobs, illegal moves and duplicates.
+
+No HTTP route is exposed by this module. TLS, request-size and rate limits,
+network authorization, production runner integration and operator-approved
+reconciliation remain outstanding. **NO-GO production.**
