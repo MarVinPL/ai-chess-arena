@@ -71,7 +71,9 @@ jobs:
 
   desktop:
     needs: changes
-    if: needs.changes.outputs.linux == 'true' || needs.changes.outputs.windows == 'true'
+    # Paused by user decision #225 / branch-synchronization Issue #227.
+    # Keep this matrix job intact; re-enable only through a reviewed PR.
+    if: ${{ false && (needs.changes.outputs.linux == 'true' || needs.changes.outputs.windows == 'true') }}
     strategy:
       fail-fast: false
       matrix:
