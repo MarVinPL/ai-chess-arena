@@ -318,3 +318,14 @@ Replay never marks a worker idle: after restart its safety state remains
 `unknown`, and subsequent assignments remain blocked pending independent
 reconciliation. Duplicate replay is rejected. This is an offline recovery
 primitive, not a network recovery endpoint or automatic production resume.
+
+### Result staging / reassignment race guard
+
+`stage_validated()` transitions worker safety to `idle_confirmed` before its
+chess checkpoint result is applied. A worker with any pending result must not
+receive another bound job even if its safety state appears idle. Assignment
+now checks `worker_result_journal` for pending applications under the same
+SQLite `BEGIN IMMEDIATE` transaction. A regression test verifies the worker
+cannot be reassigned until that result is committed. This does not replace
+post-restart reconciliation or authenticated transport; production remains
+NO-GO.

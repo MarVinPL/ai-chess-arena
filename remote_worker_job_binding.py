@@ -42,6 +42,12 @@ class BoundWorkerResults(WorkerResultJournal):
                 raise ValueError('Invalid checkpoint board')
             if db.execute('SELECT 1 FROM remote_job_binding WHERE job_id=?', (job_id,)).fetchone():
                 raise ValueError('Duplicate job')
+            # Staging a result marks the worker idle, but the chess move is
+            # not committed yet. Do not assign another position until the
+            # previous result has been atomically applied to its checkpoint.
+            if db.execute('''SELECT 1 FROM worker_result_journal
+                WHERE worker_id=? AND state='pending_application' LIMIT 1''', (worker_id,)).fetchone():
+                raise ValueError('Worker has unapplied result')
             # A staged result still owns its source position until applied.
             # Never dispatch a competing job to another worker for that FEN.
             conflict = db.execute('''SELECT 1 FROM remote_job_binding b

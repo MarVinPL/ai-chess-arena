@@ -115,3 +115,18 @@ def test_restart_reconciliation_blocks_unapplied_result(tmp_path):
     with pytest.raises(ValueError, match='unapplied'):
         journal.confirm_idle_after_restart(worker, operator_confirmed=True, worker_reconnected=True)
     assert journal.state(worker) == 'unknown'
+
+
+def test_worker_cannot_receive_next_job_while_result_unapplied(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    worker = 'worker_12345678'
+    job = 'job_12345678'
+    journal.assign_bound(worker, job, tournament_id=1, pairing_id=7,
+                         expected_sha256=digest, timeout_seconds=90)
+    journal.stage_validated(worker, job, {'version': 1, 'job_id': job, 'uci': 'e2e4'})
+    assert journal.state(worker) == 'idle_confirmed'
+    with pytest.raises(ValueError, match='unapplied result'):
+        journal.assign_bound(worker, 'job_87654321', tournament_id=1,
+                             pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    with journal._db() as db:
+        assert db.execute('SELECT count(*) FROM remote_job_binding').fetchone()[0] == 1
