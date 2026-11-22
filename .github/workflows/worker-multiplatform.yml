@@ -141,7 +141,20 @@ jobs:
 
   android:
     needs: changes
-    if: needs.changes.outputs.android == 'true'
+    # Pull requests never receive the historical signing keystore.
+    if: needs.changes.outputs.android == 'true' && github.event_name == 'pull_request'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
+
+  android_signed:
+    needs: changes
+    # Only trusted pushes to main may pass private signing Secrets.
+    if: needs.changes.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/android-worker-apk.yml
+    permissions:
+      contents: read
+    secrets:
+      WORKER_ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
+      WORKER_ANDROID_DEBUG_STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
+      WORKER_ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
