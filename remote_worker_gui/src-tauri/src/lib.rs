@@ -549,7 +549,27 @@ async fn reconcile_installed_worker_update() -> Result<&'static str, String> {
         if !android_update_identity::installed_update_matches_journal(
             &installed, journal.previous_version_code, journal.target_version_code,
         ) {
-            return Ok("not_confirmed");
+            // Android explicitly reports failure/cancellation, AND the old
+            // installed package remains intact with the original signing key:
+            // only then may we release the hold. Absent/pending callbacks or
+            // changed package identity keep the transaction blocked.
+            let status = android_update_package_installer::read_session_result(journal.session_id)?;
+            let old_app_intact = installed.package_name == android_update_identity::WORKER_PACKAGE_ID
+                && installed.platform_signing_verified
+                && installed.current_signer_count == 1
+                && installed.certificate_sha256 ==
+                   android_update_identity::WORKER_SIGNING_CERT_SHA256
+                && installed.long_version_code == journal.previous_version_code;
+            if !old_app_intact || !status.is_some_and(|code| code > 0) {
+                return Ok("not_confirmed");
+            }
+            let machine_token = token_entry()?.get_password()
+                .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+            android_update_coordinator::release_update(
+                &pending.server, &pending.worker_id, &machine_token,
+            ).await?;
+            android_update_install_journal::clear_confirmed(&journal)?;
+            return Ok("installation_cancelled");
         }
         let machine_token = token_entry()?.get_password()
             .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
