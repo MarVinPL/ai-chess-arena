@@ -207,6 +207,86 @@ pub(crate) fn stage_verified_apk_session(
     result.map(|()| id)
 }
 
+
+/// Commit only the named, still-uncommitted session of the currently installed
+/// Worker. A private, non-exported Android receiver launches the OS consent
+/// activity on STATUS_PENDING_USER_ACTION. This call means *submitted*, not
+/// installed. Caller must have persisted the expected version+hold journal.
+#[allow(dead_code)]
+pub(crate) fn commit_staged_session(session_id: i32) -> Result<(), String> {
+    use jni::objects::JValue;
+    if session_id < 0 {
+        return Err("Nieprawidłowy identyfikator instalacji".into());
+    }
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(jni_error)?;
+    let mut env = vm.attach_current_thread().map_err(jni_error)?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let pm = env.call_method(&context, "getPackageManager",
+        "()Landroid/content/pm/PackageManager;", &[])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    let installer = env.call_method(&pm, "getPackageInstaller",
+        "()Landroid/content/pm/PackageInstaller;", &[])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    let info = env.call_method(&installer, "getSessionInfo",
+        "(I)Landroid/content/pm/PackageInstaller$SessionInfo;",
+        &[JValue::Int(session_id)]).map_err(jni_error)?.l().map_err(jni_error)?;
+    if info.is_null() { return Err("Android nie znalazł sesji APK".into()); }
+    let pkg = env.call_method(&info, "getAppPackageName",
+        "()Ljava/lang/String;", &[]).map_err(jni_error)?.l().map_err(jni_error)?;
+    let owner = env.call_method(&info, "getInstallerPackageName",
+        "()Ljava/lang/String;", &[]).map_err(jni_error)?.l().map_err(jni_error)?;
+    if java_string(&mut env, pkg)?.as_deref() != Some(WORKER_PACKAGE_ID)
+        || java_string(&mut env, owner)?.as_deref() != Some(WORKER_PACKAGE_ID) {
+        return Err("Sesja nie należy do tej aplikacji".into());
+    }
+    if env.call_method(&info, "isCommitted", "()Z", &[])
+        .map_err(jni_error)?.z().map_err(jni_error)? {
+        return Err("Sesja została już zatwierdzona".into());
+    }
+    let name = env.new_string(WORKER_PACKAGE_ID).map_err(jni_error)?;
+    let receiver = env.new_string(
+        "pl.marvin.aichessarena.worker.WorkerInstallStatusReceiver"
+    ).map_err(jni_error)?;
+    let action = env.new_string(
+        "pl.marvin.aichessarena.worker.INSTALL_STATUS"
+    ).map_err(jni_error)?;
+    let intent = env.new_object("android/content/Intent", "()V", &[])
+        .map_err(jni_error)?;
+    env.call_method(&intent, "setClassName",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(name.as_ref()), JValue::Object(receiver.as_ref())])
+        .map_err(jni_error)?;
+    env.call_method(&intent, "setAction",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(action.as_ref())])
+        .map_err(jni_error)?;
+    // FLAG_MUTABLE is required: PackageInstaller fills status extras.
+    // Explicit component prevents an implicit mutable PendingIntent.
+    const FLAG_UPDATE_CURRENT: i32 = 0x08000000;
+    const FLAG_MUTABLE: i32 = 0x02000000;
+    let pending = env.call_static_method("android/app/PendingIntent", "getBroadcast",
+        "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+        &[JValue::Object(&context), JValue::Int(session_id),
+          JValue::Object(&intent),
+          JValue::Int(FLAG_UPDATE_CURRENT | FLAG_MUTABLE)])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    if pending.is_null() { return Err("Android nie przygotował odbiornika instalacji".into()); }
+    let sender = env.call_method(&pending, "getIntentSender",
+        "()Landroid/content/IntentSender;", &[])
+        .map_err(jni_error)?.l().map_err(jni_error)?;
+    if sender.is_null() { return Err("Brak wyniku sesji instalatora".into()); }
+    let session = env.call_method(&installer, "openSession",
+        "(I)Landroid/content/pm/PackageInstaller$Session;",
+        &[JValue::Int(session_id)]).map_err(jni_error)?.l().map_err(jni_error)?;
+    if session.is_null() { return Err("Nie można otworzyć sesji instalatora".into()); }
+    let result = env.call_method(&session, "commit",
+        "(Landroid/content/IntentSender;)V", &[JValue::Object(&sender)])
+        .map_err(jni_error);
+    let _ = env.call_method(&session, "close", "()V", &[]);
+    result.map(|_| ())
+}
+
 pub(crate) fn observation_is_terminal(_observation: SessionObservation) -> bool {
     // Even "no visible session" cannot prove success or safe cancellation.
     false
