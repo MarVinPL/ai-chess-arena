@@ -244,3 +244,20 @@ provider move. The callback is **not** connected to network transport,
 activated. Full remote execution requires coordinator dispatch, durable
 job-result bridging, checkpoint-aware progress handling, and crash/restart
 end-to-end tests before production approval.
+
+### Offline runner-to-journal bridge and restart test
+
+`remote_worker_runner_bridge.py` connects the optional runner move-provider
+interface to durable job binding, validated result staging, and atomic
+checkpoint updates. It uses an injected **offline** inference function, not
+network transport. A test plays the four-ply Fool's Mate, stops after two
+persisted moves, simulates coordinator restart, and resumes from the SQLite
+checkpoint to checkmate with no duplicate moves. The test explicitly
+re-confirms the worker as idle after restart; this is a **test-only state
+transition**, not an implemented worker reconciliation protocol.
+
+**NO-GO for production:** the live `server.py` still invokes its original
+local runner and `publish_move` callback. There is no authenticated network
+transport, live dispatch, durable worker re-confirmation, or production
+replay coordinator. The bridge must not be enabled alongside the existing
+checkpoint writer for the same game without a single-writer integration.

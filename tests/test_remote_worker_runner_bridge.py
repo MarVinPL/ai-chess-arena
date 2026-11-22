@@ -1,0 +1,59 @@
+import sqlite3
+import chess
+import tournament_checkpoint
+from engine_runner import SequentialChessRunner
+from remote_worker_runner_bridge import RemoteRunnerBridge
+
+
+class NoLocalRuntime:
+    def generate(self, *args, **kwargs):
+        raise AssertionError('Unexpected local inference')
+
+
+def test_complete_chess_game_with_durable_remote_bridge_and_restart(tmp_path):
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    original = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game',
+                'pairing': {'id': 7}, 'moves': [], 'move_times': [],
+                'fen': chess.Board().fen(), 'side_to_move': 'white'}
+    tournament_checkpoint.save(path, 1, original)
+    moves = iter(['f2f3', 'e7e5', 'g2g4', 'd8h4'])
+
+    def infer(job, board, player):
+        return {'version': 1, 'job_id': job['job_id'], 'uci': next(moves)}
+
+    bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', infer, clock=lambda: 100)
+    runner = SequentialChessRunner(NoLocalRuntime(), move_provider=bridge.provide)
+    # Simulate restart after two committed moves; a new bridge reads the durable checkpoint.
+    class StopAfterTwo:
+        def __init__(self):
+            self.stopped = False
+        def is_set(self):
+            return self.stopped
+    stop = StopAfterTwo()
+
+    def progress(record):
+        bridge.publish(record)
+        if record['ply'] == 2:
+            stop.stopped = True
+
+    partial = runner.play_game({'name': 'White'}, {'name': 'Black'}, stop_event=stop, progress=progress)
+    assert partial['status'] == 'stopped'
+    saved = tournament_checkpoint.load(path, 1)
+    assert len(saved['moves']) == 2
+    bridge.journal.recover_after_restart()
+    resumed_bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', infer, clock=lambda: 110)
+    # Coordinator must explicitly re-confirm worker idle after restart.
+    with resumed_bridge.journal._db() as db:
+        db.execute("UPDATE worker_job_safety SET state='idle_confirmed' WHERE worker_id='worker_12345678'")
+    resumed_runner = SequentialChessRunner(NoLocalRuntime(), move_provider=resumed_bridge.provide)
+    result = resumed_runner.play_game({'name': 'White'}, {'name': 'Black'},
+        resume_moves=saved['moves'], resume_fen=saved['fen'],
+        resume_move_times=saved['move_times'], progress=resumed_bridge.publish)
+    assert result['result'] == '0-1'
+    final = tournament_checkpoint.load(path, 1)
+    assert [m['uci'] for m in final['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+    assert len(resumed_bridge.journal.pending()) == 0
