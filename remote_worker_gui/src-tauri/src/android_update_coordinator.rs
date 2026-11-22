@@ -390,7 +390,7 @@ pub(crate) async fn fetch_my_inference_job(
         return Err("Odpowiedź zadania nie należy do tego telefonu".into());
     }
     match body.get("state").and_then(Value::as_str) {
-        Some("none" | "blocked" | "expired") => {
+        Some("none" | "blocked" | "expired" | "awaiting_arena") => {
             if body.get("job").is_some() {
                 return Err("Nieaktywna kolejka ujawnia obce zadanie".into());
             }
