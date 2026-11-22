@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -264,6 +264,81 @@ pub(crate) async fn release_update(
     } else {
         Err("Koordynator nie potwierdził zwolnienia rezerwacji".into())
     }
+}
+
+/// A stop instruction is NOT proof of actual execution suspension.
+/// No webview command or automatic install is attached to this poll.
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum StopInstruction {
+    None,
+    StopCheckpoint { job_id: String, request_id: String },
+    AwaitReconciliation,
+    Blocked,
+}
+
+#[allow(dead_code)]
+pub(crate) fn verify_pause_poll_reply(
+    response: &Value, worker_id: &str, nonce: &str,
+) -> Result<StopInstruction, String> {
+    if nonce.len() != 32 || !nonce.bytes().all(|b|
+        b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || response.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || response.get("source").and_then(Value::as_str) != Some("coordinator")
+        || response.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || response.get("nonce").and_then(Value::as_str) != Some(nonce)
+        || response.get("install_allowed").and_then(Value::as_bool) != Some(false) {
+        return Err("Niewiarygodne polecenie wstrzymania Workera".into());
+    }
+    let instruction = response.get("instruction")
+        .and_then(Value::as_object)
+        .ok_or("Brak polecenia koordynatora")?;
+    match instruction.get("action").and_then(Value::as_str) {
+        Some("none") if instruction.len() == 1 => Ok(StopInstruction::None),
+        Some("await_reconciliation") if instruction.len() == 1 =>
+            Ok(StopInstruction::AwaitReconciliation),
+        Some("blocked") if instruction.len() == 1 => Ok(StopInstruction::Blocked),
+        Some("stop_checkpoint") if instruction.len() == 3 => {
+            let job_id = instruction.get("job_id")
+                .and_then(Value::as_str).ok_or("Brak zadania do przerwania")?;
+            let request_id = instruction.get("request_id")
+                .and_then(Value::as_str).ok_or("Brak identyfikatora pauzy")?;
+            if !valid_worker_id(job_id) || request_id.len() != 32
+                || !request_id.bytes().all(|b|
+                    b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                return Err("Nieprawidłowe polecenie pauzy".into());
+            }
+            Ok(StopInstruction::StopCheckpoint {
+                job_id: job_id.to_owned(), request_id: request_id.to_owned(),
+            })
+        }
+        _ => Err("Nieznane polecenie zatrzymania Workera".into()),
+    }
+}
+
+/// Future native executor may poll while inference is active, then stop at a
+/// safe checkpoint and transmit a *separately verified* acknowledgment.
+/// This function does not stop execution or claim the worker is idle.
+#[allow(dead_code)]
+pub(crate) async fn poll_pause_instruction(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<StopInstruction, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let endpoint = coordinator_endpoint(base, "update-pause-poll")?;
+    let nonce = random_nonce()?;
+    let reply = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+        }))
+        .send().await.map_err(|_| "Nie można pobrać polecenia pauzy")?;
+    if !reply.status().is_success() {
+        return Err("Koordynator nie potwierdził polecenia pauzy".into());
+    }
+    let body: Value = reply.json().await
+        .map_err(|_| "Nieprawidłowa odpowiedź koordynatora".to_string())?;
+    verify_pause_poll_reply(&body, worker_id, &nonce)
 }
 
 #[cfg(test)]
