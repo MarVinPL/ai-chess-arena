@@ -598,3 +598,13 @@ claims. Previously retrievable jobs become unavailable, readiness checks fail
 closed, and new assignments to unknown workers are rejected until explicit
 reconciliation. This is an isolated temporary-database test, not a production
 restart or automatic worker recovery mechanism.
+
+### Read-only unresolved-job recovery inventory
+
+`remote_worker_recovery_report.inspect_unresolved_jobs` inventories durable
+remote job bindings, worker safety state, pending staged results, and
+checkpoint hash/position integrity. It reports whether to wait, review a
+staged result, or require manual reconciliation. Corrupt or changed
+checkpoints are flagged for manual review, never automatically replayed.
+The inventory does not mutate worker state, grant liveness, acknowledge
+results, or restart jobs. Production dispatch remains disabled.
