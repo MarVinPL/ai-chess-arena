@@ -717,3 +717,26 @@ przydziału po aktualizacji. W aktualnym kodzie `update_installation_readiness`
 wciąż zwraca odmowę, ponieważ nie istnieje działające powiązanie
 PackageInstaller/callback z wykonawcą. Nie deklarować gotowości instalacji
 na podstawie samego rozszerzenia enuma i unit testów.
+
+
+## 2026-11-22 — natywne przygotowanie sesji PackageInstaller (etap bez commit)
+
+Moduł `android_update_package_installer.rs` zawiera obecnie wewnętrzną
+funkcję `stage_verified_apk_session` (commity `4b6e7442`, `1bc813b2`).
+Funkcja wymaga od zaufanego wywołującego równocześnie potwierdzenia
+tożsamości aplikacji i rezerwacji koordynatora. Odrzuca symlinki, brak
+pliku, błędny rozmiar i hash; sprawdza `canRequestPackageInstalls()`,
+brak wcześniejszej sesji i tworzy przez Android JNI `SessionParams`,
+`createSession`, `openWrite`, porcjami zapisuje `base.apk`,
+sprawdza SHA-256 w trakcie kopiowania i wykonuje `fsync`.
+Błędy powodują próbę porzucenia nowej niezatwierdzonej sesji.
+
+**To jeszcze nie jest instalator użytkowy**: funkcji nie wywołuje
+GUI ani Tauri. Brakuje trwałego zapisu identyfikatora sesji,
+odbiornika `IntentSender` dla statusów OS, `STATUS_PENDING_USER_ACTION`
+i powrotu do aplikacji, ponownego potwierdzenia podpisu/wersji po
+aktualizacji, atomowego uzgodnienia rezerwacji oraz ręcznego `Wznów`
+podłączonego do prawdziwego wykonawcy. Nie dodano `Session.commit()`.
+Bez tych elementów nie wolno uruchamiać nieodzyskiwalnej instalacji.
+Testy źródłowe nie zastępują kompilacji JNI na Androidzie i testu na
+fizycznym urządzeniu.
