@@ -491,3 +491,15 @@ coordinator applies it with checkpoint compare-and-swap. Duplicate submission
 is rejected, repeated application is idempotent, and exactly one move is
 committed. This uses a temporary database and HTTP server, **not** the
 production tournament scheduler, remote HTTPS exposure or automatic dispatch.
+
+### Coordinator-side staged-result wait adapter
+
+`remote_worker_coordinator_transport.py` adds a bounded, interruptible wait
+for a coordinator-assigned result in the durable SQLite journal. An offline
+integration test feeds an authenticated result from a separate thread into
+`RemoteRunnerBridge`, which applies the move to the tournament checkpoint.
+Timeout does not release the reservation or reassign the position. This is a
+coordinator-side test adapter only: `server.py` still uses local inference,
+there is no automatic production scheduling, no network worker executor,
+and no deployed gateway. Before production use, the bridge must avoid
+restaging an already staged result and acquire single-writer ownership.
