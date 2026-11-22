@@ -79,6 +79,38 @@ class WorkerUpdatePause:
             "job_id": row[0], "request_id": row[1], "phase": row[2]
         }
 
+    def poll_stop_instruction(self, worker_id):
+        """Read-only instruction for a machine-authenticated Worker poll.
+
+        A request is not proof of delivery or an ACK. Repeated polls may
+        return the SAME request_id; the future executor must deduplicate it.
+        Expired/mismatched execution state remains blocked, never idle.
+        """
+        self.jobs._id(worker_id)
+        with self.jobs._db() as db:
+            pause = db.execute(
+                "SELECT job_id,request_id,phase FROM worker_update_pause_requests "
+                "WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            active = db.execute(
+                "SELECT job_id,state,deadline FROM worker_job_safety "
+                "WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+        if pause is None:
+            return {"action": "none"}
+        job_id, request_id, phase = pause
+        if phase == "acknowledged":
+            return {"action": "await_reconciliation"}
+        if phase != "requested" or not active or (
+            active[0] != job_id or active[1] != "running" or
+            active[2] is None or active[2] <= self.clock()
+        ):
+            return {"action": "blocked"}
+        return {
+            "action": "stop_checkpoint",
+            "job_id": job_id, "request_id": request_id,
+        }
+
     def acknowledge(self, worker_id, job_id, request_id, *,
                     worker_stopped, checkpoint_verified):
         """Only coordinator-validated worker ACK+checkpoint can mark pause.
