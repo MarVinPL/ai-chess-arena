@@ -1786,6 +1786,36 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/update-pause-poll':
+            # Read-only STOP instruction transport; no client-supplied ACK,
+            # checkpoint, idle transition, hold release or install permission.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid pause poll')
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid pause poll nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_update_pause import WorkerUpdatePause
+                instruction = WorkerUpdatePause(DB).poll_stop_instruction(worker_id)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce,
+                    'instruction': instruction, 'install_allowed': False,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie pauzy'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można odczytać żądania pauzy'}, 500)
+            return
         if path in ('/api/remote-workers/update-reserve', '/api/remote-workers/update-release',
                      '/api/remote-workers/update-hold-status'):
             # These are coordinator transactions, not an APK installer.
