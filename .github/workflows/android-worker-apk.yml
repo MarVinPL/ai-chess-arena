@@ -19,17 +19,17 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # The legacy SDK 'tools' package was removed from Google's repository.
           # v3 still defaults to requesting it unless packages is overridden.
@@ -61,7 +61,7 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/ai-chess-arena-worker-arm64-debug.apk
           (cd dist && sha256sum ai-chess-arena-worker-arm64-debug.apk > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: ai-chess-arena-worker-arm64-debug
