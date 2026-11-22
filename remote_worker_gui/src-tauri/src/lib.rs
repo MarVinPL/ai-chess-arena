@@ -175,15 +175,20 @@ struct WorkerStatus {
     message: &'static str,
 }
 
-// Local-only status command. No remote network connection, shell execution,
-// filesystem access, or model inference is available in this prototype.
+// A phone can run an optional local llama.cpp server. Desktop continues to
+// show a disabled inference path. "running" means an active local request.
 #[tauri::command]
 fn worker_status() -> WorkerStatus {
     WorkerStatus {
         connected: false,
-        running: false,
-        message: "Agent nie jest jeszcze połączony z VPS",
+        running: android_local_llama::generation_active(),
+        message: "Brak trwałej sesji przydziału; status obliczeń jest lokalny",
     }
+}
+
+#[tauri::command]
+fn phone_inference_supported() -> bool {
+    cfg!(target_os = "android")
 }
 
 // The desktop app connects outbound only. Never pass the token into JS or a URL.
@@ -782,7 +787,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
