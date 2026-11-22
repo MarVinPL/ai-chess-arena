@@ -518,3 +518,21 @@ Dalszy krok: podłączyć transport STOP/checkpoint/ACK oraz
 weryfikator domenowy (np. legalną historię ruchów szachowych),
 potem odczyt checkpointu i kontrolowane wznowienie bez podwójnych
 wyników. Nadal nie uruchamiać instalatora APK bez zgody Androida.
+
+## 2026-11-22 — blokada osieroconego checkpointu po aktualizacji
+
+Tabela `worker_update_resume` jest współdzielona od inicjalizacji
+`DurableWorkerJobs`. Zarówno nowe, jak i kompatybilne API przydziału
+zadań oraz `reserve_update` sprawdzają ją **w tej samej transakcji**,
+również wtedy, gdy blokada instalatora została już zwolniona i
+ktoś usunął oddzielny wpis pauzy. `update_safety_snapshot` nie
+ogłasza bezczynności, jeśli istnieje zapis przerwanego zadania.
+Nie ma automatycznego „wznawiam” bez dowodu, że Worker powrócił
+do działania, i nie ma usuwania checkpointu po samym zakończeniu
+instalacji.
+
+Dodano test, który celowo usuwa wpis pauzy i sztucznie ustawia stare
+`idle_confirmed` po zwolnieniu hold. Obie ścieżki schedulera nadal
+odmawiają przydziału, a zapis checkpointu przetrwał. Ostateczne
+wznowienie wymaga osobnego zaufanego protokołu dispatcher–Worker,
+kontroli wersji i idempotencji wyników.
