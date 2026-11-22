@@ -78,6 +78,18 @@ class WorkerSessions:
         if not s or s.revoked or self._clock() >= s.expires or not isinstance(token, str) or not hmac.compare_digest(s.token_hash, self._digest(token)):
             raise ProtocolError('Worker authentication failed')
 
+    def update_safety_state(self, worker_id: str, token: str) -> str:
+        """Coordinator-side advisory state; never an install authorization.
+
+        A live authenticated session is required. Timed-out jobs are UNKNOWN,
+        not idle, until the coordinator explicitly resolves them.
+        """
+        self.authenticate(worker_id, token)
+        jobs = [job for job in self._jobs.values() if job.worker_id == worker_id and not job.committed]
+        if any(self._clock() >= job.expires for job in jobs):
+            return 'unknown'
+        return 'running' if jobs else 'idle_confirmed'
+
     def revoke(self, worker_id: str) -> None:
         s = self._sessions.get(worker_id)
         if s:

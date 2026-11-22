@@ -27,6 +27,18 @@ class WorkerSessionTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             self.s.accept(self.worker, self.token, self.result, self.board)
 
+    def test_update_safety_state_fails_closed_on_expiry_and_revocation(self):
+        self.assertEqual(self.s.update_safety_state(self.worker, self.token), 'idle_confirmed')
+        self.s.assign(self.worker, self.token, self.job)
+        self.assertEqual(self.s.update_safety_state(self.worker, self.token), 'running')
+        self.now[0] += 91
+        self.assertEqual(self.s.update_safety_state(self.worker, self.token), 'unknown')
+        self.s.terminate(self.worker, self.token, self.job['job_id'], status='cancelled')
+        self.assertEqual(self.s.update_safety_state(self.worker, self.token), 'idle_confirmed')
+        self.s.revoke(self.worker)
+        with self.assertRaises(ProtocolError):
+            self.s.update_safety_state(self.worker, self.token)
+
     def test_revocation_invalidates_active_job(self):
         self.s.assign(self.worker, self.token, self.job)
         self.s.revoke(self.worker)
