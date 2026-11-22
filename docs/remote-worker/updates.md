@@ -526,3 +526,13 @@ falls back to local if a remote job is unavailable or fails. The current
 production `server.py` still uses the local runner; wiring the mode switch
 requires an explicit lifecycle design for acquiring/releasing coordinator
 ownership and avoiding its existing direct `tournament_checkpoint.save` path.
+
+### Explicit runner selection boundary
+
+`remote_worker_runner_selection.py` provides a fail-closed runner factory
+selector. Local remains the default; remote selection requires the opt-in
+flag, coordinator ownership, ready worker, and exclusive remote checkpoint
+ownership. Only the selected runner is constructed, and remote failures never
+implicitly construct a local fallback. The **production server.py still uses
+the existing local runner**. Wiring this selector into production requires
+explicit lifecycle ownership, checkpoint writer replacement and restart tests.
