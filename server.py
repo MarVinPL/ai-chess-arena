@@ -20,6 +20,7 @@ import runtime_factory
 import adjudication
 import passkey_test
 import tournament_checkpoint
+import remote_worker_tokens
 import arena_auth
 import model_permissions
 
@@ -1460,6 +1461,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 422)
+        elif path == '/api/hf-candidates/review-queue':
+            try:
+                with league.connect() as c:
+                    self.send_json(hf_candidate_reviews.list_proposals(c))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                self.send_json({'error': str(exc)}, 422)
         elif path == '/api/hf-candidates/audit-queue':
             try: self.send_json(hf_candidate_queue.snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
@@ -1626,6 +1633,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+        if path == '/api/remote-workers/authenticate':
+            # Token-only authentication; token issuance is admin-only and offline.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid payload')
+                worker_id, token = payload.get('worker_id'), payload.get('token')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'authenticated': False}, 401)
+                    return
+                self.send_json({'authenticated': True, 'worker_id': worker_id})
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except Exception:
+                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
+            return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
                 self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
@@ -1672,7 +1699,7 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -1708,6 +1735,12 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == '/api/hf-candidates/review':
                     with league.connect() as c:
                         result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
+                elif path == '/api/hf-candidates/review-action':
+                    with league.connect() as c:
+                        result = hf_candidate_reviews.apply_proposal_action(
+                            c, proposal_id=payload.get('proposal_id'), action=payload.get('action'),
+                            reason=payload.get('reason', ''), actor=self.authenticated_user() or 'arena',
+                            catalog=hf_candidate_audit.load_catalog())
                 elif path == '/api/hf-candidates/audit':
                     if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
                         raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
@@ -1834,7 +1867,7 @@ class Handler(BaseHTTPRequestHandler):
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
                     result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
-                self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
+                self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
         elif path == '/api/step':

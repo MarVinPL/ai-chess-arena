@@ -50,8 +50,31 @@ class CandidateAuditTests(unittest.TestCase):
         self.assertEqual(report['suggested_form']['proposed_status'], 'review_required')
         self.assertEqual(report['suggested_form']['scope_formats'], [])
         self.assertFalse(report['suggested_form']['revision_confirmed'])
+        provenance = report['field_provenance']
+        for field in ('license_id', 'license_notes', 'technical_readiness', 'technical_evidence',
+                      'technical_blockers', 'revision_confirmed', 'revision_notes',
+                      'proposed_status', 'restrictions', 'obligations', 'block_reason', 'scope_formats'):
+            self.assertEqual(provenance[field]['value'], report['suggested_form'][field])
         self.assertNotIn('verified_permissive', json.dumps(report))
         self.assertIn('Nie pobrano wag', ' '.join(report['limitations']))
+
+    def test_field_provenance_separates_observed_facts_from_decisions(self):
+        report = audit.audit_candidate('hf:org/model', catalog=[self.item], fetcher=self.fetcher)
+        provenance = report['field_provenance']
+        self.assertEqual(provenance['repo_id']['confidence'], 'source_confirmed')
+        self.assertEqual(provenance['declared_license']['confidence'], 'declaration_only')
+        self.assertEqual(provenance['license_review']['value'], 'pending')
+        self.assertEqual(provenance['technical_readiness']['value'], 'not_evaluated')
+        self.assertEqual(provenance['proposed_status']['value'], 'review_required')
+        self.assertEqual(provenance['scope_formats']['value'], [])
+        self.assertFalse(provenance['revision_confirmed']['value'])
+        for field in ('license_id', 'license_notes', 'technical_evidence', 'technical_blockers',
+                      'revision_notes', 'block_reason', 'restrictions', 'obligations'):
+            self.assertIn(field, provenance)
+            self.assertIn('source', provenance[field])
+            self.assertIn('confidence', provenance[field])
+            self.assertIn('decision', provenance[field])
+        self.assertFalse(report['suggested_form']['revision_confirmed'])
 
     def test_conflicting_license_declarations_are_flagged(self):
         self.info['cardData']['license'] = 'mit'
