@@ -181,6 +181,9 @@ pub(crate) fn stage_verified_apk_session(
                     env.call_method(&stream, "write", "([BII)V",
                         &[JValue::Object(bytes.as_ref()), JValue::Int(0),
                             JValue::Int(count as i32)]).map_err(jni_error)?;
+                    // APKs can contain thousands of chunks; release every
+                    // Java local reference before processing the next one.
+                    env.delete_local_ref(bytes).map_err(jni_error)?;
                 }
                 if written != meta.len() { return Err("APK jest niekompletny".into()); }
                 if format!("{:x}", digest.finalize()) != expected_sha256 {
