@@ -116,6 +116,11 @@ def set_live(stage, message, **fields):
             fields.setdefault('generation_started_at', now)
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
+        # Worker attribution is per event. Never inherit identifiers from
+        # a previous live event when the tournament changes jobs or players.
+        for identity_key in ('worker_id', 'job_id'):
+            if identity_key not in fields:
+                live_status.pop(identity_key, None)
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
         event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
