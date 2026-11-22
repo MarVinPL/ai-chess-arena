@@ -1,0 +1,66 @@
+name: Android Worker ARM64 APK (reusable)
+
+# Only called by the selective source-change workflow.
+# No workflow_dispatch: unchanged code cannot request a build.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: remote_worker_gui/src-tauri
+          key: android-arm64
+      - name: Compile Android Worker
+        run: |
+          npm ci
+          npx tauri android init --ci
+          npx tauri android build --apk --target aarch64 --ci --debug
+      - name: Verify signature and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          test -s "$apk"
+          apksigner verify --verbose "$apk"
+          mkdir -p dist
+          cp "$apk" dist/ai-chess-arena-worker-arm64-debug.apk
+          (cd dist && sha256sum ai-chess-arena-worker-arm64-debug.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: ai-chess-arena-worker-arm64-debug
+          path: remote_worker_gui/dist/
+          if-no-files-found: error
+          retention-days: 90
