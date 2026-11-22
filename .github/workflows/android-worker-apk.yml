@@ -123,8 +123,8 @@ jobs:
           # Derive the public filename from the actual built Android package,
           # never a hardcoded workflow version or an untrusted PR input.
           badging="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")"
-          version="$(sed -n "s/^package:.*versionName='\\([^']*\\)'.*/\\1/p" <<< "$badging" | head -n 1)"
-          [[ "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || {
+          version="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" <<< "$badging" | head -n 1)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
             echo "::error::Unsupported Android APK versionName"; exit 1;
           }
           # CI/debug artifacts are pre-release builds, even on main.
