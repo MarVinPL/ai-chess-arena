@@ -109,7 +109,11 @@ downloadApkButton.addEventListener('click',async()=>{
  try{
   await invoke('download_worker_apk');
   apkProgress.value=100;
-  apkStatus.textContent='APK pobrany i sprawdzony SHA-256 w prywatnym katalogu aplikacji. Instalacja nadal wyłączona: niezweryfikowany certyfikat APK i stan zadań.';
+  apkStatus.textContent='APK pobrany. Sprawdzanie certyfikatu i wersji przez Android…';
+  const identity=await invoke('verify_downloaded_worker_apk');
+  apkStatus.textContent=identity?.verified===true
+   ?'APK: podpis, nazwa pakietu i versionCode zgodne z zainstalowanym Workerem. Instalacja nadal wyłączona: oczekiwanie na potwierdzenie idle koordynatora.'
+   :'APK odrzucony: certyfikat, pakiet lub wersja nie spełniają warunków. Instalacja wyłączona.';
  }catch(_){
   apkStatus.textContent='Nie udało się bezpiecznie pobrać APK. Żadna instalacja nie została uruchomiona.';
  }finally{downloadingWorkerApk=false;downloadApkButton.disabled=false;}
