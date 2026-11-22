@@ -94,6 +94,11 @@ class DurableWorkerJobs:
                 raise ValueError('Wrong update reservation')
             db.execute('DELETE FROM worker_update_holds WHERE worker_id=?',
                        (worker_id,))
+            # Releasing the hold is NOT proof that the app came back online.
+            # Force reconciliation before this worker may accept new jobs.
+            db.execute('''UPDATE worker_job_safety SET state='unknown',
+                          job_id=NULL,deadline=NULL,updated_at=?
+                          WHERE worker_id=?''', (self.clock(), worker_id))
 
     def assign(self, worker_id, job_id, *, timeout_seconds):
         """Called only by coordinator after assignment is durably accepted."""
