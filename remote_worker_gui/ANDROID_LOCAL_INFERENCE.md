@@ -40,3 +40,9 @@ W trybie eksperymentalnym Arena musi mieć gotowy lokalny model na telefonie dla
 Przy ustawieniu ARENA_PHONE_INFERENCE_ENABLED=1 preflight Areny wymaga świeżego zgłoszenia gotowości telefonu z pasującym SHA-256 **dla każdego zawodnika**. Nie wymaga wówczas dostępnego lokalnego Llamafile na VPS do obliczeń ruchów. Jeśli którykolwiek telefon/model jest niedostępny, start turnieju zostaje jawnie zablokowany; nie ma automatycznego fallbacku na VPS. Również na początku każdej partii Arena nie pobiera dodatkowych GGUF na dysk VPS, ponieważ obliczenia wykonuje urządzenie mobilne.
 
 **Ograniczenie obecnego prototypu:** jeden telefon z jednym aktywnie załadowanym modelem nie jest jeszcze zdolny do automatycznego przełączania wielu modeli w kolejnych ruchach. Dla partii dwóch różnych modeli oba muszą być obsługiwane przez gotowe urządzenia; docelowy downloader/switcher dla telefonu nadal wymaga implementacji. Weryfikacja deklarowanego aliasu modelu nie zastępuje kontroli pliku GGUF. Zasady zatwierdzania modeli w rejestrze Areny pozostają bez zmian.
+
+## Bezpieczny wybór legalnego ruchu (protokół v2)
+
+Arena wylicza pełną, posortowaną listę legalnych ruchów UCI dla własnego FEN i dołącza ją do zadania w protokole v2. Telefon **nie wylicza legalnych ruchów ani nie utrzymuje szachownicy**: lokalny llama.cpp dostaje listę w promptcie i ograniczenie GBNF dopuszczające dokładnie jeden ruch z tej listy. Po generacji aplikacja sprawdza, czy UCI rzeczywiście jest na liście, a Arena niezależnie sprawdza legalność względem własnego FEN przed przyjęciem wyniku. Starsze zadania v1 nadal pozostają akceptowane na poziomie protokołu; nowe przydziały Areny korzystają z v2. Wyniki pozostają w istniejącym formacie v1.
+
+Lista musi być kompletną, kanoniczną listą legalnych ruchów z Areny. Usunięte ruchy, nieprawidłowa kolejność, duplikaty lub niespójny FEN powodują odrzucenie zadania, a nie wygenerowanie alternatywnej pozycji w APK.
