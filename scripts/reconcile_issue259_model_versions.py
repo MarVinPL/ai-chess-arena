@@ -9,13 +9,16 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import model_allowlist
 from model_manifest import load_manifest
-
-ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "arena.sqlite3"
 # Bielik v3 requires >=18; not activated by this migration.
 OPERATIONAL_MODEL_IDS = (1, 2, 3, 4, 5, 7, 8)
