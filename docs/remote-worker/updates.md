@@ -481,3 +481,13 @@ integration step only: the existing Caddy example deliberately exposes only
 the result endpoint, so the job endpoint is **not externally reachable**.
 Production dispatch, access policy and coordinator single-writer handoff
 remain prerequisites for enabling remote execution.
+
+### Isolated full job roundtrip
+
+`tests/test_remote_worker_job_roundtrip.py` exercises a real loopback HTTP
+exchange: coordinator creates a durable position binding, authenticated worker
+retrieves its assigned FEN, submits a legal move, result is staged, and the
+coordinator applies it with checkpoint compare-and-swap. Duplicate submission
+is rejected, repeated application is idempotent, and exactly one move is
+committed. This uses a temporary database and HTTP server, **not** the
+production tournament scheduler, remote HTTPS exposure or automatic dispatch.
