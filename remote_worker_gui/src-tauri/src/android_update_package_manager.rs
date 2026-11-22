@@ -27,8 +27,8 @@ fn read_android_identity(
     if name_obj.is_null() {
         return Err("Brak nazwy pakietu".into());
     }
-    let package_name: String = env.get_string(&JString::from(name_obj))
-        .map_err(java_error)?.into();
+    let package_name = env.get_string(&JString::from(name_obj))
+        .map_err(java_error)?.to_string_lossy().into_owned();
     let raw_version = env.call_method(package_info, "getLongVersionCode", "()J", &[])
         .map_err(java_error)?.j().map_err(java_error)?;
     if raw_version <= 0 { return Err("Nieprawidłowy versionCode APK".into()); }
