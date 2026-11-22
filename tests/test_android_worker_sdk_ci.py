@@ -16,5 +16,7 @@ def test_workflow_only_changes_do_not_trigger_builds():
     parent = (ROOT / ".github/workflows/worker-multiplatform.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch:" not in parent
     assert "    paths:" in parent
-    assert ".github/workflows/android-worker-apk.yml" not in parent
-    assert ".github/workflows/worker-multiplatform.yml" not in parent
+    # Reusable-workflow references are valid. Only paths-filter triggers
+    # could build unchanged code; a mere `uses:` line is not a trigger.
+    assert "      - '.github/workflows/android-worker-apk.yml'" not in parent
+    assert "      - '.github/workflows/worker-multiplatform.yml'" not in parent
