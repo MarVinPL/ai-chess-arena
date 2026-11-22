@@ -504,6 +504,18 @@ async fn install_downloaded_worker_apk(
     }
 }
 
+/// Arena is the sole owner of the chessboard and checkpoint.
+#[tauri::command]
+async fn get_my_worker_board(
+    server: String, worker_id: String,
+) -> Result<serde_json::Value, String> {
+    let machine_token = token_entry()?.get_password()
+        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    android_update_coordinator::fetch_worker_board_view(
+        &server, &worker_id, &machine_token,
+    ).await
+}
+
 /// Read coordinator resume readiness after an Android update. A checkpoint
 /// without a real inference executor does not permit launching a game.
 #[tauri::command]
@@ -695,7 +707,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
