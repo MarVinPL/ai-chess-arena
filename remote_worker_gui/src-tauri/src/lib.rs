@@ -80,12 +80,25 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
         .build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/authenticate")
         .map_err(|_| "Nieprawidłowy adres endpointu")?;
-    let response = client.post(endpoint).json(&serde_json::json!({
+    let mut response = client.post(endpoint).json(&serde_json::json!({
         "worker_id": worker_id, "token": token
     })).send().await.map_err(|_| "Nie udało się połączyć przez HTTPS")?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Ok(false); }
     if !response.status().is_success() { return Err("Serwer odrzucił żądanie".into()); }
-    let result: serde_json::Value = response.json().await
+    // A remote endpoint can lie about Content-Length or use chunked encoding.
+    // Bound actual response bytes before parsing, including on low-memory Android.
+    const MAX_AUTH_RESPONSE_BYTES: usize = 4096;
+    if response.content_length().map(|n| n > MAX_AUTH_RESPONSE_BYTES as u64).unwrap_or(false) {
+        return Err("Zbyt duża odpowiedź serwera".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > MAX_AUTH_RESPONSE_BYTES - bytes.len() {
+            return Err("Zbyt duża odpowiedź serwera".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let result: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
     Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
 }
