@@ -152,15 +152,16 @@ def _plan(c: sqlite3.Connection, models_dir: Path) -> dict:
             "WHERE tournament_id=?", (tid,)
         ).fetchall()
         expected = {
-            (a, b, leg)
-            for a in present for b in present if a != b
-            for leg in (1,)  # ordered pairs constitute both legs
+            record
+            for a in admitted for b in admitted if a < b
+            for record in ((a, b, 1), (b, a, 2))
         }
-        actual = {(r["white_model_id"], r["black_model_id"], r["leg"]) for r in rows}
-        # Fixture representation can be either two ordered legs or both single
-        # ordered pairs. Only require intact admitted-v-admitted fixtures.
-        remaining = [r for r in rows if r["white_model_id"] in admitted and r["black_model_id"] in admitted]
-        if len(remaining) != len(admitted) * (len(admitted) - 1):
+        remaining = [
+            (r["white_model_id"], r["black_model_id"], r["leg"])
+            for r in rows
+            if r["white_model_id"] in admitted and r["black_model_id"] in admitted
+        ]
+        if len(remaining) != len(expected) or set(remaining) != expected:
             raise ValueError("Nieprawidłowy terminarz zatwierdzonych graczy")
 
     entry_count = c.execute(
