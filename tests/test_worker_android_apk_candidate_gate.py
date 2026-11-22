@@ -258,7 +258,10 @@ def test_coordinator_reservation_transport_is_native_and_not_exposed_to_webview(
     assert 'reqwest::redirect::Policy::none()' in coordinator
     assert "verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)" in coordinator
     assert "verify_release_reply(&body, worker_id, &nonce)" in coordinator
-    assert '"hold_token": hold_token' in coordinator
+    assert '"hold_token": pending.hold_token' in coordinator
+    assert 'save_pending(&pending)?' in coordinator
+    assert 'load_pending()?' in coordinator
+    assert 'clear_pending(&pending)' in coordinator
     assert 'pub(crate) async fn reserve_update(' in coordinator
     assert 'pub(crate) async fn release_update(' in coordinator
     assert 'fn authenticated_update_transport_rejects_untrusted_destinations()' in coordinator
@@ -269,3 +272,27 @@ def test_coordinator_reservation_transport_is_native_and_not_exposed_to_webview(
     assert "hold_token" not in ui
     assert "update_installation_readiness() -> UpdateReadiness" in lib
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+
+
+def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
+    lib = LIB.read_text(encoding="utf-8")
+    coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    recovery = (ROOT / "remote_worker_gui/src-tauri/src/android_update_recovery.rs").read_text(encoding="utf-8")
+    server = (ROOT / "server.py").read_text(encoding="utf-8")
+    assert "mod android_update_recovery;" in lib
+    assert 'const HOLD_ACCOUNT: &str = "coordinator-update-hold-v1"' in recovery
+    assert 'keyring::Entry::new(HOLD_SERVICE, HOLD_ACCOUNT)' in recovery
+    assert 'entry()?.set_password(&serialized)' in recovery
+    assert "load_pending()?.is_some()" in recovery
+    assert "load_pending()?.as_ref() != Some(record)" in recovery
+    assert "load_pending()?.as_ref() != Some(expected)" in recovery
+    assert "entry()?.delete_credential()" in recovery
+    before = coordinator.index('save_pending(&pending)?')
+    network = coordinator.index('let response = update_http_client()?.post(endpoint)', before)
+    assert before < network
+    assert '"hold_token": pending.hold_token' in coordinator
+    assert "verified.token != pending.hold_token" in coordinator
+    assert "hold_token=proposed_token" in server
+    assert "install_allowed': False" in server
+    # Neither the journal contents nor the signing key are in the webview.
+    assert "hold_token" not in (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
