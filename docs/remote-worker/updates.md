@@ -666,3 +666,10 @@ and coordinator restart followed by a fresh worker heartbeat. All scenarios
 fail closed: no duplicate job is created, existing checkpoint persists, and
 unknown jobs require manual reconciliation. These are deterministic SQLite
 failure simulations, not live process-kill or network partition tests.
+
+### Coordinator wait timeout and cancellation regression
+
+An isolated regression confirms that timeout and cancellation of a staged
+result wait retain the original running reservation and binding. A subsequent
+attempt to assign a second job is rejected, and the unresolved job remains
+visible to the coordinator inventory. No automatic release or retry occurs.
