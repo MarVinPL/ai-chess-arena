@@ -904,3 +904,42 @@ Dlatego nawet poprawnie działający endpoint pokazuje
 rzeczywiście podłączone do centralnego harmonogramu. Sam podgląd
 szachownicy nie oznacza uruchomionej inferencji. Do odbioru wymagane
 są testy CI i urządzenia.
+
+
+## 2026-11-22 — transport obliczeń z Areny do telefonu
+
+W PR #197 dodano w `remote_worker_inference_delivery.py` transakcję
+`assign_from_arena(worker_id, job)`, która waliduje istniejący
+protokół v1 (`job_id`, FEN, `model_sha256`, `max_tokens`,
+`timeout_seconds`) i **atomowo** zapisuje payload oraz dzierżawę
+wykonania w jednej bazie SQLite Areny. Przed przydziałem ponownie
+sprawdza blokady aktualizacji, pauzy, oczekującego wznowienia i
+stan `idle_confirmed`. Żaden endpoint dostępny dla Workera nie
+może sam wydać sobie zadania ani odnowić leasingu.
+
+`POST /api/remote-workers/job-poll` sprawdza istniejący token
+maszyny, wiąże odpowiedź z jednorazowym `nonce` i odczytuje
+tylko przypisane temu urządzeniu zadanie. Odczyt nie wydłuża
+ważności przydziału; wygasły leasing i aktywne blokady pozostają
+niedostępne. Natywny Rust na Androidzie udostępnia
+`poll_my_inference_job`; GUI informacyjnie wyświetla tylko ID
+zadania i skrót SHA-256 modelu. Nie pokazuje fikcyjnych obliczeń.
+
+`POST /api/remote-workers/job-result` przyjmuje od Workera
+`{version,job_id,uci}`, a Arena sprawdza poprawność UCI
+względem FEN przypisanego zadania za pomocą `python-chess`.
+Wynik jest trwale zapisywany i idempotentny; powtórna próba
+podmiany ruchu jest odrzucana. Nie przesuwa figur, nie zamyka
+przydziału i **nie zapisuje checkpointu** w imieniu telefonu.
+Te czynności musi wykonać autorytatywny serwerowy runner.
+Natywny `submit_my_inference_move` ma przygotowany transport,
+ale nie jest wystawiony do JS bez rzeczywistego GGUF inference.
+
+**Pozostała integracja:** pakowany, lokalny runtime GGUF (np. darmowy
+llama.cpp) działający na telefonie wraz z kontrolą digestu modelu
+i limitów pamięci; wywoływanie transportu wyniku przez ten runtime;
+połączenie serwerowego tournament runnera z zaufanym przydziałem
+`assign_from_arena` i odbiorem wyniku; potwierdzenie STOP po
+zatrzymaniu lokalnych obliczeń oraz ręczne `Wznów`. Na tym etapie
+API nie jest automatycznie włączone w istniejącym turnieju;
+`select_game_runner('local', ...)` pozostaje bez zmian.
