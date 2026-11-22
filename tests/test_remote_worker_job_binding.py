@@ -86,3 +86,32 @@ def test_bound_result_cannot_rewrite_tournament_metadata(tmp_path):
     assert tournament_checkpoint.load(path, 1) == old
     assert len(journal.pending()) == 1
     assert journal.apply_bound(job, valid)
+
+
+def test_restart_reconciliation_fails_closed_without_independent_confirmation(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign_bound(worker, job, tournament_id=1, pairing_id=7,
+                         expected_sha256=digest, timeout_seconds=90)
+    journal.recover_after_restart()
+    with pytest.raises(ValueError, match='Independent'):
+        journal.confirm_idle_after_restart(worker, operator_confirmed=False, worker_reconnected=True)
+    with pytest.raises(ValueError, match='Independent'):
+        journal.confirm_idle_after_restart(worker, operator_confirmed=True, worker_reconnected=False)
+    assert journal.state(worker) == 'unknown'
+    assert journal.confirm_idle_after_restart(worker, operator_confirmed=True, worker_reconnected=True)
+    assert journal.state(worker) == 'idle_confirmed'
+    with pytest.raises(ValueError, match='not eligible'):
+        journal.confirm_idle_after_restart(worker, operator_confirmed=True, worker_reconnected=True)
+
+
+def test_restart_reconciliation_blocks_unapplied_result(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign_bound(worker, job, tournament_id=1, pairing_id=7,
+                         expected_sha256=digest, timeout_seconds=90)
+    journal.stage_validated(worker, job, {'version': 1, 'job_id': job, 'uci': 'e2e4'})
+    journal.recover_after_restart()
+    with pytest.raises(ValueError, match='unapplied'):
+        journal.confirm_idle_after_restart(worker, operator_confirmed=True, worker_reconnected=True)
+    assert journal.state(worker) == 'unknown'

@@ -64,6 +64,22 @@ class BoundWorkerResults(WorkerResultJournal):
                        (job_id, worker_id, tournament_id, pairing_id, expected_sha256, checkpoint['fen']))
             return checkpoint['fen']
 
+    def confirm_idle_after_restart(self, worker_id, *, operator_confirmed, worker_reconnected):
+        """Coordinator-only reconciliation; caller must verify both attestations."""
+        self._id(worker_id)
+        if operator_confirmed is not True or worker_reconnected is not True:
+            raise ValueError('Independent operator and worker confirmation required')
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state,job_id FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
+            if row is None or row[0] != 'unknown' or row[1] is not None:
+                raise ValueError('Worker not eligible for restart reconciliation')
+            pending = db.execute("SELECT 1 FROM worker_result_journal WHERE worker_id=? AND state='pending_application' LIMIT 1", (worker_id,)).fetchone()
+            if pending:
+                raise ValueError('Worker has unapplied results')
+            db.execute("UPDATE worker_job_safety SET state='idle_confirmed',updated_at=? WHERE worker_id=? AND state='unknown' AND job_id IS NULL", (self.clock(), worker_id))
+            return True
+
     def apply_bound(self, job_id, checkpoint):
         """Only apply to the exact position and pairing reserved at assignment."""
         self._id(job_id)

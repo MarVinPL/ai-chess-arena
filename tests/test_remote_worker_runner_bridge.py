@@ -46,9 +46,9 @@ def test_complete_chess_game_with_durable_remote_bridge_and_restart(tmp_path):
     assert len(saved['moves']) == 2
     bridge.journal.recover_after_restart()
     resumed_bridge = RemoteRunnerBridge(path, 1, 7, 'worker_12345678', infer, clock=lambda: 110)
-    # Coordinator must explicitly re-confirm worker idle after restart.
-    with resumed_bridge.journal._db() as db:
-        db.execute("UPDATE worker_job_safety SET state='idle_confirmed' WHERE worker_id='worker_12345678'")
+    # Test harness supplies independent confirmations after simulated restart.
+    resumed_bridge.journal.confirm_idle_after_restart('worker_12345678',
+        operator_confirmed=True, worker_reconnected=True)
     resumed_runner = SequentialChessRunner(NoLocalRuntime(), move_provider=resumed_bridge.provide)
     result = resumed_runner.play_game({'name': 'White'}, {'name': 'Black'},
         resume_moves=saved['moves'], resume_fen=saved['fen'],

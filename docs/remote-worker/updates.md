@@ -295,3 +295,16 @@ confirms that a forged schedule field cannot be committed or acknowledged.
 
 The live production server remains on the local runner path. Authenticated
 transport and safe post-restart worker reconciliation remain outstanding.
+
+### Restart reconciliation guard (offline only)
+
+`BoundWorkerResults.confirm_idle_after_restart()` allows an `unknown` worker
+to become `idle_confirmed` only when the coordinator caller supplies both an
+independently verified operator confirmation and a freshly authenticated,
+reconnected worker confirmation. It rejects duplicate reconciliation and
+workers with unapplied journal results. The test harness supplies these
+booleans explicitly; **there is no implementation yet that authenticates or
+verifies the underlying evidence**. This method must remain inaccessible to
+worker-controlled HTTP requests and is not production-ready. A real operator
+approval flow, fresh worker challenge/response and auditable evidence are
+required before enabling it.
