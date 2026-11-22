@@ -87,7 +87,7 @@ def test_single_button_does_not_claim_game_resumed_without_executor():
     assert "invoke('inspect_worker_resume_readiness'" in GUI
     assert "button.disabled=true" in GUI
     assert "Checkpoint przerwanego zadania jest zachowany w Arenie." in GUI
-    assert "state==='no_checkpoint'&&supported===true" in GUI
+    assert "state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled" in GUI
     assert "state!=='no_checkpoint'||safety!=='idle_confirmed'||!supported" in GUI
     assert "const authenticated=await invoke('verify_worker_connection'" in GUI
     assert "if(!activatePhoneJobPolling())" in GUI
@@ -99,7 +99,7 @@ def test_resume_button_never_replays_durable_interrupted_job_unverified():
     # A one-tap continuation after an IDLE app update is only restarting
     # assignment polling. A genuinely pending interrupted checkpoint remains
     # blocked until an authenticated resume dispatch/ACK exists.
-    assert "button.disabled=!(state==='no_checkpoint'&&supported===true)" in GUI
+    assert "button.disabled=!(state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled)" in GUI
     assert "if(!invoke||resumeReadinessState!=='no_checkpoint')return;" in GUI
     assert "check_update_safety" in GUI
     assert "Odbieranie zadań wznowione na telefonie." in GUI
