@@ -48,14 +48,13 @@ fn exact_release_download_url(raw: &str, tag: &str, filename: &str) -> bool {
 /// A validated candidate is NOT permission to install.
 pub(crate) fn select_apk_candidate(release: &Value, expected_tag: &str)
     -> Option<ApkCandidate> {
-    if !expected_tag.starts_with("worker-v") ||
-        expected_tag.len() > 100 ||
-        !expected_tag.bytes().all(|c|
-            c.is_ascii_alphanumeric() || b"._-".contains(&c)) {
-        return None;
-    }
+    // Stable Worker tags only: a malformed tag or prerelease can never
+    // become an Android installer candidate, even if its URL looks official.
+    let version = expected_tag.strip_prefix("worker-v")?;
+    crate::numeric_version(version)?;
     if release.get("tag_name")?.as_str()? != expected_tag
         || release.get("draft")?.as_bool()? 
+        || release.get("prerelease")?.as_bool()?
         || release.get("assets")?.as_array()?.len() > 100 {
         return None;
     }
@@ -158,6 +157,22 @@ mod tests {
         }
         let mut data = release();
         data["assets"][0].as_object_mut().unwrap().remove("digest");
+        assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
+    }
+
+    #[test]
+    fn rejects_prereleases_missing_flags_and_malformed_worker_tags() {
+        for tag in ["worker-v1.2", "worker-v1.2.3-rc1", "worker-v1.2.3+meta",
+                    "worker-v1.2.3/evil", "server-v1.2.3"] {
+            assert!(select_apk_candidate(&release(), tag).is_none(), "{tag}");
+        }
+        for key in ["draft", "prerelease"] {
+            let mut data = release();
+            data.as_object_mut().unwrap().remove(key);
+            assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
+        }
+        let mut data = release();
+        data["prerelease"] = json!(true);
         assert!(select_apk_candidate(&data, "worker-v1.2.3").is_none());
     }
 
