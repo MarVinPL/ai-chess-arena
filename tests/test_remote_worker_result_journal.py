@@ -99,3 +99,45 @@ def test_atomic_application_failure_rolls_back(tmp_path):
     assert journal.pending() == [(job, worker, {'job_id': job, 'uci': 'e2e4'})]
     with journal._db() as db:
         assert db.execute('SELECT * FROM demo_moves').fetchall() == []
+
+
+def test_checkpoint_and_result_ack_are_atomic_and_idempotent(tmp_path):
+    import sqlite3
+    import tournament_checkpoint
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    old = {'schema_version': 1, 'tournament_id': 1, 'moves': []}
+    original = tournament_checkpoint.save(path, 1, old)
+    journal = WorkerResultJournal(path, clock=lambda: 100)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign(worker, job, timeout_seconds=90)
+    journal.stage_validated(worker, job, {'job_id': job, 'uci': 'e2e4'})
+    new = {'schema_version': 1, 'tournament_id': 1, 'moves': ['e2e4']}
+    assert journal.apply_checkpoint_atomically(job, 1, new, expected_sha256=original['sha256'])
+    assert not journal.apply_checkpoint_atomically(job, 1, new, expected_sha256=original['sha256'])
+    assert tournament_checkpoint.load(path, 1) == new
+    assert journal.pending() == []
+
+
+def test_checkpoint_conflict_keeps_result_pending(tmp_path):
+    import sqlite3
+    import tournament_checkpoint
+    path = tmp_path / 'arena.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO tournaments VALUES (1)')
+    tournament_checkpoint.ensure_schema(path)
+    original = tournament_checkpoint.save(path, 1, {'schema_version': 1, 'tournament_id': 1, 'moves': []})
+    journal = WorkerResultJournal(path, clock=lambda: 100)
+    worker, job = 'worker_12345678', 'job_12345678'
+    journal.assign(worker, job, timeout_seconds=90)
+    journal.stage_validated(worker, job, {'job_id': job, 'uci': 'e2e4'})
+    changed = {'schema_version': 1, 'tournament_id': 1, 'moves': ['d2d4']}
+    tournament_checkpoint.save(path, 1, changed)
+    with pytest.raises(ValueError, match='Checkpoint changed'):
+        journal.apply_checkpoint_atomically(job, 1, {'schema_version': 1, 'tournament_id': 1, 'moves': ['e2e4']}, expected_sha256=original['sha256'])
+    assert tournament_checkpoint.load(path, 1) == changed
+    assert len(journal.pending()) == 1

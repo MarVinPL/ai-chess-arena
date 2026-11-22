@@ -195,3 +195,19 @@ Tests use a disposable `demo_moves` table, **not** the live tournament
 checkpoint. The actual chess runner still uses a separate checkpoint writer;
 production remote dispatch remains NO-GO until that writer and result journal
 are integrated transactionally and restart-tested.
+
+### Transactional tournament checkpoint adapter
+
+`WorkerResultJournal.apply_checkpoint_atomically()` now combines the existing
+journal acknowledgement with `tournament_checkpoint.save_in_transaction()` in
+one SQLite transaction. Checkpoint compare-and-swap checks the expected SHA-256
+and stored payload integrity before writing. A conflicting or corrupted
+checkpoint leaves the journal entry pending; replay after a successful commit
+is a no-op. Tests cover success, replay, and checkpoint conflict.
+
+**Integration boundary:** the adapter accepts a coordinator-constructed
+checkpoint payload; it does not independently verify a worker's chess move,
+validate pairing ownership, or attach to `SequentialChessRunner.publish_move`.
+The live tournament runner still uses its original checkpoint save path.
+Production remote chess execution remains disabled until the runner dispatch,
+board validation, crash recovery and replay ownership are integrated and tested.

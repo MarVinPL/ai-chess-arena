@@ -77,3 +77,12 @@ class WorkerResultJournal(DurableWorkerJobs):
             if updated.rowcount != 1:
                 raise ValueError('Result application race')
             return True
+
+    def apply_checkpoint_atomically(self, job_id, tournament_id, checkpoint, *, expected_sha256):
+        """Checkpoint CAS + result acknowledgement; no live scheduler dispatch."""
+        from tournament_checkpoint import save_in_transaction
+        def apply(db, _worker_id, result):
+            if result.get('job_id') != job_id:
+                raise ValueError('Result job mismatch')
+            save_in_transaction(db, tournament_id, checkpoint, expected_sha256=expected_sha256)
+        return self.apply_atomically(job_id, apply)
