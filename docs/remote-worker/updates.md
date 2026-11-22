@@ -329,3 +329,12 @@ SQLite `BEGIN IMMEDIATE` transaction. A regression test verifies the worker
 cannot be reassigned until that result is committed. This does not replace
 post-restart reconciliation or authenticated transport; production remains
 NO-GO.
+
+### Restart: prevent competing assignment to an unknown worker's position
+
+A coordinator restart clears the `job_id` in `worker_job_safety` and marks
+workers `unknown`. The outstanding-position check must join safety by worker
+identity (not only the now-cleared job ID), so an unresolved worker continues
+to block a second worker from receiving the same checkpoint/FEN. A regression
+test verifies that a restart followed by a competing assignment fails closed.
+This is a guard, not an automated worker reconciliation or production enablement.

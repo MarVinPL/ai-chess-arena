@@ -52,10 +52,11 @@ class BoundWorkerResults(WorkerResultJournal):
             # Never dispatch a competing job to another worker for that FEN.
             conflict = db.execute('''SELECT 1 FROM remote_job_binding b
                 LEFT JOIN worker_result_journal r ON r.job_id=b.job_id
-                LEFT JOIN worker_job_safety s ON s.worker_id=b.worker_id AND s.job_id=b.job_id
+                LEFT JOIN worker_job_safety s ON s.worker_id=b.worker_id
                 WHERE b.tournament_id=? AND b.pairing_id=? AND b.checkpoint_sha256=?
                 AND (r.state='pending_application' OR
-                     (r.job_id IS NULL AND s.state IN ('running','unknown')))
+                     (r.job_id IS NULL AND (s.state='unknown' OR
+                      (s.state='running' AND s.job_id=b.job_id))))
                 LIMIT 1''', (tournament_id, pairing_id, expected_sha256)).fetchone()
             if conflict:
                 raise ValueError('Position already has an outstanding remote job')

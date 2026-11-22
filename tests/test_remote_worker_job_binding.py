@@ -130,3 +130,15 @@ def test_worker_cannot_receive_next_job_while_result_unapplied(tmp_path):
                              pairing_id=7, expected_sha256=digest, timeout_seconds=90)
     with journal._db() as db:
         assert db.execute('SELECT count(*) FROM remote_job_binding').fetchone()[0] == 1
+
+
+def test_restart_unknown_worker_blocks_competing_worker_on_same_position(tmp_path):
+    path, journal, old, digest = setup_game(tmp_path)
+    journal.assign_bound('worker_12345678', 'job_12345678', tournament_id=1,
+                         pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    journal.recover_after_restart()
+    assert journal.state('worker_12345678') == 'unknown'
+    with pytest.raises(ValueError, match='outstanding remote job'):
+        journal.assign_bound('worker_87654321', 'job_87654321', tournament_id=1,
+                             pairing_id=7, expected_sha256=digest, timeout_seconds=90)
+    assert journal.state('worker_87654321') == 'unknown'
