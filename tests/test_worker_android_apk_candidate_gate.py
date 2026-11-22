@@ -228,3 +228,22 @@ def test_android_installer_permission_is_read_only_and_fails_closed():
     # Neither permission nor a valid APK identity can unlock installation.
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
     assert "session.commit" not in bridge
+
+
+def test_native_coordinator_reservation_reply_is_not_install_authorization():
+    source = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
+    for required in (
+        "fn verify_reservation_reply(", "fn verify_release_reply(",
+        'response.get("hold_token")', 'response.get("expires_at_unix_ms")',
+        'response.get("authenticated")', 'response.get("source")',
+        'response.get("worker_id")', 'response.get("nonce")',
+        'response.get("install_allowed")', 'Some("reserved")',
+        'Some("unknown")', "remaining < 5_000 || remaining > 305_000",
+        "fn reservation_requires_bound_nonce_and_bounded_lifetime()",
+        "fn release_is_never_conflated_with_idle_or_install_permission()",
+    ):
+        assert required in source
+    lib = LIB.read_text(encoding="utf-8")
+    # These parsers are private and still cannot enable Tauri installation.
+    assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
+    assert "reserve_worker_for_install" not in lib
