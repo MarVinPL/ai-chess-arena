@@ -138,3 +138,15 @@ processes have no leader election/fencing epoch; one process restarting can
 invalidate another process's live assignments. Run a single coordinator until
 process ownership/fencing and real job reconciliation are implemented. The
 current HTTP endpoint still denies update installation.
+
+### Single-host coordinator ownership
+
+Server startup now acquires an exclusive POSIX `flock` on
+`<DB>.coordinator.lock` **before** invalidating persisted worker claims or
+starting any threads/listener. The file descriptor remains open for the
+process lifetime. A competing server using the same local database and lock
+path fails before recovery; kernel releases ownership on process exit.
+Multiprocess tests verify rejection and acquisition after exit. This only
+protects cooperating processes on one host/local filesystem: it is not a
+cross-host fencing token, does not repair orphaned jobs, and does not make
+remote execution or updater installation production-ready.

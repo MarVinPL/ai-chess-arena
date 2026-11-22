@@ -1929,6 +1929,9 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    # Exclusive local coordinator ownership is required before state recovery.
+    from remote_worker_coordinator_lock import CoordinatorLock
+    _coordinator_lock = CoordinatorLock(DB).acquire()
     # Invalidate stale worker state before any background worker or HTTP listener starts.
     remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
