@@ -628,3 +628,13 @@ invalid or revoked credentials are rejected. Heartbeats update only
 `worker_heartbeats`, never `worker_job_safety`. No external Caddy route or
 production listener was enabled. Fresh heartbeat is not an authorization to
 reassign unknown or in-flight jobs.
+
+### Heartbeat-gated readiness
+
+`assert_worker_heartbeat_ready` combines a recent authenticated heartbeat
+(default 30-second age) with the existing fail-closed durable idle,
+unapplied-result and credential checks. A heartbeat alone never changes
+job state or permits reassignment. The checks are preliminary and not an
+atomic reservation; final assignment must still enforce SQLite transaction
+preconditions, and heartbeat does not attest model capacity. The production
+scheduler remains local-only.
