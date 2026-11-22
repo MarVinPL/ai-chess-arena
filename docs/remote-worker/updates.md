@@ -426,3 +426,18 @@ boundaries, single-writer requirement, default-off policy and zero-cost
 constraints are recorded in
 [`service-architecture-decision.md`](service-architecture-decision.md).
 This is a documented decision only; no unit has been installed or started.
+
+### Separate gateway process and systemd template
+
+`remote_worker_service.py` is a manually started entrypoint for the
+loopback-only result intake, with explicit database and port arguments,
+preflight checks for an existing initialized SQLite schema, and graceful
+SIGTERM/SIGINT shutdown. The template
+`deploy/remote-worker/ai-chess-remote-worker.service.example` documents the
+proposed independent systemd unit with restart, privilege, network and
+resource restrictions. The unit is **not installed or enabled**. Its example
+DB path, writable directory, account permissions and limits must be checked
+against the actual production environment before installation. The gateway
+currently receives results only; outbound job delivery and coordinator
+single-writer integration remain pending. Tests verify fail-closed startup
+and template guardrails on the existing VPS.
