@@ -1791,6 +1791,35 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
+        if path == '/api/remote-workers/job-poll':
+            # A Worker can read only its OWN already-assigned inference job.
+            # This path cannot assign, renew, cancel or mark a game finished.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid job poll request')
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid job poll nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_inference_delivery import WorkerInferenceDelivery
+                job = WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce, **job,
+                })
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie zadania'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można pobrać zadania Workera'}, 500)
+            return
         if path == '/api/remote-workers/board-view':
             # Read-only view of Arena-owned FEN, bound to the authenticated
             # worker's *current* lease and matching live worker/job identity.
