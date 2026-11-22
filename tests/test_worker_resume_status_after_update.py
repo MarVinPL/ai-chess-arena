@@ -78,7 +78,7 @@ def test_machine_authenticated_resume_status_has_no_unsafe_dispatch():
     assert "reconcile_resume(" not in section
     assert "checkpoint_json" not in section
     assert '"update-resume-status"' in COORDINATOR
-    assert 'response.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())' in COORDINATOR
+    assert 'value.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())' in COORDINATOR
 
 
 def test_single_button_does_not_claim_game_resumed_without_executor():
