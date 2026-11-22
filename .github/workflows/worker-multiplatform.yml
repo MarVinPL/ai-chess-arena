@@ -1,16 +1,13 @@
 name: Worker multiplatform CI
 
 on:
-  workflow_dispatch:
   pull_request:
     paths:
       - 'remote_worker_gui/**'
-      - '.github/workflows/worker-multiplatform.yml'
   push:
     branches: [main]
     paths:
       - 'remote_worker_gui/**'
-      - '.github/workflows/worker-multiplatform.yml'
 
 permissions:
   contents: read
@@ -60,7 +57,6 @@ jobs:
       - name: Select platforms
         id: select
         env:
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
           SHARED: ${{ steps.filter.outputs.shared }}
           LINUX: ${{ steps.filter.outputs.linux }}
           WINDOWS: ${{ steps.filter.outputs.windows }}
@@ -69,7 +65,7 @@ jobs:
           for platform in linux windows android; do
             upper="${platform^^}"
             value="${!upper}"
-            if [[ "$MANUAL" == true || "$SHARED" == true || "$value" == true ]]; then
+            if [[ "$SHARED" == true || "$value" == true ]]; then
               echo "$platform=true" >> "$GITHUB_OUTPUT"
             else
               echo "$platform=false" >> "$GITHUB_OUTPUT"
