@@ -663,3 +663,28 @@ fencing dzierżawy, brak równoległego wykonawcy tego samego job_id,
 integracja z wykonawcą Android oraz potwierdzenie wyniku
 PackageInstaller. Bez tych warunków nie należy deklarować, że
 automatyczne aktualizowanie i wznowienie już działa.
+
+
+## 2026-11-22 — decyzja UX: ręczny przycisk „Wznów”
+
+Po zakończeniu aktualizacji Android Workera **nie wznawiaj zadania automatycznie**.
+Zamiast rozbudowanego kreatora przywracania, pokaż jeden przycisk **„Wznów”**
+przy przerwanej partii. Kliknięcie oznacza zgodę użytkownika na kontynuację
+tej właśnie partii. Przygotowany wcześniej, zweryfikowany checkpoint tej samej
+partii ma pierwszeństwo; gdy go nie ma lub jest nieprawidłowy, uruchom wyłącznie
+tę partię od początku. Nie powtarzaj ukończonych partii i nie zapisuj
+niedokończonej odpowiedzi modelu jako ruchu.
+
+Przycisk musi być **nieaktywny**, dopóki koordynator nie potwierdzi
+zakończenia lub bezpiecznego anulowania instalacji, trwałego zatrzymania
+starego wykonawcy i możliwości wyłącznego wznowienia tego samego job_id.
+Kliknięcie ma uruchamiać rzeczywisty, idempotentny mechanizm przydziału i
+wznowienia z ACK Workera, a nie zmieniać lokalnie etykiety czy deklarować
+sukces na podstawie samego HTTP 200. Brak transportu wykonawcy oznacza,
+że funkcja pozostaje niedostępna — nie dodawać pozornego działającego
+przycisku. W razie niepewnego stanu instalatora/rezerwacji zachować blokadę
+(fail closed) i udostępnić diagnostykę.
+
+To jest **docelowy prosty UX, a nie zrealizowane wznowienie** w aktualnym
+PR #197. Certyfikat podpisujący pozostaje ten sam z istniejącego GitHub
+Secret, bez nowego klucza lub płatnych integracji.
