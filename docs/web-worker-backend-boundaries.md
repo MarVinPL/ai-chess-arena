@@ -141,3 +141,12 @@ candidate review, review queue, audit queue, hardware, and runtime preflight.
 calling it. It uses existing `league.connect()`, HF review, queue and
 runtime services, preserving 422 errors for reviews and 503 errors for
 queue/runtime snapshots. No Worker-token fallback or separate registry.
+
+## Game history and PGN boundary
+
+`web_panel_games_api` handles the three authenticated read variants:
+`GET /api/games`, `GET /api/games/{id}` and `GET /api/games/{id}/pgn`.
+The panel session is verified before delegation. The module reads the same
+`arena.sqlite3` database path passed from `server.py` and retains the
+legacy arbiter metadata, errors and PGN response headers. It does not serve
+Worker machine tokens or create a second game store.
