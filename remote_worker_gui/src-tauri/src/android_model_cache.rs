@@ -150,8 +150,14 @@ mod tests {
     use std::io::Cursor;
 
     fn fixture() -> (PathBuf, String, Vec<u8>) {
-        let root = std::env::temp_dir().join(format!("arena-model-cache-{}-{}",
-            std::process::id(), crate::android_update_coordinator::random_nonce().unwrap()));
+        static TEST_NONCE: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let serial = TEST_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("arena-model-cache-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            serial));
         fs::create_dir(&root).unwrap();
         let bytes = b"GGUFtest-file-model".to_vec();
         let digest = format!("{:x}", Sha256::digest(&bytes));
