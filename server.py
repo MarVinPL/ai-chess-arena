@@ -40,6 +40,7 @@ import web_panel_hf_catalog_api
 import web_panel_storage_api
 import web_panel_passkey_tests_api
 import web_panel_export_api
+import web_panel_live_state_api
 import arena_auth
 import model_permissions
 
@@ -1310,6 +1311,12 @@ def fetch_hf_license_evidence(source):
     }
     return evidence
 
+def _panel_state_snapshot():
+    # Retain the original serialized access to the single live board.
+    with lock:
+        return state()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -1382,6 +1389,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_export_api.dispatch_panel_export_get(self, path, DB):
             return
+        if web_panel_live_state_api.dispatch_panel_live_state_get(
+                self, path, state_snapshot=_panel_state_snapshot, live_snapshot=get_live):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1393,10 +1403,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(search_hf_models(query))
             except Exception as e:
                 self.send_json({'error':str(e)}, 422)
-        elif path == '/api/state':
-            with lock: self.send_json(state())
-        elif path == '/api/live':
-            self.send_json(get_live())
         elif path == '/':
             self.send_html_file('index.html')
         else: self.send_error(404)
