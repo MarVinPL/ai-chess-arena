@@ -1794,28 +1794,6 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 400)
             return
-        if path == '/api/remote-workers/authenticate':
-            # Machine-to-machine bearer authentication; no admin session required.
-            # TLS termination must be enforced by the reverse proxy.
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id = payload.get('worker_id')
-                token = payload.get('token')
-                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
-                    self.send_json({'authenticated': False}, 401)
-                    return
-                self.send_json({'authenticated': True, 'worker_id': worker_id})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-            except Exception:
-                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
-            return
         if path == '/api/remote-workers/update-safety':
             # Fail closed: durable job state is advisory, not install permission.
             # No worker-facing API can initialize idle or mark jobs terminal.
