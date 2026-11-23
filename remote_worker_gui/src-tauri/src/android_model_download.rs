@@ -85,19 +85,25 @@ fn client() -> Result<Client, String> {
 /// Only a trusted caller can provide approved metadata and a private root.
 /// A closure reads usable bytes on the same volume as the private cache.
 /// Downloads are serialized, and no automatic eviction occurs here.
-pub(crate) async fn download_approved_model<F, P>(
+/// The trusted native coordinator MUST supply a fresh lease validation callback
+/// which rejects paused, expired, cancelled or changed assignments. A stale
+/// nonce, job ID or matching model alias alone is not authorization.
+pub(crate) async fn download_approved_model<F, P, L>(
     root: &Path,
     approved: &ApprovedGguf,
     reserve_bytes: u64,
     mut free_space: F,
     mut progress: P,
+    mut check_active_lease: L,
 ) -> Result<PathBuf, String>
 where
     F: FnMut() -> Result<u64, String>,
     P: FnMut(u64, u64),
+    L: FnMut() -> Result<(), String>,
 {
     let _lock = TransferGuard::new()?;
     let url = validate_model_source(approved)?;
+    check_active_lease()?;
     let metadata = fs::symlink_metadata(root)
         .map_err(|_| "Prywatny katalog GGUF nie istnieje")?;
     if !metadata.file_type().is_dir() {
@@ -143,6 +149,8 @@ where
         let mut received = 0u64;
         while let Some(chunk) = response.chunk().await
             .map_err(|_| "Przerwany transfer modelu")? {
+            // Never write more bytes after an assignment was revoked.
+            check_active_lease()?;
             received = received.checked_add(chunk.len() as u64)
                 .ok_or("Przekroczono rozmiar modelu")?;
             if received > approved.size_bytes {
@@ -160,6 +168,7 @@ where
         if received != approved.size_bytes {
             return Err("GGUF pobrany niekompletnie".into());
         }
+        check_active_lease()?;
         file.flush().map_err(|_| "Błąd flush GGUF")?;
         file.sync_all().map_err(|_| "Błąd sync GGUF")?;
         drop(file);
@@ -173,6 +182,7 @@ where
         if free_space()? < reserve_bytes {
             return Err("insufficient_storage: Rezerwa miejsca została naruszona".into());
         }
+        check_active_lease()?;
         match fs::symlink_metadata(&target) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             _ => return Err("Model docelowy już istnieje lub jest niedostępny".into()),
