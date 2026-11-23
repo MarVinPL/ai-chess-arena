@@ -61,6 +61,54 @@ fn regular_file(path: &Path) -> Result<Option<fs::Metadata>, String> {
     }
 }
 
+/// Read-only inventory of content-addressed GGUF files inside the Worker
+/// private cache. Inventory sizes are NOT an integrity verification or proof
+/// that any model is safe to execute/evict; loader rehashes actual bytes.
+/// Unexpected filenames are ignored, but symlinks disguised as models fail
+/// closed rather than being followed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ModelCacheInventory {
+    pub(crate) model_count: u64,
+    pub(crate) occupied_bytes: u64,
+}
+
+pub(crate) fn inspect_model_cache(root: &Path) -> Result<ModelCacheInventory, String> {
+    let mut inventory = ModelCacheInventory {
+        model_count: 0,
+        occupied_bytes: 0,
+    };
+    let root_meta = match fs::symlink_metadata(root) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(inventory),
+        Err(_) => return Err("Nie można odczytać prywatnego cache modeli".into()),
+    };
+    if !root_meta.file_type().is_dir() {
+        return Err("Niedozwolony katalog cache modeli".into());
+    }
+    let entries = fs::read_dir(root)
+        .map_err(|_| "Nie można wyświetlić cache GGUF")?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "Błąd odczytu wpisu cache GGUF")?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(digest) = name.strip_suffix(".gguf") else { continue };
+        if !valid_digest(digest) { continue; }
+        let meta = fs::symlink_metadata(entry.path())
+            .map_err(|_| "Nie można sprawdzić pliku cache GGUF")?;
+        if !meta.file_type().is_file() {
+            return Err("Niedozwolony typ pliku GGUF w cache".into());
+        }
+        if !valid_size(meta.len()) {
+            return Err("Nieprawidłowy rozmiar pliku GGUF w cache".into());
+        }
+        inventory.model_count = inventory.model_count.checked_add(1)
+            .ok_or("Przekroczono licznik modeli")?;
+        inventory.occupied_bytes = inventory.occupied_bytes.checked_add(meta.len())
+            .ok_or("Przekroczono rozmiar cache GGUF")?;
+    }
+    Ok(inventory)
+}
+
 /// An entry is eligible for eviction only after the trusted coordinator
 /// reports no active lease, session, checkpoint or installation referring to
 /// it. The UI must never set these flags based on untrusted model metadata.
@@ -320,6 +368,52 @@ mod tests {
             &[good.clone(), good]).is_err());
         assert!(plan_storage_reclamation(0, gib, u64::MAX, &[]).is_err());
         assert!(plan_storage_reclamation(0, gib, u64::MAX - 1, &[]).is_err());
+    }
+
+    #[test]
+    fn inventory_counts_only_private_content_addressed_models() {
+        let (root, digest, data) = fixture();
+        assert_eq!(inspect_model_cache(&root).unwrap(),
+            ModelCacheInventory { model_count: 0, occupied_bytes: 0 });
+        fs::write(root.join("notes.txt"), b"not a model").unwrap();
+        fs::write(root.join(format!("{digest}.gguf.partial")), b"partial").unwrap();
+        let model = stage_verified_model(&root, &digest, data.len() as u64,
+            &mut Cursor::new(&data)).unwrap();
+        assert_eq!(inspect_model_cache(&root).unwrap(),
+            ModelCacheInventory { model_count: 1,
+                occupied_bytes: data.len() as u64 });
+        fs::remove_file(model).unwrap();
+        fs::remove_file(root.join(format!("{digest}.gguf.partial"))).unwrap();
+        fs::remove_file(root.join("notes.txt")).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn absent_cache_is_empty_but_non_directory_cache_is_denied() {
+        let (root, digest, _) = fixture();
+        let absent = root.join("not-created");
+        assert_eq!(inspect_model_cache(&absent).unwrap(),
+            ModelCacheInventory { model_count: 0, occupied_bytes: 0 });
+        fs::write(&absent, b"not a directory").unwrap();
+        assert!(inspect_model_cache(&absent).is_err());
+        fs::remove_file(absent).unwrap();
+        assert!(model_path(&root, &digest).is_ok());
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_does_not_follow_symlinked_gguf() {
+        let (root, digest, data) = fixture();
+        let other = root.join("personal-document.txt");
+        fs::write(&other, &data).unwrap();
+        let link = model_path(&root, &digest).unwrap();
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(inspect_model_cache(&root).is_err());
+        assert_eq!(fs::read(&other).unwrap(), data);
+        fs::remove_file(link).unwrap();
+        fs::remove_file(other).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 
     #[test]
