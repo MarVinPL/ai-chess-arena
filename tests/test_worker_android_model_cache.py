@@ -73,7 +73,7 @@ def test_android_reads_private_partition_without_user_selected_path():
 
 def test_native_storage_command_is_read_only_and_displayed_in_android_ui():
     ui = (BASE / "remote_worker_gui/public/index.html").read_text()
-    assert 'fn inspect_phone_model_storage() -> Result<PhoneModelStorage, String>' in LIB
+    assert 'fn inspect_phone_model_storage(app: tauri::AppHandle) -> Result<PhoneModelStorage, String>' in LIB
     assert 'android_model_cache::android_private_free_bytes()?' in LIB
     assert 'free_bytes.saturating_sub(reserve_bytes)' in LIB
     assert 'inspect_phone_model_storage,' in LIB
