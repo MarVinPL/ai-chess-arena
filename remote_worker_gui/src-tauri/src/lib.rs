@@ -253,6 +253,45 @@ fn inspect_phone_model_storage(app: tauri::AppHandle) -> Result<PhoneModelStorag
     }
 }
 
+/// Fixed-host HEAD diagnostic: checks HTTP protocol negotiated by Android OS.
+/// No arbitrary URL from WebView; no credentials, GGUF or inference.
+#[tauri::command]
+async fn inspect_phone_quic_protocol() -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Diagnostyka QUIC jest dostępna tylko na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            use jni::{objects::{JObject, JValue}, JavaVM};
+            let context = ndk_context::android_context();
+            let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }
+                .map_err(|_| "Brak środowiska Java Androida")?;
+            let mut env = vm.attach_current_thread()
+                .map_err(|_| "Nie można uruchomić diagnostyki QUIC")?;
+            let android_context = unsafe { JObject::from_raw(context.context().cast()) };
+            let result = env.call_static_method(
+                "pl/marvin/aichessarena/worker/WorkerQuicTransport",
+                "probeProtocol",
+                "(Landroid/content/Context;)Ljava/lang/String;",
+                &[JValue::Object(&android_context)],
+            ).map_err(|_| "Android HttpEngine nie mógł wykonać próby QUIC")?
+                .l().map_err(|_| "Android zwrócił nieprawidłowy protokół")?;
+            if result.is_null() {
+                return Err("Brak odpowiedzi protokołu".into());
+            }
+            let protocol: String = env.get_string(&jni::objects::JString::from(result))
+                .map_err(|_| "Nie można odczytać protokołu")?.into();
+            // Never return arbitrary strings from the platform to the UI.
+            if !matches!(protocol.as_str(), "h3" | "h2" | "http/1.1") {
+                return Err("Serwer zwrócił nieobsługiwany protokół HTTP".into());
+            }
+            Ok(protocol)
+        }).await.map_err(|_| "Diagnostyka QUIC została przerwana")?
+    }
+}
+
 #[tauri::command]
 async fn inspect_phone_local_model() -> Result<String, String> {
     // Diagnostic only: localhost probe does NOT authenticate Arena, allocate
@@ -955,7 +994,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_phone_quic_protocol, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
