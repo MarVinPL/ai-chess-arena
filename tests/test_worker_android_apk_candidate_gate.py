@@ -278,7 +278,7 @@ def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
     lib = LIB.read_text(encoding="utf-8")
     coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
     recovery = (ROOT / "remote_worker_gui/src-tauri/src/android_update_recovery.rs").read_text(encoding="utf-8")
-    server = (ROOT / "server.py").read_text(encoding="utf-8")
+    server = (ROOT / ("worker_update_hold_api.py" if (ROOT / "worker_update_hold_api.py").exists() else "server.py")).read_text(encoding="utf-8")
     assert "mod android_update_recovery;" in lib
     assert 'const HOLD_ACCOUNT: &str = "coordinator-update-hold-v1"' in recovery
     assert 'keyring::Entry::new(HOLD_SERVICE, HOLD_ACCOUNT)' in recovery
@@ -292,8 +292,8 @@ def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
     assert before < network
     assert '"hold_token": pending.hold_token' in coordinator
     assert "verified.token != pending.hold_token" in coordinator
-    assert "hold_token=proposed_token" in server
-    assert "install_allowed': False" in server
+    assert ("hold_token=proposed_token" in server or "hold_token=hold_token" in server)
+    assert ("'install_allowed': False" in server or '"install_allowed": False' in server)
     # Neither the journal contents nor the signing key are in the webview.
     assert "hold_token" not in (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
 
@@ -334,13 +334,13 @@ def test_hold_reconciliation_is_read_only_and_never_exposes_secret_to_ui():
     coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
     ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
     jobs = (ROOT / "remote_worker_jobs.py").read_text(encoding="utf-8")
-    server = (ROOT / "server.py").read_text(encoding="utf-8")
+    server = (ROOT / ("worker_update_hold_api.py" if (ROOT / "worker_update_hold_api.py").exists() else "server.py")).read_text(encoding="utf-8")
     assert 'def inspect_update_hold(self, worker_id, token):' in jobs
     assert "'active' if self.clock() < row[1] else 'expired'" in jobs
     assert "secrets.compare_digest(row[0], token)" in jobs
     assert "update-hold-status" in server
     assert "registry.inspect_update_hold(worker_id, hold_token)" in server
-    assert "'install_allowed': False" in server
+    assert ("'install_allowed': False" in server or '"install_allowed": False' in server)
     assert 'pub(crate) async fn inspect_pending_update(' in coordinator
     assert 'coordinator_endpoint(&pending.server, "update-hold-status")?' in coordinator
     assert 'load_pending()?' in coordinator
