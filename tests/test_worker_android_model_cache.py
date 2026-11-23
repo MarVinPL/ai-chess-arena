@@ -266,3 +266,18 @@ def test_http3_jni_bridge_rehashes_gguf_and_shares_private_cache_dir():
     assert 'download_verified_gguf_via_http3(' not in (
         BASE / 'remote_worker_gui/src-tauri/src/android_update_coordinator.rs'
     ).read_text()  # not automatically executed without STOP/ACK
+
+
+def test_download_preflight_never_treats_chess_job_as_transfer_lease():
+    code = (BASE / "remote_worker_gui/src-tauri/src/android_model_preflight.rs").read_text()
+    assert "mod android_model_preflight;" in LIB
+    assert "bind_approved_model_to_job(assigned_sha256, approved)?" in code
+    assert "DEFAULT_FREE_RESERVE_BYTES" in code
+    assert "active_inference_or_job || stop_or_update_pending" in code
+    assert "ModelPreflight::NeedsPreparationLease" in code
+    assert "ModelPreflight::InsufficientStorage" in code
+    assert "ModelPreflight::VerifiedCacheAvailable" in code
+    assert "download_approved_model(" not in code
+    assert "download_verified_gguf_via_http3(" not in code
+    assert "retire_model(" not in code
+    assert "preflight_assigned_gguf(" not in LIB.split("generate_handler![", 1)[-1]
