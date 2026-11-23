@@ -61,8 +61,9 @@ def database(tmp_path):
 
 def test_unrecognized_routes_and_worker_api_are_never_intercepted(tmp_path):
     handler = Reply()
-    assert api.dispatch_panel_games_get(handler, "/api/remote-workers/game", database(tmp_path)) is False
-    assert api.dispatch_panel_games_get(handler, "/api/games-extra", database(tmp_path)) is False
+    db = database(tmp_path)
+    assert api.dispatch_panel_games_get(handler, "/api/remote-workers/game", db) is False
+    assert api.dispatch_panel_games_get(handler, "/api/games-extra", db) is False
     assert not handler.json and not handler.errors
 
 
