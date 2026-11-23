@@ -17,7 +17,6 @@ ANDROID = ROOT / "src-tauri" / "gen" / "android" / "app" / "src" / "main"
 MANIFEST = ANDROID / "AndroidManifest.xml"
 TARGET = ANDROID / "java" / "pl" / "marvin" / "aichessarena" / "worker" / SOURCE.name
 VAULT_TARGET = TARGET.parent / VAULT_SOURCE.name
-QUIC_TARGET = TARGET.parent / QUIC_SOURCE.name
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 A = f"{{{ANDROID_NS}}}"
 ET.register_namespace("android", ANDROID_NS)
@@ -50,7 +49,7 @@ def install():
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, TARGET)
     shutil.copyfile(VAULT_SOURCE, VAULT_TARGET)
-    shutil.copyfile(QUIC_SOURCE, QUIC_TARGET)
+    shutil.copyfile(QUIC_SOURCE, VAULT_TARGET.parent / QUIC_SOURCE.name)
     tree.write(MANIFEST, encoding="unicode", xml_declaration=True)
     # Check the output, not only the in-memory tree.
     output = ET.parse(MANIFEST).getroot()
@@ -61,7 +60,7 @@ def install():
         raise RuntimeError("Installer receiver source was not copied")
     if not VAULT_TARGET.is_file():
         raise RuntimeError("Android Keystore credential vault source was not copied")
-    if not QUIC_TARGET.is_file():
+    if not (VAULT_TARGET.parent / QUIC_SOURCE.name).is_file():
         raise RuntimeError("Android QUIC transport source was not copied")
     print("Android Worker receiver, encrypted token vault and OS QUIC bridge installed")
 
