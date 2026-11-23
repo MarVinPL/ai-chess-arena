@@ -536,6 +536,38 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     instruction = post("update-pause-poll", who)[1]["instruction"]
     assert instruction["lease_token_sha256"] != job["lease_token"]
     assert instruction["request_id"] == request_id
+    lease_digest = instruction["lease_token_sha256"]
+
+    pause = WorkerUpdatePause(path)
+    for evidence in (None, "0" * 64, job["lease_token"]):
+        with pytest.raises(ValueError, match="stale or missing lease"):
+            pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                              checkpoint_verified=True, lease_token_sha256=evidence)
+    with pytest.raises(ValueError, match="has not stopped"):
+        pause.acknowledge(WORKER, job_id, request_id, worker_stopped=False,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+    assert post("update-pause-ack", {
+        **who, "job_id": job_id, "request_id": request_id,
+        "lease_token_sha256": lease_digest,
+    })[0] == 404
+    assert pause.pending(WORKER)["phase"] == "requested"
+
+    pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                      checkpoint_verified=True, lease_token_sha256=lease_digest)
+    with sqlite3.connect(path) as db:
+        before_retry = db.execute(
+            "SELECT phase, acknowledged_at FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()
+        assert before_retry[0] == "acknowledged"
+        retry = WorkerUpdatePause(path, clock=lambda: before_retry[1] + 1)
+        retry.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+        assert db.execute(
+            "SELECT phase, acknowledged_at FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == before_retry
+    assert post("update-pause-poll", who)[1]["instruction"] == {"action": "await_reconciliation"}
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
 
 

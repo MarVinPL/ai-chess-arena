@@ -116,17 +116,10 @@ class WorkerUpdatePause:
             ):
                 return {"action": "blocked"}
 
-            # Fresh and legacy registries may predate inference assignment
-            # storage. Inspect the schema in the same read snapshot as STOP.
-            assignment = None
-            if db.execute(
-                "SELECT 1 FROM sqlite_schema "
-                "WHERE type='table' AND name='worker_inference_assignments'"
-            ).fetchone():
-                assignment = db.execute(
-                    "SELECT job_id,job_json FROM worker_inference_assignments "
-                    "WHERE worker_id=?", (worker_id,)
-                ).fetchone()
+            try:
+                lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+            except ValueError:
+                return {"action": "blocked"}
         instruction = {
             "action": "stop_checkpoint",
             "job_id": job_id, "request_id": request_id,
@@ -134,33 +127,49 @@ class WorkerUpdatePause:
         # Protocol v3: bind the STOP instruction to the exact execution
         # generation without echoing its 256-bit bearer capability. A legacy
         # v1/v2 job keeps the unchanged instruction format.
-        if assignment is not None:
-            if assignment[0] != job_id:
-                return {"action": "blocked"}
-            try:
-                job = json.loads(assignment[1])
-            except (TypeError, ValueError):
-                return {"action": "blocked"}
-            if not isinstance(job, dict):
-                return {"action": "blocked"}
-            if job.get("version") == 3:
-                token = job.get("lease_token")
-                if not isinstance(token, str) or len(token) != 64 or any(
-                    c not in "0123456789abcdef" for c in token
-                ):
-                    return {"action": "blocked"}
-                instruction["lease_token_sha256"] = hashlib.sha256(
-                    token.encode("ascii")
-                ).hexdigest()
+        if lease_digest is not None:
+            instruction["lease_token_sha256"] = lease_digest
         return instruction
 
+    @staticmethod
+    def _stop_lease_digest(db, worker_id, job_id):
+        """Read the execution lease in the caller's STOP transaction."""
+        # Fresh and legacy registries may predate inference assignment storage.
+        if not db.execute(
+            "SELECT 1 FROM sqlite_schema "
+            "WHERE type='table' AND name='worker_inference_assignments'"
+        ).fetchone():
+            return None
+        assignment = db.execute(
+            "SELECT job_id,job_json FROM worker_inference_assignments WHERE worker_id=?",
+            (worker_id,),
+        ).fetchone()
+        if assignment is None:
+            return None
+        job = json.loads(assignment[1])
+        if assignment[0] != job_id or not isinstance(job, dict) or job.get("job_id") != job_id:
+            raise ValueError("Mismatched STOP assignment")
+        version = job.get("version")
+        if type(version) is not int or version not in (1, 2, 3):
+            raise ValueError("Invalid STOP assignment protocol")
+        if version != 3:
+            return None
+        token = job.get("lease_token")
+        if not isinstance(token, str) or len(token) != 64 or any(
+            c not in "0123456789abcdef" for c in token
+        ):
+            raise ValueError("Invalid STOP assignment lease")
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+
     def acknowledge(self, worker_id, job_id, request_id, *,
-                    worker_stopped, checkpoint_verified):
+                    worker_stopped, checkpoint_verified, lease_token_sha256=None):
         """Only coordinator-validated worker ACK+checkpoint can mark pause.
 
         This is a bookkeeping marker, NOT a scheduler idle transition:
         the running job remains running until the real worker's execution
         lease and saved checkpoint are integrated with atomic assignment.
+        For v3, the trusted caller must match the stopped execution lease.
+        A retry for that same live lease leaves the original ACK intact.
         """
         self.jobs._id(worker_id)
         self.jobs._id(job_id)
@@ -172,6 +181,7 @@ class WorkerUpdatePause:
             raise ValueError("Worker has not stopped with verified checkpoint")
         with self.jobs._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
             row = db.execute(
                 """SELECT job_id,request_id,phase
                 FROM worker_update_pause_requests WHERE worker_id=?""",
@@ -181,9 +191,21 @@ class WorkerUpdatePause:
                 """SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?""",
                 (worker_id,),
             ).fetchone()
-            if (row != (job_id, request_id, "requested")
+            if (not row or row[:2] != (job_id, request_id)
                     or not active or active[:2] != (job_id, "running")
                     or active[2] is None or active[2] <= self.clock()):
+                raise ValueError("Stale pause acknowledgment")
+            lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+            if lease_digest is not None:
+                if (not isinstance(lease_token_sha256, str)
+                        or len(lease_token_sha256) != 64 or not lease_token_sha256.isascii()
+                        or not secrets.compare_digest(lease_digest, lease_token_sha256)):
+                    raise ValueError("STOP acknowledgment has a stale or missing lease")
+                if row[2] == "acknowledged":
+                    return
+            elif lease_token_sha256 is not None:
+                raise ValueError("STOP acknowledgment lease does not match the job protocol")
+            if row[2] != "requested":
                 raise ValueError("Stale pause acknowledgment")
             db.execute(
                 """UPDATE worker_update_pause_requests
