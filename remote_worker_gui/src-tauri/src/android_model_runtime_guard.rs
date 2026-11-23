@@ -11,6 +11,7 @@
 use crate::android_model_cache::{model_path, verify_model};
 use std::collections::HashMap;
 use std::fs::{self, File};
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,6 +65,8 @@ pub(crate) fn open_verified_session(
         .map_err(|_| "Nie udało się sprawdzić GGUF".to_owned())? {
         return Err("GGUF nie przeszedł weryfikacji integralności".into());
     }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| "Nie można ustawić początku pliku GGUF".to_owned())?;
     let mut active = sessions().lock()
         .map_err(|_| "Nieustalona lista aktywnych modeli".to_owned())?;
     if MAINTENANCE_ACTIVE.load(Ordering::SeqCst) {
@@ -110,6 +113,7 @@ mod tests {
     use std::io::Write;
     use std::sync::{Arc, Barrier};
     use std::thread;
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn fixture() -> (std::path::PathBuf, String, u64) {
         static N: std::sync::atomic::AtomicUsize =
@@ -127,9 +131,11 @@ mod tests {
 
     #[test]
     fn open_file_prevents_maintenance_until_guard_is_dropped() {
+        let _exclusive_test = TEST_LOCK.lock().unwrap();
         let (root, digest, size) = fixture();
-        let session = open_verified_session(&root, &digest, size).unwrap();
+        let mut session = open_verified_session(&root, &digest, size).unwrap();
         assert!(session.file.metadata().is_ok());
+        assert_eq!(session.file.stream_position().unwrap(), 0);
         assert!(with_no_open_sessions(|| Ok(())).is_err());
         drop(session);
         assert!(with_no_open_sessions(|| Ok(())).is_ok());
@@ -138,6 +144,7 @@ mod tests {
 
     #[test]
     fn open_rejects_tampering_or_symlink() {
+        let _exclusive_test = TEST_LOCK.lock().unwrap();
         let (root, digest, size) = fixture();
         assert!(open_verified_session(&root, &digest, size+1).is_err());
         fs::write(root.join(format!("{digest}.gguf")), b"GGUFwrong-bytes").unwrap();
@@ -155,6 +162,7 @@ mod tests {
 
     #[test]
     fn exclusive_maintenance_prevents_concurrent_managed_opens() {
+        let _exclusive_test = TEST_LOCK.lock().unwrap();
         let (root, digest, size) = fixture();
         let barrier = Arc::new(Barrier::new(2));
         let barrier_for_thread = barrier.clone();
