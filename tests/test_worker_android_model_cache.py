@@ -381,3 +381,22 @@ def test_app_owned_gguf_file_descriptor_remains_locked_until_runtime_stops():
     assert 'open_verified_session(' not in LIB
     assert 'with_no_open_sessions(' not in LIB
     assert '#[tauri::command]' not in runtime
+
+
+def test_embedded_android_llama_probe_uses_only_own_package_abi_not_termux():
+    source = (BASE / "remote_worker_gui/src-tauri/src/android_embedded_llama.rs").read_text()
+    assert "mod android_embedded_llama;" in LIB
+    assert "getApplicationInfo" in source
+    assert '"nativeLibraryDir"' in source
+    assert 'root.join("libllama.so")' in source
+    assert 'fs::symlink_metadata(path)' in source
+    assert 'info.file_type().is_file()' in source
+    assert 'dlopen(raw.as_ptr(), RTLD_NOW | RTLD_LOCAL)' in source
+    assert 'dlsym(library.0, symbol.as_ptr())' in source
+    assert 'llama_model_load_from_file' in source
+    assert 'llama_decode' in source
+    assert 'llama_sampler_init_greedy' in source
+    assert 'llama-server' not in source.split('#[cfg(test)]', 1)[0].split('fn native_library_dir()', 1)[1]
+    assert 'std::process::Command' not in source
+    assert 'probe_embedded_llama_library(' not in LIB
+    assert '#[tauri::command]' not in source
