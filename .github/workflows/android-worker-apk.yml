@@ -32,10 +32,17 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@v6
+      # setup-java caches Gradle dependencies and wrapper distributions
+      # separately. A tracked wrapper-properties pin is necessary because
+      # Tauri generates the actual Android wrapper later in this job.
+      - name: Set up Java with Gradle cache
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
+          cache-dependency-path: .github/workflows/android-worker-apk.yml
+          cache-jdk: false
       - name: Install pinned official Android CLI
         shell: bash
         run: |
@@ -74,15 +81,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      # A Rust cache hit is immutable and cannot pick up the Gradle ZIP
-      # downloaded later by Tauri. Keep the Gradle wrapper distribution in an
-      # independent GitHub Actions cache, shared by builds of this PR.
-      - name: Restore Gradle 9.6.1 distribution
-        id: gradle-wrapper-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle/wrapper/dists
-          key: gradle-wrapper-${{ runner.os }}-9.6.1-bin-v1
       - name: Restore Rust cache
         uses: swatinem/rust-cache@v2
         with:
@@ -90,14 +88,11 @@ jobs:
           key: android-arm64-gradle-9.6.1
       - name: Report Gradle wrapper cache
         shell: bash
-        env:
-          GRADLE_WRAPPER_CACHE_HIT: ${{ steps.gradle-wrapper-cache.outputs.cache-hit }}
         run: |
-          if [[ "$GRADLE_WRAPPER_CACHE_HIT" == true ]] &&
-             find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -name 'gradle-launcher-9.6.1.jar' -print -quit 2>/dev/null | grep -q .; then
+          if find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -name 'gradle-launcher-9.6.1.jar' -print -quit 2>/dev/null | grep -q .; then
             echo 'Gradle 9.6.1 distribution restored; no wrapper download needed.'
           else
-            echo 'Gradle 9.6.1 not fully cached; it will download once and be saved independently after a successful job.'
+            echo 'Gradle 9.6.1 not in wrapper cache; setup-java will save it after this job.'
           fi
       - name: Initialize Android Worker
         run: |
