@@ -34,6 +34,7 @@ import web_panel_model_license_api
 import web_panel_download_status_api
 import web_panel_hf_status_api
 import web_panel_games_api
+import web_panel_inventory_api
 import arena_auth
 import model_permissions
 
@@ -1362,6 +1363,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_games_api.dispatch_panel_games_get(self, path, DB):
             return
+        if web_panel_inventory_api.dispatch_panel_inventory_get(self, path):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1377,26 +1380,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path == '/api/models':
-            with league.connect() as c:
-                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
-                  FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
-                  ORDER BY m.name''').fetchall()
-            models = []
-            for row in rows:
-                item = dict(row)
-                try:
-                    metadata = json.loads(item.pop('metadata_json') or '{}')
-                    item['license_evidence'] = metadata.get('license_evidence')
-                    item['inference'] = league.normalize_inference_config(metadata)
-                    item['token_budget'] = league.token_budget_info(
-                        item.get('sha256'), item.get('draft_sha256'), metadata)
-                except (TypeError, json.JSONDecodeError, ValueError):
-                    item['license_evidence'] = None
-                    item['inference'] = {'thinking': False}
-                    item.pop('metadata_json', None)
-                models.append(item)
-            self.send_json(models)
         elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -1429,16 +1412,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(result)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/model-admission':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_admission.list_decisions(c))
-            except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
-                self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/league':
-            self.send_json(league.elo_ratings('PURE_AI'))
-        elif path == '/api/league/engine':
-            self.send_json(league.elo_ratings('AI_ENGINE'))
         elif path == '/api/storage':
             status = league.storage_status()
             managed = model_store.MANAGED_DIR
