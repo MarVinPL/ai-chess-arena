@@ -221,24 +221,34 @@ struct PhoneModelStorage {
     free_bytes: u64,
     reserve_bytes: u64,
     available_for_models_bytes: u64,
+    cached_models: u64,
+    cached_bytes: u64,
 }
 
 /// Read-only Android storage diagnostic. Not an allocation guarantee:
 /// the downloader must check space again before and during transfer.
 #[tauri::command]
-fn inspect_phone_model_storage() -> Result<PhoneModelStorage, String> {
+fn inspect_phone_model_storage(app: tauri::AppHandle) -> Result<PhoneModelStorage, String> {
     #[cfg(not(target_os = "android"))]
     {
+        let _ = app;
         Err("Pamięć modeli GGUF można sprawdzić tylko na Androidzie".into())
     }
     #[cfg(target_os = "android")]
     {
+        use tauri::Manager;
+        let private_root = app.path().app_data_dir()
+            .map_err(|_| "Nie można wskazać prywatnego katalogu aplikacji")?
+            .join("worker-gguf-models");
+        let inventory = android_model_cache::inspect_model_cache(&private_root)?;
         let free_bytes = android_model_cache::android_private_free_bytes()?;
         let reserve_bytes = android_model_cache::DEFAULT_FREE_RESERVE_BYTES;
         Ok(PhoneModelStorage {
             free_bytes,
             reserve_bytes,
             available_for_models_bytes: free_bytes.saturating_sub(reserve_bytes),
+            cached_models: inventory.model_count,
+            cached_bytes: inventory.occupied_bytes,
         })
     }
 }
