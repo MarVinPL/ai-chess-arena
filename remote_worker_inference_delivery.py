@@ -336,18 +336,19 @@ class WorkerInferenceDelivery:
             if old is None or hashlib.sha256(old[0].encode("utf-8")).hexdigest() != old[1]:
                 raise ValueError("Missing or corrupted predecessor checkpoint")
             predecessor = json.loads(old[0])
-            # Only per-move checkpoint fields may change. Never let a remote
-            # result rewrite tournament configuration or player identities.
+            # The new checkpoint is allowed to change ONLY per-move fields.
+            # Tournament metadata, pairing, player definitions and phase must
+            # be identical to the persisted predecessor. Otherwise a remote
+            # result could accidentally bless a stale/rewritten tournament
+            # snapshot while still carrying the same FEN and legal UCI.
             mutable_fields = frozenset({
                 "moves", "move_times", "fen", "side_to_move", "updated_at",
             })
             unchanged_before = {
-                key: value for key, value in predecessor.items()
-                if key not in mutable_fields
+                k: v for k, v in predecessor.items() if k not in mutable_fields
             }
             unchanged_after = {
-                key: value for key, value in checkpoint.items()
-                if key not in mutable_fields
+                k: v for k, v in checkpoint.items() if k not in mutable_fields
             }
             if unchanged_before != unchanged_after:
                 raise ValueError("Arena checkpoint metadata changed during inference")
