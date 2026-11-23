@@ -15,7 +15,12 @@ def test_token_issue_and_revoke(tmp_path):
     store.revoke('android_marvin_01')
     assert not store.authenticate('android_marvin_01', token)
 
-def test_server_auth_endpoint_is_present():
-    source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
-    assert "if path == '/api/remote-workers/authenticate':" in source
-    assert 'WorkerTokenStore(DB).authenticate(worker_id, token)' in source
+def test_worker_auth_endpoint_is_owned_by_machine_backend():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'server.py').read_text()
+    worker = (root / 'worker_backend.py').read_text()
+    assert "worker_backend.dispatch_worker_post(" in source
+    assert 'if path == AUTH_ROUTE:' in worker
+    assert 'WorkerTokenStore(db).authenticate(worker_id, token)' in worker
+    # The browser session is never an alternative to a Worker machine token.
+    assert 'authenticated_user' not in worker
