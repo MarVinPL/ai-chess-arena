@@ -29,6 +29,9 @@ mod android_quic_bridge;
 // Pure lifecycle/STOP-ACK policy; no transport or cache deletion effects.
 #[allow(dead_code)]
 mod android_model_lifecycle;
+// Local app-owned GGUF descriptor leases; no file deletion or dispatch yet.
+#[allow(dead_code)]
+mod android_model_runtime_guard;
 // Read-only preparation plan; a normal chess job is not a download lease.
 #[allow(dead_code)]
 mod android_model_preflight;
