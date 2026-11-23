@@ -96,3 +96,29 @@ def test_real_phone_inference_checks_authenticated_stop_at_both_boundaries():
     )[0]
     assert 'generation_active()' in install
     assert 'Telefon aktualnie oblicza ruch' in install
+
+
+def test_android_local_diagnostic_is_read_only_and_does_not_enable_dispatch():
+    assert 'async fn inspect_phone_local_model() -> Result<String, String>' in LIB
+    section = LIB.split('async fn inspect_phone_local_model()', 1)[1].split(
+        '// The desktop app connects outbound only', 1
+    )[0]
+    assert 'android_local_llama::probe_local_model_alias().await' in section
+    assert 'cfg(not(target_os = "android"))' in section
+    assert 'assign_from_arena' not in section
+    assert 'announce_phone_ready' not in section
+    assert 'store_worker_token' not in section
+    assert 'inspect_phone_local_model,' in LIB
+
+
+def test_android_model_status_visible_without_needing_to_start_a_job():
+    assert 'id="checkLocalModel"' in UI
+    assert 'id="localModelStatus"' in UI
+    assert "invoke('inspect_phone_local_model')" in UI
+    assert 'alias.slice(0,12)' in UI
+    assert 'nie potwierdza integralności pliku GGUF' in UI
+    assert "document.addEventListener('visibilitychange'" in UI
+    assert "if(localModelProbeInFlight||phoneWorkerRunning" in UI
+    assert 'Date.now()-localModelLastCheck<30000' in UI
+    assert "checkPhoneLocalModel(true)" in UI
+    assert 'void checkPhoneLocalModel();' in UI
