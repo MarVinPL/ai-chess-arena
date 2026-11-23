@@ -539,6 +539,36 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
 
 
+def test_stop_poll_works_before_inference_schema_exists(sandbox, tmp_path, monkeypatch):
+    from remote_worker_jobs import DurableWorkerJobs
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    _, _, post = sandbox
+    legacy_db = tmp_path / "legacy.sqlite3"
+    token = WorkerTokenStore(legacy_db).issue(WORKER, ttl_seconds=600)
+    monkeypatch.setattr(server, "DB", legacy_db)
+    who = auth(token)
+    code, reply = post("update-pause-poll", who)
+    assert code == 200
+    assert reply["instruction"] == {"action": "none"}
+
+    job_id = "legacy_job_123456"
+    DurableWorkerJobs(legacy_db).assign(WORKER, job_id, timeout_seconds=60)
+    pause = WorkerUpdatePause(legacy_db)
+    request_id = pause.request(WORKER, job_id)
+    code, reply = post("update-pause-poll", who)
+    assert code == 200
+    assert reply["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": request_id,
+    }
+    assert reply["install_allowed"] is False
+    assert pause.pending(WORKER)["phase"] == "requested"
+    with sqlite3.connect(legacy_db) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name = 'worker_inference_assignments'"
+        ).fetchone() is None
+
+
 def test_coordinator_stop_retry_reuses_request_without_faking_ack(sandbox):
     """Lost STOP response can be retried without minting a new STOP generation."""
     from remote_worker_update_pause import WorkerUpdatePause

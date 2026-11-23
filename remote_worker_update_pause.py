@@ -105,20 +105,28 @@ class WorkerUpdatePause:
                 "SELECT job_id,state,deadline FROM worker_job_safety "
                 "WHERE worker_id=?", (worker_id,)
             ).fetchone()
-            assignment = db.execute(
-                "SELECT job_id,job_json FROM worker_inference_assignments "
-                "WHERE worker_id=?", (worker_id,)
-            ).fetchone()
-        if pause is None:
-            return {"action": "none"}
-        job_id, request_id, phase = pause
-        if phase == "acknowledged":
-            return {"action": "await_reconciliation"}
-        if phase != "requested" or not active or (
-            active[0] != job_id or active[1] != "running" or
-            active[2] is None or active[2] <= self.clock()
-        ):
-            return {"action": "blocked"}
+            if pause is None:
+                return {"action": "none"}
+            job_id, request_id, phase = pause
+            if phase == "acknowledged":
+                return {"action": "await_reconciliation"}
+            if phase != "requested" or not active or (
+                active[0] != job_id or active[1] != "running" or
+                active[2] is None or active[2] <= self.clock()
+            ):
+                return {"action": "blocked"}
+
+            # Fresh and legacy registries may predate inference assignment
+            # storage. Inspect the schema in the same read snapshot as STOP.
+            assignment = None
+            if db.execute(
+                "SELECT 1 FROM sqlite_schema "
+                "WHERE type='table' AND name='worker_inference_assignments'"
+            ).fetchone():
+                assignment = db.execute(
+                    "SELECT job_id,job_json FROM worker_inference_assignments "
+                    "WHERE worker_id=?", (worker_id,)
+                ).fetchone()
         instruction = {
             "action": "stop_checkpoint",
             "job_id": job_id, "request_id": request_id,
