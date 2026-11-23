@@ -552,3 +552,29 @@ def test_apk_update_exclusivity_fences_native_gguf_across_async_handoff():
     assert 'android_update_install_journal::load()?.is_some()' in native_runtime
     assert native_runtime.index('load_pending()?.is_some()') < native_runtime.index('open_verified_session(')
     assert native_runtime.index('load()?.is_some()') < native_runtime.index('open_verified_session(')
+
+
+def test_native_llama_stop_is_sticky_until_model_is_reopened():
+    """Static regression contract: cancellation is independent of engine mutex."""
+    cpp = (BASE / "remote_worker_gui/android/arena_llama_bridge.cpp").read_text()
+    rust = (BASE / "remote_worker_gui/src-tauri/src/android_llama_runtime.rs").read_text()
+    assert "#include <atomic>" in cpp
+    assert "std::atomic<bool> stop_requested{false}" in cpp
+    assert "std::atomic<bool> inference_active{false}" in cpp
+    stop = cpp.split("int arena_llama_request_stop() noexcept {", 1)[1].split("}", 1)[0]
+    assert "stop_requested.store(true, std::memory_order_release)" in stop
+    assert "engine_mutex" not in stop
+    assert "stop_requested.store(false, std::memory_order_release)" in cpp.split(
+        "int arena_llama_model_open(", 1
+    )[1].split("void arena_llama_model_close(", 1)[0]
+    generate = cpp.split("int arena_llama_generate_greedy(", 1)[1]
+    assert "inference_active.store(true, std::memory_order_release)" in generate
+    assert "inference_active.store(false, std::memory_order_release)" in generate
+    assert generate.count("stop_requested.load(std::memory_order_acquire)") >= 5
+    assert "arena_llama_inference_quiesced" in cpp
+    assert "pub(crate) fn request_embedded_inference_stop()" in rust
+    assert "pub(crate) fn embedded_inference_quiesced()" in rust
+    assert 'lib.symbol(c"arena_llama_request_stop")?' in rust
+    assert 'lib.symbol(c"arena_llama_inference_quiesced")?' in rust
+    assert "request_embedded_inference_stop(" not in LIB
+    assert "embedded_inference_quiesced(" not in LIB
