@@ -15,7 +15,8 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
                 |            |-- DurableWorkerJobs / inference delivery
                 |            +-- authoritative shared SQLite checkpoint/lease
                 |
-                +-- Web panel --> arena_auth cookie and origin checks
+                +-- Web panel --> web_panel_auth (login, logout, origin/rate limits)
+                    |-- arena_auth browser sessions
                     |-- web_panel_backend (exact static asset allowlist)
                     +-- admin/model/tournament handlers (incremental extraction)
                                |
@@ -43,7 +44,8 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
 - `server.Handler.send_panel_asset` is kept as an adapter for existing
   callers/tests, with the implementation in `web_panel_backend`.
 - `server.Handler.do_POST` delegates Worker authentication and the
-  phone routes to `worker_backend.dispatch_worker_post`.
+  phone routes to `worker_backend.dispatch_worker_post` first; it then
+  delegates browser login/logout to `web_panel_auth.dispatch_panel_auth_post`.
 - Existing panel business API handlers remain inside `server.py` for now.
   Further extraction must keep auth and CSRF checks in front of every panel
   action, and requires its own tests within Issue #314 before closing it.
