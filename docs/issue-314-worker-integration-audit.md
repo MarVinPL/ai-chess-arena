@@ -62,3 +62,19 @@ of deleting the security checks.
 **NO-GO for merging #316 solely on the basis of its current green Python CI.**
 That CI validates #316 in isolation, not the integrated versions of #197,
 #292 and #296. No production or Android E2E verification is claimed.
+
+## Fail-closed namespace fix on #316
+
+Before any browser session check, `worker_backend.dispatch_worker_post`
+now **rejects unknown `/api/remote-workers/*` routes with HTTP 404**.
+Previously, these unknown machine paths fell through to panel-session
+routing and returned a panel-login response. This fix reserves the machine
+namespace and prevents future accidentally added panel handlers from
+acquiring Worker paths. Existing recognized routes retain their token-only
+and feature-flag behavior. An unrelated route still falls through normally.
+The regression test covers an unknown Worker URL carrying a browser cookie.
+
+**#296 remains blocked:** its branch is 12 commits behind main and alters
+`server.py` alongside main. No unverified merge resolution or duplicated
+auth-handler removal was pushed to #296. The single-handler consolidation
+must be performed after reconciling main and the stacked PR dependencies.
