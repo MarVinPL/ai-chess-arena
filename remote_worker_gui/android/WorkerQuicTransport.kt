@@ -24,6 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * This bridge is NOT reachable from WebView. Only the trusted Rust Arena
  * model-registry path should invoke it; it validates URLs and bytes again.
+ * Experimental transport remains dormant until verified registry assignment,
+ * STOP/ACK and post-download GGUF verification are fully integrated.
  * One transfer, no persistent HTTP body cache, exactly one app-private GGUF.
  */
 object WorkerQuicTransport {
