@@ -376,14 +376,15 @@ mod tests {
         assert_eq!(inspect_model_cache(&root).unwrap(),
             ModelCacheInventory { model_count: 0, occupied_bytes: 0 });
         fs::write(root.join("notes.txt"), b"not a model").unwrap();
-        fs::write(root.join(format!("{digest}.gguf.partial")), b"partial").unwrap();
+        let unrelated_partial = format!("{}.gguf.partial", "e".repeat(64));
+        fs::write(root.join(&unrelated_partial), b"partial").unwrap();
         let model = stage_verified_model(&root, &digest, data.len() as u64,
             &mut Cursor::new(&data)).unwrap();
         assert_eq!(inspect_model_cache(&root).unwrap(),
             ModelCacheInventory { model_count: 1,
                 occupied_bytes: data.len() as u64 });
         fs::remove_file(model).unwrap();
-        fs::remove_file(root.join(format!("{digest}.gguf.partial"))).unwrap();
+        fs::remove_file(root.join(unrelated_partial)).unwrap();
         fs::remove_file(root.join("notes.txt")).unwrap();
         fs::remove_dir(root).unwrap();
     }
