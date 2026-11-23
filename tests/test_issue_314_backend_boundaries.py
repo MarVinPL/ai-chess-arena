@@ -6,6 +6,7 @@ from unittest.mock import patch
 import server
 import web_panel_backend
 import worker_backend
+import web_panel_auth
 
 
 class HandlerStub:
@@ -89,3 +90,61 @@ def test_composition_root_preserves_both_authentication_boundaries():
     assert "WorkerTokenStore" in Path(worker_backend.__file__).read_text()
     assert "session_user" not in Path(worker_backend.__file__).read_text()
     assert "WorkerTokenStore" not in Path(web_panel_backend.__file__).read_text()
+
+
+def test_panel_auth_isolated_from_machine_token():
+    """No Worker token or route is accepted by browser-session auth."""
+    h = HandlerStub(headers={"Authorization": "Bearer fake-worker-token"})
+    assert not web_panel_auth.dispatch_panel_auth_post(
+        h, "/api/remote-workers/authenticate"
+    )
+    assert not h.responses
+
+
+def test_browser_login_rejects_origin_before_reading_credentials():
+    h = HandlerStub(headers={"Origin": "https://untrusted.invalid", "Content-Length": "2"})
+    with patch.object(web_panel_auth.arena_auth, "is_configured", return_value=True), (
+        patch.object(web_panel_auth.arena_auth, "origin_allowed", return_value=False)
+    ):
+        assert web_panel_auth.dispatch_panel_auth_post(h, "/api/auth/login")
+    assert h.responses[0][0] == 403
+
+
+def test_browser_login_keeps_rate_limit_and_cookie_policy():
+    body = b'{"username":"operator","password":"example"}'
+    h = HandlerStub(body, {"Content-Length": str(len(body))})
+    h.client_address = ("127.0.0.1", 12345)
+    with patch.object(web_panel_auth.arena_auth, "is_configured", return_value=True), (
+        patch.object(web_panel_auth.arena_auth, "origin_allowed", return_value=True)
+    ), patch.object(web_panel_auth.arena_auth, "client_key", return_value="test"), (
+        patch.object(web_panel_auth.arena_auth, "check_login", return_value=(False, "rate_limited"))
+    ):
+        assert web_panel_auth.dispatch_panel_auth_post(h, "/api/auth/login")
+    assert h.responses[-1][0] == 429
+
+    h = HandlerStub(body, {"Content-Length": str(len(body))})
+    h.client_address = ("127.0.0.1", 12345)
+    with patch.object(web_panel_auth.arena_auth, "is_configured", return_value=True), (
+        patch.object(web_panel_auth.arena_auth, "origin_allowed", return_value=True)
+    ), patch.object(web_panel_auth.arena_auth, "client_key", return_value="test"), (
+        patch.object(web_panel_auth.arena_auth, "check_login", return_value=(True, "ok"))
+    ), patch.object(web_panel_auth.arena_auth, "create_session_token", return_value="test-session"), (
+        patch.object(web_panel_auth.arena_auth, "session_cookie", return_value="arena_session=test")
+    ):
+        assert web_panel_auth.dispatch_panel_auth_post(h, "/api/auth/login")
+    assert h.responses[-1][0] == 200
+    assert h.responses[-1][1] == {"ok": True}
+
+
+def test_browser_logout_requires_origin_and_sets_expired_cookie():
+    h = HandlerStub(headers={"Origin": "https://untrusted.invalid"})
+    with patch.object(web_panel_auth.arena_auth, "origin_allowed", return_value=False):
+        assert web_panel_auth.dispatch_panel_auth_post(h, "/api/auth/logout")
+    assert h.responses[-1][0] == 403
+
+    h = HandlerStub()
+    with patch.object(web_panel_auth.arena_auth, "origin_allowed", return_value=True), (
+        patch.object(web_panel_auth.arena_auth, "expired_cookie", return_value="expired")
+    ):
+        assert web_panel_auth.dispatch_panel_auth_post(h, "/api/auth/logout")
+    assert h.responses[-1] == (200, {"ok": True})
