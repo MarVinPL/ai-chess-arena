@@ -17,7 +17,7 @@ use std::os::raw::{c_char, c_int, c_void};
 #[cfg(target_os = "android")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
-use std::{fs, ptr};
+use std::fs;
 
 #[cfg(target_os = "android")]
 const RTLD_NOW: c_int = 2;
