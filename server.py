@@ -38,6 +38,7 @@ import web_panel_inventory_api
 import web_panel_tournament_read_api
 import web_panel_hf_catalog_api
 import web_panel_storage_api
+import web_panel_passkey_tests_api
 import arena_auth
 import model_permissions
 
@@ -1375,6 +1376,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_storage_api.dispatch_panel_storage_get(self, path):
             return
+        if web_panel_passkey_tests_api.dispatch_panel_passkey_tests_get(
+                self, path, raw_path, DB):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1390,13 +1394,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path.startswith('/api/passkey-tests'):
-            from urllib.parse import urlparse, parse_qs
-            tid = parse_qs(urlparse(raw_path).query).get('tournament_id', [None])[0]
-            with sqlite3.connect(DB) as c:
-                c.row_factory = sqlite3.Row
-                rows = c.execute('SELECT tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at FROM passkey_test_answers' + (' WHERE tournament_id=?' if tid else '') + ' ORDER BY tournament_id,model_name,question_no', ((int(tid),) if tid else ())).fetchall()
-            self.send_json([dict(x) for x in rows])
         elif path == '/api/export/pgn':
             with sqlite3.connect(DB) as c:
                 rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
