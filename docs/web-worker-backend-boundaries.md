@@ -81,3 +81,12 @@ thread and stop Event are **passed from server.py**, not copied into new
 module globals. It does not create a second coordinator, worker control
 path, SQLite database, checkpoint store or scheduler. The existing status
 codes and responses continue through the same handler.
+
+## HF review and audit boundary
+
+`web_panel_hf_review_api` handles exactly the review, review-action and audit
+POST requests. The browser session and Origin checks still run in
+`server.Handler` before delegation; Worker tokens cannot access it. Existing
+`league.connect()` is the only DB connection provider and the original
+`hf_candidate_audit.AUDIT_LOCK` is retained for atomic exclusion, including
+release on failure. This module does not admit models or modify lease logic.
