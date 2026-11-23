@@ -160,3 +160,13 @@ calling it, while the adapter reuses `league.connect()` and existing domain
 services. Metadata normalization, budget fields, error status codes and
 response formats remain compatible. No Worker-token fallback or separate
 model registry is introduced.
+
+## Tournament read boundary
+
+`web_panel_tournament_read_api` owns browser-only `GET /api/tournaments`,
+`GET /api/tournaments/{id}/view` and `GET /api/tournaments/{id}/preflight`.
+The browser session is required before delegation. Listing and existence
+checks reuse `league.connect()` with the unchanged SQL; live snapshots
+and the preflight function are provided by the main server rather than
+reimplemented. Legacy 404/422 errors are preserved. No second tournament
+coordinator, Worker route or checkpoint store was introduced.
