@@ -146,3 +146,26 @@ def test_model_cache_inventory_is_read_only_and_shown_in_ui():
     assert "storage.cached_models" in ui
     assert "storage.cached_bytes" in ui
     assert "Cache GGUF:" in ui
+
+
+def test_android_http3_bridge_is_packaged_with_tauri_and_requires_approved_gguf():
+    root = BASE / "remote_worker_gui"
+    bridge = (root / "android/WorkerQuicTransport.kt").read_text()
+    injector = (root / "android/inject_package_installer.py").read_text()
+    workflow = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
+    assert 'import android.net.http.HttpEngine' in bridge
+    assert 'setEnableQuic(true)' in bridge
+    assert 'setEnableHttp2(true)' in bridge
+    assert 'info.negotiatedProtocol' in bridge
+    assert 'setEnableHttpCache' not in bridge
+    assert 'expectedBytes' in bridge and 'reserveBytes' in bridge
+    assert 'sha.digest()' in bridge
+    assert 'check(actual == sha256)' in bridge
+    assert 'context.filesDir' in bridge
+    assert 'redirectHosts' in bridge
+    assert 'check(redirects++ < 3)' in bridge
+    assert 'java.nio.file.Files.isSymbolicLink' in bridge
+    assert 'WorkerQuicTransport.kt' in injector
+    assert 'shutil.copyfile(QUIC_SOURCE, QUIC_TARGET)' in injector
+    assert 'python3 android/inject_package_installer.py' in workflow
+    assert 'downloadApproved(' not in LIB  # no untrusted Tauri IPC
