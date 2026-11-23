@@ -100,6 +100,10 @@ class WorkerUpdatePause:
                 "SELECT job_id,state,deadline FROM worker_job_safety "
                 "WHERE worker_id=?", (worker_id,)
             ).fetchone()
+            assignment = db.execute(
+                "SELECT job_id,job_json FROM worker_inference_assignments "
+                "WHERE worker_id=?", (worker_id,)
+            ).fetchone()
         if pause is None:
             return {"action": "none"}
         job_id, request_id, phase = pause
@@ -110,10 +114,32 @@ class WorkerUpdatePause:
             active[2] is None or active[2] <= self.clock()
         ):
             return {"action": "blocked"}
-        return {
+        instruction = {
             "action": "stop_checkpoint",
             "job_id": job_id, "request_id": request_id,
         }
+        # Protocol v3: bind the STOP instruction to the exact execution
+        # generation without echoing its 256-bit bearer capability. A legacy
+        # v1/v2 job keeps the unchanged instruction format.
+        if assignment is not None:
+            if assignment[0] != job_id:
+                return {"action": "blocked"}
+            try:
+                job = json.loads(assignment[1])
+            except (TypeError, ValueError):
+                return {"action": "blocked"}
+            if not isinstance(job, dict):
+                return {"action": "blocked"}
+            if job.get("version") == 3:
+                token = job.get("lease_token")
+                if not isinstance(token, str) or len(token) != 64 or any(
+                    c not in "0123456789abcdef" for c in token
+                ):
+                    return {"action": "blocked"}
+                instruction["lease_token_sha256"] = hashlib.sha256(
+                    token.encode("ascii")
+                ).hexdigest()
+        return instruction
 
     def acknowledge(self, worker_id, job_id, request_id, *,
                     worker_stopped, checkpoint_verified):
