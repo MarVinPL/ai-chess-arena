@@ -306,3 +306,21 @@ def test_download_cannot_start_continue_or_publish_without_fresh_lease():
     assert "if result.is_err()" in section
     assert "fs::remove_file(&partial)" in section
     assert 'download_approved_model(' not in LIB
+
+
+def test_android_http3_never_publishes_late_aborted_or_non_gguf_download():
+    bridge = (BASE / "remote_worker_gui/android/WorkerQuicTransport.kt").read_text()
+    transfer = bridge.split("fun downloadApproved(", 1)[1]
+    assert 'val aborted = AtomicBoolean(false)' in transfer
+    assert transfer.count('aborted.set(true)') >= 2
+    assert 'check(!aborted.get()) { "GGUF transfer aborted" }' in transfer
+    assert 'val header = ByteArray(4)' in transfer
+    assert 'bytes.copyInto(header, headerBytes, 0, take)' in transfer
+    assert 'header.contentEquals(byteArrayOf(71, 71, 85, 70))' in transfer
+    publish = transfer.split('onSucceeded(request: UrlRequest, info: UrlResponseInfo)', 1)[1]
+    publish = publish.split('override fun onFailed(', 1)[0]
+    assert publish.index('check(!aborted.get())') < publish.index('pending.renameTo(complete)')
+    assert publish.index('headerBytes == header.size') < publish.index('pending.renameTo(complete)')
+    assert publish.index('check(actual == sha256)') < publish.index('pending.renameTo(complete)')
+    # The execution STOP/ACK gate is not yet wired, so this is still internal.
+    assert 'download_verified_gguf_via_http3(' not in LIB
