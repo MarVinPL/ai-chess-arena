@@ -47,17 +47,39 @@ def test_panel_is_auth_gated_and_no_secret_exposure():
 
 def test_machine_auth_endpoint_has_bounded_body_and_no_echo():
     from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
-    endpoint = source.split("if path == '/api/remote-workers/authenticate':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
-    assert "length <= 2048" in endpoint
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
-    assert "'authenticated': True" in endpoint
-    assert "'token': token" not in endpoint
+    root = Path(__file__).resolve().parents[1]
+    if (root / "worker_backend.py").exists():
+        endpoint = (root / "worker_backend.py").read_text()
+        assert "if path == AUTH_ROUTE:" in endpoint
+        assert "length <= 2048" in endpoint
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in endpoint
+        assert '"authenticated": True' in endpoint
+        assert '"token": token' not in endpoint
+        assert endpoint.index("if path == AUTH_ROUTE:") < endpoint.index("if path not in ROUTES:")
+    else:
+        source = (root / 'server.py').read_text()
+        endpoint = source.split("if path == '/api/remote-workers/authenticate':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
+        assert "length <= 2048" in endpoint
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
+        assert "'authenticated': True" in endpoint
+        assert "'token': token" not in endpoint
 
 
 def test_update_safety_endpoint_fails_closed_without_durable_job_registry():
     from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
+    root = Path(__file__).resolve().parents[1]
+    if (root / "worker_update_safety_api.py").exists():
+        endpoint = (root / "worker_update_safety_api.py").read_text()
+        assert "WorkerTokenStore(database).authenticate(worker_id, token)" in endpoint
+        assert "DurableWorkerJobs(database).update_safety_snapshot(worker_id)" in endpoint
+        assert "length <= 2048" in endpoint
+        assert "install_allowed" in endpoint
+        assert '"install_allowed": False' in endpoint
+        assert '"nonce": nonce' in endpoint
+        assert "time.time() * 1000" in endpoint
+        assert "hold_token" not in endpoint
+        return
+    source = (root / 'server.py').read_text()
     endpoint = source.split("if path == '/api/remote-workers/update-safety':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
     assert "length <= 2048" in endpoint
