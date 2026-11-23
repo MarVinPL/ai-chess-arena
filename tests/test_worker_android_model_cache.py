@@ -395,6 +395,8 @@ def test_embedded_android_llama_probe_uses_only_own_package_abi_not_termux():
     assert 'dlsym(library.0, symbol.as_ptr())' in source
     assert 'llama_model_load_from_file' in source
     assert 'llama_decode' in source
+    assert 'llama_init_from_model' in source
+    assert 'llama_new_context_with_model' not in source
     assert 'llama_sampler_init_greedy' in source
     assert 'llama-server' not in source.split('#[cfg(test)]', 1)[0].split('fn native_library_dir()', 1)[1]
     assert 'std::process::Command' not in source
@@ -432,6 +434,8 @@ def test_pinned_embedded_llama_build_and_apk_packaging_are_fail_closed():
     assert 'awk -v expected="$sym"' in script
     assert '| grep -Fxq "$sym"' not in script
     assert 'llama_model_load_from_file' in script
+    assert 'llama_init_from_model' in script
+    assert 'llama_new_context_with_model' not in script
     assert 'bash android/build_embedded_llama.sh' in workflow
     assert 'unzip -Z1 "$apk"' in workflow
     assert 'lib/arm64-v8a/lib${name}.so' in workflow
