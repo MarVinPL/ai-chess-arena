@@ -43,12 +43,12 @@ cmake --build "$STAGING/build" --parallel 2 --target llama
 LIB_DIR="$APP/src/main/jniLibs/arm64-v8a"
 mkdir -p "$LIB_DIR"
 for lib in llama ggml ggml-base ggml-cpu; do
-  so="$(find "$STAGING/build" -type f -name "lib${lib}.so" -print -quit)"
+  so="$(find "$STAGING/build" -name "lib${lib}.so" -print -quit)"
   test -n "$so" && test -s "$so" || {
     echo "Missing required upstream library: lib${lib}.so" >&2
     exit 1
   }
-  cp "$so" "$LIB_DIR/lib${lib}.so"
+  cp -L "$so" "$LIB_DIR/lib${lib}.so"
 done
 
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
