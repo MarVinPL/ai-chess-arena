@@ -12,16 +12,18 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "android" / "WorkerInstallStatusReceiver.kt"
 VAULT_SOURCE = ROOT / "android" / "WorkerCredentialVault.kt"
+QUIC_SOURCE = ROOT / "android" / "WorkerQuicTransport.kt"
 ANDROID = ROOT / "src-tauri" / "gen" / "android" / "app" / "src" / "main"
 MANIFEST = ANDROID / "AndroidManifest.xml"
 TARGET = ANDROID / "java" / "pl" / "marvin" / "aichessarena" / "worker" / SOURCE.name
 VAULT_TARGET = TARGET.parent / VAULT_SOURCE.name
+QUIC_TARGET = TARGET.parent / QUIC_SOURCE.name
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 A = f"{{{ANDROID_NS}}}"
 ET.register_namespace("android", ANDROID_NS)
 
 def install():
-    if not MANIFEST.is_file() or not SOURCE.is_file() or not VAULT_SOURCE.is_file():
+    if not MANIFEST.is_file() or not SOURCE.is_file() or not VAULT_SOURCE.is_file() or not QUIC_SOURCE.is_file():
         raise RuntimeError("Android Tauri init or installer source is missing")
     tree = ET.parse(MANIFEST)
     root = tree.getroot()
@@ -48,6 +50,7 @@ def install():
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, TARGET)
     shutil.copyfile(VAULT_SOURCE, VAULT_TARGET)
+    shutil.copyfile(QUIC_SOURCE, QUIC_TARGET)
     tree.write(MANIFEST, encoding="unicode", xml_declaration=True)
     # Check the output, not only the in-memory tree.
     output = ET.parse(MANIFEST).getroot()
@@ -58,7 +61,9 @@ def install():
         raise RuntimeError("Installer receiver source was not copied")
     if not VAULT_TARGET.is_file():
         raise RuntimeError("Android Keystore credential vault source was not copied")
-    print("Android Worker PackageInstaller receiver and encrypted token vault installed")
+    if not QUIC_TARGET.is_file():
+        raise RuntimeError("Android QUIC transport source was not copied")
+    print("Android Worker receiver, encrypted token vault and OS QUIC bridge installed")
 
 if __name__ == "__main__":
     install()
