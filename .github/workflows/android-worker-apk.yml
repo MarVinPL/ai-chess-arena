@@ -95,7 +95,7 @@ jobs:
           set -euo pipefail
           bash android/build_embedded_llama.sh
           # Refuse an APK build if a required bundled dependency is absent.
-          for name in llama ggml ggml-base ggml-cpu; do
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
             test -s "src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/lib${name}.so"
           done
       - name: Restore original Android test signing key
