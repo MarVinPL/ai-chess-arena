@@ -486,3 +486,12 @@ def test_native_embedded_llama_loader_keeps_gguf_handle_until_unload():
     assert 'for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do' in ci
     assert 'load_verified_embedded_model(' not in LIB  # no frontend dispatch
     assert '#[tauri::command]' not in runtime
+
+
+def test_native_llama_bridge_compiles_with_pinned_ggml_headers():
+    build = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
+    bridge = (BASE / "remote_worker_gui/android/arena_llama_bridge.cpp").read_text()
+    assert '#include "llama.h"' in bridge
+    assert '-I"$STAGING/source/include"' in build
+    assert '-I"$STAGING/source/ggml/include"' in build
+    assert build.index('-I"$STAGING/source/ggml/include"') < build.index('android/arena_llama_bridge.cpp')
