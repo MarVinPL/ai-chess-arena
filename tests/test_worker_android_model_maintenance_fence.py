@@ -106,3 +106,24 @@ def test_atomic_maintenance_reservation_loses_to_unresolved_assignment(tmp_path)
         )
     with pytest.raises(ValueError, match="Unresolved inference assignment"):
         d.jobs.reserve_model_maintenance(WORKER)
+
+
+def test_maintenance_fence_prevents_real_inference_assignment(tmp_path):
+    import chess
+    path, d = setup(tmp_path)
+    token = d.jobs.reserve_model_maintenance(WORKER)
+    job = {
+        "version": 1, "job_id": "game_12345678",
+        "fen": chess.STARTING_FEN, "model_sha256": SHA,
+        "max_tokens": 32, "timeout_seconds": 100,
+    }
+    with pytest.raises(ValueError, match="maintenance"):
+        d.assign_from_arena(WORKER, job)
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT count(*) FROM worker_inference_assignments"
+        ).fetchone()[0] == 0
+    d.jobs.release_model_maintenance(WORKER, token)
+    # Explicit release is not idle evidence: re-assignment still fails.
+    with pytest.raises(ValueError):
+        d.assign_from_arena(WORKER, job)
