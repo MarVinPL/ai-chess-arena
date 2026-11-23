@@ -465,5 +465,12 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     assert post("job-poll", who)[1]["state"] == "blocked"
     assert post("update-pause-poll", who)[1]["instruction"] == {
         "action": "stop_checkpoint", "job_id": job_id, "request_id": request_id,
+        "lease_token_sha256": hashlib.sha256(
+            job["lease_token"].encode("ascii")
+        ).hexdigest(),
     }
+    # Retrying STOP never reveals the bearer lease token.
+    instruction = post("update-pause-poll", who)[1]["instruction"]
+    assert instruction["lease_token_sha256"] != job["lease_token"]
+    assert instruction["request_id"] == request_id
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
