@@ -77,7 +77,7 @@ def test_native_storage_command_is_read_only_and_displayed_in_android_ui():
     assert 'android_model_cache::android_private_free_bytes()?' in LIB
     assert 'free_bytes.saturating_sub(reserve_bytes)' in LIB
     assert 'inspect_phone_model_storage,' in LIB
-    section = LIB.split('fn inspect_phone_model_storage()', 1)[1].split(
+    section = LIB.split('fn inspect_phone_model_storage(app: tauri::AppHandle)', 1)[1].split(
         'async fn inspect_phone_local_model()', 1
     )[0]
     assert 'stage_verified_model' not in section
