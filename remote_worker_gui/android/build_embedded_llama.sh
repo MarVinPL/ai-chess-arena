@@ -59,7 +59,7 @@ test -x "$CXX"
   -I"$STAGING/source/include" \
   -I"$STAGING/source/ggml/include" \
   android/arena_llama_bridge.cpp \
-  -L"$LIB_DIR" -llama -Wl,-rpath,'$ORIGIN' \
+  "$(realpath "$LIB_DIR/libllama.so")" -Wl,-rpath,'$ORIGIN' \
   -o "$LIB_DIR/libarena_llama_bridge.so"
 
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
