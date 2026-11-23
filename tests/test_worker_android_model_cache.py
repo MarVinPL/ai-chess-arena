@@ -157,6 +157,9 @@ def test_android_http3_bridge_is_packaged_with_tauri_and_requires_approved_gguf(
     assert 'setEnableQuic(true)' in bridge
     assert 'setEnableHttp2(true)' in bridge
     assert 'info.negotiatedProtocol' in bridge
+    assert 'info.headers.asMap.entries' in bridge
+    assert 'it.key.equals("content-length", ignoreCase = true)' in bridge
+    assert 'info.allHeaders' not in bridge
     assert 'setEnableHttpCache' not in bridge
     assert 'expectedBytes' in bridge and 'reserveBytes' in bridge
     assert 'sha.digest()' in bridge
