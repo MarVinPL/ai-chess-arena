@@ -27,6 +27,7 @@ import web_panel_auth
 import web_panel_model_api
 import web_panel_download_api
 import web_panel_tournament_api
+import web_panel_hf_review_api
 import arena_auth
 import model_permissions
 
@@ -1652,25 +1653,9 @@ class Handler(BaseHTTPRequestHandler):
                         path, payload, self.authenticated_user())
                 elif path in web_panel_download_api.ADMIN_DOWNLOAD_POST_ROUTES:
                     result = web_panel_download_api.handle_download_admin_post(path, payload)
-                elif path == '/api/hf-candidates/review':
-                    with league.connect() as c:
-                        result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
-                elif path == '/api/hf-candidates/review-action':
-                    with league.connect() as c:
-                        result = hf_candidate_reviews.apply_proposal_action(
-                            c, proposal_id=payload.get('proposal_id'), action=payload.get('action'),
-                            reason=payload.get('reason', ''), actor=self.authenticated_user() or 'arena',
-                            catalog=hf_candidate_audit.load_catalog())
-                elif path == '/api/hf-candidates/audit':
-                    if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
-                        raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
-                    try:
-                        report = hf_candidate_audit.audit_candidate(payload.get('catalog_id'))
-                        with league.connect() as c:
-                            hf_candidate_audit.save_report(c, report)
-                        result = report
-                    finally:
-                        hf_candidate_audit.AUDIT_LOCK.release()
+                elif path in web_panel_hf_review_api.HF_REVIEW_POST_ROUTES:
+                    result = web_panel_hf_review_api.handle_hf_review_admin_post(
+                        path, payload, actor=self.authenticated_user())
                 elif path == '/api/model-review-submissions/action':
                     with league.connect() as c:
                         allowed_ids = {
