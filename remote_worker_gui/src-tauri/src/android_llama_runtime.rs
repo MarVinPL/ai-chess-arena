@@ -30,6 +30,7 @@ unsafe extern "C" {
 type OpenModel = unsafe extern "C" fn(*const c_char) -> c_int;
 type CloseModel = unsafe extern "C" fn();
 type IsModelOpen = unsafe extern "C" fn() -> c_int;
+type GenerateGreedy = unsafe extern "C" fn(*const c_char, c_int, c_int, *mut c_char, c_int) -> c_int;
 
 struct NativeLibrary(NonNull<c_void>);
 impl Drop for NativeLibrary {
@@ -54,12 +55,56 @@ impl NativeLibrary {
 pub(crate) struct EmbeddedLlamaModel {
     close: CloseModel,
     is_open: IsModelOpen,
+    generate: GenerateGreedy,
     lib: NativeLibrary,
     _verified_file: ModelSession,
     _not_send: PhantomData<*mut ()>,
 }
 
 impl EmbeddedLlamaModel {
+    /// Internal experimental token generation; no dispatch, no remote
+    /// authorization, and no chess move is accepted without a legal-list
+    /// membership check. No wallclock abort yet: do not enable jobs.
+    #[allow(dead_code)]
+    pub(crate) fn propose_uci(
+        &self, fen: &str, legal_moves: &[String],
+    ) -> Result<String, String> {
+        if !self.is_open() || fen.len() > 120 || fen.split(' ').count() != 6 ||
+           !fen.bytes().all(|b| b.is_ascii_alphanumeric() ||
+              matches!(b, b'/' | b' ' | b'-')) ||
+           legal_moves.is_empty() || legal_moves.len() > 256 {
+            return Err("Nieprawidłowa pozycja lub lista ruchów".into());
+        }
+        for mv in legal_moves {
+            crate::android_local_llama::parse_exact_uci_answer(mv)?;
+        }
+        let prompt = format!(
+            "You are playing chess. Output only ONE move from the legal list in UCI notation. \
+FEN: {fen}\nLegal UCI moves: {}\nUCI:",
+            legal_moves.join(", "),
+        );
+        if prompt.len() > 8192 {
+            return Err("Zbyt długi prompt do silnika".into());
+        }
+        let input = CString::new(prompt)
+            .map_err(|_| "Nieprawidłowy prompt")?;
+        let mut output = [0u8; 128];
+        let written = unsafe {
+            (self.generate)(input.as_ptr(), input.as_bytes().len() as c_int,
+                            16, output.as_mut_ptr().cast(), output.len() as c_int)
+        };
+        if written < 0 || written as usize >= output.len() {
+            return Err("Wbudowany silnik nie wygenerował ruchu".into());
+        }
+        let text = std::str::from_utf8(&output[..written as usize])
+            .map_err(|_| "Niewłaściwy kod UTF-8 modelu")?;
+        let proposed = crate::android_local_llama::parse_exact_uci_answer(text)?;
+        if !legal_moves.iter().any(|mv| mv == &proposed) {
+            return Err("Ruch jest poza listą legalnych ruchów Areny".into());
+        }
+        Ok(proposed)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn is_open(&self) -> bool {
         unsafe { (self.is_open)() == 1 }
@@ -108,6 +153,9 @@ pub(crate) fn load_verified_embedded_model(
     let is_open: IsModelOpen = unsafe {
         std::mem::transmute(lib.symbol(c"arena_llama_model_is_open")?)
     };
+    let generate: GenerateGreedy = unsafe {
+        std::mem::transmute(lib.symbol(c"arena_llama_generate_greedy")?)
+    };
     // Require a virgin, single-owner model before starting a new one.
     if unsafe { is_open() } != 0 {
         return Err("Wbudowany silnik ma już otwarty model GGUF".into());
@@ -116,7 +164,7 @@ pub(crate) fn load_verified_embedded_model(
         return Err("Wbudowany silnik nie załadował modelu GGUF".into());
     }
     Ok(EmbeddedLlamaModel {
-        close, is_open, lib, _verified_file: verified,
+        close, is_open, generate, lib, _verified_file: verified,
         _not_send: PhantomData,
     })
 }
