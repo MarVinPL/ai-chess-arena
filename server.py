@@ -25,6 +25,7 @@ import worker_backend
 import web_panel_backend
 import web_panel_auth
 import web_panel_model_api
+import web_panel_download_api
 import arena_auth
 import model_permissions
 
@@ -1648,18 +1649,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path in web_panel_model_api.PERMISSION_POST_ROUTES:
                     result = web_panel_model_api.handle_permission_post(
                         path, payload, self.authenticated_user())
-                elif path == '/api/hf-candidates/download-cancel':
-                    result = hf_candidate_downloads.cancel(payload.get('job_id'))
-                elif path == '/api/hf-candidates/download-resume':
-                    if payload.get('confirm_resume') is not True:
-                        raise ValueError('Wymagane jawne zatwierdzenie wznowienia pobierania.')
-                    result = hf_candidate_downloads.resume(payload.get('job_id'))
-                elif path == '/api/hf-candidates/download-plan/refresh':
-                    result = hf_candidate_downloads.refresh_plan()
-                elif path == '/api/hf-candidates/download-start':
-                    if payload.get('confirm_download') is not True:
-                        raise ValueError('Wymagane jawne zatwierdzenie pobrania partii.')
-                    result = hf_candidate_downloads.start(payload.get('candidates'), source='manual')
+                elif path in web_panel_download_api.ADMIN_DOWNLOAD_POST_ROUTES:
+                    result = web_panel_download_api.handle_download_admin_post(path, payload)
                 elif path == '/api/hf-candidates/review':
                     with league.connect() as c:
                         result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
