@@ -440,9 +440,12 @@ class WorkerInferenceDelivery:
             if job["job_id"] != row[0]:
                 raise ValueError("Inference job was changed")
             move = validate_result(result, job, chess.Board(job["fen"]))
+            receipt = {"version": 1, "job_id": job["job_id"], "uci": move.uci()}
+            if job["version"] == 3:
+                receipt["version"] = 2
+                receipt["lease_token"] = job["lease_token"]
             canonical = json.dumps(
-                {"version": 1, "job_id": job["job_id"], "uci": move.uci()},
-                sort_keys=True, separators=(",", ":"), allow_nan=False,
+                receipt, sort_keys=True, separators=(",", ":"), allow_nan=False,
             )
             existing = db.execute(
                 "SELECT worker_id,result_json FROM worker_inference_results WHERE job_id=?",
