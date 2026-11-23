@@ -78,3 +78,11 @@ The regression test covers an unknown Worker URL carrying a browser cookie.
 `server.py` alongside main. No unverified merge resolution or duplicated
 auth-handler removal was pushed to #296. The single-handler consolidation
 must be performed after reconciling main and the stacked PR dependencies.
+
+## Incremental resume-status migration — 2026-11-23
+
+The upstream #296 selective Android APK build [45259697151](https://github.com/MarVinPL/ai-chess-arena/actions/runs/45259697151) completed successfully. A sandbox merge of #296 into #316 has one conflicting file (`server.py`, two hunks). Taking the #316 routing hunk alone dropped several Worker update endpoints and broke 12 selected tests — **do not merge by choosing either side wholesale**.
+
+The first compatible operation has been migrated separately to `worker_update_resume_status_api.py`. Machine-token authenticated, bounded `POST /api/remote-workers/update-resume-status` is routed through `worker_backend.py` **before** browser-session checks. It delegates to the existing shared `WorkerUpdatePause.resume_status()` and cannot authorize APK installation or resume a job. Tests assert cookie/token isolation and response shape.
+
+Still pending: separate safe adapters for `update-safety`, `model-source`, `update-reserve`, `update-release`, `update-hold-status`; reconcile matching tests and audit full integration; physical Android/staging STOP/ACK; no changes to production or main. Other unregistered Worker paths remain HTTP 404. Until all routes are reconciled, merging PR #296 into #316 is **NO-GO**.
