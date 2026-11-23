@@ -146,3 +146,82 @@ def test_resume_offer_only_becomes_running_after_verified_worker_acceptance(tmp_
     assert pause.pending(WORKER) is None
     with pytest.raises(ValueError):
         pause.reconcile_resume(WORKER, JOB, REQUEST, **args)
+
+
+def test_private_dispatch_requires_nonce_bound_verified_acceptance(tmp_path):
+    pause, digest = seed_resume(tmp_path)
+    sent = []
+    def trusted_transport(offer):
+        sent.append(offer.copy())
+        return {
+            "version": 1, "authenticated": True,
+            "engine_accepted_verified": True,
+            "worker_id": offer["worker_id"], "job_id": offer["job_id"],
+            "request_id": offer["request_id"],
+            "checkpoint_sha256": offer["checkpoint_sha256"],
+            "resume_mode": offer["resume_mode"], "nonce": offer["nonce"],
+        }
+    result = pause.dispatch_trusted_resume(
+        WORKER, installed_identity_verified=True, stopped_engine_verified=True,
+        checkpoint_verifier=lambda c: c == CHECKPOINT,
+        send_and_verify=trusted_transport, timeout_seconds=120)
+    assert result["state"] == "running"
+    assert sent[0]["version"] == 1
+    assert sent[0]["checkpoint_sha256"] == digest
+    assert len(sent[0]["nonce"]) == 32
+    assert sent[0]["checkpoint"] == CHECKPOINT
+    assert pause.read_resume_checkpoint(WORKER) is None
+    with pytest.raises(ValueError):
+        pause.dispatch_trusted_resume(
+            WORKER, installed_identity_verified=True, stopped_engine_verified=True,
+            checkpoint_verifier=lambda c: c == CHECKPOINT,
+            send_and_verify=trusted_transport)
+
+
+@pytest.mark.parametrize("mismatch", [
+    {"nonce": "f" * 32}, {"job_id": "job_wrong000"},
+    {"request_id": "c" * 32}, {"checkpoint_sha256": "0" * 64},
+    {"resume_mode": "resume"}, {"worker_id": "worker_wrong000"},
+    {"authenticated": False}, {"engine_accepted_verified": False},
+    {"version": 2},
+])
+def test_private_resume_dispatch_rejects_wrong_receipt_without_state_change(tmp_path, mismatch):
+    pause, _ = seed_resume(tmp_path)
+    def untrusted_transport(offer):
+        receipt = {
+            "version": 1, "authenticated": True,
+            "engine_accepted_verified": True, "worker_id": offer["worker_id"],
+            "job_id": offer["job_id"], "request_id": offer["request_id"],
+            "checkpoint_sha256": offer["checkpoint_sha256"],
+            "resume_mode": offer["resume_mode"], "nonce": offer["nonce"],
+        }
+        receipt.update(mismatch)
+        return receipt
+    with pytest.raises(ValueError, match="receipt"):
+        pause.dispatch_trusted_resume(
+            WORKER, installed_identity_verified=True, stopped_engine_verified=True,
+            checkpoint_verifier=lambda c: c == CHECKPOINT,
+            send_and_verify=untrusted_transport)
+    assert pause.jobs.state(WORKER) == "unknown"
+    assert pause.read_resume_checkpoint(WORKER) is not None
+
+
+def test_private_resume_dispatch_transport_failure_preserves_checkpoint(tmp_path):
+    pause, _ = seed_resume(tmp_path)
+    def broken(_):
+        raise ConnectionError("network unavailable")
+    with pytest.raises(ConnectionError):
+        pause.dispatch_trusted_resume(
+            WORKER, installed_identity_verified=True, stopped_engine_verified=True,
+            checkpoint_verifier=lambda c: c == CHECKPOINT,
+            send_and_verify=broken)
+    assert pause.jobs.state(WORKER) == "unknown"
+    assert pause.read_resume_checkpoint(WORKER) is not None
+
+
+def test_private_resume_dispatch_not_exposed_via_worker_http_or_webview():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert "dispatch_trusted_resume(" not in (root / "server.py").read_text()
+    assert "dispatch_trusted_resume(" not in (
+        root / "remote_worker_gui/public/index.html").read_text()
