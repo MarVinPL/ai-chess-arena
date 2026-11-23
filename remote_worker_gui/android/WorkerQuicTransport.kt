@@ -56,6 +56,75 @@ object WorkerQuicTransport {
     }
 
     /**
+     * No GGUF download. Fixed HTTPS HEAD probe for a network diagnostic only.
+     * A fresh QUIC connection may negotiate HTTP/2 until server Alt-Svc is known.
+     * The result is NOT evidence of model availability or Arena authentication.
+     */
+    @JvmStatic
+    fun probeProtocol(context: Context): String {
+        require(Build.VERSION.SDK_INT >= 34)
+        val target = "https://huggingface.co/robots.txt"
+        val executor = Executors.newSingleThreadExecutor()
+        var engine: HttpEngine? = null
+        var request: UrlRequest? = null
+        val done = CountDownLatch(1)
+        var result: String? = null
+        var failure: String? = null
+        try {
+            engine = HttpEngine.Builder(context)
+                .setEnableQuic(true)
+                .setEnableHttp2(true)
+                .build()
+            val callback = object : UrlRequest.Callback {
+                override fun onRedirectReceived(
+                    request: UrlRequest, info: UrlResponseInfo, newLocationUrl: String
+                ) {
+                    failure = "Redirect in QUIC probe"
+                    request.cancel()
+                }
+                override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
+                    if (info.httpStatusCode !in 200..299) {
+                        failure = "QUIC probe returned HTTP ${info.httpStatusCode}"
+                    } else {
+                        result = info.negotiatedProtocol ?: "unknown"
+                    }
+                    // HEAD has no response body; complete the callback lifecycle.
+                    request.cancel()
+                }
+                override fun onReadCompleted(
+                    request: UrlRequest, info: UrlResponseInfo, byteBuffer: ByteBuffer
+                ) {
+                    failure = "Unexpected body in HEAD response"
+                    request.cancel()
+                }
+                override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
+                    done.countDown()
+                }
+                override fun onFailed(
+                    request: UrlRequest, info: UrlResponseInfo?, exception: HttpException
+                ) {
+                    failure = "QUIC network probe failed"
+                    done.countDown()
+                }
+                override fun onCanceled(request: UrlRequest, info: UrlResponseInfo?) {
+                    done.countDown()
+                }
+            }
+            request = engine.newUrlRequestBuilder(target, executor, callback)
+                .setHttpMethod("HEAD")
+                .build()
+            request.start()
+            check(done.await(20, TimeUnit.SECONDS)) { "QUIC probe timeout" }
+            check(failure == null && result != null) { failure ?: "QUIC probe failed" }
+            return result!!
+        } finally {
+            try { request?.cancel() } catch (_: Exception) {}
+            try { engine?.shutdown() } catch (_: Exception) {}
+            executor.shutdownNow()
+        }
+    }
+
+    /**
      * Only callable from a trusted worker thread; synchronous JNI boundary
      * awaits the asynchronous platform callback. Returns negotiated protocol.
      * Rust must still rehash the final file and require an active registry
