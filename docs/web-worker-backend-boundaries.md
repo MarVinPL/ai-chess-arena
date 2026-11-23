@@ -19,6 +19,7 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
                     |-- arena_auth browser sessions
                     |-- web_panel_backend (exact static asset allowlist)
                     +-- web_panel_model_api (model permissions and reviews)
+                    +-- web_panel_download_api (admin HF downloads)
                     +-- remaining admin/tournament handlers (incremental extraction)
                                |
                                +-- shared chess / model / checkpoint modules
@@ -51,6 +52,9 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
   delegate to `web_panel_model_api.py` behind the established session+Origin
   checks and reuse `league.connect()` and domain services. Other panel business
   API handlers remain inside `server.py` for now.
+- Admin HF download start/cancel/resume/plan-refresh now delegate to
+  `web_panel_download_api`, still behind session+Origin checks. Explicit
+  confirmation requirements and status codes are unchanged.
   Further extraction must keep auth and CSRF checks in front of every panel
   action, and requires its own tests within Issue #314 before closing it.
 - Unfinished Draft PR #197, #292 and #296 contain overlapping Worker
