@@ -88,6 +88,10 @@ class WorkerUpdatePause:
         """
         self.jobs._id(worker_id)
         with self.jobs._db() as db:
+            # One SQLite read snapshot prevents torn STOP and lease reads
+            # during concurrent coordinator reconciliation. Polling stays
+            # read-only and is never an acknowledgment of model termination.
+            db.execute("BEGIN")
             pause = db.execute(
                 "SELECT job_id,request_id,phase FROM worker_update_pause_requests "
                 "WHERE worker_id=?", (worker_id,)
