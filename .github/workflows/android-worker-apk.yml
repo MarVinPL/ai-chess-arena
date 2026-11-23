@@ -36,6 +36,23 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      # Tauri generates the Gradle wrapper during android init. GitHub-hosted
+      # runners are ephemeral, so save the Gradle distribution separately from
+      # npm/Rust caches to avoid downloading gradle-9.6.1-bin.zip every build.
+      - name: Cache Gradle wrapper distribution
+        id: gradle-wrapper-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: android-gradle-wrapper-${{ runner.os }}-9.6.1-v1
+      - name: Report Gradle wrapper cache
+        shell: bash
+        run: |
+          if [[ "${{ steps.gradle-wrapper-cache.outputs.cache-hit }}" == 'true' ]]; then
+            echo 'Gradle 9.6.1 wrapper distribution restored from GitHub cache.'
+          else
+            echo 'Gradle wrapper cache cold: first build downloads once and saves after successful job.'
+          fi
       - name: Install pinned official Android CLI
         shell: bash
         run: |
