@@ -438,3 +438,19 @@ def test_pinned_embedded_llama_build_and_apk_packaging_are_fail_closed():
     assert workflow.index('bash android/build_embedded_llama.sh') < workflow.index('npx tauri android build')
     assert 'LLAMA_COMMIT=master' not in script
     assert 'curl ' not in script
+
+
+def test_extracted_native_packaging_for_own_apk_library_directory():
+    injected = (BASE / "remote_worker_gui/android/force_extracted_native_libs.py").read_text()
+    workflow = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
+    assert 'jniLibs.useLegacyPackaging = true' in injected
+    assert '"src-tauri/gen/android/app/build.gradle.kts"' in injected or (
+        '"src-tauri/gen/android/app/build.gradle.kts"' in injected.replace(
+            '\\n', ''
+        )
+    )
+    assert 'Generated Android Gradle layout changed' in injected
+    assert 'python3 android/force_extracted_native_libs.py' in workflow
+    assert workflow.index('python3 android/force_extracted_native_libs.py') < (
+        workflow.index('bash android/build_embedded_llama.sh')
+    )
