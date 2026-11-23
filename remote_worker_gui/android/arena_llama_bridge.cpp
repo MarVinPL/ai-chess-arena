@@ -7,6 +7,7 @@
 // Inference, token sampling and chess moves are deliberately not implemented.
 #include "llama.h"
 #include <mutex>
+#include <atomic>
 #include <cstring>
 #include <vector>
 #include <string>
@@ -16,6 +17,10 @@ namespace {
 std::mutex engine_mutex;
 llama_model * loaded_model = nullptr;
 bool backend_initialized = false;
+// STOP may be raised while generation holds engine_mutex. It remains sticky
+// until the old model is destroyed; a new invocation must not clear it.
+std::atomic<bool> stop_requested{false};
+std::atomic<bool> inference_active{false};
 }
 
 extern "C" __attribute__((visibility("default")))
@@ -33,16 +38,34 @@ int arena_llama_model_open(const char * private_gguf_path) noexcept {
     llama_model *model = llama_model_load_from_file(private_gguf_path, params);
     if (model == nullptr) return -3;
     loaded_model = model;
+    stop_requested.store(false, std::memory_order_release);
     return 0;
 }
 
 extern "C" __attribute__((visibility("default")))
 void arena_llama_model_close() noexcept {
+    // Cancel first; mutex acquisition waits for in-flight generation to exit.
+    stop_requested.store(true, std::memory_order_release);
     std::lock_guard<std::mutex> guard(engine_mutex);
     if (loaded_model != nullptr) {
         llama_model_free(loaded_model);
         loaded_model = nullptr;
     }
+}
+
+extern "C" __attribute__((visibility("default")))
+int arena_llama_request_stop() noexcept {
+    stop_requested.store(true, std::memory_order_release);
+    // This is an instruction, NOT a verified STOP/ACK.
+    return 0;
+}
+
+extern "C" __attribute__((visibility("default")))
+int arena_llama_inference_quiesced() noexcept {
+    // No generation may begin after a sticky STOP on the current model.
+    // This local signal alone is insufficient for coordinator ACK.
+    return stop_requested.load(std::memory_order_acquire) &&
+           !inference_active.load(std::memory_order_acquire) ? 1 : 0;
 }
 
 extern "C" __attribute__((visibility("default")))
@@ -67,6 +90,11 @@ int arena_llama_generate_greedy(
         output_capacity < 2 || output_capacity > 4096) return -1;
     std::lock_guard<std::mutex> guard(engine_mutex);
     if (loaded_model == nullptr) return -2;
+    inference_active.store(true, std::memory_order_release);
+    struct ActivityCleanup {
+        ~ActivityCleanup() { inference_active.store(false, std::memory_order_release); }
+    } activity_cleanup;
+    if (stop_requested.load(std::memory_order_acquire)) return -11;
     output[0] = '\0';
 
     llama_context_params params = llama_context_default_params();
@@ -89,7 +117,9 @@ int arena_llama_generate_greedy(
                            true, false);
     if (n < 1 || n > 1024 || n + max_tokens >= 2048) return -5;
     tokens.resize(static_cast<size_t>(n));
+    if (stop_requested.load(std::memory_order_acquire)) return -11;
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), n)) != 0) return -6;
+    if (stop_requested.load(std::memory_order_acquire)) return -11;
 
     llama_sampler * sampler = llama_sampler_init_greedy();
     if (sampler == nullptr) return -7;
@@ -100,6 +130,7 @@ int arena_llama_generate_greedy(
 
     int used = 0;
     for (int step = 0; step < max_tokens; step++) {
+        if (stop_requested.load(std::memory_order_acquire)) return -11;
         llama_token next = llama_sampler_sample(sampler, ctx, -1);
         if (llama_vocab_is_eog(vocab, next)) break;
         char piece[256];
@@ -117,7 +148,9 @@ int arena_llama_generate_greedy(
         }
         output[used] = '\0';
         if (newline) break;
+        if (stop_requested.load(std::memory_order_acquire)) return -11;
         if (llama_decode(ctx, llama_batch_get_one(&next, 1)) != 0) return -10;
     }
+    if (stop_requested.load(std::memory_order_acquire)) return -11;
     return used;
 }
