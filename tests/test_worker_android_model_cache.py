@@ -241,7 +241,9 @@ def test_native_model_registry_fetch_requires_active_verified_job():
     assert 'if current != previous' in section
     assert 'bind_approved_model_to_job(assigned_digest, &approved)?' in coordinator
     assert 'download_approved_model(' not in section
-    assert 'fetch_my_approved_gguf(' not in LIB  # internal, no Tauri command
+    assert '.filter(|job| *job == expected_job)' in section
+    assert 'fetch_my_approved_gguf(' in LIB
+    assert 'fetch_my_approved_gguf,' not in LIB  # no direct Tauri command
 
 
 def test_http3_jni_bridge_rehashes_gguf_and_shares_private_cache_dir():
@@ -485,7 +487,8 @@ def test_native_embedded_llama_loader_keeps_gguf_handle_until_unload():
     assert 'libarena_llama_bridge.so' in build
     assert 'arena_llama_model_is_open' in build
     assert 'for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do' in ci
-    assert 'load_verified_embedded_model(' not in LIB  # no frontend dispatch
+    assert 'load_verified_embedded_model(' in LIB
+    assert 'load_verified_embedded_model,' not in LIB
     assert '#[tauri::command]' not in runtime
 
 
@@ -505,7 +508,7 @@ def test_embedded_llama_bridge_links_exact_file_not_relative_library_search():
     assert 'libarena_llama_bridge.so' in script
 
 
-def test_native_embedded_greedy_uci_is_bounded_and_not_dispatched():
+def test_native_embedded_greedy_uci_is_bounded_and_dispatched_for_v3():
     bridge = (BASE / "remote_worker_gui/android/arena_llama_bridge.cpp").read_text()
     runtime = (BASE / "remote_worker_gui/src-tauri/src/android_llama_runtime.rs").read_text()
     build = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
@@ -530,7 +533,8 @@ def test_native_embedded_greedy_uci_is_bounded_and_not_dispatched():
     assert 'parse_exact_uci_answer(text)?' in runtime
     assert 'legal_moves.iter().any(|mv| mv == &proposed)' in runtime
     assert 'self.generate' in runtime
-    assert 'propose_uci(' not in LIB
+    assert 'model.propose_uci(&fen, &moves, max_tokens)' in LIB
+    assert 'let uci = if lease_token.is_some()' in LIB
     assert '#[tauri::command]' not in runtime
 
 
@@ -572,10 +576,21 @@ def test_native_llama_stop_is_sticky_until_model_is_reopened():
     assert "inference_active.store(true, std::memory_order_release)" in generate
     assert "inference_active.store(false, std::memory_order_release)" in generate
     assert generate.count("stop_requested.load(std::memory_order_acquire)") >= 5
+    assert "params.abort_callback" in generate
     assert "arena_llama_inference_quiesced" in cpp
     assert "pub(crate) fn request_embedded_inference_stop()" in rust
     assert "pub(crate) fn embedded_inference_quiesced()" in rust
     assert 'lib.symbol(c"arena_llama_request_stop")?' in rust
     assert 'lib.symbol(c"arena_llama_inference_quiesced")?' in rust
-    assert "request_embedded_inference_stop(" not in LIB
+    dispatch = LIB.split("async fn execute_fenced_native_inference(", 1)[1].split(
+        "async fn execute_phone_inference_once(", 1
+    )[0]
+    assert "requested == job_id && digest == lease_digest" in dispatch
+    assert dispatch.index("request_embedded_inference_stop()") < dispatch.index(
+        "spawn_blocking(move || engine.join().is_ok())"
+    )
+    assert dispatch.index("spawn_blocking(move || engine.join().is_ok())") < dispatch.index(
+        "Ok(None)"
+    )
+    assert 'job.remove("lease_token")' in LIB
     assert "embedded_inference_quiesced(" not in LIB

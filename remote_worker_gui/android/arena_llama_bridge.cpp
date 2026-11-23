@@ -103,6 +103,9 @@ int arena_llama_generate_greedy(
     params.n_ubatch = 1024;
     params.n_threads = 2;
     params.n_threads_batch = 2;
+    params.abort_callback = [](void *) {
+        return stop_requested.load(std::memory_order_acquire);
+    };
     llama_context * ctx = llama_init_from_model(loaded_model, params);
     if (ctx == nullptr) return -3;
     struct ContextCleanup {

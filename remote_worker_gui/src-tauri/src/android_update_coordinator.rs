@@ -272,7 +272,11 @@ pub(crate) async fn release_update(
 #[allow(dead_code)]
 pub(crate) enum StopInstruction {
     None,
-    StopCheckpoint { job_id: String, request_id: String },
+    StopCheckpoint {
+        job_id: String,
+        request_id: String,
+        lease_token_sha256: Option<String>,
+    },
     AwaitReconciliation,
     Blocked,
 }
@@ -298,7 +302,7 @@ pub(crate) fn verify_pause_poll_reply(
         Some("await_reconciliation") if instruction.len() == 1 =>
             Ok(StopInstruction::AwaitReconciliation),
         Some("blocked") if instruction.len() == 1 => Ok(StopInstruction::Blocked),
-        Some("stop_checkpoint") if instruction.len() == 3 => {
+        Some("stop_checkpoint") if matches!(instruction.len(), 3 | 4) => {
             let job_id = instruction.get("job_id")
                 .and_then(Value::as_str).ok_or("Brak zadania do przerwania")?;
             let request_id = instruction.get("request_id")
@@ -308,12 +312,25 @@ pub(crate) fn verify_pause_poll_reply(
                     b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                 return Err("Nieprawidłowe polecenie pauzy".into());
             }
+            let lease_token_sha256 = if instruction.len() == 4 {
+                Some(instruction.get("lease_token_sha256").and_then(Value::as_str)
+                    .filter(|value| valid_lease_token(value))
+                    .ok_or("Brak poprawnego skrótu lease w poleceniu STOP")?.to_owned())
+            } else {
+                None
+            };
             Ok(StopInstruction::StopCheckpoint {
                 job_id: job_id.to_owned(), request_id: request_id.to_owned(),
+                lease_token_sha256,
             })
         }
         _ => Err("Nieznane polecenie zatrzymania Workera".into()),
     }
+}
+
+fn valid_lease_token(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b|
+        b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Announce a locally active model to Arena without claiming any active job.
@@ -359,7 +376,7 @@ pub(crate) async fn announce_phone_ready(
 #[allow(dead_code)]
 pub(crate) async fn submit_my_inference_move(
     base: &str, worker_id: &str, machine_token: &str,
-    job_id: &str, uci: &str,
+    job_id: &str, uci: &str, lease_token: Option<&str>,
 ) -> Result<&'static str, String> {
     if !valid_worker_id(worker_id) || !valid_worker_id(job_id)
         || machine_token.is_empty() {
@@ -373,10 +390,16 @@ pub(crate) async fn submit_my_inference_move(
     }
     let endpoint = coordinator_endpoint(base, "job-result")?;
     let nonce = random_nonce()?;
+    let result = match lease_token {
+        Some(lease) if valid_lease_token(lease) =>
+            serde_json::json!({"version": 2, "job_id": job_id, "uci": uci, "lease_token": lease}),
+        Some(_) => return Err("Nieprawidłowy lease wyniku inferencji".into()),
+        None => serde_json::json!({"version": 1, "job_id": job_id, "uci": uci}),
+    };
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({
             "worker_id": worker_id, "token": machine_token, "nonce": nonce,
-            "result": {"version": 1, "job_id": job_id, "uci": uci},
+            "result": result,
         }))
         .send().await.map_err(|_| "Nie udało się przesłać wyniku do Areny")?;
     if !response.status().is_success() {
@@ -440,7 +463,9 @@ pub(crate) async fn fetch_my_inference_job(
                 .ok_or("Brak zatwierdzonego zadania".to_owned())?;
             let version = job.get("version").and_then(Value::as_u64)
                 .ok_or("Brak wersji protokołu".to_owned())?;
-            if !matches!((version, job.len()), (1, 6) | (2, 7)) {
+            if !matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8))
+                || (version == 3 && !job.get("lease_token").and_then(Value::as_str)
+                    .is_some_and(valid_lease_token)) {
                 return Err("Niezgodny format zadania".into());
             }
             let job_id = job.get("job_id").and_then(Value::as_str)
@@ -463,7 +488,7 @@ pub(crate) async fn fetch_my_inference_job(
                 || !(1..=600).contains(&timeout) {
                 return Err("Arena przysłała nieprawidłowe zadanie".into());
             }
-            if version == 2 {
+            if matches!(version, 2 | 3) {
                 let legal = job.get("legal_moves").and_then(Value::as_array)
                     .ok_or("Arena nie podała legalnych ruchów")?;
                 if legal.is_empty() || legal.len() > 256 {
@@ -536,6 +561,7 @@ pub(crate) fn verify_assigned_model_source_reply(
 #[allow(dead_code)]
 pub(crate) async fn fetch_my_approved_gguf(
     base: &str, worker_id: &str, machine_token: &str,
+    expected_job: &Value,
 ) -> Result<crate::android_model_source::ApprovedGguf, String> {
     if !valid_worker_id(worker_id) || machine_token.is_empty() {
         return Err("Brak zaufanej tożsamości Workera".into());
@@ -543,6 +569,7 @@ pub(crate) async fn fetch_my_approved_gguf(
     let previous = fetch_my_inference_job(base, worker_id, machine_token).await?;
     let assigned_digest = previous.get("job")
         .filter(|_| previous.get("state").and_then(Value::as_str) == Some("assigned"))
+        .filter(|job| *job == expected_job)
         .and_then(|job| job.get("model_sha256")).and_then(Value::as_str)
         .ok_or("Brak aktywnego przydziału modelu")?;
     let nonce = random_nonce()?;
@@ -819,9 +846,21 @@ mod tests {
         assert_eq!(
             verify_pause_poll_reply(&reply, "worker_12345678", NONCE).unwrap(),
             StopInstruction::StopCheckpoint {
-                job_id: "job_12345678".into(), request_id: "a".repeat(32)
+                job_id: "job_12345678".into(), request_id: "a".repeat(32),
+                lease_token_sha256: None,
             }
         );
+        let mut fenced = reply.clone();
+        fenced["instruction"]["lease_token_sha256"] = json!("b".repeat(64));
+        assert_eq!(
+            verify_pause_poll_reply(&fenced, "worker_12345678", NONCE).unwrap(),
+            StopInstruction::StopCheckpoint {
+                job_id: "job_12345678".into(), request_id: "a".repeat(32),
+                lease_token_sha256: Some("b".repeat(64)),
+            },
+        );
+        fenced["instruction"]["lease_token_sha256"] = json!("not-a-digest");
+        assert!(verify_pause_poll_reply(&fenced, "worker_12345678", NONCE).is_err());
         for (key, forged) in [
             ("authenticated", json!(false)),
             ("source", json!("worker")),
