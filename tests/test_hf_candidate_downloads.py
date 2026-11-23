@@ -18,6 +18,9 @@ class DummyThread:
 class CandidateDownloadTests(unittest.TestCase):
     def setUp(self):
         self.tempdir=tempfile.TemporaryDirectory()
+        # Keep tests independent of the VPS production quarantine path.
+        self._previous_staging_dir = downloads.STAGING_DIR
+        downloads.STAGING_DIR = Path(self.tempdir.name) / 'staging'
         downloads.init_db(Path(self.tempdir.name)/'arena.sqlite3')
         with downloads._lock:
             downloads._jobs.clear(); downloads._cancel_events.clear(); downloads._active=False
@@ -25,6 +28,7 @@ class CandidateDownloadTests(unittest.TestCase):
                         'free_bytes':30*1024**3,'files':[{'name':'model.Q4_K_M.gguf','size_bytes':4,'sha256':SHA,'revision':REV}]}
 
     def tearDown(self):
+        downloads.STAGING_DIR = self._previous_staging_dir
         self.tempdir.cleanup()
 
     def group(self,catalog='hf:org/model'):
