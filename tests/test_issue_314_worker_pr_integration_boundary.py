@@ -53,14 +53,15 @@ def test_only_worker_backend_owns_worker_http_dispatch_in_composition_root():
 
 def test_unintegrated_update_routes_must_not_be_implicitly_authorized():
     """Draft #296 machine operations require explicit integration, not cookies."""
+    integrated = "/api/remote-workers/update-resume-status"
+    assert integrated not in PANEL_POST_ROUTES
+    assert integrated in worker_backend.WORKER_POST_ROUTES
     for route in (
         "/api/remote-workers/update-reserve",
         "/api/remote-workers/update-release",
         "/api/remote-workers/update-hold-status",
-        "/api/remote-workers/update-resume-status",
         "/api/remote-workers/model-source",
     ):
         assert route not in PANEL_POST_ROUTES
-        # These endpoints are intentionally absent from the #314 base:
-        # a future PR integration must add audited machine-token handlers.
+        # Remaining draft-only operations must be migrated explicitly.
         assert route not in worker_backend.WORKER_POST_ROUTES
