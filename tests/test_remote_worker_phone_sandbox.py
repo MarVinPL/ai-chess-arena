@@ -269,3 +269,34 @@ def test_stop_ack_must_not_be_inferred_from_reconnect_or_wrong_proof(sandbox):
         "version": 1, "job_id": job_id, "uci": "e2e4"
     }})[0] == 409
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == old
+
+
+def test_abrupt_power_loss_without_stop_does_not_reassign_or_recover(sandbox):
+    """A reconnect to a running job is not a successful STOP/ACK handshake."""
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    # Simulated process death: no STOP was requested or acknowledged.
+    # Valid old credentials on reconnect must not steal the running lease.
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "blocked"
+    code, job = post("job-poll", who)
+    assert code == 200 and job["state"] == "assigned"
+    assert job["job"]["job_id"] == job_id
+    assert post("update-pause-poll", who)[1]["instruction"] == {"action": "none"}
+    with pytest.raises(ValueError, match="idle"):
+        arm_one_job(path, WORKER)
+
+    # There is no new checkpoint or false idle transition.
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone()[0] == 0
