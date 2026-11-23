@@ -91,13 +91,23 @@ def test_live_events_never_inherit_previous_worker_identity():
 
 
 def test_endpoint_requires_machine_token_and_matching_nonce():
-    section = SERVER.split("if path == '/api/remote-workers/board-view':", 1)[1].split(
-        "if path == '/api/remote-workers/update-resume-status':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
-    assert "worker_board_snapshot(DB, worker_id, get_live())" in section
-    assert "'nonce': nonce" in section
-    assert "self.send_json({'error': 'Brak autoryzacji'}, 401)" in section
+    if (ROOT / "worker_backend.py").exists():
+        section = (ROOT / "remote_worker_phone_api.py").read_text(encoding="utf-8")
+        router = (ROOT / "worker_backend.py").read_text(encoding="utf-8")
+        assert '"/api/remote-workers/board-view"' in section
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in section
+        assert "worker_board_snapshot(db, worker_id, live)" in section
+        assert '"nonce": nonce' in section
+        assert '"Brak autoryzacji Workera"' in section
+        assert "handle_phone_request(handler, path, db, live_snapshot)" in router
+    else:
+        section = SERVER.split("if path == '/api/remote-workers/board-view':", 1)[1].split(
+            "if path == '/api/remote-workers/update-resume-status':", 1
+        )[0]
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
+        assert "worker_board_snapshot(DB, worker_id, get_live())" in section
+        assert "'nonce': nonce" in section
+        assert "self.send_json({'error': 'Brak autoryzacji'}, 401)" in section
     assert '"board-view"' in BRIDGE
     assert 'get("nonce").and_then(Value::as_str) != Some(nonce.as_str())' in BRIDGE
     assert 'get("worker_id").and_then(Value::as_str) != Some(worker_id)' in BRIDGE
