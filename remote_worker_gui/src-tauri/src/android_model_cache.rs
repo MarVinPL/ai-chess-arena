@@ -61,6 +61,80 @@ fn regular_file(path: &Path) -> Result<Option<fs::Metadata>, String> {
     }
 }
 
+/// An entry is eligible for eviction only after the trusted coordinator
+/// reports no active lease, session, checkpoint or installation referring to
+/// it. The UI must never set these flags based on untrusted model metadata.
+#[derive(Debug, Clone)]
+pub(crate) struct CacheEntry {
+    pub(crate) digest: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) last_used_ms: u64,
+    pub(crate) in_use: bool,
+    pub(crate) preserve: bool,
+}
+
+pub(crate) const DEFAULT_FREE_RESERVE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Planning is pure: no files are deleted from this function. The downloader
+/// must re-check actual free bytes after each verified deletion, and again
+/// immediately before committing the transfer. The trusted coordinator is
+/// responsible for refreshing active leases under its own lock.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct StoragePlan {
+    pub(crate) delete_digests: Vec<String>,
+    pub(crate) reclaimable_bytes: u64,
+    pub(crate) still_missing_bytes: u64,
+}
+
+pub(crate) fn plan_storage_reclamation(
+    free_bytes: u64,
+    incoming_bytes: u64,
+    reserve_bytes: u64,
+    entries: &[CacheEntry],
+) -> Result<StoragePlan, String> {
+    if !valid_size(incoming_bytes) {
+        return Err("Nieprawidłowy rozmiar pobieranego modelu".into());
+    }
+    // Download is written to a .partial file, then renamed in-place.
+    // The caller must include any simultaneous temporary-file budget
+    // in reserve_bytes and serialize transfers across Worker sessions.
+    let required = incoming_bytes.checked_add(reserve_bytes)
+        .ok_or("Zbyt duża rezerwa miejsca")?;
+    let shortage = required.saturating_sub(free_bytes);
+    if shortage == 0 {
+        return Ok(StoragePlan {
+            delete_digests: Vec::new(), reclaimable_bytes: 0,
+            still_missing_bytes: 0,
+        });
+    }
+    // Ensure the plan never double-counts the same cached model. Invalid
+    // metadata is a hard failure, not a reason to delete arbitrary files.
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        if !valid_digest(&entry.digest) || !valid_size(entry.size_bytes)
+            || !seen.insert(&entry.digest) {
+            return Err("Nieprawidłowy indeks cache GGUF".into());
+        }
+    }
+    let mut eligible: Vec<_> = entries.iter()
+        .filter(|entry| !entry.in_use && !entry.preserve)
+        .collect();
+    eligible.sort_by(|a,b| a.last_used_ms.cmp(&b.last_used_ms)
+        .then_with(|| a.digest.cmp(&b.digest)));
+    let mut reclaimed = 0u64;
+    let mut delete_digests = Vec::new();
+    for entry in eligible {
+        if reclaimed >= shortage { break; }
+        reclaimed = reclaimed.saturating_add(entry.size_bytes);
+        delete_digests.push(entry.digest.clone());
+    }
+    Ok(StoragePlan {
+        delete_digests,
+        reclaimable_bytes: reclaimed,
+        still_missing_bytes: shortage.saturating_sub(reclaimed),
+    })
+}
+
 /// Write a previously approved transfer stream into an app-private cache.
 /// A failed transfer never publishes a truncated or corrupt GGUF.
 /// Callers serialize downloads and must reserve enough space before calling.
