@@ -86,6 +86,15 @@ jobs:
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
+      - name: Build and bundle pinned embedded llama.cpp for ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash android/build_embedded_llama.sh
+          # Refuse an APK build if a required bundled dependency is absent.
+          for name in llama ggml ggml-base ggml-cpu; do
+            test -s "src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/lib${name}.so"
+          done
       - name: Restore original Android test signing key
         # Never provide the keystore to pull_request or untrusted source builds.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
