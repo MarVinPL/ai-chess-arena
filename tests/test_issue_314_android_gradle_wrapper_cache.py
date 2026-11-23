@@ -13,13 +13,15 @@ WORKFLOW = (ROOT / ".github/workflows/android-worker-apk.yml").read_text(
 
 
 def test_gradle_wrapper_distribution_is_cached_before_tauri_build():
-    assert "uses: actions/cache@v4" in WORKFLOW
-    assert "path: ~/.gradle/wrapper/dists" in WORKFLOW
-    assert "key: android-gradle-wrapper-${{ runner.os }}-9.6.1-v1" in WORKFLOW
-    assert WORKFLOW.index("name: Cache Gradle wrapper distribution") < WORKFLOW.index(
+    # Reuse the already approved Rust cache action: it supports extra folders.
+    assert "uses: swatinem/rust-cache@v2" in WORKFLOW
+    assert "cache-directories: ~/.gradle/wrapper/dists" in WORKFLOW
+    assert "key: android-arm64-gradle-9.6.1" in WORKFLOW
+    assert "uses: actions/cache@v4" not in WORKFLOW
+    assert WORKFLOW.index("name: Restore Rust and Gradle wrapper caches") < WORKFLOW.index(
         "name: Initialize Android Worker"
     )
-    assert WORKFLOW.index("name: Cache Gradle wrapper distribution") < WORKFLOW.index(
+    assert WORKFLOW.index("name: Restore Rust and Gradle wrapper caches") < WORKFLOW.index(
         "name: Compile Android Worker"
     )
 
@@ -35,11 +37,11 @@ def test_cache_restoration_does_not_change_gradle_or_android_signing_policy():
 
 
 def test_cache_step_reports_hits_without_network_or_secret_operations():
-    block = WORKFLOW.split("name: Cache Gradle wrapper distribution", 1)[1].split(
-        "name: Install pinned official Android CLI", 1
+    block = WORKFLOW.split("name: Restore Rust and Gradle wrapper caches", 1)[1].split(
+        "name: Initialize Android Worker", 1
     )[0]
-    assert "id: gradle-wrapper-cache" in block
-    assert "steps.gradle-wrapper-cache.outputs.cache-hit" in block
+    assert "id: rust-and-gradle-cache" in block
+    assert '$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin' in block
     assert "secrets." not in block
     assert "curl " not in block
     assert "gradle --stop" not in block
