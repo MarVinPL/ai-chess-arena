@@ -17,6 +17,7 @@
 #view-live .last-move-note{min-height:25px;margin:6px 0;color:#c1e9e5;font-size:12px;font-weight:650}
 #view-live .controls{margin-top:8px}
 #view-live button:disabled{cursor:not-allowed}
+#view-live .controls-note{min-height:19px;margin-top:4px;color:#edcc91;font-size:12px;line-height:1.5}
 #view-live button:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
 @media(min-width:761px){
  #view-live .board{max-width:min(100%,560px,max(300px,calc(100dvh - 445px)))}
