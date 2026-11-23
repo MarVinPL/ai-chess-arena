@@ -79,30 +79,40 @@ pub(crate) fn open_verified_session(
     Ok(ModelSession { digest: digest.into(), file })
 }
 
-/// A local exclusive window prevents new managed model opens while the
-/// caller verifies engine shutdown and evaluates coordinator evidence.
-/// No file deletion is implemented here. In particular, the caller cannot
-/// infer engine shutdown just because this function returns successfully.
-#[allow(dead_code)]
-pub(crate) fn with_no_open_sessions<T>(
-    examine: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
+/// Exclusive process-local update window. Blocks new managed GGUF model
+/// openings and refuses to begin if any counted native session is live.
+/// Keep this value across ALL await points up to the PackageInstaller handoff.
+/// This does not substitute for Arena's authenticated STOP/ACK or persistent
+/// coordinator hold and cannot control external Termux processes.
+#[must_use = "Keep the update gate alive until the installer handoff finishes"]
+pub(crate) struct ExclusiveUpdateGate;
+impl Drop for ExclusiveUpdateGate {
+    fn drop(&mut self) {
+        MAINTENANCE_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn begin_exclusive_update() -> Result<ExclusiveUpdateGate, String> {
     MAINTENANCE_ACTIVE.compare_exchange(
         false, true, Ordering::SeqCst, Ordering::SeqCst,
-    ).map_err(|_| "Konserwacja GGUF już trwa".to_owned())?;
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            MAINTENANCE_ACTIVE.store(false, Ordering::SeqCst);
-        }
-    }
-    let _reset = Reset;
+    ).map_err(|_| "Inna konserwacja lub instalacja GGUF już trwa".to_owned())?;
+    let gate = ExclusiveUpdateGate;
     let active = sessions().lock()
         .map_err(|_| "Nieustalony stan aktywnych plików GGUF".to_owned())?;
     if !active.is_empty() {
         return Err("Silnik nadal ma otwarte pliki GGUF".into());
     }
     drop(active);
+    Ok(gate)
+}
+
+/// Synchronous use for cache diagnostics and future exclusive cleanup.
+/// Does not authorize deletion or prove that an external model stopped.
+#[allow(dead_code)]
+pub(crate) fn with_no_open_sessions<T>(
+    examine: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _gate = begin_exclusive_update()?;
     examine()
 }
 
@@ -157,6 +167,21 @@ mod tests {
             symlink("/dev/null", &model).unwrap();
             assert!(open_verified_session(&root, &digest, size).is_err());
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_gate_rejects_live_model_then_blocks_new_opens_until_drop() {
+        let _exclusive_test = TEST_LOCK.lock().unwrap();
+        let (root, digest, size) = fixture();
+        let live = open_verified_session(&root, &digest, size).unwrap();
+        assert!(begin_exclusive_update().is_err());
+        drop(live);
+        let update = begin_exclusive_update().unwrap();
+        assert!(begin_exclusive_update().is_err());
+        assert!(open_verified_session(&root, &digest, size).is_err());
+        drop(update);
+        assert!(open_verified_session(&root, &digest, size).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 
