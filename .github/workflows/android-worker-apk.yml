@@ -83,6 +83,22 @@ jobs:
           npm ci
           # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+      - name: Install branded Android pawn launcher resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the Arena header pawn (U+265F) without modifying desktop icons.
+          npx tauri icon src-tauri/icons/android-pawn.svg --output src-tauri/icons/android-generated
+          source_dir=src-tauri/icons/android-generated/android
+          resource_dir=src-tauri/gen/android/app/src/main/res
+          test -s "$source_dir/mipmap-mdpi/ic_launcher.png"
+          test -s "$source_dir/mipmap-xxxhdpi/ic_launcher_foreground.png"
+          for file in "$source_dir"/mipmap-*/*.png; do
+            relative="${file#"$source_dir"/}"
+            install -D -m 644 "$file" "$resource_dir/$relative"
+          done
+          cmp "$source_dir/mipmap-mdpi/ic_launcher.png" "$resource_dir/mipmap-mdpi/ic_launcher.png"
+          cmp "$source_dir/mipmap-xxxhdpi/ic_launcher_foreground.png" "$resource_dir/mipmap-xxxhdpi/ic_launcher_foreground.png"
       - name: Restore original Android test signing key
         # Never provide the keystore to pull_request or untrusted source builds.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
