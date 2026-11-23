@@ -16,6 +16,9 @@ mod android_update_coordinator;
 mod android_update_recovery;
 mod android_update_install_journal;
 mod android_local_llama;
+// Verified app-private GGUF staging and retirement; not wired to dispatch yet.
+#[allow(dead_code)]
+mod android_model_cache;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
 #[allow(dead_code)]
