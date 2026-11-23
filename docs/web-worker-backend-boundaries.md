@@ -197,3 +197,13 @@ filtering. It receives the original `arena.sqlite3` path from the server,
 queries the existing `passkey_test_answers` table and preserves the response
 columns, ordering and legacy error behavior. Browser-session authentication
 runs before delegation; no Worker credential path or second test database.
+
+## Bulk PGN and CSV export boundary
+
+`web_panel_export_api` handles the existing `GET /api/export/pgn` and
+`GET /api/export/csv` endpoints behind browser-session authentication.
+Both exports receive the authoritative `arena.sqlite3` path and preserve
+record ordering, UTF-8 encoding (including the CSV BOM), PGN separators,
+column order, HTTP content types, attachment names and content lengths.
+Worker tokens cannot authorize these downloads and no second game store
+is introduced.
