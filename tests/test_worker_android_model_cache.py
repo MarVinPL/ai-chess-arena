@@ -400,3 +400,14 @@ def test_embedded_android_llama_probe_uses_only_own_package_abi_not_termux():
     assert 'std::process::Command' not in source
     assert 'probe_embedded_llama_library(' not in LIB
     assert '#[tauri::command]' not in source
+
+
+def test_embedded_llama_diagnostic_does_not_activate_inference():
+    ui = (BASE / "remote_worker_gui/public/index.html").read_text()
+    assert 'async fn inspect_embedded_llama_engine() -> Result<bool, String>' in LIB
+    assert 'android_embedded_llama::probe_embedded_llama_library()?' in LIB
+    assert 'inspect_embedded_llama_engine,' in LIB
+    assert 'id="checkEmbeddedLlama"' in ui
+    assert 'id="embeddedLlamaStatus"' in ui
+    assert "invoke('inspect_embedded_llama_engine')" in ui
+    assert 'Inferencja bez Termux pozostaje wyłączona' in ui
