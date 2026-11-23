@@ -13,15 +13,13 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static OPEN_MODELS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
-static MAINTENANCE_ACTIVE: OnceLock<Mutex<bool>> = OnceLock::new();
+static MAINTENANCE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn sessions() -> &'static Mutex<HashMap<String, usize>> {
     OPEN_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-fn maintenance() -> &'static Mutex<bool> {
-    MAINTENANCE_ACTIVE.get_or_init(|| Mutex::new(false))
 }
 
 pub(crate) struct ModelSession {
@@ -49,11 +47,6 @@ impl Drop for ModelSession {
 pub(crate) fn open_verified_session(
     root: &Path, digest: &str, expected_size: u64,
 ) -> Result<ModelSession, String> {
-    let mut maintained = maintenance().lock()
-        .map_err(|_| "Nieustalony stan konserwacji GGUF")?;
-    if *maintained {
-        return Err("Trwa wyłączna konserwacja GGUF".into());
-    }
     let target = model_path(root, digest)?;
     let root_meta = fs::symlink_metadata(root)
         .map_err(|_| "Brak prywatnego katalogu GGUF".to_owned())?;
@@ -73,11 +66,13 @@ pub(crate) fn open_verified_session(
     }
     let mut active = sessions().lock()
         .map_err(|_| "Nieustalona lista aktywnych modeli".to_owned())?;
+    if MAINTENANCE_ACTIVE.load(Ordering::SeqCst) {
+        return Err("Trwa wyłączna konserwacja GGUF".into());
+    }
     let count = active.entry(digest.to_owned()).or_insert(0);
     *count = count.checked_add(1)
         .ok_or("Przekroczono licznik sesji GGUF")?;
     drop(active);
-    *maintained = false;
     Ok(ModelSession { digest: digest.into(), file })
 }
 
@@ -89,18 +84,16 @@ pub(crate) fn open_verified_session(
 pub(crate) fn with_no_open_sessions<T>(
     examine: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    let mut maintained = maintenance().lock()
-        .map_err(|_| "Nieustalony stan blokady cache GGUF")?;
-    if *maintained {
-        return Err("Konserwacja GGUF już trwa".into());
+    MAINTENANCE_ACTIVE.compare_exchange(
+        false, true, Ordering::SeqCst, Ordering::SeqCst,
+    ).map_err(|_| "Konserwacja GGUF już trwa".to_owned())?;
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            MAINTENANCE_ACTIVE.store(false, Ordering::SeqCst);
+        }
     }
-    *maintained = true;
-    // Scope restores the flag on success, errors and unwinding.
-    struct Reset<'a>(&'a mut bool);
-    impl Drop for Reset<'_> {
-        fn drop(&mut self) { *self.0 = false; }
-    }
-    let _reset = Reset(&mut maintained);
+    let _reset = Reset;
     let active = sessions().lock()
         .map_err(|_| "Nieustalony stan aktywnych plików GGUF".to_owned())?;
     if !active.is_empty() {
