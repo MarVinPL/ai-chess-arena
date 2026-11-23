@@ -304,6 +304,71 @@ class WorkerUpdatePause:
             "checkpoint_sha256": saved["sha256"],
         }
 
+    def prepare_trusted_resume_offer(self, worker_id, *,
+                                     installed_identity_verified,
+                                     stopped_engine_verified,
+                                     checkpoint_verifier):
+        """Read-only, private resume payload for a future trusted dispatcher.
+
+        NEVER expose this method via machine-token HTTP or the WebView. The
+        caller must attest the installed APK's version and signing identity,
+        and confirm the old engine is stopped *after* update reconciliation.
+        Preparing an offer is not execution, not STOP/ACK and not a lease.
+        The later reconcile_resume CAS still checks the digest and consumes
+        the saved checkpoint only after a real, authenticated worker ACK.
+        """
+        self.jobs._id(worker_id)
+        if installed_identity_verified is not True or stopped_engine_verified is not True:
+            raise ValueError("Trusted installed identity and engine STOP required")
+        if not callable(checkpoint_verifier):
+            raise ValueError("Trusted resume checkpoint verifier required")
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            self.jobs._reject_model_maintenance_hold(db, worker_id)
+            row = db.execute(
+                "SELECT job_id,request_id,checkpoint_json,checkpoint_sha256 "
+                "FROM worker_update_resume WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("No durable resume checkpoint")
+            job_id, request_id, raw, digest = row
+            pause = db.execute(
+                "SELECT job_id,request_id,phase "
+                "FROM worker_update_pause_requests WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            worker = db.execute(
+                "SELECT job_id,state FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            if pause != (job_id, request_id, "acknowledged") or worker != (None, "unknown"):
+                raise ValueError("Worker pause and execution state not reconciled")
+            if not isinstance(digest, str) or len(digest) != 64 or (
+                not secrets.compare_digest(hashlib.sha256(raw.encode("utf-8")).hexdigest(), digest)
+            ):
+                raise ValueError("Corrupted durable resume checkpoint")
+            try:
+                checkpoint = json.loads(raw)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Malformed resume checkpoint") from error
+            if not isinstance(checkpoint, dict) or (
+                checkpoint.get("schema_version") != 1 or
+                checkpoint.get("job_id") != job_id or
+                checkpoint.get("resume_mode") not in ("resume", "restart") or
+                not isinstance(checkpoint.get("payload"), dict)
+            ):
+                raise ValueError("Resume checkpoint identity mismatch")
+            if checkpoint_verifier(checkpoint) is not True:
+                raise ValueError("Coordinator rejected resume checkpoint")
+            return {
+                "worker_id": worker_id,
+                "job_id": job_id,
+                "request_id": request_id,
+                "checkpoint_sha256": digest,
+                "resume_mode": checkpoint["resume_mode"],
+                "checkpoint": checkpoint,
+            }
+
     def reconcile_resume(self, worker_id, job_id, request_id, *,
                          checkpoint_sha256, timeout_seconds,
                          worker_ready_verified, resume_accepted_verified,
