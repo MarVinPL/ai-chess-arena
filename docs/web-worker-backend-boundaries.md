@@ -218,3 +218,14 @@ The state snapshot is taken under the existing shared RLock through
 function. HTTP routing delegates only after browser-session validation.
 No independent board, Worker-token fallback or competing coordinator is
 introduced.
+
+## Browser game-control POST boundary
+
+`web_panel_game_control_api` dispatches exact `POST /api/step`,
+`POST /api/run`, `POST /api/stop` and `POST /api/reset` requests only
+once `server.Handler.do_POST` has validated the browser session and Origin.
+The server retains exclusive ownership of the board, move lists, timing,
+autoplay thread and `lock` RLock; `_panel_game_control_action` performs
+the original mutations and serializes responses under that lock, including
+422 snapshots when individual steps fail. The router introduces no second
+board, scheduler, database or Worker-token fallback.
