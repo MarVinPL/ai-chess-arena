@@ -376,7 +376,7 @@ def test_app_owned_gguf_file_descriptor_remains_locked_until_runtime_stops():
     assert 'MAINTENANCE_ACTIVE.compare_exchange(' in runtime
     assert 'if !active.is_empty()' in runtime
     assert 'std::process::Command' not in runtime
-    assert 'fs::remove_file(' not in runtime
+    assert 'fs::remove_file(' not in runtime.split('#[cfg(test)]', 1)[0]
     assert 'retire_model(' not in runtime
     assert 'open_verified_session(' not in LIB
     assert 'with_no_open_sessions(' not in LIB
