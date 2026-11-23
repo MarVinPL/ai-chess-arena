@@ -33,6 +33,7 @@ import web_panel_model_storage_api
 import web_panel_model_license_api
 import web_panel_download_status_api
 import web_panel_hf_status_api
+import web_panel_games_api
 import arena_auth
 import model_permissions
 
@@ -1359,6 +1360,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_hf_status_api.dispatch_panel_hf_status_get(self, path, raw_path):
             return
+        if web_panel_games_api.dispatch_panel_games_get(self, path, DB):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1374,72 +1377,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path == '/api/games':
-            with sqlite3.connect(DB) as c:
-                c.row_factory = sqlite3.Row
-                rows = c.execute('''SELECT id,started_at,white_model,black_model,result,move_count,
-                    avg_move_seconds,adjudication_status,adjudication_json,inference_metadata_json,failure_reason,
-                    failure_fen,failure_color,failure_side_to_move,failure_model_id
-                    FROM games ORDER BY id DESC LIMIT 30''').fetchall()
-            games = []
-            for row in rows:
-                item = dict(row, white=row['white_model'], black=row['black_model'],
-                            moves=row['move_count'], avg_seconds=round(row['avg_move_seconds'],3))
-                try:
-                    move_metadata = json.loads(item.get('inference_metadata_json') or '[]')
-                except (TypeError, json.JSONDecodeError):
-                    move_metadata = []
-                item['arbiter_interventions'] = sum(
-                    1 for move in move_metadata
-                    if isinstance(move, dict) and move.get('arbiter_intervention')
-                ) if isinstance(move_metadata, list) else 0
-                item.pop('inference_metadata_json', None)
-                games.append(item)
-            self.send_json(games)
-        elif path.startswith('/api/games/') and path.endswith('/pgn'):
-            try:
-                game_id = int(path.split('/')[3])
-                with sqlite3.connect(DB) as c:
-                    row = c.execute('SELECT pgn FROM games WHERE id=?', (game_id,)).fetchone()
-                if row is None:
-                    self.send_error(404, 'Nie znaleziono zapisanej partii')
-                else:
-                    body = row[0].encode('utf-8')
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
-                    self.send_header('Content-Disposition', f'inline; filename="game-{game_id}.pgn"')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-            except ValueError:
-                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
-        elif path.startswith('/api/games/'):
-            try:
-                game_id = int(path.rsplit('/', 1)[1])
-                with sqlite3.connect(DB) as c:
-                    c.row_factory = sqlite3.Row
-                    row = c.execute('''SELECT id,started_at,ended_at,white_model,black_model,result,pgn,
-                        move_count,tournament_id,pairing_id,adjudication_status,adjudication_json,
-                        inference_metadata_json,failure_reason,failure_fen,failure_color,failure_side_to_move,failure_model_id
-                        FROM games WHERE id=?''', (game_id,)).fetchone()
-                if row is None:
-                    self.send_json({'error': 'Nie znaleziono zapisanej partii'}, 404)
-                else:
-                    payload = dict(row)
-                    try:
-                        move_metadata = json.loads(payload.get('inference_metadata_json') or '[]')
-                    except (TypeError, json.JSONDecodeError):
-                        move_metadata = []
-                    payload['arbiter_events'] = [
-                        {'ply': item.get('ply'), 'color': item.get('color'),
-                         'model': item.get('model'), 'signal': item.get('arbiter_signal'),
-                         'response': item.get('arbiter_response'), 'response_seconds': item.get('seconds'),
-                         'selected_move': item.get('uci')}
-                        for item in move_metadata if item.get('arbiter_intervention')
-                    ] if isinstance(move_metadata, list) else []
-                    self.send_json(payload)
-            except ValueError:
-                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
         elif path == '/api/models':
             with league.connect() as c:
                 rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
