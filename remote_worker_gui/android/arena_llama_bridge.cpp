@@ -8,6 +8,9 @@
 #include "llama.h"
 #include <mutex>
 #include <cstring>
+#include <vector>
+#include <string>
+#include <algorithm>
 
 namespace {
 std::mutex engine_mutex;
@@ -46,4 +49,75 @@ extern "C" __attribute__((visibility("default")))
 int arena_llama_model_is_open() noexcept {
     std::lock_guard<std::mutex> guard(engine_mutex);
     return loaded_model == nullptr ? 0 : 1;
+}
+
+
+// Bounded CPU-only experimental text generation. This routine is internal:
+// neither the JS webview nor the remote-worker dispatch can call it yet.
+// Returns negative on model/ABI/tokenization/decode errors; output buffer is
+// always NUL-terminated on success. Caller validates exact UCI + legal list.
+extern "C" __attribute__((visibility("default")))
+int arena_llama_generate_greedy(
+    const char * prompt, int prompt_len, int max_tokens,
+    char * output, int output_capacity
+) noexcept {
+    if (prompt == nullptr || output == nullptr ||
+        prompt_len < 1 || prompt_len > 8192 ||
+        max_tokens < 1 || max_tokens > 64 ||
+        output_capacity < 2 || output_capacity > 4096) return -1;
+    std::lock_guard<std::mutex> guard(engine_mutex);
+    if (loaded_model == nullptr) return -2;
+    output[0] = '\0';
+
+    llama_context_params params = llama_context_default_params();
+    params.n_ctx = 2048;
+    params.n_batch = 1024;
+    params.n_ubatch = 1024;
+    params.n_threads = 2;
+    params.n_threads_batch = 2;
+    llama_context * ctx = llama_init_from_model(loaded_model, params);
+    if (ctx == nullptr) return -3;
+    struct ContextCleanup {
+        llama_context * ptr;
+        ~ContextCleanup() { llama_free(ptr); }
+    } context_cleanup{ctx};
+    const llama_vocab * vocab = llama_model_get_vocab(loaded_model);
+    if (vocab == nullptr) return -4;
+    std::vector<llama_token> tokens(1024);
+    int n = llama_tokenize(vocab, prompt, prompt_len,
+                           tokens.data(), static_cast<int>(tokens.size()),
+                           true, false);
+    if (n < 1 || n > 1024 || n + max_tokens >= 2048) return -5;
+    tokens.resize(static_cast<size_t>(n));
+    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), n)) != 0) return -6;
+
+    llama_sampler * sampler = llama_sampler_init_greedy();
+    if (sampler == nullptr) return -7;
+    struct SamplerCleanup {
+        llama_sampler * ptr;
+        ~SamplerCleanup() { llama_sampler_free(ptr); }
+    } sampler_cleanup{sampler};
+
+    int used = 0;
+    for (int step = 0; step < max_tokens; step++) {
+        llama_token next = llama_sampler_sample(sampler, ctx, -1);
+        if (llama_vocab_is_eog(vocab, next)) break;
+        char piece[256];
+        int bytes = llama_token_to_piece(vocab, next, piece,
+                                        static_cast<int>(sizeof(piece)), 0, false);
+        if (bytes < 0 || bytes > static_cast<int>(sizeof(piece))) return -8;
+        if (used + bytes >= output_capacity) return -9;
+        bool newline = false;
+        for (int i = 0; i < bytes; i++) {
+            if (piece[i] == '\n' || piece[i] == '\r') {
+                newline = true;
+                break;
+            }
+            output[used++] = piece[i];
+        }
+        output[used] = '\0';
+        if (newline) break;
+        if (llama_decode(ctx, llama_batch_get_one(&next, 1)) != 0) return -10;
+    }
+    return used;
 }
