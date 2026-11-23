@@ -150,3 +150,13 @@ The panel session is verified before delegation. The module reads the same
 `arena.sqlite3` database path passed from `server.py` and retains the
 legacy arbiter metadata, errors and PGN response headers. It does not serve
 Worker machine tokens or create a second game store.
+
+## Model inventory and Elo GET boundary
+
+`web_panel_inventory_api` handles authenticated read operations for the
+model inventory, model admission decisions, and PURE_AI / AI_ENGINE Elo
+rankings. `server.Handler.do_GET` validates the browser session before
+calling it, while the adapter reuses `league.connect()` and existing domain
+services. Metadata normalization, budget fields, error status codes and
+response formats remain compatible. No Worker-token fallback or separate
+model registry is introduced.
