@@ -96,3 +96,25 @@ def test_registry_admission_revision_must_match_model_revision(tmp_path):
                    ("2"*40,))
     with pytest.raises(WorkerModelRegistryError):
         resolve_approved_worker_gguf(dbpath,SHA)
+
+
+def test_model_source_endpoint_requires_machine_token_and_existing_assignment():
+    from pathlib import Path
+    server = (Path(__file__).resolve().parents[1] / "server.py").read_text()
+    endpoint = server.split(
+        "if path == '/api/remote-workers/model-source':", 1
+    )[1].split("if path == '/api/remote-workers/board-view':", 1)[0]
+    assert "set(payload) != {" in endpoint
+    assert "'worker_id', 'token', 'nonce'" in endpoint
+    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
+    assert "WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)" in endpoint
+    assert "assignment.get('state') != 'assigned'" in endpoint
+    assert "assignment['job']['model_sha256']" in endpoint
+    assert "resolve_approved_worker_gguf(" in endpoint
+    assert "repeat != assignment" in endpoint
+    assert "state': 'approved_metadata_only'" in endpoint
+    assert "WorkerModelRegistryError" in endpoint
+    assert "assign_from_arena(" not in endpoint
+    assert "register_local_ready(" not in endpoint
+    assert "download_version(" not in endpoint
+    assert "cleanup_version(" not in endpoint
