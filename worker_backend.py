@@ -11,10 +11,11 @@ import os
 from remote_worker_phone_api import ROUTES, handle_phone_request
 from remote_worker_tokens import WorkerTokenStore
 from worker_update_resume_status_api import ROUTE as RESUME_STATUS_ROUTE, handle_update_resume_status
+from worker_update_safety_api import ROUTE as UPDATE_SAFETY_ROUTE, handle_update_safety
 
 WORKER_ROUTE_PREFIX = "/api/remote-workers/"
 AUTH_ROUTE = "/api/remote-workers/authenticate"
-WORKER_POST_ROUTES = frozenset(ROUTES) | {AUTH_ROUTE, RESUME_STATUS_ROUTE}
+WORKER_POST_ROUTES = frozenset(ROUTES) | {AUTH_ROUTE, RESUME_STATUS_ROUTE, UPDATE_SAFETY_ROUTE}
 
 
 def dispatch_worker_post(handler, path, db, live_snapshot):
@@ -45,6 +46,9 @@ def dispatch_worker_post(handler, path, db, live_snapshot):
 
     if path == RESUME_STATUS_ROUTE:
         handle_update_resume_status(handler, db)
+        return True
+    if path == UPDATE_SAFETY_ROUTE:
+        handle_update_safety(handler, db)
         return True
 
     if path not in ROUTES:
