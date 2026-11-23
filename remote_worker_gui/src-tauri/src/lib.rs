@@ -35,6 +35,9 @@ mod android_model_runtime_guard;
 // Read-only ABI preflight: actual embedded llama.cpp is not bundled yet.
 #[allow(dead_code)]
 mod android_embedded_llama;
+// Internal-only, verified GGUF load/free; dispatch and token generation disabled.
+#[cfg(target_os = "android")]
+mod android_llama_runtime;
 // Read-only preparation plan; a normal chess job is not a download lease.
 #[allow(dead_code)]
 mod android_model_preflight;
