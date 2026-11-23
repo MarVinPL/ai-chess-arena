@@ -21,6 +21,8 @@ mod android_local_llama;
 mod android_model_cache;
 #[allow(dead_code)]
 mod android_model_source;
+#[allow(dead_code)]
+mod android_model_download;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
 #[allow(dead_code)]
