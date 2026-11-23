@@ -21,6 +21,8 @@ import adjudication
 import passkey_test
 import tournament_checkpoint
 import remote_worker_tokens
+import worker_backend
+import web_panel_backend
 import arena_auth
 import model_permissions
 
@@ -1315,26 +1317,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def send_panel_asset(self, url_path):
-        # Exact URL allowlist: never interpolate user input into a filesystem path.
-        assets = {
-            '/assets/arena.css': ('web/css/arena.css', 'text/css; charset=utf-8'),
-            '/assets/arena.js': ('web/js/arena.js', 'text/javascript; charset=utf-8'),
-            '/assets/navigation.js': ('web/js/navigation.js', 'text/javascript; charset=utf-8'),
-            '/assets/navigation.css': ('web/css/navigation.css', 'text/css; charset=utf-8'),
-        }
-        entry = assets.get(url_path)
-        if entry is None:
-            self.send_error(404)
-            return
-        filename, content_type = entry
-        body = (ROOT / filename).read_bytes()
-        self.send_response(200)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.end_headers()
-        self.wfile.write(body)
+        # The panel authentication check remains in do_GET before this call.
+        web_panel_backend.serve_panel_asset(self, url_path, ROOT)
     def authenticated_user(self):
         return arena_auth.session_user(self.headers.get('Cookie'))
     def do_GET(self):
@@ -1652,37 +1636,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if path == '/api/remote-workers/authenticate':
-            # Token-only authentication; token issuance is admin-only and offline.
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id, token = payload.get('worker_id'), payload.get('token')
-                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
-                    self.send_json({'authenticated': False}, 401)
-                    return
-                self.send_json({'authenticated': True, 'worker_id': worker_id})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-            except Exception:
-                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
-            return
-        # Opt-in Android Worker API, independent from phone tournament dispatch.
-        # No browser/admin session is accepted here: authenticate each machine
-        # request using the existing SQLite WorkerTokenStore.
-        from remote_worker_phone_api import ROUTES, handle_phone_request
-        if path in ROUTES:
-            if os.environ.get('ARENA_PHONE_WORKER_API_ENABLED') != '1':
-                self.send_json({'error': 'Android Worker API nie jest jeszcze włączone'}, 503)
-                return
-            with live_lock:
-                worker_live_snapshot = dict(live_status)
-            handle_phone_request(self, path, DB, worker_live_snapshot)
+        # Worker routing is a separate machine-token boundary, never a
+        # panel-session or administrator endpoint. This is deliberately first.
+        with live_lock:
+            worker_live_snapshot = dict(live_status)
+        if worker_backend.dispatch_worker_post(self, path, DB, worker_live_snapshot):
             return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
