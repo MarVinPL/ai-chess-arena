@@ -281,3 +281,28 @@ def test_download_preflight_never_treats_chess_job_as_transfer_lease():
     assert "download_verified_gguf_via_http3(" not in code
     assert "retire_model(" not in code
     assert "preflight_assigned_gguf(" not in LIB.split("generate_handler![", 1)[-1]
+
+
+def test_download_cannot_start_continue_or_publish_without_fresh_lease():
+    downloader = (BASE / "remote_worker_gui/src-tauri/src/android_model_download.rs").read_text()
+    section = downloader.split(
+        "pub(crate) async fn download_approved_model<F, P, L>(", 1
+    )[1].split("#[cfg(test)]", 1)[0]
+    assert "mut check_active_lease: L," in section
+    assert "L: FnMut() -> Result<(), String>" in section
+    assert section.count("check_active_lease()?;") >= 4
+    assert section.index("check_active_lease()?;") < section.index(
+        "let metadata = fs::symlink_metadata(root)"
+    )
+    assert "while let Some(chunk)" in section
+    after_chunk = section.split("while let Some(chunk)", 1)[1]
+    assert after_chunk.index("check_active_lease()?;") < after_chunk.index(
+        "file.write_all(&chunk)"
+    )
+    publish = section.split("fs::rename(&partial, &target)", 1)[0]
+    assert publish.rfind("check_active_lease()?;") > publish.rfind(
+        "file.sync_all()"
+    )
+    assert "if result.is_err()" in section
+    assert "fs::remove_file(&partial)" in section
+    assert 'download_approved_model(' not in LIB
