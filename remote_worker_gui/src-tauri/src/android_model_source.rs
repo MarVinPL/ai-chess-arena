@@ -55,6 +55,23 @@ pub(crate) fn validate_model_source(source: &ApprovedGguf) -> Result<Url, String
     Ok(url)
 }
 
+/// Bind authenticated Arena job's exact model digest to an entry fetched
+/// independently from the approved DB registry. Neither job JSON nor WebView
+/// may choose source_url/size. This is necessary but NOT sufficient for a
+/// download: trusted coordinator must still verify assignment/lease and STOP.
+pub(crate) fn bind_approved_model_to_job(
+    assigned_model_sha256: &str,
+    registry_model: &ApprovedGguf,
+) -> Result<Url, String> {
+    if !valid_digest(assigned_model_sha256) {
+        return Err("Przydział Areny nie zawiera prawidłowego SHA-256 modelu".into());
+    }
+    if assigned_model_sha256 != registry_model.sha256 {
+        return Err("Model z rejestru nie odpowiada przydziałowi Areny".into());
+    }
+    validate_model_source(registry_model)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +85,26 @@ mod tests {
     fn source() -> String {
         format!("https://huggingface.co/owner/repo/resolve/{}/model.Q4_K_M.gguf",
             "1".repeat(40))
+    }
+
+    #[test]
+    fn bound_registry_model_must_match_authenticated_job_digest() {
+        let approved = candidate(&source());
+        assert!(bind_approved_model_to_job(&approved.sha256, &approved).is_ok());
+        assert!(bind_approved_model_to_job(&"b".repeat(64), &approved).is_err());
+        assert!(bind_approved_model_to_job(&"A".repeat(64), &approved).is_err());
+        assert!(bind_approved_model_to_job("user-controlled-url", &approved).is_err());
+    }
+
+    #[test]
+    fn assigned_digest_does_not_authorize_unpinned_registry_source() {
+        let mut approved = candidate(&source());
+        approved.source_url = approved.source_url.replace(
+            &"1".repeat(40), "main");
+        assert!(bind_approved_model_to_job(&approved.sha256, &approved).is_err());
+        approved.source_url = source();
+        approved.size_bytes = MAX_MODEL_BYTES + 1;
+        assert!(bind_approved_model_to_job(&approved.sha256, &approved).is_err());
     }
 
     #[test]
