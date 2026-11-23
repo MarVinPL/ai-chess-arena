@@ -39,6 +39,7 @@ import web_panel_tournament_read_api
 import web_panel_hf_catalog_api
 import web_panel_storage_api
 import web_panel_passkey_tests_api
+import web_panel_export_api
 import arena_auth
 import model_permissions
 
@@ -1379,6 +1380,8 @@ class Handler(BaseHTTPRequestHandler):
         if web_panel_passkey_tests_api.dispatch_panel_passkey_tests_get(
                 self, path, raw_path, DB):
             return
+        if web_panel_export_api.dispatch_panel_export_get(self, path, DB):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1394,24 +1397,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path == '/api/export/pgn':
-            with sqlite3.connect(DB) as c:
-                rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
-            body = ('\n\n'.join(row[0].strip() for row in rows if row[0].strip()) + ('\n' if rows else '')).encode('utf-8')
-            self.send_response(200); self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.pgn"')
-            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
-        elif path == '/api/export/csv':
-            output = io.StringIO(newline='')
-            writer = csv.writer(output)
-            writer.writerow(['id','started_at','ended_at','white_model','black_model','result','move_count','illegal_attempts','avg_move_seconds','pgn'])
-            with sqlite3.connect(DB) as c:
-                for row in c.execute('SELECT id,started_at,ended_at,white_model,black_model,result,move_count,illegal_attempts,avg_move_seconds,pgn FROM games ORDER BY id'):
-                    writer.writerow(row)
-            body = output.getvalue().encode('utf-8-sig')
-            self.send_response(200); self.send_header('Content-Type', 'text/csv; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.csv"')
-            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
         elif path == '/':
             self.send_html_file('index.html')
         else: self.send_error(404)
