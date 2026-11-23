@@ -179,3 +179,12 @@ It reuses the existing candidate catalog, stored reports and reviews from
 `league.connect()`, preserves the explicit response field projection and
 404/422/503 error contracts. No second catalog, model allowlist or Worker
 credential path is created.
+
+## Storage overview GET boundary
+
+`web_panel_storage_api` serves the existing `GET /api/storage` after the
+browser session gate. It reuses `league.storage_status()` and the authoritative
+`model_store.MANAGED_DIR`, returning the same managed GGUF filenames, byte
+sizes and free space. The existing create-if-absent directory behavior and
+failure semantics are retained. No Worker token or second model directory
+is introduced.
