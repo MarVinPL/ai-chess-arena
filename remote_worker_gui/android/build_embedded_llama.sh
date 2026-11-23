@@ -75,7 +75,7 @@ for sym in llama_backend_init llama_model_load_from_file llama_init_from_model l
   }
 done
 "$NM" -D --defined-only "$LIB_DIR/libarena_llama_bridge.so" > "$STAGING/bridge-symbols.txt"
-for sym in arena_llama_model_open arena_llama_model_close arena_llama_model_is_open; do
+for sym in arena_llama_model_open arena_llama_model_close arena_llama_model_is_open arena_llama_generate_greedy; do
   awk -v expected="$sym" '$NF == expected { found=1 } END { exit !found }' \
     "$STAGING/bridge-symbols.txt" || {
     echo "Missing native bridge symbol $sym" >&2; exit 1
