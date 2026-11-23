@@ -57,6 +57,7 @@ test -x "$CXX"
 "$CXX" -std=c++17 -O2 -fPIC -shared -fvisibility=hidden \
   -static-libstdc++ \
   -I"$STAGING/source/include" \
+  -I"$STAGING/source/ggml/include" \
   android/arena_llama_bridge.cpp \
   -L"$LIB_DIR" -llama -Wl,-rpath,'$ORIGIN' \
   -o "$LIB_DIR/libarena_llama_bridge.so"
