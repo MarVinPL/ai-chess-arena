@@ -412,3 +412,26 @@ def test_embedded_llama_diagnostic_does_not_activate_inference():
     assert 'id="embeddedLlamaStatus"' in ui
     assert "invoke('inspect_embedded_llama_engine')" in ui
     assert 'Inferencja bez Termux pozostaje wyłączona' in ui
+
+
+def test_pinned_embedded_llama_build_and_apk_packaging_are_fail_closed():
+    script = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
+    workflow = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
+    assert "LLAMA_COMMIT=b1b770d90d94cad9e9ea5b993bdbc383a522fb28" in script
+    assert 'git -C "$STAGING/source" fetch --no-tags --depth 1 origin "$LLAMA_COMMIT"' in script
+    assert 'rev-parse FETCH_HEAD' in script
+    assert '-DANDROID_ABI=arm64-v8a' in script
+    assert '-DGGML_NATIVE=OFF' in script
+    assert '-DGGML_OPENMP=OFF' in script
+    assert '-DLLAMA_BUILD_SERVER=OFF' in script
+    assert 'test ! -e "$STAGING"' in script
+    assert 'git -C "$STAGING/source" remote add origin "$LLAMA_REPO"' in script
+    assert 'cp -L "$so" "$LIB_DIR/lib${lib}.so"' in script
+    assert 'llvm-nm' in script
+    assert 'llama_model_load_from_file' in script
+    assert 'bash android/build_embedded_llama.sh' in workflow
+    assert 'unzip -Z1 "$apk"' in workflow
+    assert 'lib/arm64-v8a/lib${name}.so' in workflow
+    assert workflow.index('bash android/build_embedded_llama.sh') < workflow.index('npx tauri android build')
+    assert 'LLAMA_COMMIT=master' not in script
+    assert 'curl ' not in script
