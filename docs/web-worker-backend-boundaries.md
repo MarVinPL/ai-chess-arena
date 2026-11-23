@@ -18,7 +18,8 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
                 +-- Web panel --> web_panel_auth (login, logout, origin/rate limits)
                     |-- arena_auth browser sessions
                     |-- web_panel_backend (exact static asset allowlist)
-                    +-- admin/model/tournament handlers (incremental extraction)
+                    +-- web_panel_model_api (model permissions and reviews)
+                    +-- remaining admin/tournament handlers (incremental extraction)
                                |
                                +-- shared chess / model / checkpoint modules
 ```
@@ -46,7 +47,10 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
 - `server.Handler.do_POST` delegates Worker authentication and the
   phone routes to `worker_backend.dispatch_worker_post` first; it then
   delegates browser login/logout to `web_panel_auth.dispatch_panel_auth_post`.
-- Existing panel business API handlers remain inside `server.py` for now.
+- Browser model-permission read/write and model-review-submission reads now
+  delegate to `web_panel_model_api.py` behind the established session+Origin
+  checks and reuse `league.connect()` and domain services. Other panel business
+  API handlers remain inside `server.py` for now.
   Further extraction must keep auth and CSRF checks in front of every panel
   action, and requires its own tests within Issue #314 before closing it.
 - Unfinished Draft PR #197, #292 and #296 contain overlapping Worker
