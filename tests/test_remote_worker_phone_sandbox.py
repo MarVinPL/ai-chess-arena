@@ -195,3 +195,77 @@ def test_stop_request_fences_http_result_without_fake_ack_or_checkpoint(sandbox)
             "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
             (WORKER,)
         ).fetchone()[0] == 0
+
+
+def test_power_loss_reconnect_never_recovers_running_job_from_ready(sandbox):
+    """Issue #291: a phone reboot is not evidence that a previous lease stopped."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    checkpoint_before = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    # Simulate loss of the client's in-memory session and a durable STOP request
+    # remaining in SQLite while the phone reconnects with its valid token.
+    req_id = WorkerUpdatePause(path).request(WORKER, job_id)
+    reopened = WorkerUpdatePause(path)
+    assert reopened.pending(WORKER) == {
+        "job_id": job_id, "request_id": req_id, "phase": "requested"
+    }
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[0] == 400
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": req_id
+    }
+    # Neither reboot nor reconnect can release the old lease or change chess.
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == checkpoint_before
+
+
+def test_stop_ack_must_not_be_inferred_from_reconnect_or_wrong_proof(sandbox):
+    """Issue #291: no STOP ACK from merely receiving STOP or asserting ready."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    stop = WorkerUpdatePause(path)
+    request_id = stop.request(WORKER, job_id)
+    old = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    cases = [
+        (False, False, request_id),
+        (True, False, request_id),
+        (False, True, request_id),
+        (True, True, "0" * 32),
+    ]
+    for stopped, checkpoint_verified, received_id in cases:
+        with pytest.raises(ValueError):
+            stop.acknowledge(
+                WORKER, job_id, received_id,
+                worker_stopped=stopped,
+                checkpoint_verified=checkpoint_verified,
+            )
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})[0] == 409
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == old
