@@ -53,8 +53,12 @@ done
 
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
 READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+"$NM" -D --defined-only "$LIB_DIR/libllama.so" > "$STAGING/llama-symbols.txt"
 for sym in llama_backend_init llama_model_load_from_file llama_new_context_with_model llama_decode llama_sampler_init_greedy; do
-  "$NM" -D --defined-only "$LIB_DIR/libllama.so" | awk '{print $NF}' | grep -Fxq "$sym" || {
+  # Read the complete symbols file; with pipefail, grep -q on a live nm/awk
+  # pipe could SIGPIPE the producer and incorrectly report a missing symbol.
+  awk -v expected="$sym" '$NF == expected { found=1 } END { exit !found }' \
+    "$STAGING/llama-symbols.txt" || {
     echo "Pinned llama.cpp ABI missing symbol $sym" >&2
     exit 1
   }
