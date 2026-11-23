@@ -13,6 +13,7 @@ import server
 
 class HandlerStub:
     def __init__(self, payload):
+        self.path = "/api/remote-workers/authenticate"
         self.headers = {"Content-Length": str(len(payload)), "Cookie": "arena_session=admin"}
         self.rfile = io.BytesIO(payload)
         self.responses = []
