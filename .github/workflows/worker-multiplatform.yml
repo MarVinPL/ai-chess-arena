@@ -18,9 +18,10 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
   pull_request:
-    # Temporary integration target for stacked updater PR #197; remove before main.
-    branches: [main, feat/issue-194-worker-defaults]
+    # Temporary stacked integration targets for #197/#294/#296; remove before main.
+    branches: [main, feat/issue-194-worker-defaults, feat/issue-293-android-model-diagnostics]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'
@@ -34,6 +35,7 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
 
 permissions:
   contents: read
@@ -76,6 +78,7 @@ jobs:
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
+              - 'remote_worker_gui/android/**'
       - name: Select only changed platforms
         id: select
         shell: bash
