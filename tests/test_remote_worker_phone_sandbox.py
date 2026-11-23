@@ -357,6 +357,69 @@ def test_trusted_ack_does_not_release_execution_lease_or_allow_replay(sandbox):
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == before
 
 
+def test_stop_between_result_read_and_checkpoint_commit(sandbox, monkeypatch):
+    """STOP arriving after runner's read must still prevent a chess commit."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original_checkpoint = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    code, reply = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4",
+    }})
+    assert code == 200 and reply["state"] == "received_not_applied"
+
+    result_read = threading.Event()
+    continue_finalization = threading.Event()
+    original_read = WorkerInferenceDelivery.read_arena_result
+
+    def delayed_read(self, worker_id, selected_job):
+        proposed = original_read(self, worker_id, selected_job)
+        result_read.set()
+        if not continue_finalization.wait(timeout=5):
+            raise RuntimeError("Timed out waiting to test concurrent STOP")
+        return proposed
+
+    monkeypatch.setattr(WorkerInferenceDelivery, "read_arena_result", delayed_read)
+    outcome = []
+
+    def finalize_in_background():
+        try:
+            outcome.append(("success", finalize_one_result(path, WORKER)))
+        except Exception as exc:
+            outcome.append(("error", exc))
+
+    runner = threading.Thread(target=finalize_in_background)
+    runner.start()
+    try:
+        assert result_read.wait(timeout=5), "Runner never reached result read"
+        request_id = WorkerUpdatePause(path).request(WORKER, job_id)
+        assert request_id
+    finally:
+        continue_finalization.set()
+        runner.join(timeout=5)
+
+    assert not runner.is_alive(), "Runner remained blocked"
+    assert len(outcome) == 1 and outcome[0][0] == "error"
+    assert isinstance(outcome[0][1], ValueError)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original_checkpoint
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 1
+
+
 def test_stop_fences_coordinator_read_even_for_result_received_before_stop(sandbox):
     """A previously stored legal UCI must not be handed to the runner after STOP."""
     from remote_worker_update_pause import WorkerUpdatePause
