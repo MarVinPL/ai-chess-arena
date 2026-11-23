@@ -26,6 +26,9 @@ mod android_model_download;
 // Internal-only JNI bridge to Android platform QUIC/HTTP3; not dispatched yet.
 #[cfg(target_os = "android")]
 mod android_quic_bridge;
+// Pure lifecycle/STOP-ACK policy; no transport or cache deletion effects.
+#[allow(dead_code)]
+mod android_model_lifecycle;
 // Read-only preparation plan; a normal chess job is not a download lease.
 #[allow(dead_code)]
 mod android_model_preflight;
