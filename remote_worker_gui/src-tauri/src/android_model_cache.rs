@@ -75,6 +75,34 @@ pub(crate) struct CacheEntry {
 
 pub(crate) const DEFAULT_FREE_RESERVE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
+/// Android's File.getUsableSpace reports *usable* bytes on the same volume as
+/// this app's private files. Neither JavaScript nor the Arena can select a
+/// storage path. Unknown space is an error, never permission to download.
+#[cfg(target_os = "android")]
+pub(crate) fn android_private_free_bytes() -> Result<u64, String> {
+    use jni::{objects::JObject, JavaVM};
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
+        .map_err(|_| "Android nie udostępnił licznika miejsca")?;
+    let mut env = vm.attach_current_thread()
+        .map_err(|_| "Nie można odczytać miejsca aplikacji")?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let files = env.call_method(&context, "getFilesDir", "()Ljava/io/File;", &[])
+        .map_err(|_| "Brak prywatnego katalogu Android Worker")?
+        .l().map_err(|_| "Błąd katalogu Android Worker")?;
+    if files.is_null() {
+        return Err("Brak prywatnego katalogu Android Worker".into());
+    }
+    let usable = env.call_method(&files, "getUsableSpace", "()J", &[])
+        .map_err(|_| "Android nie podał dostępnego miejsca")?
+        .j().map_err(|_| "Nieprawidłowy odczyt wolnego miejsca")?;
+    if usable < 0 {
+        return Err("Android zwrócił nieprawidłowy rozmiar wolnego miejsca".into());
+    }
+    Ok(usable as u64)
+}
+
+
 /// Planning is pure: no files are deleted from this function. The downloader
 /// must re-check actual free bytes after each verified deletion, and again
 /// immediately before committing the transfer. The trusted coordinator is
