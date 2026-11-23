@@ -1944,6 +1944,56 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_json({'error': 'Nie można pobrać zadania Workera'}, 500)
             return
+        if path == '/api/remote-workers/model-source':
+            # Read-only source metadata for the ALREADY assigned model only.
+            # Authenticated caller cannot choose sha, URL, version or lease.
+            # No new assignments, downloads, GC or execution side effects.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 2048:
+                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict) or set(payload) != {
+                    'worker_id', 'token', 'nonce'
+                }:
+                    raise ValueError('Invalid model metadata request')
+                worker_id, token, nonce = (
+                    payload['worker_id'], payload['token'], payload['nonce'])
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid metadata nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                from remote_worker_inference_delivery import WorkerInferenceDelivery
+                from remote_worker_model_registry import (
+                    resolve_approved_worker_gguf, WorkerModelRegistryError)
+                assignment = WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)
+                if assignment.get('state') != 'assigned':
+                    self.send_json({'error': 'Brak aktywnego, ważnego przydziału'}, 409)
+                    return
+                approved = resolve_approved_worker_gguf(
+                    DB, assignment['job']['model_sha256'])
+                # Re-check lease after DB read; a revoked/moved assignment may
+                # not be returned. A metadata response is never a download
+                # capability; client must independently verify prior to use.
+                repeat = WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)
+                if repeat != assignment or repeat.get('state') != 'assigned':
+                    self.send_json({'error': 'Przydział uległ zmianie'}, 409)
+                    return
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce,
+                    'state': 'approved_metadata_only',
+                    'model': approved,
+                })
+            except WorkerModelRegistryError:
+                self.send_json({'error': 'Model nie jest dopuszczony'}, 409)
+            except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie metadanych'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można odczytać rejestru modeli'}, 503)
+            return
         if path == '/api/remote-workers/board-view':
             # Read-only view of Arena-owned FEN, bound to the authenticated
             # worker's *current* lease and matching live worker/job identity.
