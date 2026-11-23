@@ -26,6 +26,7 @@ import web_panel_backend
 import web_panel_auth
 import web_panel_model_api
 import web_panel_download_api
+import web_panel_tournament_api
 import arena_auth
 import model_permissions
 
@@ -1741,25 +1742,10 @@ class Handler(BaseHTTPRequestHandler):
                     result = {'version_id': version_id, 'license_verified': True}
                 elif path == '/api/models/register':
                     result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
-                elif path == '/api/tournaments/start':
-                    result = start_tournament(int(payload.get('tournament_id', 0)))
-                elif path == '/api/tournaments/admissions':
-                    if tournament_thread and tournament_thread.is_alive():
-                        raise RuntimeError('Najpierw bezpiecznie zatrzymaj aktywny turniej')
-                    result = league.create_late_admission_batch(
-                        int(payload.get('parent_tournament_id', 0)), payload.get('model_ids'))
-                elif path == '/api/tournaments/entries':
-                    if tournament_thread and tournament_thread.is_alive():
-                        raise RuntimeError('Nie można zmieniać składu podczas aktywnego turnieju')
-                    result = league.add_prestart_tournament_entries(
-                        int(payload.get('tournament_id', 0)), payload.get('model_ids'))
-                elif path == '/api/tournaments/stop':
-                    active = bool(tournament_thread and tournament_thread.is_alive())
-                    if active:
-                        tournament_stop_event.set()
-                        result = {'status': 'stop_requested', 'checkpoint_required': True}
-                    else:
-                        result = {'status': 'not_running'}
+                elif path in web_panel_tournament_api.TOURNAMENT_POST_ROUTES:
+                    result = web_panel_tournament_api.handle_tournament_admin_post(
+                        path, payload, start_tournament=start_tournament,
+                        active_thread=tournament_thread, stop_event=tournament_stop_event)
                 elif path == '/api/models/download':
                     if payload.get('confirm_download') is not True:
                         raise ValueError('Wymagane jawne potwierdzenie pobrania')
@@ -1777,7 +1763,7 @@ class Handler(BaseHTTPRequestHandler):
                     finally:
                         model_store.MODEL_LIFECYCLE_LOCK.release()
                 else:
-                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
+                    raise ValueError('Nieznana operacja administracyjna')
                 self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
