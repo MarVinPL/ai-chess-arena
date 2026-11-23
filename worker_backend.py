@@ -11,15 +11,16 @@ import os
 from remote_worker_phone_api import ROUTES, handle_phone_request
 from remote_worker_tokens import WorkerTokenStore
 
+WORKER_ROUTE_PREFIX = "/api/remote-workers/"
 AUTH_ROUTE = "/api/remote-workers/authenticate"
 WORKER_POST_ROUTES = frozenset(ROUTES) | {AUTH_ROUTE}
 
 
 def dispatch_worker_post(handler, path, db, live_snapshot):
-    """Return True only for a recognized Worker path, including denied calls.
+    """Own the entire Worker namespace before any panel session logic.
 
-    Dispatch must run BEFORE web-panel login and CSRF checks. Unknown paths
-    fall through to web routing, where they are not granted Worker access.
+    Known routes use machine-token authentication; unknown Worker paths are
+    rejected here rather than falling through to browser-cookie auth.
     """
     if path == AUTH_ROUTE:
         try:
@@ -42,6 +43,9 @@ def dispatch_worker_post(handler, path, db, live_snapshot):
         return True
 
     if path not in ROUTES:
+        if path.startswith(WORKER_ROUTE_PREFIX):
+            handler.send_json({"error": "Nieznana operacja Workera"}, 404)
+            return True
         return False
     if os.environ.get("ARENA_PHONE_WORKER_API_ENABLED") != "1":
         handler.send_json({"error": "Android Worker API nie jest jeszcze włączone"}, 503)
