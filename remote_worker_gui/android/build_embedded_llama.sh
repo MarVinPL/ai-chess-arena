@@ -51,6 +51,16 @@ for lib in llama ggml ggml-base ggml-cpu; do
   cp -L "$so" "$LIB_DIR/lib${lib}.so"
 done
 
+# Compile a small, app-owned open/close shim against the exact pinned ABI.
+CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang++"
+test -x "$CXX"
+"$CXX" -std=c++17 -O2 -fPIC -shared -fvisibility=hidden \
+  -static-libstdc++ \
+  -I"$STAGING/source/include" \
+  android/arena_llama_bridge.cpp \
+  -L"$LIB_DIR" -llama -Wl,-rpath,'$ORIGIN' \
+  -o "$LIB_DIR/libarena_llama_bridge.so"
+
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
 READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 "$NM" -D --defined-only "$LIB_DIR/libllama.so" > "$STAGING/llama-symbols.txt"
@@ -61,6 +71,13 @@ for sym in llama_backend_init llama_model_load_from_file llama_init_from_model l
     "$STAGING/llama-symbols.txt" || {
     echo "Pinned llama.cpp ABI missing symbol $sym" >&2
     exit 1
+  }
+done
+"$NM" -D --defined-only "$LIB_DIR/libarena_llama_bridge.so" > "$STAGING/bridge-symbols.txt"
+for sym in arena_llama_model_open arena_llama_model_close arena_llama_model_is_open; do
+  awk -v expected="$sym" '$NF == expected { found=1 } END { exit !found }' \
+    "$STAGING/bridge-symbols.txt" || {
+    echo "Missing native bridge symbol $sym" >&2; exit 1
   }
 done
 for so in "$LIB_DIR"/*.so; do
