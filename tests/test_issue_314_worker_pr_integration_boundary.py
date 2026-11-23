@@ -57,14 +57,10 @@ def test_unintegrated_update_routes_must_not_be_implicitly_authorized():
         "/api/remote-workers/update-resume-status",
         "/api/remote-workers/update-safety",
         "/api/remote-workers/model-source",
-    }
-    assert not (integrated & PANEL_POST_ROUTES)
-    assert integrated <= worker_backend.WORKER_POST_ROUTES
-    for route in (
         "/api/remote-workers/update-reserve",
         "/api/remote-workers/update-release",
         "/api/remote-workers/update-hold-status",
-    ):
-        assert route not in PANEL_POST_ROUTES
-        # Remaining draft-only operations must be migrated explicitly.
-        assert route not in worker_backend.WORKER_POST_ROUTES
+    }
+    assert not (integrated & PANEL_POST_ROUTES)
+    assert integrated <= worker_backend.WORKER_POST_ROUTES
+    assert len(integrated) == 6
