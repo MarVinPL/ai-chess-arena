@@ -144,6 +144,8 @@ object WorkerQuicTransport {
         var request: UrlRequest? = null
         var engine: HttpEngine? = null
         val executor = Executors.newSingleThreadExecutor()
+        // A timed-out transfer must never be promoted by a late callback.
+        val aborted = AtomicBoolean(false)
         try {
             val root = File(context.filesDir, "worker-gguf-models")
             check((root.isDirectory || root.mkdir()) && !java.nio.file.Files.isSymbolicLink(root.toPath()))
@@ -165,6 +167,8 @@ object WorkerQuicTransport {
             var error: String? = null
             var protocol = ""
             var received = 0L
+            var headerBytes = 0
+            val header = ByteArray(4)
             var redirects = 0
             val sha = MessageDigest.getInstance("SHA-256")
             val stream = FileOutputStream(pending, false)
@@ -174,6 +178,7 @@ object WorkerQuicTransport {
                     request: UrlRequest, info: UrlResponseInfo, newLocationUrl: String
                 ) {
                     try {
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         check(redirects++ < 3) { "Too many redirects" }
                         canonicalUri(newLocationUrl)
                         request.followRedirect()
@@ -185,6 +190,7 @@ object WorkerQuicTransport {
 
                 override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
                     try {
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         check(info.httpStatusCode == 200) { "Unexpected GGUF status" }
                         val reportedLength = info.headers.asMap.entries
                             .firstOrNull { it.key.equals("content-length", ignoreCase = true) }
@@ -206,6 +212,7 @@ object WorkerQuicTransport {
                     request: UrlRequest, info: UrlResponseInfo, byteBuffer: ByteBuffer
                 ) {
                     try {
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         byteBuffer.flip()
                         val count = byteBuffer.remaining()
                         received = Math.addExact(received, count.toLong())
@@ -216,6 +223,17 @@ object WorkerQuicTransport {
                         }
                         val bytes = ByteArray(count)
                         byteBuffer.get(bytes)
+                        if (headerBytes < header.size) {
+                            val take = minOf(bytes.size, header.size - headerBytes)
+                            bytes.copyInto(header, headerBytes, 0, take)
+                            headerBytes += take
+                            if (headerBytes == header.size) {
+                                check(header.contentEquals(byteArrayOf(71, 71, 85, 70))) {
+                                    "GGUF header mismatch"
+                                }
+                            }
+                        }
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         stream.write(bytes)
                         sha.update(bytes)
                         byteBuffer.clear()
@@ -228,12 +246,18 @@ object WorkerQuicTransport {
 
                 override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
                     try {
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         stream.fd.sync()
+                        check(headerBytes == header.size &&
+                            header.contentEquals(byteArrayOf(71, 71, 85, 70))) {
+                            "GGUF header mismatch"
+                        }
                         check(received == expectedBytes) { "Truncated GGUF" }
                         val actual = sha.digest().joinToString("") { "%02x".format(it) }
                         check(actual == sha256) { "GGUF SHA-256 mismatch" }
                         check(root.usableSpace >= reserveBytes) { "insufficient_storage" }
                         check(!complete.exists()) { "GGUF target already exists" }
+                        check(!aborted.get()) { "GGUF transfer aborted" }
                         check(pending.renameTo(complete)) { "Could not publish verified GGUF" }
                     } catch (e: Exception) {
                         error = "GGUF integrity or publishing failed"
@@ -255,12 +279,15 @@ object WorkerQuicTransport {
                 request.start()
                 check(done.await(2, TimeUnit.HOURS)) { "GGUF transfer timed out" }
             } finally {
+                // Abort publication before asynchronous cancellation returns.
+                aborted.set(true)
                 request?.cancel()
                 stream.close()
             }
             check(error == null) { error ?: "GGUF transfer failed" }
             return protocol
         } finally {
+            aborted.set(true)
             // The published target is never deleted on error, only our own
             // incomplete staging file. No recursive cleanup.
             partial?.let { if (it.exists()) it.delete() }
