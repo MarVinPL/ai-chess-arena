@@ -324,3 +324,21 @@ def test_android_http3_never_publishes_late_aborted_or_non_gguf_download():
     assert publish.index('check(actual == sha256)') < publish.index('pending.renameTo(complete)')
     # The execution STOP/ACK gate is not yet wired, so this is still internal.
     assert 'download_verified_gguf_via_http3(' not in LIB
+
+
+
+def test_android_quic_jni_bridge_is_private_and_rehashes_gguf():
+    bridge = (BASE / "remote_worker_gui/src-tauri/src/android_quic_bridge.rs").read_text()
+    assert '#[cfg(target_os = "android")]\nmod android_quic_bridge;' in LIB
+    assert 'download_pinned_gguf_with_android_quic(' in bridge
+    assert 'validate_model_source(source)?;' in bridge
+    assert '"pl.marvin.aichessarena.worker.WorkerQuicTransport"' in bridge
+    assert '"downloadApproved"' in bridge
+    assert 'DEFAULT_FREE_RESERVE_BYTES' in bridge
+    assert 'fs::symlink_metadata(&target)' in bridge
+    assert 'verify_model(&mut file, source.size_bytes, &source.sha256)' in bridge
+    assert 'fn private_cache_root(' in bridge
+    assert 'download_pinned_gguf_with_android_quic(' not in LIB
+    assert '#[tauri::command]' not in bridge
+    assert 'JValue::Long(size)' in bridge
+    assert 'JValue::Long(reserve)' in bridge
