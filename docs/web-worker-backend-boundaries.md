@@ -207,3 +207,14 @@ record ordering, UTF-8 encoding (including the CSV BOM), PGN separators,
 column order, HTTP content types, attachment names and content lengths.
 Worker tokens cannot authorize these downloads and no second game store
 is introduced.
+
+## Live state read boundary
+
+`web_panel_live_state_api` handles the exact authenticated
+`GET /api/state` and `GET /api/live` routes. The original `server.py`
+remains the sole owner of the chess board, game state and live status.
+The state snapshot is taken under the existing shared RLock through
+`_panel_state_snapshot`; the live snapshot uses the existing `get_live`
+function. HTTP routing delegates only after browser-session validation.
+No independent board, Worker-token fallback or competing coordinator is
+introduced.
