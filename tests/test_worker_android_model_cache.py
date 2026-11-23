@@ -180,11 +180,11 @@ def test_stacked_android_quic_build_runs_without_exposing_signing_secrets():
     assert "branches: [main, feat/issue-295-native-model-cache]" in workflow
     assert "feat/issue-293-android-model-diagnostics" in workflow
     assert workflow.count("'remote_worker_gui/android/**'") == 3
-    guard = workflow.split("\n  android:\\n", 1)[1].split("\n  android_signed:\\n", 1)[0]
+    guard = workflow.split("  android:", 1)[1].split("  android_signed:", 1)[0]
     assert "refs/heads/feat/issue-295-native-model-cache" in guard
     assert "secrets:" not in guard
     assert "WORKER_ANDROID_DEBUG_KEYSTORE_B64" not in guard
-    signed = workflow.split("\n  android_signed:\\n", 1)[1]
+    signed = workflow.split("  android_signed:", 1)[1]
     assert "github.ref == 'refs/heads/main'" in signed
     assert "WORKER_ANDROID_DEBUG_KEYSTORE_B64" in signed
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in apk
