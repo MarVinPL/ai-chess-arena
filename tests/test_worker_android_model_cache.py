@@ -166,6 +166,6 @@ def test_android_http3_bridge_is_packaged_with_tauri_and_requires_approved_gguf(
     assert 'check(redirects++ < 3)' in bridge
     assert 'java.nio.file.Files.isSymbolicLink' in bridge
     assert 'WorkerQuicTransport.kt' in injector
-    assert 'shutil.copyfile(QUIC_SOURCE, QUIC_TARGET)' in injector
+    assert 'shutil.copyfile(QUIC_SOURCE, VAULT_TARGET.parent / QUIC_SOURCE.name)' in injector
     assert 'python3 android/inject_package_installer.py' in workflow
     assert 'downloadApproved(' not in LIB  # no untrusted Tauri IPC
