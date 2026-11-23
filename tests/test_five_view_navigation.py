@@ -93,7 +93,7 @@ const link=links[1];nav.listeners.click({target:{closest:()=>link},preventDefaul
 assert.strictEqual(location.hash,'#view-tournaments');assert.strictEqual(all['view-tournaments'].hidden,false);
 assert.strictEqual(all['view-live'].hidden,true);
 location.hash='#view-models';win.hashchange();assert.strictEqual(all['view-models'].hidden,false);
-assert.strictEqual(modelColumn.parent,all['view-models'].children[0]);
+assert.strictEqual(modelColumn.parent,all['view-models'].children[1]);
 assert.strictEqual(links[2].attrs['aria-current'],'page');
 assert.strictEqual(links[1].attrs['aria-current'],undefined);
 assert.strictEqual(leagueGrid.children.length,0);
