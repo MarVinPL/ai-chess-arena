@@ -122,3 +122,13 @@ implementation is injected by `server.py`, and `league.connect()` remains
 the single model-version database connection. Confirmation, exclusion
 checks, metadata evidence persistence and license updates remain unchanged.
 The server retains the same HTTP route names and response status policy.
+
+## Download status GET boundary
+
+`web_panel_download_status_api` handles the five exact GET paths for HF
+candidate download plans, history, events, files, and jobs. The main HTTP
+handler checks the browser session **before** forwarding requests. All
+responses retain their previous HTTP status behavior (including 404 for
+missing jobs and 422 for missing event job_id or service errors), and use
+existing `hf_candidate_downloads` state. No Worker-token fallback or
+alternate download scheduler is introduced.
