@@ -111,3 +111,14 @@ explicit confirmations, shared `model_store` service and its
 unlock in `finally`. Browser-session and Origin checks remain in the
 composition root; no Worker token is accepted, no separate filesystem
 registry or model ownership is introduced.
+
+## Model registration and license administration boundary
+
+`web_panel_model_license_api` owns browser-admin model registration,
+evidence retrieval, and manual license verification. The composition root
+continues to require browser session and Origin checks; Worker tokens cannot
+authorize these operations. The existing `fetch_hf_license_evidence`
+implementation is injected by `server.py`, and `league.connect()` remains
+the single model-version database connection. Confirmation, exclusion
+checks, metadata evidence persistence and license updates remain unchanged.
+The server retains the same HTTP route names and response status policy.
