@@ -361,3 +361,23 @@ def test_model_lifecycle_requires_terminal_stop_ack_and_reconciliation():
     assert 'retire_model(' not in lifecycle
     assert 'download_pinned_gguf_with_android_quic(' not in lifecycle
     assert '#[tauri::command]' not in lifecycle
+
+
+def test_app_owned_gguf_file_descriptor_remains_locked_until_runtime_stops():
+    runtime = (BASE / "remote_worker_gui/src-tauri/src/android_model_runtime_guard.rs").read_text()
+    assert 'mod android_model_runtime_guard;' in LIB
+    assert 'pub(crate) struct ModelSession' in runtime
+    assert 'pub(crate) file: File' in runtime
+    assert 'impl Drop for ModelSession' in runtime
+    assert 'pub(crate) fn open_verified_session(' in runtime
+    assert 'verify_model(&mut file, expected_size, digest)' in runtime
+    assert 'SeekFrom::Start(0)' in runtime
+    assert 'pub(crate) fn with_no_open_sessions<' in runtime
+    assert 'MAINTENANCE_ACTIVE.compare_exchange(' in runtime
+    assert 'if !active.is_empty()' in runtime
+    assert 'std::process::Command' not in runtime
+    assert 'fs::remove_file(' not in runtime
+    assert 'retire_model(' not in runtime
+    assert 'open_verified_session(' not in LIB
+    assert 'with_no_open_sessions(' not in LIB
+    assert '#[tauri::command]' not in runtime
