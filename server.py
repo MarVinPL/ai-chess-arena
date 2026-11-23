@@ -37,6 +37,7 @@ import web_panel_games_api
 import web_panel_inventory_api
 import web_panel_tournament_read_api
 import web_panel_hf_catalog_api
+import web_panel_storage_api
 import arena_auth
 import model_permissions
 
@@ -1372,6 +1373,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_hf_catalog_api.dispatch_panel_hf_catalog_get(self, path, raw_path):
             return
+        if web_panel_storage_api.dispatch_panel_storage_get(self, path):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1387,17 +1390,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path == '/api/storage':
-            status = league.storage_status()
-            managed = model_store.MANAGED_DIR
-            managed.mkdir(mode=0o700, parents=True, exist_ok=True)
-            status['managed_directory'] = str(managed)
-            status['managed_models'] = [
-                {'filename': p.name, 'size_bytes': p.stat().st_size}
-                for p in sorted(managed.glob('*.gguf')) if p.is_file()
-            ]
-            status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
-            self.send_json(status)
         elif path.startswith('/api/passkey-tests'):
             from urllib.parse import urlparse, parse_qs
             tid = parse_qs(urlparse(raw_path).query).get('tournament_id', [None])[0]
