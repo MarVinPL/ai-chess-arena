@@ -355,3 +355,42 @@ def test_trusted_ack_does_not_release_execution_lease_or_allow_replay(sandbox):
             (WORKER,),
         ).fetchone()[0] == 0
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == before
+
+
+def test_stop_fences_coordinator_read_even_for_result_received_before_stop(sandbox):
+    """A previously stored legal UCI must not be handed to the runner after STOP."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    response_code, accepted = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})
+    assert response_code == 200 and accepted["state"] == "received_not_applied"
+    delivery = WorkerInferenceDelivery(path)
+    assert delivery.read_arena_result(WORKER, job_id) == "e2e4"
+
+    # STOP wins over an uncommitted result, including coordinator-side reads.
+    stop = WorkerUpdatePause(path)
+    request_id = stop.request(WORKER, job_id)
+    with pytest.raises(ValueError, match="fenced"):
+        delivery.read_arena_result(WORKER, job_id)
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+    stop.acknowledge(WORKER, job_id, request_id,
+                     worker_stopped=True, checkpoint_verified=True)
+    with pytest.raises(ValueError, match="fenced"):
+        delivery.read_arena_result(WORKER, job_id)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT result_json FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() is not None  # still durable, but fenced from chess
