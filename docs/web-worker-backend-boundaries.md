@@ -20,6 +20,7 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
                     |-- web_panel_backend (exact static asset allowlist)
                     +-- web_panel_model_api (model permissions and reviews)
                     +-- web_panel_download_api (admin HF downloads)
+                    +-- web_panel_tournament_api (admin tournament lifecycle)
                     +-- remaining admin/tournament handlers (incremental extraction)
                                |
                                +-- shared chess / model / checkpoint modules
@@ -70,3 +71,13 @@ cookie-only denial, and check that no route has changed semantics.
 
 Revert the #314 PR on staging to restore the previous single-file dispatch
 if regression is found. Production deployment requires separate approval.
+
+## Tournament API extraction
+
+`web_panel_tournament_api` owns the five administrative tournament POST
+operations (create, start, stop, late admission, pre-start entries). Only the
+browser-session and Origin-validated HTTP handler can invoke it. The live
+thread and stop Event are **passed from server.py**, not copied into new
+module globals. It does not create a second coordinator, worker control
+path, SQLite database, checkpoint store or scheduler. The existing status
+codes and responses continue through the same handler.
