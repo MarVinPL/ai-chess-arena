@@ -126,3 +126,23 @@ def test_recover_stale_partial_only_after_trusted_stop_and_without_js_ipc():
     assert 'remove_dir_all' not in recovery
     assert 'std::process::Command' not in recovery
     assert 'reconcile_partial_after_restart(' not in LIB
+
+
+def test_model_cache_inventory_is_read_only_and_shown_in_ui():
+    ui = (BASE / "remote_worker_gui/public/index.html").read_text()
+    assert 'fn inspect_model_cache(root: &Path) -> Result<ModelCacheInventory, String>' in CACHE
+    assert 'fs::read_dir(root)' in CACHE
+    assert 'fs::symlink_metadata(entry.path())' in CACHE
+    inventory = CACHE.split('fn inspect_model_cache(', 1)[1].split(
+        '/// An entry is eligible for eviction', 1
+    )[0]
+    assert 'fs::remove_file' not in inventory
+    assert 'valid_digest(digest)' in inventory
+    assert 'entry.file_name()' in inventory
+    assert '.join("worker-gguf-models")' in LIB
+    assert 'android_model_cache::inspect_model_cache(&private_root)?' in LIB
+    assert 'cached_models: inventory.model_count' in LIB
+    assert 'cached_bytes: inventory.occupied_bytes' in LIB
+    assert "storage.cached_models" in ui
+    assert "storage.cached_bytes" in ui
+    assert "Cache GGUF:" in ui
