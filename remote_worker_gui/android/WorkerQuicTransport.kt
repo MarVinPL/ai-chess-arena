@@ -6,7 +6,6 @@ import android.net.http.HttpException
 import android.net.http.UrlRequest
 import android.net.http.UrlResponseInfo
 import android.os.Build
-import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -27,7 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * model-registry path should invoke it; it validates URLs and bytes again.
  * One transfer, no persistent HTTP body cache, exactly one app-private GGUF.
  */
-@RequiresApi(34)
 object WorkerQuicTransport {
     private const val MAX_BYTES = 16L * 1024 * 1024 * 1024
     private val busy = AtomicBoolean(false)
@@ -43,16 +41,15 @@ object WorkerQuicTransport {
     private fun canonicalUri(raw: String): URI {
         val uri = URI(raw)
         require(uri.scheme == "https" && uri.port == -1 && uri.rawUserInfo == null)
-        require(uri.rawQuery == null || raw.contains("?")) // signed CDN URLs allowed
         require(uri.rawFragment == null)
-        require(uri.host in redirectHosts)
+        require(uri.host in redirectHosts && !uri.rawPath.contains("%"))
         return uri
     }
 
     private fun approvedUri(raw: String): URI {
         val uri = canonicalUri(raw)
         require(uri.host == "huggingface.co" && uri.rawQuery == null)
-        require(pinned.matches(uri.rawPath) && !uri.rawPath.contains("%"))
+        require(pinned.matches(uri.rawPath))
         return uri
     }
 
