@@ -55,10 +55,18 @@ def test_disabled_worker_api_is_not_authorized_by_panel_session(tmp_path, monkey
     assert h.responses == [(503, {"error": "Android Worker API nie jest jeszcze włączone"})]
 
 
-def test_unknown_worker_route_never_bypasses_panel_routing(tmp_path):
+def test_unknown_worker_route_is_rejected_before_panel_cookie_auth(tmp_path):
+    h = HandlerStub(headers={"Cookie": "arena_session=admin"})
+    assert worker_backend.dispatch_worker_post(
+        h, "/api/remote-workers/admin-assign", tmp_path / "tokens.sqlite", {}
+    )
+    assert h.responses == [(404, {"error": "Nieznana operacja Workera"})]
+
+
+def test_unrelated_route_falls_through_without_worker_response(tmp_path):
     h = HandlerStub(headers={"Cookie": "arena_session=admin"})
     assert not worker_backend.dispatch_worker_post(
-        h, "/api/remote-workers/admin-assign", tmp_path / "tokens.sqlite", {}
+        h, "/api/models", tmp_path / "tokens.sqlite", {}
     )
     assert not h.responses
 
