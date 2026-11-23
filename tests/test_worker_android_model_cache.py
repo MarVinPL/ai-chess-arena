@@ -428,6 +428,9 @@ def test_pinned_embedded_llama_build_and_apk_packaging_are_fail_closed():
     assert 'git -C "$STAGING/source" remote add origin "$LLAMA_REPO"' in script
     assert 'cp -L "$so" "$LIB_DIR/lib${lib}.so"' in script
     assert 'llvm-nm' in script
+    assert 'llama-symbols.txt' in script
+    assert 'awk -v expected="$sym"' in script
+    assert '| grep -Fxq "$sym"' not in script
     assert 'llama_model_load_from_file' in script
     assert 'bash android/build_embedded_llama.sh' in workflow
     assert 'unzip -Z1 "$apk"' in workflow
