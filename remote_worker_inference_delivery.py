@@ -336,6 +336,21 @@ class WorkerInferenceDelivery:
             if old is None or hashlib.sha256(old[0].encode("utf-8")).hexdigest() != old[1]:
                 raise ValueError("Missing or corrupted predecessor checkpoint")
             predecessor = json.loads(old[0])
+            # Only per-move checkpoint fields may change. Never let a remote
+            # result rewrite tournament configuration or player identities.
+            mutable_fields = frozenset({
+                "moves", "move_times", "fen", "side_to_move", "updated_at",
+            })
+            unchanged_before = {
+                key: value for key, value in predecessor.items()
+                if key not in mutable_fields
+            }
+            unchanged_after = {
+                key: value for key, value in checkpoint.items()
+                if key not in mutable_fields
+            }
+            if unchanged_before != unchanged_after:
+                raise ValueError("Arena checkpoint metadata changed during inference")
             previous_moves = predecessor.get("moves")
             next_moves = checkpoint.get("moves")
             previous_times = predecessor.get("move_times")
@@ -356,7 +371,10 @@ class WorkerInferenceDelivery:
                 or next_moves[-1].get("uci") != uci
                 or next_moves[-1].get("fen") != expected_fen
                 or next_moves[-1].get("ply") != len(next_moves)
-                or checkpoint.get("fen") != expected_fen):
+                or checkpoint.get("fen") != expected_fen
+                or checkpoint.get("side_to_move") != (
+                    "white" if before_board.turn else "black"
+                )):
                 raise ValueError("Arena checkpoint does not extend the assigned chess move")
 
             tournament_checkpoint.save_in_transaction(
