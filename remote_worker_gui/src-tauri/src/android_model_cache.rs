@@ -197,6 +197,23 @@ mod tests {
         fs::remove_dir(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_model_cannot_be_loaded_or_deleted() {
+        let (root, digest, data) = fixture();
+        let foreign = root.join("personal-notes.txt");
+        fs::write(&foreign, &data).unwrap();
+        let target = model_path(&root, &digest).unwrap();
+        std::os::unix::fs::symlink(&foreign, &target).unwrap();
+        assert!(stage_verified_model(&root, &digest, data.len() as u64,
+            &mut Cursor::new(&data)).is_err());
+        assert!(retire_model(&root, &digest, false, false).is_err());
+        assert_eq!(fs::read(&foreign).unwrap(), data);
+        fs::remove_file(&target).unwrap();
+        fs::remove_file(foreign).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn invalid_digest_paths_and_foreign_files_never_deleted() {
         let (root, digest, data) = fixture();
