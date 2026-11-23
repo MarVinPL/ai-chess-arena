@@ -49,8 +49,19 @@ jobs:
       linux: ${{ steps.select.outputs.linux }}
       windows: ${{ steps.select.outputs.windows }}
       android: ${{ steps.select.outputs.android }}
+      worker_source: ${{ steps.source.outputs.present }}
     steps:
       - uses: actions/checkout@v7
+      - name: Check whether Worker source exists in checkout
+        id: source
+        shell: bash
+        run: |
+          if [[ -f remote_worker_gui/package-lock.json && -f remote_worker_gui/src-tauri/tauri.conf.json ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Worker source not yet on main; defer APK build until integrated.'
+          fi
       - id: filter
         uses: dorny/paths-filter@v4
         with:
@@ -176,7 +187,7 @@ jobs:
   android:
     needs: detect
     # Pull requests are always untrusted: NEVER forward signing secrets.
-    if: needs.detect.outputs.android == 'true' && github.event_name == 'pull_request'
+    if: needs.detect.outputs.worker_source == 'true' && needs.detect.outputs.android == 'true' && github.event_name == 'pull_request'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
@@ -184,7 +195,7 @@ jobs:
   android_signed:
     needs: detect
     # Release signing is available only to a trusted push on main.
-    if: needs.detect.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.detect.outputs.worker_source == 'true' && needs.detect.outputs.android == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
