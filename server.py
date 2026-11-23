@@ -35,6 +35,7 @@ import web_panel_download_status_api
 import web_panel_hf_status_api
 import web_panel_games_api
 import web_panel_inventory_api
+import web_panel_tournament_read_api
 import arena_auth
 import model_permissions
 
@@ -1365,6 +1366,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_inventory_api.dispatch_panel_inventory_get(self, path):
             return
+        if web_panel_tournament_read_api.dispatch_panel_tournament_get(
+                self, path, get_live=get_live, tournament_preflight=tournament_preflight):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1423,49 +1427,6 @@ class Handler(BaseHTTPRequestHandler):
             ]
             status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
             self.send_json(status)
-        elif path.startswith('/api/tournaments/') and path.endswith('/view'):
-            try:
-                tournament_id = int(path.split('/')[3])
-                self.send_json(league.tournament_view(tournament_id, get_live()))
-            except KeyError as exc:
-                self.send_json({'error': str(exc)}, 404)
-            except (ValueError, IndexError):
-                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif path.startswith('/api/tournaments/') and path.endswith('/preflight'):
-            try:
-                tournament_id = int(path.split('/')[3])
-                with league.connect() as c:
-                    exists = c.execute('SELECT 1 FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
-                if not exists:
-                    self.send_json({'error': 'Nie znaleziono turnieju'}, 404)
-                else:
-                    self.send_json(tournament_preflight(tournament_id))
-            except (ValueError, IndexError):
-                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif path == '/api/tournaments':
-            with league.connect() as c:
-                rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
-                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
-                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
-                    (SELECT COUNT(DISTINCT p.id)
-                     FROM tournament_pairings p
-                     JOIN games g ON g.id=p.game_id
-                       AND g.tournament_id=p.tournament_id
-                       AND g.pairing_id=p.id
-                     WHERE p.tournament_id=t.id
-                       AND p.status='completed'
-                       AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
-                    (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
-                    t.qualification_percent,t.resume_blocked,t.initial_entrant_count,t.late_admission_limit,
-                    t.late_admission_used,t.parent_tournament_id,t.admission_batch_id,
-                    EXISTS(SELECT 1 FROM tournament_checkpoints cp WHERE cp.tournament_id=t.id) AS has_checkpoint,
-                    CASE WHEN t.rules_version='2' THEN
-                      (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
-                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
-                      MAX(1,COALESCE((SELECT COUNT(*) FROM tournament_seeds q WHERE q.tournament_id=t.id),CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER)))-1
-                    ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
-                    FROM tournaments t ORDER BY t.id DESC''').fetchall()
-            self.send_json([dict(x) for x in rows])
         elif path.startswith('/api/passkey-tests'):
             from urllib.parse import urlparse, parse_qs
             tid = parse_qs(urlparse(raw_path).query).get('tournament_id', [None])[0]
