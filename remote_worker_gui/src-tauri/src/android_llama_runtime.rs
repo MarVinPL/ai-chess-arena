@@ -119,6 +119,45 @@ impl Drop for EmbeddedLlamaModel {
     }
 }
 
+/// Request cooperative STOP even when the generation thread owns the bridge
+/// model mutex. This is a local signal, NOT a trusted Arena STOP/ACK.
+#[allow(dead_code)]
+pub(crate) fn request_embedded_inference_stop() -> Result<(), String> {
+    let lib = open_control_bridge()?;
+    let request: unsafe extern "C" fn() -> c_int = unsafe {
+        std::mem::transmute(lib.symbol(c"arena_llama_request_stop")?)
+    };
+    if unsafe { request() } != 0 {
+        return Err("Nie udało się zgłosić STOP do natywnego silnika".into());
+    }
+    Ok(())
+}
+
+/// Check local quiescence only. A trusted coordinator must ALSO validate the
+/// exact STOP request, lease fencing, checkpoint and native task ownership.
+#[allow(dead_code)]
+pub(crate) fn embedded_inference_quiesced() -> Result<bool, String> {
+    let lib = open_control_bridge()?;
+    let check: unsafe extern "C" fn() -> c_int = unsafe {
+        std::mem::transmute(lib.symbol(c"arena_llama_inference_quiesced")?)
+    };
+    Ok(unsafe { check() } == 1)
+}
+
+fn open_control_bridge() -> Result<NativeLibrary, String> {
+    let path = native_library_dir()?.join("libarena_llama_bridge.so");
+    let meta = fs::symlink_metadata(&path)
+        .map_err(|_| "Brak natywnego mostu llama.cpp".to_owned())?;
+    if !meta.file_type().is_file() || meta.len() < 64 {
+        return Err("Nieprawidłowy natywny most llama.cpp".into());
+    }
+    let raw = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "Nieprawidłowa ścieżka mostu".to_owned())?;
+    let lib = unsafe { dlopen(raw.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
+    NonNull::new(lib).map(NativeLibrary)
+        .ok_or_else(|| "Natywny most llama.cpp jest niedostępny".into())
+}
+
 /// Synchronous/possibly expensive: never call from Android UI thread.
 /// Caller must retain this object for the *entire* inference lifetime.
 #[allow(dead_code)]
