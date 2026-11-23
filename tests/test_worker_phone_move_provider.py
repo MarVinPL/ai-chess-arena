@@ -95,6 +95,41 @@ def test_arena_receives_phone_result_and_retains_board_authority(tmp_path):
         ).fetchone() == ("idle_confirmed", None)
 
 
+@pytest.mark.parametrize("mutation", ["side_to_move", "tournament_metadata"])
+def test_checkpoint_rejects_untrusted_turn_or_metadata_without_releasing_lease(
+    tmp_path, mutation,
+):
+    db, delivery = prepare(tmp_path)
+    predecessor = initialize_arena_checkpoint(db)
+    job = {
+        "version": 1, "job_id": "move_1234567890",
+        "fen": chess.STARTING_FEN, "model_sha256": MODEL,
+        "max_tokens": 16, "timeout_seconds": 600,
+    }
+    delivery.assign_from_arena(WORKER, job)
+    delivery.submit_inference_result(
+        WORKER, {"version": 1, "job_id": job["job_id"], "uci": "e2e4"},
+    )
+    candidate, _record = next_arena_checkpoint(predecessor, "e2e4")
+    if mutation == "side_to_move":
+        candidate["side_to_move"] = "white"
+    else:
+        candidate["white"] = {"model_sha256": "c" * 64}
+    with pytest.raises(ValueError, match="checkpoint"):
+        delivery.finalize_arena_result(
+            WORKER, job["job_id"], "e2e4",
+            tournament_id=1, checkpoint=candidate,
+        )
+    assert tournament_checkpoint.load(db, 1) == predecessor
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT state FROM worker_job_safety WHERE worker_id=?", (WORKER,)
+        ).fetchone()[0] == "running"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM worker_inference_results"
+        ).fetchone()[0] == 1
+
+
 def test_job_without_ready_or_matching_model_cannot_start(tmp_path):
     db, delivery = prepare(tmp_path)
     provider = ArenaPhoneMoveProvider(db, WORKER)
