@@ -67,7 +67,7 @@ class El {
  setAttribute(name,value){this.attrs[name]=value;}
  removeAttribute(name){delete this.attrs[name];}
  getAttribute(name){return this.attrs[name]||null;}
- contains(node){return node===this||this.children.includes(node);}
+ contains(node){return node===this||this.children.includes(node)||(this===nav&&links.includes(node));}
  insertAdjacentElement(_where,node){this.inserted=node;node.parent=this;}
  focus(){}
 }
