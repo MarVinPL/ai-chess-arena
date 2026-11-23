@@ -55,3 +55,35 @@ def test_disk_reservation_is_lru_and_never_deletes_during_planning():
     assert 'fs::remove_file' not in planner
     assert 'still_missing_bytes: shortage.saturating_sub(reclaimed)' in planner
     assert 'seen.insert(&entry.digest)' in planner
+
+
+def test_android_reads_private_partition_without_user_selected_path():
+    assert 'fn android_private_free_bytes() -> Result<u64, String>' in CACHE
+    assert 'getFilesDir' in CACHE
+    assert 'getUsableSpace' in CACHE
+    block = CACHE.split('fn android_private_free_bytes()', 1)[1].split(
+        '/// Planning is pure:', 1
+    )[0]
+    assert 'ndk_context::android_context()' in block
+    assert 'if usable < 0' in block
+    assert 'std::env::' not in block
+    assert 'getExternalStorage' not in block
+    assert 'remove_file' not in block
+
+
+def test_native_storage_command_is_read_only_and_displayed_in_android_ui():
+    ui = (BASE / "remote_worker_gui/public/index.html").read_text()
+    assert 'fn inspect_phone_model_storage() -> Result<PhoneModelStorage, String>' in LIB
+    assert 'android_model_cache::android_private_free_bytes()?' in LIB
+    assert 'free_bytes.saturating_sub(reserve_bytes)' in LIB
+    assert 'inspect_phone_model_storage,' in LIB
+    section = LIB.split('fn inspect_phone_model_storage()', 1)[1].split(
+        'async fn inspect_phone_local_model()', 1
+    )[0]
+    assert 'stage_verified_model' not in section
+    assert 'retire_model' not in section
+    assert 'id="localModelStorageStatus"' in ui
+    assert "invoke('inspect_phone_model_storage')" in ui
+    assert 'szacunek; brak rezerwacji miejsca' in ui
+    assert "if(localModelStorageProbeInFlight||document.hidden)return;" in ui
+    assert 'void checkPhoneModelStorage();' in ui
