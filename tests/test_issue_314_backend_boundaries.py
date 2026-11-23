@@ -80,7 +80,7 @@ def test_composition_root_preserves_both_authentication_boundaries():
     source = Path(server.__file__).read_text(encoding="utf-8")
     post = source.split("    def do_POST(self):", 1)[1]
     assert post.index("worker_backend.dispatch_worker_post(") < post.index(
-        "if path == '/api/auth/login':"
+        "web_panel_auth.dispatch_panel_auth_post("
     )
     assert post.index("worker_backend.dispatch_worker_post(") < post.index(
         "if not self.authenticated_user():"
