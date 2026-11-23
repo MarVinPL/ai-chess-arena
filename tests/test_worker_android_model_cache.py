@@ -110,3 +110,19 @@ def test_approved_hf_metadata_and_private_download_are_not_exposed_to_js():
     assert 'pub(crate) async fn download_approved_model' in downloader
     assert 'download_approved_model(' not in LIB
     assert 'download_model' not in LIB
+
+
+def test_recover_stale_partial_only_after_trusted_stop_and_without_js_ipc():
+    transport = (BASE / "remote_worker_gui/src-tauri/src/android_model_download.rs").read_text()
+    assert 'fn reconcile_partial_after_restart(' in transport
+    assert 'previous_execution_stopped_verified: bool' in transport
+    assert 'if active_reference || !previous_execution_stopped_verified' in transport
+    assert 'fs::symlink_metadata(&partial)' in transport
+    assert 'meta.file_type().is_file()' in transport
+    recovery = transport.split('fn reconcile_partial_after_restart(', 1)[1].split(
+        'fn allowed_redirect(', 1
+    )[0]
+    assert 'fs::remove_file(&partial)' in recovery
+    assert 'remove_dir_all' not in recovery
+    assert 'std::process::Command' not in recovery
+    assert 'reconcile_partial_after_restart(' not in LIB
