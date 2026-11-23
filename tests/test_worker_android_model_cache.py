@@ -87,3 +87,26 @@ def test_native_storage_command_is_read_only_and_displayed_in_android_ui():
     assert 'szacunek; brak rezerwacji miejsca' in ui
     assert "if(localModelStorageProbeInFlight||document.hidden)return;" in ui
     assert 'void checkPhoneModelStorage();' in ui
+
+
+def test_approved_hf_metadata_and_private_download_are_not_exposed_to_js():
+    source = (BASE / "remote_worker_gui/src-tauri/src/android_model_source.rs").read_text()
+    downloader = (BASE / "remote_worker_gui/src-tauri/src/android_model_download.rs").read_text()
+    assert 'mod android_model_source;' in LIB
+    assert 'mod android_model_download;' in LIB
+    assert 'sha256: String' in source and 'size_bytes: u64' in source
+    assert 'source_url: String' in source
+    assert 'url.host_str() != Some("huggingface.co")' in source
+    assert 'segments[3].len() != 40' in source
+    assert 'url.scheme() != "https"' in source
+    assert 'validate_model_source(approved)?' in downloader
+    assert 'redirect::Policy::custom' in downloader
+    assert 'file.sync_all()' in downloader
+    assert 'verify_model(&mut check, approved.size_bytes, &approved.sha256)' in downloader
+    assert 'fs::rename(&partial, &target)' in downloader
+    assert 'free_space()? < needed' in downloader
+    assert 'free_space()? < reserve_bytes' in downloader
+    assert 'active_reference' in CACHE
+    assert 'pub(crate) async fn download_approved_model' in downloader
+    assert 'download_approved_model(' not in LIB
+    assert 'download_model' not in LIB
