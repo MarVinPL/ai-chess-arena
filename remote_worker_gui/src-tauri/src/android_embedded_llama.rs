@@ -90,7 +90,7 @@ fn inspect_library(path: &Path) -> Result<(), String> {
     const SYMBOLS: [&CStr; 5] = [
         c"llama_backend_init",
         c"llama_model_load_from_file",
-        c"llama_new_context_with_model",
+        c"llama_init_from_model",
         c"llama_decode",
         c"llama_sampler_init_greedy",
     ];
