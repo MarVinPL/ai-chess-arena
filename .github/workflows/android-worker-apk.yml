@@ -86,6 +86,9 @@ jobs:
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
+          # On Android the JNI linker must see physical libllama/ggml paths.
+          # Tauri regenerates Gradle, so apply this deterministic patch after init.
+          python3 android/force_extracted_native_libs.py
       - name: Build and bundle pinned embedded llama.cpp for ARM64
         shell: bash
         run: |
