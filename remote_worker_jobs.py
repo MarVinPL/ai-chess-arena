@@ -25,6 +25,13 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
                 created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
 
+            # Model-cache maintenance reservation: blocks *new* assignments
+            # while a trusted coordinator reconciles the local runtime.
+            # This reservation is NOT permission to delete a GGUF file.
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_model_maintenance_holds (
+                worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
+                created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
+
             # Shared coordinator lock. Requests must block a racing new
             # assignment before a trusted STOP/checkpoint ACK is delivered.
             db.execute('''CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
@@ -81,6 +88,14 @@ class DurableWorkerJobs:
         ).fetchone():
             raise ValueError('Worker pause for update pending; assignment blocked')
 
+    def _reject_model_maintenance_hold(self, db, worker_id):
+        # Expiry alone NEVER releases a model-maintenance reservation.
+        if db.execute(
+            'SELECT 1 FROM worker_model_maintenance_holds WHERE worker_id=?',
+            (worker_id,),
+        ).fetchone():
+            raise ValueError('Worker model maintenance requires reconciliation')
+
     def _reject_update_hold(self, db, worker_id):
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
         # blocking assignments until explicit coordinator reconciliation.
@@ -88,6 +103,75 @@ class DurableWorkerJobs:
         if db.execute('SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                       (worker_id,)).fetchone():
             raise ValueError('Worker reserved for update; assignment blocked')
+        self._reject_model_maintenance_hold(db, worker_id)
+
+    def reserve_model_maintenance(self, worker_id, *, ttl_seconds=300):
+        """Coordinator-only, atomically fence out new work for cache inspection.
+
+        Requires a fresh idle row and no outstanding inference, update, STOP
+        or resume state. A successful hold is only a durable EXCLUSION LOCK.
+        It cannot prove Android has closed its GGUF descriptors or authorize
+        deletion. Do not expose this method through worker-facing HTTP.
+        """
+        self._id(worker_id)
+        if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= 900:
+            raise ValueError('Invalid maintenance TTL')
+        now = self.clock()
+        token = secrets.token_hex(32)
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
+            state = db.execute(
+                'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            if not state or state[0] != 'idle_confirmed' or state[1] is not None \
+                    or state[2] is not None or not 0 <= now - state[3] <= 30:
+                raise ValueError('Worker has no fresh terminal idle confirmation')
+            # Check this table only when the optional inference schema exists.
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='worker_inference_assignments'",
+            ).fetchone()
+            if exists and db.execute(
+                'SELECT 1 FROM worker_inference_assignments WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone():
+                raise ValueError('Unresolved inference assignment')
+            db.execute(
+                'INSERT INTO worker_model_maintenance_holds VALUES (?,?,?,?)',
+                (worker_id, token, now, now + ttl_seconds),
+            )
+        return token
+
+    def release_model_maintenance(self, worker_id, token):
+        """Explicit release, invalidating idle to force fresh reconciliation.
+
+        Even an expired reservation requires the original token. Crash or
+        timeout never implicitly permits an assignment or filesystem change.
+        """
+        self._id(worker_id)
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            raise ValueError('Invalid maintenance token')
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            hold = db.execute(
+                'SELECT hold_token FROM worker_model_maintenance_holds WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            if not hold or not secrets.compare_digest(hold[0], token):
+                raise ValueError('Maintenance hold mismatch')
+            db.execute(
+                'UPDATE worker_job_safety SET state=?, job_id=NULL, deadline=NULL, updated_at=? '
+                'WHERE worker_id=? AND state=? AND job_id IS NULL AND deadline IS NULL',
+                ('unknown', self.clock(), worker_id, 'idle_confirmed'),
+            )
+            db.execute(
+                'DELETE FROM worker_model_maintenance_holds WHERE worker_id=?',
+                (worker_id,),
+            )
 
     def reserve_update(self, worker_id, *, ttl_seconds=300, hold_token=None):
         """Atomically reserve a recently confirmed idle worker for update.
