@@ -170,3 +170,12 @@ checks reuse `league.connect()` with the unchanged SQL; live snapshots
 and the preflight function are provided by the main server rather than
 reimplemented. Legacy 404/422 errors are preserved. No second tournament
 coordinator, Worker route or checkpoint store was introduced.
+
+## HF catalog and stored audit reads
+
+`web_panel_hf_catalog_api` serves `GET /api/hf-candidates` and
+`GET /api/hf-candidates/audit`, only after browser-session authentication.
+It reuses the existing candidate catalog, stored reports and reviews from
+`league.connect()`, preserves the explicit response field projection and
+404/422/503 error contracts. No second catalog, model allowlist or Worker
+credential path is created.
