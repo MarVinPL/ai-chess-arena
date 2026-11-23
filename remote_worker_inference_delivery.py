@@ -249,6 +249,15 @@ class WorkerInferenceDelivery:
         self.jobs._id(worker_id)
         self.jobs._id(job_id)
         with self.jobs._db() as db:
+            # Keep the result, lease and STOP gates in one read snapshot.
+            # A result received before STOP must not be consumed after it.
+            db.execute("BEGIN")
+            blocked = any(db.execute(
+                f"SELECT 1 FROM {table} WHERE worker_id=?", (worker_id,),
+            ).fetchone() for table in (
+                "worker_update_holds", "worker_update_pause_requests",
+                "worker_update_resume",
+            ))
             row = db.execute(
                 "SELECT job_json FROM worker_inference_assignments WHERE worker_id=? AND job_id=?",
                 (worker_id, job_id),
@@ -261,6 +270,8 @@ class WorkerInferenceDelivery:
                 "SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
+        if blocked:
+            raise ValueError("Worker result fenced by STOP or update reconciliation")
         if row is None or not lease or lease[0] != "running" or lease[1] != job_id:
             raise ValueError("Worker job lease is not active")
         if lease[2] is None or lease[2] <= self.clock():
