@@ -126,6 +126,13 @@ pub(crate) fn load_verified_embedded_model(
     digest: &str,
     expected_size: u64,
 ) -> Result<EmbeddedLlamaModel, String> {
+    // A submitted Android installation outlives the temporary update gate.
+    // Persisted journals block native models across app restarts and while
+    // PackageInstaller is waiting for user consent.
+    if crate::android_update_recovery::load_pending()?.is_some()
+        || crate::android_update_install_journal::load()?.is_some() {
+        return Err("Aktualizacja APK blokuje uruchomienie modelu".into());
+    }
     probe_embedded_llama_library()?;
     let root = crate::android_model_quic::android_gguf_cache_root()?;
     let verified = open_verified_session(&root, digest, expected_size)?;
