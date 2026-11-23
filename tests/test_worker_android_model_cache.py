@@ -40,3 +40,18 @@ def test_cache_is_not_dispatched_or_exposed_to_untrusted_js():
     assert 'stage_verified_model(' not in LIB
     assert 'retire_model(' not in LIB
     assert 'download_model' not in LIB
+
+
+def test_disk_reservation_is_lru_and_never_deletes_during_planning():
+    assert 'pub(crate) const DEFAULT_FREE_RESERVE_BYTES: u64 = 10 * 1024 * 1024 * 1024' in CACHE
+    assert 'fn plan_storage_reclamation(' in CACHE
+    assert 'incoming_bytes.checked_add(reserve_bytes)' in CACHE
+    assert 'entry.in_use &&' not in CACHE
+    assert '!entry.in_use && !entry.preserve' in CACHE
+    assert 'a.last_used_ms.cmp(&b.last_used_ms)' in CACHE
+    planner = CACHE.split('fn plan_storage_reclamation(', 1)[1].split(
+        '/// Write a previously approved transfer', 1
+    )[0]
+    assert 'fs::remove_file' not in planner
+    assert 'still_missing_bytes: shortage.saturating_sub(reclaimed)' in planner
+    assert 'seen.insert(&entry.digest)' in planner
