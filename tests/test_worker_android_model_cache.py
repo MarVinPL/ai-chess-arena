@@ -226,3 +226,18 @@ def test_arena_assignment_digest_must_bind_independently_approved_model():
     assert 'assigned_digest_does_not_authorize_unpinned_registry_source' in source
     assert 'download_approved_model' not in binding
     assert 'bind_approved_model_to_job' not in LIB  # no WebView command
+
+
+def test_native_model_registry_fetch_requires_active_verified_job():
+    coordinator = (BASE / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text()
+    assert '"model-source"' in coordinator
+    section = coordinator.split('pub(crate) async fn fetch_my_approved_gguf(', 1)[1].split(
+        '/// The Arena owns chess state.', 1
+    )[0]
+    assert 'fetch_my_inference_job(base, worker_id, machine_token).await?' in section
+    assert 'coordinator_endpoint(base, "model-source")' in section
+    assert 'verify_assigned_model_source_reply(' in section
+    assert 'if current != previous' in section
+    assert 'bind_approved_model_to_job(assigned_digest, &approved)?' in coordinator
+    assert 'download_approved_model(' not in section
+    assert 'fetch_my_approved_gguf(' not in LIB  # internal, no Tauri command
