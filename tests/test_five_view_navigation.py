@@ -8,6 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 NAV = (ROOT / "web/js/navigation.js").read_text(encoding="utf-8")
 SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
+PANEL_BACKEND = (ROOT / "web_panel_backend.py").read_text(encoding="utf-8")
 
 
 class NavigationTests(unittest.TestCase):
@@ -26,8 +27,8 @@ class NavigationTests(unittest.TestCase):
         self.assertIn('hashchange', NAV)
 
     def test_routes_authentication_and_existing_ids(self):
-        self.assertIn("'/assets/navigation.js':", SERVER)
-        self.assertIn("'/assets/navigation.css':", SERVER)
+        self.assertIn("'/assets/navigation.js':", PANEL_BACKEND)
+        self.assertIn("'/assets/navigation.css':", PANEL_BACKEND)
         self.assertLess(SERVER.index("if not user:"), SERVER.index("self.send_panel_asset(path)"))
         for unique_id in (
             "board", "games", "tournament-list", "tournament-form",
