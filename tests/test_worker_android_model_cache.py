@@ -495,3 +495,10 @@ def test_native_llama_bridge_compiles_with_pinned_ggml_headers():
     assert '-I"$STAGING/source/include"' in build
     assert '-I"$STAGING/source/ggml/include"' in build
     assert build.index('-I"$STAGING/source/ggml/include"') < build.index('android/arena_llama_bridge.cpp')
+
+
+def test_embedded_llama_bridge_links_exact_file_not_relative_library_search():
+    script = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
+    assert '"$(realpath "$LIB_DIR/libllama.so")"' in script
+    assert ' -llama ' not in script
+    assert 'libarena_llama_bridge.so' in script
