@@ -25,6 +25,41 @@ impl Drop for TransferGuard {
     fn drop(&mut self) { ACTIVE_TRANSFER.store(false, Ordering::Release); }
 }
 
+/// Reconcile a crash-left partial download for one exact approved model.
+/// The trusted caller must independently verify that the coordinator has no
+/// active lease, that no model load is using the file, and that the previous
+/// execution is no longer running. Not callable by WebView; no broad cleanup.
+pub(crate) fn reconcile_partial_after_restart(
+    root: &Path,
+    approved: &ApprovedGguf,
+    active_reference: bool,
+    previous_execution_stopped_verified: bool,
+) -> Result<bool, String> {
+    let _lock = TransferGuard::new()?;
+    validate_model_source(approved)?;
+    if active_reference || !previous_execution_stopped_verified {
+        return Err("Niepotwierdzony STOP lub aktywna sesja — cache zablokowany".into());
+    }
+    let root_meta = fs::symlink_metadata(root)
+        .map_err(|_| "Brak prywatnego katalogu GGUF")?;
+    if !root_meta.file_type().is_dir() {
+        return Err("Nieprawidłowy katalog GGUF".into());
+    }
+    let partial = root.join(format!("{}.gguf.partial", approved.sha256));
+    match fs::symlink_metadata(&partial) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Ok(meta) if meta.file_type().is_file() => {
+            // File in use? The coordinator must prove no active writer/reader;
+            // this routine does not derive a trusted STOP from a process ID.
+            fs::remove_file(&partial)
+                .map_err(|_| "Nie można uzgodnić częściowego pobierania")?;
+            Ok(true)
+        }
+        Ok(_) => Err("Odmowa usunięcia symlinku/katalogu w cache".into()),
+        Err(_) => Err("Nie można odczytać częściowego modelu".into()),
+    }
+}
+
 fn allowed_redirect(url: &Url) -> bool {
     url.scheme() == "https" && url.port().is_none()
         && url.username().is_empty() && url.password().is_none()
@@ -154,6 +189,66 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_partial_requires_verified_stop_and_never_removes_other_files() {
+        use sha2::{Digest, Sha256};
+        let serial = format!("{}-{:?}", std::process::id(),
+            std::thread::current().id());
+        let root = std::env::temp_dir().join(format!(
+            "arena-download-reconcile-{serial}-{}", 
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let data = b"GGUFcached-partial";
+        let approved = ApprovedGguf {
+            sha256: format!("{:x}", Sha256::digest(data)),
+            size_bytes: data.len() as u64,
+            source_url: format!("https://huggingface.co/owner/repo/resolve/{}/model.gguf",
+                "1".repeat(40)),
+        };
+        let partial = root.join(format!("{}.gguf.partial", approved.sha256));
+        let foreign = root.join("user-document.txt");
+        fs::write(&partial, data).unwrap();
+        fs::write(&foreign, b"important").unwrap();
+        assert!(reconcile_partial_after_restart(
+            &root, &approved, true, true).is_err());
+        assert!(reconcile_partial_after_restart(
+            &root, &approved, false, false).is_err());
+        assert!(partial.exists());
+        assert!(reconcile_partial_after_restart(
+            &root, &approved, false, true).unwrap());
+        assert!(!partial.exists());
+        assert!(!reconcile_partial_after_restart(
+            &root, &approved, false, true).unwrap());
+        assert_eq!(fs::read(&foreign).unwrap(), b"important");
+        fs::remove_file(foreign).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crash_recovery_never_follows_partial_symlink() {
+        let root = std::env::temp_dir().join(format!(
+            "arena-partial-symlink-{}-{}", std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let approved = ApprovedGguf {
+            sha256: "a".repeat(64), size_bytes: 4096,
+            source_url: format!("https://huggingface.co/owner/repo/resolve/{}/model.gguf",
+                "1".repeat(40)),
+        };
+        let foreign = root.join("user-document.txt");
+        fs::write(&foreign, b"private").unwrap();
+        let partial = root.join(format!("{}.gguf.partial", approved.sha256));
+        std::os::unix::fs::symlink(&foreign, &partial).unwrap();
+        assert!(reconcile_partial_after_restart(&root, &approved, false, true).is_err());
+        assert_eq!(fs::read(&foreign).unwrap(), b"private");
+        fs::remove_file(partial).unwrap();
+        fs::remove_file(foreign).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn redirects_are_only_to_known_https_model_storage() {
         for host in [
