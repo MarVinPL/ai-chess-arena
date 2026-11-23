@@ -188,3 +188,12 @@ browser session gate. It reuses `league.storage_status()` and the authoritative
 sizes and free space. The existing create-if-absent directory behavior and
 failure semantics are retained. No Worker token or second model directory
 is introduced.
+
+## Passkey readiness history GET boundary
+
+`web_panel_passkey_tests_api` owns the existing authenticated
+`GET /api/passkey-tests` family, including optional `tournament_id`
+filtering. It receives the original `arena.sqlite3` path from the server,
+queries the existing `passkey_test_answers` table and preserves the response
+columns, ordering and legacy error behavior. Browser-session authentication
+runs before delegation; no Worker credential path or second test database.
