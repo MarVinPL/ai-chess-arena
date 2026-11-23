@@ -1317,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def send_panel_asset(self, url_path):
-        # The panel authentication check remains in do_GET before this call.
+        # Panel authentication is checked by do_GET first.
         web_panel_backend.serve_panel_asset(self, url_path, ROOT)
     def authenticated_user(self):
         return arena_auth.session_user(self.headers.get('Cookie'))
@@ -1636,8 +1636,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        # Worker routing is a separate machine-token boundary, never a
-        # panel-session or administrator endpoint. This is deliberately first.
+        # Machine-authenticated Worker API is isolated from panel sessions.
         with live_lock:
             worker_live_snapshot = dict(live_status)
         if worker_backend.dispatch_worker_post(self, path, DB, worker_live_snapshot):
