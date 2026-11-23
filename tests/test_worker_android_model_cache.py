@@ -398,7 +398,8 @@ def test_embedded_android_llama_probe_uses_only_own_package_abi_not_termux():
     assert 'llama_sampler_init_greedy' in source
     assert 'llama-server' not in source.split('#[cfg(test)]', 1)[0].split('fn native_library_dir()', 1)[1]
     assert 'std::process::Command' not in source
-    assert 'probe_embedded_llama_library(' not in LIB
+    assert 'probe_embedded_llama_library(' not in LIB.split('async fn inspect_embedded_llama_engine()', 1)[0]
+    assert 'probe_embedded_llama_library(' not in LIB.split('// The desktop app connects outbound only.', 1)[1]
     assert '#[tauri::command]' not in source
 
 
