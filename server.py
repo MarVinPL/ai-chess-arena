@@ -32,6 +32,7 @@ import web_panel_model_review_api
 import web_panel_model_storage_api
 import web_panel_model_license_api
 import web_panel_download_status_api
+import web_panel_hf_status_api
 import arena_auth
 import model_permissions
 
@@ -1356,6 +1357,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_download_status_api.dispatch_panel_download_get(self, path, raw_path):
             return
+        if web_panel_hf_status_api.dispatch_panel_hf_status_get(self, path, raw_path):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1457,32 +1460,6 @@ class Handler(BaseHTTPRequestHandler):
                     item.pop('metadata_json', None)
                 models.append(item)
             self.send_json(models)
-        elif path == '/api/hf-candidates/review':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                params = parse_qs(urlparse(raw_path).query)
-                catalog_id = params.get('catalog_id', [''])[0]
-                revision = params.get('revision', [''])[0]
-                with league.connect() as c:
-                    review = hf_candidate_reviews.get(c, catalog_id, revision)
-                self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/review-queue':
-            try:
-                with league.connect() as c:
-                    self.send_json(hf_candidate_reviews.list_proposals(c))
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/audit-queue':
-            try: self.send_json(hf_candidate_queue.snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/hardware':
-            try: self.send_json(hf_candidate_queue.hardware_snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/runtime-preflight':
-            try: self.send_json(hf_candidate_runtime.snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
