@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -495,6 +495,77 @@ pub(crate) async fn fetch_my_inference_job(
     }
 }
 
+/// Pure validation of the machine-authenticated, metadata-only response.
+/// This does NOT authorize downloading weights; source and SHA are checked
+/// independently against the assigned job and pinned HF registry entry.
+pub(crate) fn verify_assigned_model_source_reply(
+    body: &Value, worker_id: &str, nonce: &str, assigned_digest: &str,
+) -> Result<crate::android_model_source::ApprovedGguf, String> {
+    if nonce.len() != 32 || !nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce)
+        || body.get("state").and_then(Value::as_str) != Some("approved_metadata_only") {
+        return Err("Niezaufana odpowiedź rejestru GGUF".into());
+    }
+    let model = body.get("model").and_then(Value::as_object)
+        .ok_or("Brak zatwierdzonych metadanych modelu")?;
+    if model.len() != 5
+        || !["model_id", "version_id", "sha256", "size_bytes", "source_url"]
+            .iter().all(|field| model.contains_key(*field))
+        || model.get("model_id").and_then(Value::as_u64).filter(|v| *v > 0).is_none()
+        || model.get("version_id").and_then(Value::as_u64).filter(|v| *v > 0).is_none() {
+        return Err("Nieprawidłowy format wpisu GGUF".into());
+    }
+    let approved = crate::android_model_source::ApprovedGguf {
+        sha256: model.get("sha256").and_then(Value::as_str)
+            .ok_or("Brak SHA-256 wpisu GGUF")?.to_owned(),
+        size_bytes: model.get("size_bytes").and_then(Value::as_u64)
+            .ok_or("Brak rozmiaru GGUF")?,
+        source_url: model.get("source_url").and_then(Value::as_str)
+            .ok_or("Brak adresu źródła GGUF")?.to_owned(),
+    };
+    crate::android_model_source::bind_approved_model_to_job(assigned_digest, &approved)?;
+    Ok(approved)
+}
+
+/// Obtain a registry entry ONLY for the currently authenticated, leased job.
+/// A before/after poll detects revoked or changed assignments. This transport
+/// does not invoke the Android downloader or return any secret to JavaScript.
+#[allow(dead_code)]
+pub(crate) async fn fetch_my_approved_gguf(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<crate::android_model_source::ApprovedGguf, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let previous = fetch_my_inference_job(base, worker_id, machine_token).await?;
+    let assigned_digest = previous.get("job")
+        .filter(|_| previous.get("state").and_then(Value::as_str) == Some("assigned"))
+        .and_then(|job| job.get("model_sha256")).and_then(Value::as_str)
+        .ok_or("Brak aktywnego przydziału modelu")?;
+    let nonce = random_nonce()?;
+    let endpoint = coordinator_endpoint(base, "model-source")?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+        }))
+        .send().await.map_err(|_| "Brak połączenia z rejestrem Areny")?;
+    if !response.status().is_success() {
+        return Err("Arena odmówiła udostępnienia metadanych modelu".into());
+    }
+    let body: Value = response.json().await
+        .map_err(|_| "Nieprawidłowa odpowiedź rejestru GGUF".to_owned())?;
+    let approved = verify_assigned_model_source_reply(
+        &body, worker_id, &nonce, assigned_digest)?;
+    let current = fetch_my_inference_job(base, worker_id, machine_token).await?;
+    if current != previous || current.get("state").and_then(Value::as_str) != Some("assigned") {
+        return Err("Przydział modelu zmienił się podczas odczytu rejestru".into());
+    }
+    Ok(approved)
+}
+
 /// The Arena owns chess state. Return the FEN only when the authenticated
 /// coordinator explicitly binds it to THIS worker's active job. A general
 /// /api/live snapshot is deliberately not accepted.
@@ -780,6 +851,49 @@ mod tests {
             assert!(verify_pause_poll_reply(&r, "worker_12345678", NONCE).is_ok());
         }
         assert!(coordinator_endpoint("https://arena.example/", "update-pause-poll").is_ok());
+    }
+
+    #[test]
+    fn approved_model_response_requires_matching_assignment_and_nonce() {
+        let digest = "a".repeat(64);
+        let nonce = "b".repeat(32);
+        let good = serde_json::json!({
+            "authenticated": true, "source": "coordinator",
+            "worker_id": "worker_12345678", "nonce": nonce,
+            "state": "approved_metadata_only",
+            "model": {
+                "model_id": 1, "version_id": 2,
+                "sha256": digest, "size_bytes": 4096,
+                "source_url": format!(
+                    "https://huggingface.co/owner/repo/resolve/{}/model.Q4.gguf",
+                    "1".repeat(40))
+            }
+        });
+        assert!(verify_assigned_model_source_reply(
+            &good, "worker_12345678", &nonce, &digest).is_ok());
+        for (field, replacement) in [
+            ("authenticated", serde_json::json!(false)),
+            ("nonce", serde_json::json!("c".repeat(32))),
+            ("state", serde_json::json!("ready")),
+            ("worker_id", serde_json::json!("worker_other999")),
+        ] {
+            let mut forged = good.clone();
+            forged[field] = replacement;
+            assert!(verify_assigned_model_source_reply(
+                &forged, "worker_12345678", &nonce, &digest).is_err());
+        }
+        for (field, replacement) in [
+            ("sha256", serde_json::json!("f".repeat(64))),
+            ("size_bytes", serde_json::json!(0)),
+            ("model_id", serde_json::json!(0)),
+            ("source_url", serde_json::json!("https://evil.test/file.gguf")),
+        ] {
+            let mut forged = good.clone();
+            forged["model"][field] = replacement;
+            assert!(verify_assigned_model_source_reply(
+                &forged, "worker_12345678", &nonce, &digest).is_err());
+        }
+        assert!(coordinator_endpoint("https://arena.example/", "model-source").is_ok());
     }
 
     #[test]
