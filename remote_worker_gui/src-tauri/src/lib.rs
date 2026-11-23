@@ -600,6 +600,10 @@ async fn install_downloaded_worker_apk(
     {
         use tauri::Manager;
         use android_update_identity::IdentityCheck;
+        // Hold an exclusive process-local GGUF gate across every await until
+        // PackageInstaller handoff. The durable coordinator hold is separate.
+        let _native_update_gate =
+            android_model_runtime_guard::begin_exclusive_update()?;
         if android_update_recovery::load_pending()?.is_some()
             || android_update_install_journal::load()?.is_some() {
             return Err("Wcześniejsza instalacja wymaga uzgodnienia".into());
