@@ -33,7 +33,7 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "android")]
-fn native_library_dir() -> Result<PathBuf, String> {
+pub(crate) fn native_library_dir() -> Result<PathBuf, String> {
     let context = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }
         .map_err(|_| "Brak środowiska Android JNI")?;
