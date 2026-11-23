@@ -212,6 +212,33 @@ fn phone_inference_supported() -> bool {
     cfg!(target_os = "android")
 }
 
+#[derive(Serialize)]
+struct PhoneModelStorage {
+    free_bytes: u64,
+    reserve_bytes: u64,
+    available_for_models_bytes: u64,
+}
+
+/// Read-only Android storage diagnostic. Not an allocation guarantee:
+/// the downloader must check space again before and during transfer.
+#[tauri::command]
+fn inspect_phone_model_storage() -> Result<PhoneModelStorage, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Pamięć modeli GGUF można sprawdzić tylko na Androidzie".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let free_bytes = android_model_cache::android_private_free_bytes()?;
+        let reserve_bytes = android_model_cache::DEFAULT_FREE_RESERVE_BYTES;
+        Ok(PhoneModelStorage {
+            free_bytes,
+            reserve_bytes,
+            available_for_models_bytes: free_bytes.saturating_sub(reserve_bytes),
+        })
+    }
+}
+
 #[tauri::command]
 async fn inspect_phone_local_model() -> Result<String, String> {
     // Diagnostic only: localhost probe does NOT authenticate Arena, allocate
@@ -914,7 +941,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
