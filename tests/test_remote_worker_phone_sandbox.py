@@ -394,3 +394,76 @@ def test_stop_fences_coordinator_read_even_for_result_received_before_stop(sandb
             "SELECT result_json FROM worker_inference_results WHERE worker_id=?",
             (WORKER,),
         ).fetchone() is not None  # still durable, but fenced from chess
+
+
+def test_opt_in_fenced_job_rejects_stale_lease_and_protocol_downgrade(sandbox):
+    """A new-generation assignment can never accept an old job's UCI receipt."""
+    import secrets
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    lease_token = secrets.token_hex(32)
+    job_id = "fenced_" + secrets.token_hex(12)
+    job = {
+        "version": 3, "job_id": job_id, "fen": chess.STARTING_FEN,
+        "model_sha256": MODEL_SHA,
+        "legal_moves": sorted(move.uci() for move in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 600,
+        "lease_token": lease_token,
+    }
+    delivery = WorkerInferenceDelivery(path)
+    assert delivery.assign_from_arena(WORKER, job) == job_id
+    code, poll = post("job-poll", who)
+    assert code == 200 and poll["job"] == job
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    def result(version, **fields):
+        return post("job-result", {**who, "result": {
+            "version": version, "job_id": job_id, "uci": "e2e4", **fields,
+        }})[0]
+
+    assert result(1) == 409  # No old-protocol bypass.
+    assert result(2, lease_token="0" * 64) == 409
+    assert result(2, lease_token=lease_token[:-1] + "g") == 409
+    assert result(2, lease_token=lease_token) == 200
+    assert result(2, lease_token=lease_token) == 200  # idempotent receipt
+    assert delivery.read_arena_result(WORKER, job_id) == "e2e4"
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    assert finalize_one_result(path, WORKER) == "e2e4"
+    with pytest.raises(ValueError):
+        delivery.submit_inference_result(WORKER, {
+            "version": 2, "job_id": job_id, "uci": "e2e4",
+            "lease_token": lease_token,
+        })
+
+
+def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
+    """A matching v3 lease capability never overrides the durable STOP gate."""
+    import secrets
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = "fenced_" + secrets.token_hex(12)
+    job = {
+        "version": 3, "job_id": job_id, "fen": chess.STARTING_FEN,
+        "model_sha256": MODEL_SHA,
+        "legal_moves": sorted(move.uci() for move in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 600,
+        "lease_token": secrets.token_hex(32),
+    }
+    delivery = WorkerInferenceDelivery(path)
+    delivery.assign_from_arena(WORKER, job)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    request_id = WorkerUpdatePause(path).request(WORKER, job_id)
+    assert post("job-result", {**who, "result": {
+        "version": 2, "job_id": job_id, "uci": "e2e4",
+        "lease_token": job["lease_token"],
+    }})[0] == 409
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": request_id,
+    }
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
