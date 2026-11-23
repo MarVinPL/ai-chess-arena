@@ -67,3 +67,34 @@ Ta wersja nie jest jeszcze gotowa do zapisania na zdalnej gałęzi.
 
 **Decyzja: NO-GO dla merge.** Wszystkie klony testowe zostały usunięte.
 Nie zmieniano serwisów VPS, flag produkcyjnych, danych ani `main`.
+
+## Checkpoint compatibility fix — second isolated merge check
+
+Commits on #296:
+- `609bc072`: remote result commits now preserve immutable tournament
+  metadata and validate `side_to_move` against the actual chess board turn;
+- `66873373` and `02b53935`: update test fixtures for explicit board turn;
+- `9e1ed4af`: use the stricter current-main transaction/CAS validation
+  for `tournament_checkpoint.save_in_transaction`;
+- `e28df81d`: negative tests verify forged side-to-move or player metadata
+  cannot be committed and do not release the Worker lease.
+
+Both unmerged and merged test copies were made under temporary directories
+with cleanup traps; no production deployment and no merge commit published.
+
+- Original PR #296: **18 selected tests PASS**.
+- Isolated merge with current main, manually reconciled: **51 selected
+  checkpoint/update-safety tests PASS**. Git conflict count decreased
+  from 8 to **7 files**.
+- Full isolated merged suite: **885 PASS, 9 FAIL, 1 skipped**, 82 subtests PASS.
+  Previous attempt: 877 PASS, 15 FAIL.
+- All **six checkpoint/lease integration failures** from the prior run
+  are resolved. Remaining failures: five local HF download directory
+  permission errors, one stale panel link expectation, one phone API
+  feature-gate conflict, one Android workflow branch-trigger expectation,
+  one full-suite-only Worker auth test failure (selected tests PASS).
+
+Do **not** relax the validated CAS/turn/metadata checks or infer a production
+success. Continue addressing remaining issues before synchronizing the remote
+branch; PR #296 remains 12 commits behind main until an actual merge is
+published, and approval for production is separate.
