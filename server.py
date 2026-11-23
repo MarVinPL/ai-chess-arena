@@ -28,6 +28,7 @@ import web_panel_model_api
 import web_panel_download_api
 import web_panel_tournament_api
 import web_panel_hf_review_api
+import web_panel_model_review_api
 import arena_auth
 import model_permissions
 
@@ -1656,30 +1657,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif path in web_panel_hf_review_api.HF_REVIEW_POST_ROUTES:
                     result = web_panel_hf_review_api.handle_hf_review_admin_post(
                         path, payload, actor=self.authenticated_user())
-                elif path == '/api/model-review-submissions/action':
-                    with league.connect() as c:
-                        allowed_ids = {
-                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
-                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
-                        }
-                        result = model_review_submissions.apply_action(
-                            c, submission_id=payload.get('submission_id'), action=payload.get('action'),
-                            actor='arena', reason=payload.get('reason', ''), payload=payload.get('proposal'),
-                            allowed_model_ids=allowed_ids)
-                elif path == '/api/model-review-submissions':
-                    with league.connect() as c:
-                        allowed_ids = {
-                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
-                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
-                        }
-                        result = model_review_submissions.submit(c, payload, allowed_model_ids=allowed_ids)
-                elif path in ('/api/model-admission/admit','/api/model-admission/revoke'):
-                    with league.connect() as c:
-                        result = model_admission.apply_decision(
-                            c, model_id=int(payload.get('model_id', 0)),
-                            action='admit' if path.endswith('/admit') else 'revoke',
-                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
-                        )
+                elif path in web_panel_model_review_api.MODEL_REVIEW_POST_ROUTES:
+                    result = web_panel_model_review_api.handle_model_review_admin_post(
+                        path, payload)
                 elif path == '/api/models/license-evidence':
                     version_id = int(payload.get('version_id', 0))
                     if version_id < 1:
