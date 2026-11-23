@@ -53,9 +53,12 @@ def test_only_worker_backend_owns_worker_http_dispatch_in_composition_root():
 
 def test_unintegrated_update_routes_must_not_be_implicitly_authorized():
     """Draft #296 machine operations require explicit integration, not cookies."""
-    integrated = "/api/remote-workers/update-resume-status"
-    assert integrated not in PANEL_POST_ROUTES
-    assert integrated in worker_backend.WORKER_POST_ROUTES
+    integrated = {
+        "/api/remote-workers/update-resume-status",
+        "/api/remote-workers/update-safety",
+    }
+    assert not (integrated & PANEL_POST_ROUTES)
+    assert integrated <= worker_backend.WORKER_POST_ROUTES
     for route in (
         "/api/remote-workers/update-reserve",
         "/api/remote-workers/update-release",
