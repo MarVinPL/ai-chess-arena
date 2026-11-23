@@ -30,6 +30,7 @@ def initial_state(db):
         "schema_version": 1,
         "tournament_id": TOURNAMENT,
         "fen": chess.STARTING_FEN,
+        "side_to_move": "white",
         "moves": [],
         "move_times": [],
         "pairing": {"id": 42},
@@ -64,6 +65,7 @@ def play_simulated_phone_move(db, before, *, inject_failure=False, monkeypatch=N
         payload = {
             **before,
             "fen": record["fen"],
+            "side_to_move": "black",
             "moves": before["moves"] + [record],
             "move_times": before["move_times"] + [record["seconds"]],
         }
