@@ -531,3 +531,24 @@ def test_native_embedded_greedy_uci_is_bounded_and_not_dispatched():
     assert 'self.generate' in runtime
     assert 'propose_uci(' not in LIB
     assert '#[tauri::command]' not in runtime
+
+
+def test_apk_update_exclusivity_fences_native_gguf_across_async_handoff():
+    runtime_guard = (BASE / "remote_worker_gui/src-tauri/src/android_model_runtime_guard.rs").read_text()
+    native_runtime = (BASE / "remote_worker_gui/src-tauri/src/android_llama_runtime.rs").read_text()
+    assert 'pub(crate) fn begin_exclusive_update()' in runtime_guard
+    assert 'impl Drop for ExclusiveUpdateGate' in runtime_guard
+    assert 'MAINTENANCE_ACTIVE.store(false, Ordering::SeqCst)' in runtime_guard
+    assert 'Silnik nadal ma otwarte pliki GGUF' in runtime_guard
+    assert 'update_gate_rejects_live_model_then_blocks_new_opens_until_drop' in runtime_guard
+    section = LIB.split('async fn install_downloaded_worker_apk(', 1)[1].split(
+        'async fn ', 1
+    )[0]
+    assert 'let _native_update_gate =' in section
+    assert 'android_model_runtime_guard::begin_exclusive_update()?' in section
+    assert section.index('begin_exclusive_update()?') < section.index('check_update_safety(')
+    assert section.index('begin_exclusive_update()?') < section.index('reserve_update(')
+    assert 'android_update_recovery::load_pending()?.is_some()' in native_runtime
+    assert 'android_update_install_journal::load()?.is_some()' in native_runtime
+    assert native_runtime.index('load_pending()?.is_some()') < native_runtime.index('open_verified_session(')
+    assert native_runtime.index('load()?.is_some()') < native_runtime.index('open_verified_session(')
