@@ -342,3 +342,22 @@ def test_android_quic_jni_bridge_is_private_and_rehashes_gguf():
     assert '#[tauri::command]' not in bridge
     assert 'JValue::Long(size)' in bridge
     assert 'JValue::Long(reserve)' in bridge
+
+
+def test_model_lifecycle_requires_terminal_stop_ack_and_reconciliation():
+    lifecycle = (BASE / "remote_worker_gui/src-tauri/src/android_model_lifecycle.rs").read_text()
+    assert 'mod android_model_lifecycle;' in LIB
+    assert 'pub(crate) fn model_download_gate(' in lifecycle
+    assert 'pub(crate) fn model_eviction_gate(' in lifecycle
+    assert 'pub(crate) fn plan_safe_cache_reclamation(' in lifecycle
+    assert 'JobLifecycle::StopRequested' in lifecycle
+    assert 'JobLifecycle::StopAcknowledged' in lifecycle
+    assert 'JobLifecycle::IdleConfirmed' in lifecycle
+    assert 'e.terminal_reconciled' in lifecycle
+    assert 'e.checkpoint_finalized' in lifecycle
+    assert 'e.runtime_stopped' in lifecycle
+    assert 'e.update_hold || e.pause_pending || e.resume_pending' in lifecycle
+    assert 'plan_storage_reclamation(' in lifecycle
+    assert 'retire_model(' not in lifecycle
+    assert 'download_pinned_gguf_with_android_quic(' not in lifecycle
+    assert '#[tauri::command]' not in lifecycle
