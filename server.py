@@ -41,6 +41,7 @@ import web_panel_storage_api
 import web_panel_passkey_tests_api
 import web_panel_export_api
 import web_panel_live_state_api
+import web_panel_game_control_api
 import arena_auth
 import model_permissions
 
@@ -1317,6 +1318,41 @@ def _panel_state_snapshot():
         return state()
 
 
+def _panel_game_control_action(handler, path):
+    """Mutate the single live game under its original lock, preserving HTTP semantics."""
+    global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+    if path == '/api/step':
+        try:
+            with lock:
+                do_step()
+                handler.send_json(state())
+        except Exception as e:
+            with lock:
+                handler.send_json({'error': str(e), **state()}, 422)
+    elif path == '/api/run':
+        with lock:
+            running = True
+            threading.Thread(target=autoplay_loop, daemon=True).start()
+            handler.send_json(state())
+    elif path == '/api/stop':
+        with lock:
+            running = False
+            handler.send_json(state())
+    elif path == '/api/reset':
+        with lock:
+            running = False
+            board = chess.Board()
+            moves = []
+            timings = []
+            illegal_moves = 0
+            started_at = time.time()
+            last_error = ''
+            last_move = None
+            handler.send_json(state())
+    else:
+        raise ValueError('Unknown game control route')
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -1408,7 +1444,6 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_error(404)
     def do_POST(self):
         path = _route_path(self.path)
-        global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         # Machine-authenticated Worker API is isolated from panel sessions.
         with live_lock:
             worker_live_snapshot = dict(live_status)
@@ -1451,23 +1486,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
-        elif path == '/api/step':
-            try:
-                with lock: do_step(); self.send_json(state())
-            except Exception as e:
-                with lock: self.send_json({'error':str(e), **state()}, 422)
-        elif path == '/api/run':
-            with lock:
-                running = True
-                threading.Thread(target=autoplay_loop, daemon=True).start()
-                self.send_json(state())
-        elif path == '/api/stop':
-            with lock: running = False; self.send_json(state())
-        elif path == '/api/reset':
-            with lock:
-                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
-                started_at = time.time(); last_error = ''; last_move = None
-                self.send_json(state())
+        elif web_panel_game_control_api.dispatch_panel_game_control_post(
+                self, path, control_action=_panel_game_control_action):
+            return
         else: self.send_error(404)
 
 if __name__ == '__main__':
