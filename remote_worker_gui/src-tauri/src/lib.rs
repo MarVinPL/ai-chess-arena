@@ -23,6 +23,9 @@ mod android_model_cache;
 mod android_model_source;
 #[allow(dead_code)]
 mod android_model_download;
+// Read-only preparation plan; a normal chess job is not a download lease.
+#[allow(dead_code)]
+mod android_model_preflight;
 #[cfg(target_os = "android")]
 mod android_model_quic;
 #[cfg(target_os = "android")]
