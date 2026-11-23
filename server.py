@@ -24,6 +24,7 @@ import remote_worker_tokens
 import worker_backend
 import web_panel_backend
 import web_panel_auth
+import web_panel_model_api
 import arena_auth
 import model_permissions
 
@@ -1344,13 +1345,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in web_panel_backend.ASSETS:
             self.send_panel_asset(path)
             return
-        if path == '/api/model-permissions':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_permissions.list_permissions(c))
-            except Exception as exc:
-                self.send_json({'error': str(exc)}, 500)
-        elif path == '/api/models/random':
+        if web_panel_model_api.dispatch_panel_model_get(self, path):
+            return
+        if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
             except Exception as e: self.send_json({'error':str(e)},422)
@@ -1361,12 +1358,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(search_hf_models(query))
             except Exception as e:
                 self.send_json({'error':str(e)}, 422)
-        elif path == '/api/model-review-submissions':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_review_submissions.list_submissions(c))
-            except Exception as e:
-                self.send_json({'error': str(e)}, 500)
         elif path == '/api/state':
             with lock: self.send_json(state())
         elif path == '/api/live':
@@ -1654,23 +1645,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if path == '/api/model-permissions/request':
-                    with league.connect() as c:
-                        result = model_permissions.request_permission(
-                            c, model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
-                            revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
-                            scope=payload.get('scope'), confirm=payload.get('confirm') is True,
-                            reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
-                            actor=self.authenticated_user())
-                elif path == '/api/model-permissions/decision':
-                    request_id = payload.get('request_id')
-                    if isinstance(request_id, bool) or not isinstance(request_id, int):
-                        raise ValueError('Nieprawidłowy identyfikator żądania.')
-                    with league.connect() as c:
-                        result = model_permissions.decide_permission(
-                            c, request_id=request_id, action=payload.get('action'),
-                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
-                            actor=self.authenticated_user())
+                if path in web_panel_model_api.PERMISSION_POST_ROUTES:
+                    result = web_panel_model_api.handle_permission_post(
+                        path, payload, self.authenticated_user())
                 elif path == '/api/hf-candidates/download-cancel':
                     result = hf_candidate_downloads.cancel(payload.get('job_id'))
                 elif path == '/api/hf-candidates/download-resume':
