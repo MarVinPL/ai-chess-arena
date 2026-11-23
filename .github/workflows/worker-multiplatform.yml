@@ -4,7 +4,8 @@ name: Worker selective builds (Linux, Windows, Android)
 # A push/PR must modify the actual Worker application sources.
 on:
   push:
-    branches: [main]
+    # Temporary unsigned build-only validation for stacked #296. Remove before merge.
+    branches: [main, feat/issue-295-native-model-cache]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'
@@ -179,8 +180,9 @@ jobs:
 
   android:
     needs: detect
-    # Pull requests are always untrusted: NEVER forward signing secrets.
-    if: needs.detect.outputs.android == 'true' && github.event_name == 'pull_request'
+    # Never expose signing secrets to the stacked feature branch.
+    # Temporary push validation while #296 targets another unmerged PR branch.
+    if: needs.detect.outputs.android == 'true' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/feat/issue-295-native-model-cache'))
     uses: ./.github/workflows/android-worker-apk.yml
     permissions:
       contents: read
