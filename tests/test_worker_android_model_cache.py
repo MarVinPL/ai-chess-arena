@@ -241,3 +241,28 @@ def test_native_model_registry_fetch_requires_active_verified_job():
     assert 'bind_approved_model_to_job(assigned_digest, &approved)?' in coordinator
     assert 'download_approved_model(' not in section
     assert 'fetch_my_approved_gguf(' not in LIB  # internal, no Tauri command
+
+
+def test_http3_jni_bridge_rehashes_gguf_and_shares_private_cache_dir():
+    bridge = (BASE / "remote_worker_gui/src-tauri/src/android_model_quic.rs").read_text()
+    android = (BASE / "remote_worker_gui/android/WorkerQuicTransport.kt").read_text()
+    lib = (BASE / "remote_worker_gui/src-tauri/src/lib.rs").read_text()
+    assert 'mod android_model_quic;' in lib
+    assert 'android_model_quic::android_gguf_cache_root()?' in lib
+    assert 'app.path().app_data_dir()' not in lib.split(
+        'fn inspect_phone_model_storage(', 1)[1].split(
+        'async fn inspect_phone_quic_protocol(', 1
+    )[0]
+    assert 'getFilesDir' in bridge
+    assert '"worker-gguf-models"' in bridge
+    assert 'File(context.filesDir, "worker-gguf-models")' in android
+    assert 'downloadApproved' in bridge
+    assert 'JValue::Long' in bridge
+    assert 'validate_model_source(approved)?' in bridge
+    assert 'verify_model(&mut file, approved.size_bytes, &approved.sha256)' in bridge
+    assert 'DEFAULT_FREE_RESERVE_BYTES' in bridge
+    assert 'pub(crate) fn download_verified_gguf_via_http3(' in bridge
+    assert 'download_verified_gguf_via_http3(' not in lib
+    assert 'download_verified_gguf_via_http3(' not in (
+        BASE / 'remote_worker_gui/src-tauri/src/android_update_coordinator.rs'
+    ).read_text()  # not automatically executed without STOP/ACK
