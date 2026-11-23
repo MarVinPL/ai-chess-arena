@@ -26,13 +26,13 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: '21'
@@ -71,17 +71,18 @@ jobs:
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: swatinem/rust-cache@v2
+      - name: Install stable Rust with the ARM64 Android target
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-linux-android
+          rustup default stable
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: remote_worker_gui/src-tauri
           key: android-arm64
       - name: Initialize Android Worker
         run: |
           npm ci
-          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          # ARM64 is installed above by rustup; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
@@ -172,7 +173,7 @@ jobs:
           cp "$apk" "dist/$name"
           (cd dist && sha256sum "$name" > SHA256SUMS)
           (cd dist && sha256sum --check SHA256SUMS)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: ai-chess-arena-worker-arm64-debug

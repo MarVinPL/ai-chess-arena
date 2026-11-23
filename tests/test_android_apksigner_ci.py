@@ -15,7 +15,7 @@ def test_android_apksigner_comes_from_installed_sdk_build_tools():
 
 def test_apk_is_verified_before_artifact_upload():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.index('"$signer" verify --verbose "$apk"') < text.index("actions/upload-artifact@v7")
+    assert text.index('"$signer" verify --verbose "$apk"') < text.index("actions/upload-artifact@")
     assert 'if-no-files-found: error' in text
     assert not any(line.strip() == "workflow_dispatch:" for line in text.splitlines())
 
