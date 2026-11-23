@@ -24,6 +24,8 @@ mod android_model_source;
 #[allow(dead_code)]
 mod android_model_download;
 #[cfg(target_os = "android")]
+mod android_model_quic;
+#[cfg(target_os = "android")]
 mod android_worker_token_store;
 #[allow(dead_code)]
 mod android_update_install_state;
@@ -236,10 +238,8 @@ fn inspect_phone_model_storage(app: tauri::AppHandle) -> Result<PhoneModelStorag
     }
     #[cfg(target_os = "android")]
     {
-        use tauri::Manager;
-        let private_root = app.path().app_data_dir()
-            .map_err(|_| "Nie można wskazać prywatnego katalogu aplikacji")?
-            .join("worker-gguf-models");
+        let _ = app;
+        let private_root = android_model_quic::android_gguf_cache_root()?;
         let inventory = android_model_cache::inspect_model_cache(&private_root)?;
         let free_bytes = android_model_cache::android_private_free_bytes()?;
         let reserve_bytes = android_model_cache::DEFAULT_FREE_RESERVE_BYTES;
