@@ -32,6 +32,9 @@ mod android_model_lifecycle;
 // Local app-owned GGUF descriptor leases; no file deletion or dispatch yet.
 #[allow(dead_code)]
 mod android_model_runtime_guard;
+// Read-only ABI preflight: actual embedded llama.cpp is not bundled yet.
+#[allow(dead_code)]
+mod android_embedded_llama;
 // Read-only preparation plan; a normal chess job is not a download lease.
 #[allow(dead_code)]
 mod android_model_preflight;
