@@ -115,8 +115,9 @@ object WorkerQuicTransport {
                 override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
                     try {
                         check(info.httpStatusCode == 200) { "Unexpected GGUF status" }
-                        val reportedLength = info.allHeaders["content-length"]?.firstOrNull()
-                            ?.toLongOrNull()
+                        val reportedLength = info.headers.asMap.entries
+                            .firstOrNull { it.key.equals("content-length", ignoreCase = true) }
+                            ?.value?.firstOrNull()?.toLongOrNull()
                         if (reportedLength != null) {
                             check(reportedLength == expectedBytes) { "GGUF length mismatch" }
                         }
