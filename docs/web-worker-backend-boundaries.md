@@ -132,3 +132,12 @@ responses retain their previous HTTP status behavior (including 404 for
 missing jobs and 422 for missing event job_id or service errors), and use
 existing `hf_candidate_downloads` state. No Worker-token fallback or
 alternate download scheduler is introduced.
+
+## HF status GET boundary
+
+`web_panel_hf_status_api` owns five exact authenticated read paths for
+candidate review, review queue, audit queue, hardware, and runtime preflight.
+`server.Handler.do_GET` enforces browser session authentication before
+calling it. It uses existing `league.connect()`, HF review, queue and
+runtime services, preserving 422 errors for reviews and 503 errors for
+queue/runtime snapshots. No Worker-token fallback or separate registry.
