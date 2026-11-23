@@ -458,3 +458,31 @@ def test_extracted_native_packaging_for_own_apk_library_directory():
     assert workflow.index('python3 android/force_extracted_native_libs.py') < (
         workflow.index('bash android/build_embedded_llama.sh')
     )
+
+
+def test_native_embedded_llama_loader_keeps_gguf_handle_until_unload():
+    runtime = (BASE / "remote_worker_gui/src-tauri/src/android_llama_runtime.rs").read_text()
+    shim = (BASE / "remote_worker_gui/android/arena_llama_bridge.cpp").read_text()
+    build = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
+    ci = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
+    assert 'mod android_llama_runtime;' in LIB
+    assert 'pub(crate) fn load_verified_embedded_model(' in runtime
+    assert 'open_verified_session(&root, digest, expected_size)?' in runtime
+    assert 'native_library_dir()?.join("libarena_llama_bridge.so")' in runtime
+    assert 'fs::symlink_metadata(&library_path)' in runtime
+    assert 'lib.symbol(c"arena_llama_model_open")' in runtime
+    assert 'lib.symbol(c"arena_llama_model_close")' in runtime
+    assert 'impl Drop for EmbeddedLlamaModel' in runtime
+    assert '(self.close)();' in runtime
+    assert '_verified_file: ModelSession' in runtime
+    assert 'std::mem::transmute' in runtime
+    assert 'arena_llama_model_open(' in shim
+    assert 'llama_model_load_from_file(private_gguf_path, params)' in shim
+    assert 'llama_model_free(loaded_model)' in shim
+    assert 'params.n_gpu_layers = 0' in shim
+    assert 'std::lock_guard<std::mutex>' in shim
+    assert 'libarena_llama_bridge.so' in build
+    assert 'arena_llama_model_is_open' in build
+    assert 'for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do' in ci
+    assert 'load_verified_embedded_model(' not in LIB  # no frontend dispatch
+    assert '#[tauri::command]' not in runtime
