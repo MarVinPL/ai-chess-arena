@@ -1340,7 +1340,7 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
             return
-        if path in ('/assets/arena.css', '/assets/arena.js'):
+        if path in web_panel_backend.ASSETS:
             self.send_panel_asset(path)
             return
         if path == '/api/model-permissions':
