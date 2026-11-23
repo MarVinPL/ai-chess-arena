@@ -238,6 +238,62 @@ mod tests {
         (root, digest, bytes)
     }
 
+    fn entry(n: u8, gib: u64, age: u64, in_use: bool, preserve: bool) -> CacheEntry {
+        CacheEntry {
+            digest: format!("{n:064x}"),
+            size_bytes: gib * 1024 * 1024 * 1024,
+            last_used_ms: age,
+            in_use,
+            preserve,
+        }
+    }
+
+    #[test]
+    fn lru_reclaims_only_unused_unpinned_models_until_reserve_is_met() {
+        let gib = 1024 * 1024 * 1024;
+        let entries = [
+            entry(1, 4, 1, true, false),  // active inference: NEVER delete
+            entry(2, 6, 2, false, true),  // user-pinned: NEVER delete
+            entry(3, 3, 3, false, false),
+            entry(4, 5, 4, false, false),
+            entry(5, 9, 5, false, false),
+        ];
+        // Need 8 GiB GGUF + 10 GiB reserve, with 11 GiB free.
+        let plan = plan_storage_reclamation(11*gib, 8*gib,
+            DEFAULT_FREE_RESERVE_BYTES, &entries).unwrap();
+        assert_eq!(plan.delete_digests,
+            vec![entries[2].digest.clone(), entries[3].digest.clone()]);
+        assert_eq!(plan.reclaimable_bytes, 8*gib);
+        assert_eq!(plan.still_missing_bytes, 0);
+        assert_eq!(plan_storage_reclamation(20*gib, 8*gib,
+            DEFAULT_FREE_RESERVE_BYTES, &entries).unwrap().delete_digests,
+            Vec::<String>::new());
+    }
+
+    #[test]
+    fn insufficient_storage_refuses_active_and_pinned_eviction() {
+        let gib = 1024 * 1024 * 1024;
+        let entries = [entry(1, 5, 1, true, false),
+            entry(2, 4, 2, false, true), entry(3, 1, 3, false, false)];
+        let plan = plan_storage_reclamation(1*gib, 8*gib,
+            DEFAULT_FREE_RESERVE_BYTES, &entries).unwrap();
+        assert_eq!(plan.delete_digests, vec![entries[2].digest.clone()]);
+        assert_eq!(plan.still_missing_bytes, 16*gib);
+    }
+
+    #[test]
+    fn malformed_duplicate_and_overflow_metadata_never_evicted() {
+        let gib = 1024 * 1024 * 1024;
+        let good = entry(1, 4, 0, false, false);
+        let mut bad = good.clone();
+        bad.digest = "../escape".into();
+        assert!(plan_storage_reclamation(0, gib, 10*gib, &[bad]).is_err());
+        assert!(plan_storage_reclamation(0, gib, 10*gib,
+            &[good.clone(), good]).is_err());
+        assert!(plan_storage_reclamation(0, gib, u64::MAX, &[]).is_err());
+        assert!(plan_storage_reclamation(0, gib, u64::MAX - 1, &[]).is_err());
+    }
+
     #[test]
     fn verified_model_is_reusable_and_removed_only_when_idle() {
         let (root, digest, data) = fixture();
