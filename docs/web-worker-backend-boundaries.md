@@ -90,3 +90,14 @@ POST requests. The browser session and Origin checks still run in
 `league.connect()` is the only DB connection provider and the original
 `hf_candidate_audit.AUDIT_LOCK` is retained for atomic exclusion, including
 release on failure. This module does not admit models or modify lease logic.
+
+## Model review and admission boundary
+
+`web_panel_model_review_api` owns panel POST operations for model review
+submission, review actions, and admission admit/revoke. It is called only after
+browser session and Origin checks; Worker tokens are never accepted. It
+retains the existing `model_allowlist.load_allowlist()` filtering, including
+legacy exclusion of model ID 6 from review and the `eligible`/`restricted`
+statuses. Authorization and admission decisions remain in the shared domain
+modules, with `league.connect()` providing the authoritative connection.
+No separate model registry or allowlist is introduced.
