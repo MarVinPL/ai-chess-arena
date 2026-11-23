@@ -300,3 +300,58 @@ def test_abrupt_power_loss_without_stop_does_not_reassign_or_recover(sandbox):
             "SELECT COUNT(*) FROM worker_update_pause_requests WHERE worker_id=?",
             (WORKER,)
         ).fetchone()[0] == 0
+
+
+def test_trusted_ack_does_not_release_execution_lease_or_allow_replay(sandbox):
+    """ACK records a verified stop, but is NOT a new idle lease or move commit."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    before = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    pause = WorkerUpdatePause(path)
+    request_id = pause.request(WORKER, job_id)
+
+    # Only a trusted coordinator is allowed to call this method AFTER independent
+    # validation. The worker HTTP API exposes no route for asserting this proof.
+    pause.acknowledge(
+        WORKER, job_id, request_id,
+        worker_stopped=True, checkpoint_verified=True,
+    )
+    assert pause.poll_stop_instruction(WORKER) == {
+        "action": "await_reconciliation"
+    }
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "await_reconciliation"
+    }
+    with pytest.raises(ValueError, match="Stale pause"):
+        pause.acknowledge(
+            WORKER, job_id, request_id,
+            worker_stopped=True, checkpoint_verified=True,
+        )
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})[0] == 409
+    with pytest.raises(ValueError):
+        arm_one_job(path, WORKER)
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+
+    with sqlite3.connect(path) as db:
+        phase, ack_at = db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone()
+        assert phase == "acknowledged" and ack_at is not None
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 0
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == before
