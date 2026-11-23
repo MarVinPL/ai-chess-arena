@@ -127,12 +127,18 @@ def test_transport_endpoint_has_no_worker_control_actions():
     server = (root / "server.py").read_text(encoding="utf-8")
     native = (root / "remote_worker_gui/src-tauri/src/lib.rs").read_text(encoding="utf-8")
     transport = (root / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
-    section = server.split("if path == '/api/remote-workers/job-poll':", 1)[1].split(
-        "if path == '/api/remote-workers/board-view':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
-    assert "WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)" in section
-    assert "assign_from_arena(" not in section
+    if (root / "worker_backend.py").exists():
+        section = (root / "remote_worker_phone_api.py").read_text(encoding="utf-8")
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in section
+        assert "WorkerInferenceDelivery(db).poll_assigned_job(worker_id)" in section
+        assert "assign_from_arena(" not in section
+    else:
+        section = server.split("if path == '/api/remote-workers/job-poll':", 1)[1].split(
+            "if path == '/api/remote-workers/board-view':", 1
+        )[0]
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
+        assert "WorkerInferenceDelivery(DB).poll_assigned_job(worker_id)" in section
+        assert "assign_from_arena(" not in section
     assert '"job-poll"' in transport
     assert "async fn poll_my_inference_job(" in native
     assert "fetch_my_inference_job(" in native
@@ -205,13 +211,20 @@ def test_result_api_is_authenticated_and_never_applies_moves():
     root = Path(__file__).resolve().parents[1]
     server = (root / "server.py").read_text(encoding="utf-8")
     rust = (root / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
-    block = server.split("if path == '/api/remote-workers/job-result':", 1)[1].split(
-        "if path == '/api/remote-workers/job-poll':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in block
-    assert "submit_inference_result(" in block
-    assert "set_live(" not in block
-    assert "board.push" not in block
+    if (root / "worker_backend.py").exists():
+        block = (root / "remote_worker_phone_api.py").read_text(encoding="utf-8")
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in block
+        assert "submit_inference_result(" in block
+        assert "set_live(" not in block
+        assert "board.push" not in block
+    else:
+        block = server.split("if path == '/api/remote-workers/job-result':", 1)[1].split(
+            "if path == '/api/remote-workers/job-poll':", 1
+        )[0]
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in block
+        assert "submit_inference_result(" in block
+        assert "set_live(" not in block
+        assert "board.push" not in block
     assert '"job-result"' in rust
     assert "submit_my_inference_move(" in rust
 
@@ -256,13 +269,20 @@ def test_ready_endpoint_is_machine_authenticated_not_an_assignment():
     coordinator = (
         root / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs"
     ).read_text(encoding="utf-8")
-    section = server.split("if path == '/api/remote-workers/ready':", 1)[1].split(
-        "if path == '/api/remote-workers/job-result':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
-    assert "register_local_ready(" in section
-    assert "assign_from_arena" not in section
-    assert "'nonce': nonce" in section
+    if (root / "worker_backend.py").exists():
+        section = (root / "remote_worker_phone_api.py").read_text(encoding="utf-8")
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in section
+        assert "register_local_ready(" in section
+        assert "assign_from_arena" not in section
+        assert '"nonce": nonce' in section
+    else:
+        section = server.split("if path == '/api/remote-workers/ready':", 1)[1].split(
+            "if path == '/api/remote-workers/job-result':", 1
+        )[0]
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
+        assert "register_local_ready(" in section
+        assert "assign_from_arena" not in section
+        assert "'nonce': nonce" in section
     assert "async fn announce_phone_ready(" in coordinator
     assert 'model_sha256.len() != 64' in coordinator
 
