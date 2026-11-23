@@ -189,8 +189,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Test cases exercise the same process-wide transfer guard; serialize
+    // only those fixtures, without weakening production exclusion.
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn stale_partial_requires_verified_stop_and_never_removes_other_files() {
+        let _serial = TEST_MUTEX.lock().unwrap();
         use sha2::{Digest, Sha256};
         let serial = format!("{}-{:?}", std::process::id(),
             std::thread::current().id());
@@ -228,6 +233,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn crash_recovery_never_follows_partial_symlink() {
+        let _serial = TEST_MUTEX.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "arena-partial-symlink-{}-{}", std::process::id(),
             std::time::SystemTime::now()
@@ -269,6 +275,7 @@ mod tests {
     }
     #[test]
     fn in_process_download_lock_is_exclusive() {
+        let _serial = TEST_MUTEX.lock().unwrap();
         let first = TransferGuard::new().unwrap();
         assert!(TransferGuard::new().is_err());
         drop(first);
