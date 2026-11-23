@@ -212,3 +212,17 @@ def test_android_quic_probe_is_fixed_host_head_only_without_model_side_effects()
     assert 'checkQuicProtocol' in ui
     assert "protocol==='h3'" in ui
     assert 'https://huggingface.co/robots.txt' not in ui
+
+
+def test_arena_assignment_digest_must_bind_independently_approved_model():
+    source = (BASE / "remote_worker_gui/src-tauri/src/android_model_source.rs").read_text()
+    assert 'fn bind_approved_model_to_job(' in source
+    binding = source.split('pub(crate) fn bind_approved_model_to_job(', 1)[1].split(
+        '#[cfg(test)]', 1
+    )[0]
+    assert 'assigned_model_sha256 != registry_model.sha256' in binding
+    assert 'validate_model_source(registry_model)' in binding
+    assert 'bind_approved_model_to_job(&"b".repeat(64), &approved).is_err()' in source
+    assert 'assigned_digest_does_not_authorize_unpinned_registry_source' in source
+    assert 'download_approved_model' not in binding
+    assert 'bind_approved_model_to_job' not in LIB  # no WebView command
