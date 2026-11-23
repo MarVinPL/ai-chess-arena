@@ -139,7 +139,7 @@ def test_model_cache_inventory_is_read_only_and_shown_in_ui():
     assert 'fs::remove_file' not in inventory
     assert 'valid_digest(digest)' in inventory
     assert 'entry.file_name()' in inventory
-    assert '.join("worker-gguf-models")' in LIB
+    assert 'android_model_quic::android_gguf_cache_root()?' in LIB
     assert 'android_model_cache::inspect_model_cache(&private_root)?' in LIB
     assert 'cached_models: inventory.model_count' in LIB
     assert 'cached_bytes: inventory.occupied_bytes' in LIB
