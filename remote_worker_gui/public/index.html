@@ -66,6 +66,9 @@ async function checkPhoneModelStorage(){
   if(!storage||!Number.isSafeInteger(storage.free_bytes)||
      !Number.isSafeInteger(storage.reserve_bytes)||
      !Number.isSafeInteger(storage.available_for_models_bytes)||
+     !Number.isSafeInteger(storage.cached_models)||
+     !Number.isSafeInteger(storage.cached_bytes)||
+     storage.cached_models<0||storage.cached_bytes<0||
      storage.free_bytes<0||storage.reserve_bytes<0||
      storage.available_for_models_bytes!==Math.max(0,storage.free_bytes-storage.reserve_bytes)){
    throw Error('Nieprawidłowa odpowiedź systemu');
@@ -73,7 +76,8 @@ async function checkPhoneModelStorage(){
   const gib=bytes=>(bytes/(1024**3)).toFixed(1);
   label.textContent='Wolne: '+gib(storage.free_bytes)+' GiB · rezerwa: '+
    gib(storage.reserve_bytes)+' GiB · na kolejne GGUF: '+
-   gib(storage.available_for_models_bytes)+' GiB (szacunek; brak rezerwacji miejsca).';
+   gib(storage.available_for_models_bytes)+' GiB (szacunek; brak rezerwacji miejsca). '+
+   'Cache GGUF: '+storage.cached_models+' modeli · '+gib(storage.cached_bytes)+' GiB.';
  }catch(_error){
   label.textContent='Nie udało się potwierdzić wolnego miejsca. Pobieranie modeli nie jest dozwolone.';
  }finally{localModelStorageProbeInFlight=false;}
