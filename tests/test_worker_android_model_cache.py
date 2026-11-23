@@ -502,3 +502,32 @@ def test_embedded_llama_bridge_links_exact_file_not_relative_library_search():
     assert '"$(realpath "$LIB_DIR/libllama.so")"' in script
     assert ' -llama ' not in script
     assert 'libarena_llama_bridge.so' in script
+
+
+def test_native_embedded_greedy_uci_is_bounded_and_not_dispatched():
+    bridge = (BASE / "remote_worker_gui/android/arena_llama_bridge.cpp").read_text()
+    runtime = (BASE / "remote_worker_gui/src-tauri/src/android_llama_runtime.rs").read_text()
+    build = (BASE / "remote_worker_gui/android/build_embedded_llama.sh").read_text()
+    assert 'arena_llama_generate_greedy(' in bridge
+    assert 'llama_init_from_model(loaded_model, params)' in bridge
+    assert 'llama_tokenize(vocab' in bridge
+    assert 'llama_decode(ctx, llama_batch_get_one(' in bridge
+    assert 'llama_sampler_init_greedy()' in bridge
+    assert 'llama_sampler_sample(sampler, ctx, -1)' in bridge
+    assert 'llama_token_to_piece(vocab' in bridge
+    assert 'llama_vocab_is_eog(vocab, next)' in bridge
+    assert 'llama_free(ptr)' in bridge
+    assert 'llama_sampler_free(ptr)' in bridge
+    assert 'std::lock_guard<std::mutex> guard(engine_mutex)' in bridge
+    assert 'max_tokens > 64' in bridge
+    assert 'output_capacity > 4096' in bridge
+    assert 'prompt_len > 8192' in bridge
+    assert 'params.n_gpu_layers = 0' in bridge
+    assert 'arena_llama_generate_greedy' in build
+    assert 'pub(crate) fn propose_uci(' in runtime
+    assert 'legal_moves.is_empty() || legal_moves.len() > 256' in runtime
+    assert 'parse_exact_uci_answer(text)?' in runtime
+    assert 'legal_moves.iter().any(|mv| mv == &proposed)' in runtime
+    assert 'self.generate' in runtime
+    assert 'propose_uci(' not in LIB
+    assert '#[tauri::command]' not in runtime
