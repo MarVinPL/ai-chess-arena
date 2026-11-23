@@ -74,24 +74,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      # The existing approved rust-cache action also supports extra paths.
-      # Tauri generates Gradle only during android init, so cache the wrapper
-      # distribution after the build instead of fetching gradle-9.6.1-bin.zip
-      # on every new GitHub-hosted runner.
-      - name: Restore Rust and Gradle wrapper caches
-        id: rust-and-gradle-cache
+      # A Rust cache hit is immutable and cannot pick up the Gradle ZIP
+      # downloaded later by Tauri. Keep the Gradle wrapper distribution in an
+      # independent GitHub Actions cache, shared by builds of this PR.
+      - name: Restore Gradle 9.6.1 distribution
+        id: gradle-wrapper-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-${{ runner.os }}-9.6.1-bin-v1
+      - name: Restore Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: remote_worker_gui/src-tauri
           key: android-arm64-gradle-9.6.1
-          cache-directories: ~/.gradle/wrapper/dists
       - name: Report Gradle wrapper cache
         shell: bash
+        env:
+          GRADLE_WRAPPER_CACHE_HIT: ${{ steps.gradle-wrapper-cache.outputs.cache-hit }}
         run: |
-          if [[ -d "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" ]]; then
-            echo 'Gradle 9.6.1 distribution found in the restored cache.'
+          if [[ "$GRADLE_WRAPPER_CACHE_HIT" == true ]] &&
+             find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -name 'gradle-launcher-9.6.1.jar' -print -quit 2>/dev/null | grep -q .; then
+            echo 'Gradle 9.6.1 distribution restored; no wrapper download needed.'
           else
-            echo 'Cold Gradle cache: this build downloads the wrapper; the cache saves after a successful job.'
+            echo 'Gradle 9.6.1 not fully cached; it will download once and be saved independently after a successful job.'
           fi
       - name: Initialize Android Worker
         run: |
