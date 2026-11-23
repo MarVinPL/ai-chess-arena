@@ -36,6 +36,7 @@ import web_panel_hf_status_api
 import web_panel_games_api
 import web_panel_inventory_api
 import web_panel_tournament_read_api
+import web_panel_hf_catalog_api
 import arena_auth
 import model_permissions
 
@@ -1369,6 +1370,8 @@ class Handler(BaseHTTPRequestHandler):
         if web_panel_tournament_read_api.dispatch_panel_tournament_get(
                 self, path, get_live=get_live, tournament_preflight=tournament_preflight):
             return
+        if web_panel_hf_catalog_api.dispatch_panel_hf_catalog_get(self, path, raw_path):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1384,38 +1387,6 @@ class Handler(BaseHTTPRequestHandler):
             with lock: self.send_json(state())
         elif path == '/api/live':
             self.send_json(get_live())
-        elif path == '/api/hf-candidates/audit':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                params = parse_qs(urlparse(raw_path).query)
-                catalog_id = params.get('catalog_id', [''])[0]
-                revision = params.get('revision', [''])[0]
-                with league.connect() as c:
-                    report = hf_candidate_audit.get_report(c, catalog_id, revision)
-                if report is None:
-                    self.send_json({'error': 'Brak zapisanego audytu dla tej rewizji.'}, 404)
-                else:
-                    self.send_json(report)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates':
-            try:
-                items = hf_candidate_audit.load_catalog()
-                with league.connect() as c:
-                    reports = hf_candidate_audit.list_reports(c)
-                    reviews = hf_candidate_reviews.list_reviews(c)
-                report_map = {(x['catalog_id'], x['revision']): x for x in reports}
-                review_map = {(x['catalog_id'], x['revision']): x for x in reviews}
-                result = []
-                for item in items:
-                    row = {key: item.get(key) for key in ('catalog_id','arena_model_id','display_name','repo_id','revision','audited_revision','declared_license_tag','gated','source_status','metadata_status','license_review_status','technical_readiness','admission_status')}
-                    key = (item.get('catalog_id'), item.get('revision') or item.get('audited_revision'))
-                    row['last_audit'] = report_map.get(key)
-                    row['last_review'] = review_map.get(key)
-                    result.append(row)
-                self.send_json(result)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 503)
         elif path == '/api/storage':
             status = league.storage_status()
             managed = model_store.MANAGED_DIR
