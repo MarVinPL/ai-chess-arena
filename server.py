@@ -1511,6 +1511,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == '/remote-workers':
             self.send_html_file('remote_workers.html')
+            return
         if path in web_panel_backend.ASSETS:
             self.send_panel_asset(path)
             return
