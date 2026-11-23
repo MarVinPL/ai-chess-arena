@@ -69,12 +69,18 @@ def test_saved_checkpoint_never_becomes_runnable_without_executor(tmp_path):
 
 
 def test_machine_authenticated_resume_status_has_no_unsafe_dispatch():
-    section = SERVER.split("if path == '/api/remote-workers/update-resume-status':", 1)[1].split(
-        "if path == '/api/remote-workers/update-pause-poll':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
-    assert "WorkerUpdatePause(DB).resume_status(worker_id)" in section
-    assert "'resume_available': False" in section
+    if (ROOT / "worker_update_resume_status_api.py").exists():
+        section = (ROOT / "worker_update_resume_status_api.py").read_text(encoding="utf-8")
+        assert "WorkerTokenStore(database).authenticate(worker_id, token)" in section
+        assert "WorkerUpdatePause(database).resume_status(worker_id)" in section
+        assert '"resume_available": False' in section
+    else:
+        section = SERVER.split("if path == '/api/remote-workers/update-resume-status':", 1)[1].split(
+            "if path == '/api/remote-workers/update-pause-poll':", 1
+        )[0]
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
+        assert "WorkerUpdatePause(DB).resume_status(worker_id)" in section
+        assert "'resume_available': False" in section
     assert "reconcile_resume(" not in section
     assert "checkpoint_json" not in section
     assert '"update-resume-status"' in COORDINATOR
