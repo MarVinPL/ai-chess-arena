@@ -172,3 +172,20 @@ def test_android_http3_bridge_is_packaged_with_tauri_and_requires_approved_gguf(
     assert 'shutil.copyfile(QUIC_SOURCE, VAULT_TARGET.parent / QUIC_SOURCE.name)' in injector
     assert 'python3 android/inject_package_installer.py' in workflow
     assert 'downloadApproved(' not in LIB  # no untrusted Tauri IPC
+
+
+def test_stacked_android_quic_build_runs_without_exposing_signing_secrets():
+    workflow = (BASE / ".github/workflows/worker-multiplatform.yml").read_text()
+    apk = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
+    assert "branches: [main, feat/issue-295-native-model-cache]" in workflow
+    assert "feat/issue-293-android-model-diagnostics" in workflow
+    assert workflow.count("'remote_worker_gui/android/**'") == 3
+    guard = workflow.split("\\n  android:\\n", 1)[1].split("\\n  android_signed:\\n", 1)[0]
+    assert "refs/heads/feat/issue-295-native-model-cache" in guard
+    assert "secrets:" not in guard
+    assert "WORKER_ANDROID_DEBUG_KEYSTORE_B64" not in guard
+    signed = workflow.split("\\n  android_signed:\\n", 1)[1]
+    assert "github.ref == 'refs/heads/main'" in signed
+    assert "WORKER_ANDROID_DEBUG_KEYSTORE_B64" in signed
+    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in apk
+    assert 'python3 android/inject_package_installer.py' in apk
