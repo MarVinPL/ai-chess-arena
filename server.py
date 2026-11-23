@@ -29,6 +29,7 @@ import web_panel_download_api
 import web_panel_tournament_api
 import web_panel_hf_review_api
 import web_panel_model_review_api
+import web_panel_model_storage_api
 import arena_auth
 import model_permissions
 
@@ -1711,22 +1712,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = web_panel_tournament_api.handle_tournament_admin_post(
                         path, payload, start_tournament=start_tournament,
                         active_thread=tournament_thread, stop_event=tournament_stop_event)
-                elif path == '/api/models/download':
-                    if payload.get('confirm_download') is not True:
-                        raise ValueError('Wymagane jawne potwierdzenie pobrania')
-                    result = model_store.download_version(
-                        int(payload.get('version_id',0)), payload.get('url',''), payload.get('filename',''),
-                        payload.get('sha256',''), int(payload.get('size_bytes',0)),
-                        bool(payload.get('license_verified',False)))
-                elif path == '/api/models/cleanup':
-                    if payload.get('confirm_delete') is not True:
-                        raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
-                    if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
-                        raise RuntimeError('Nie można usuwać modeli podczas aktywnego turnieju lub pobierania; spróbuj później')
-                    try:
-                        result = model_store.cleanup_version(int(payload.get('version_id',0)))
-                    finally:
-                        model_store.MODEL_LIFECYCLE_LOCK.release()
+                elif path in web_panel_model_storage_api.MODEL_STORAGE_POST_ROUTES:
+                    result = web_panel_model_storage_api.handle_model_storage_post(path, payload)
                 else:
                     raise ValueError('Nieznana operacja administracyjna')
                 self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
