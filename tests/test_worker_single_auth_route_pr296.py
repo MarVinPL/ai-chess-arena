@@ -23,12 +23,22 @@ class HandlerStub:
 
 
 def test_one_worker_authentication_handler_in_http_entrypoint():
+    root = Path(server.__file__).resolve().parent
     source = Path(server.__file__).read_text(encoding="utf-8")
     post = source.split("    def do_POST(self):", 1)[1]
-    assert post.count("if path == '/api/remote-workers/authenticate':") == 1
-    assert post.index("if path == '/api/remote-workers/authenticate':") < post.index(
-        "if path == '/api/auth/login':")
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in post
+    if (root / "worker_backend.py").exists():
+        router = (root / "worker_backend.py").read_text(encoding="utf-8")
+        assert post.count("worker_backend.dispatch_worker_post(") == 1
+        assert "if path == '/api/remote-workers/authenticate':" not in post
+        assert router.count("if path == AUTH_ROUTE:") == 1
+        assert router.index("if path == AUTH_ROUTE:") < router.index(
+            "if path not in ROUTES:")
+        assert "WorkerTokenStore(db).authenticate(worker_id, token)" in router
+    else:
+        assert post.count("if path == '/api/remote-workers/authenticate':") == 1
+        assert post.index("if path == '/api/remote-workers/authenticate':") < post.index(
+            "if path == '/api/auth/login':")
+        assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in post
 
 
 def test_worker_authentication_ignores_admin_cookie_and_rejects_invalid_token(tmp_path, monkeypatch):
