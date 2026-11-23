@@ -1,0 +1,183 @@
+//! App-local GGUF file usage tracking for a future embedded llama.cpp.
+//!
+//! A model session retains a private file descriptor and a counted, RAII
+//! guard. All admissions and retirement checks share one mutex, so a new
+//! managed session cannot race a local retirement decision.
+//!
+//! NOT a proof about independent Termux/other processes or memory mappings
+//! created outside this API. Real embedded engine must own the guard until
+//! its worker threads and mappings are fully destroyed. The coordinator must
+//! separately supply a valid exclusive DB maintenance reservation.
+use crate::android_model_cache::{model_path, verify_model};
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+
+static OPEN_MODELS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static MAINTENANCE_ACTIVE: OnceLock<Mutex<bool>> = OnceLock::new();
+
+fn sessions() -> &'static Mutex<HashMap<String, usize>> {
+    OPEN_MODELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn maintenance() -> &'static Mutex<bool> {
+    MAINTENANCE_ACTIVE.get_or_init(|| Mutex::new(false))
+}
+
+pub(crate) struct ModelSession {
+    digest: String,
+    // File descriptor retained for the lifetime of the guarded engine.
+    pub(crate) file: File,
+}
+impl Drop for ModelSession {
+    fn drop(&mut self) {
+        if let Ok(mut active) = sessions().lock() {
+            if let Some(uses) = active.get_mut(&self.digest) {
+                if *uses > 1 {
+                    *uses -= 1;
+                } else {
+                    active.remove(&self.digest);
+                }
+            }
+        }
+    }
+}
+
+/// Start a tracked session ONLY for an already verified private GGUF file.
+/// Failed verification never reserves or activates a model.
+#[allow(dead_code)]
+pub(crate) fn open_verified_session(
+    root: &Path, digest: &str, expected_size: u64,
+) -> Result<ModelSession, String> {
+    let mut maintained = maintenance().lock()
+        .map_err(|_| "Nieustalony stan konserwacji GGUF")?;
+    if *maintained {
+        return Err("Trwa wyłączna konserwacja GGUF".into());
+    }
+    let target = model_path(root, digest)?;
+    let root_meta = fs::symlink_metadata(root)
+        .map_err(|_| "Brak prywatnego katalogu GGUF".to_owned())?;
+    if !root_meta.file_type().is_dir() {
+        return Err("Nieprawidłowy katalog GGUF".into());
+    }
+    let metadata = fs::symlink_metadata(&target)
+        .map_err(|_| "Brak GGUF do uruchomienia".to_owned())?;
+    if !metadata.file_type().is_file() || metadata.len() != expected_size {
+        return Err("Model GGUF jest nieprawidłowy".into());
+    }
+    let mut file = File::open(target)
+        .map_err(|_| "Nie udało się otworzyć GGUF".to_owned())?;
+    if !verify_model(&mut file, expected_size, digest)
+        .map_err(|_| "Nie udało się sprawdzić GGUF".to_owned())? {
+        return Err("GGUF nie przeszedł weryfikacji integralności".into());
+    }
+    let mut active = sessions().lock()
+        .map_err(|_| "Nieustalona lista aktywnych modeli".to_owned())?;
+    let count = active.entry(digest.to_owned()).or_insert(0);
+    *count = count.checked_add(1)
+        .ok_or("Przekroczono licznik sesji GGUF")?;
+    drop(active);
+    *maintained = false;
+    Ok(ModelSession { digest: digest.into(), file })
+}
+
+/// A local exclusive window prevents new managed model opens while the
+/// caller verifies engine shutdown and evaluates coordinator evidence.
+/// No file deletion is implemented here. In particular, the caller cannot
+/// infer engine shutdown just because this function returns successfully.
+#[allow(dead_code)]
+pub(crate) fn with_no_open_sessions<T>(
+    examine: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let mut maintained = maintenance().lock()
+        .map_err(|_| "Nieustalony stan blokady cache GGUF")?;
+    if *maintained {
+        return Err("Konserwacja GGUF już trwa".into());
+    }
+    *maintained = true;
+    // Scope restores the flag on success, errors and unwinding.
+    struct Reset<'a>(&'a mut bool);
+    impl Drop for Reset<'_> {
+        fn drop(&mut self) { *self.0 = false; }
+    }
+    let _reset = Reset(&mut maintained);
+    let active = sessions().lock()
+        .map_err(|_| "Nieustalony stan aktywnych plików GGUF".to_owned())?;
+    if !active.is_empty() {
+        return Err("Silnik nadal ma otwarte pliki GGUF".into());
+    }
+    drop(active);
+    examine()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    fn fixture() -> (std::path::PathBuf, String, u64) {
+        static N: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(
+            format!("arena-model-runtime-{}-{}", std::process::id(), n));
+        fs::create_dir_all(&dir).unwrap();
+        let data = b"GGUFtest-model";
+        let digest = format!("{:x}", Sha256::digest(data));
+        let mut file = File::create(dir.join(format!("{digest}.gguf"))).unwrap();
+        file.write_all(data).unwrap();
+        (dir, digest, data.len() as u64)
+    }
+
+    #[test]
+    fn open_file_prevents_maintenance_until_guard_is_dropped() {
+        let (root, digest, size) = fixture();
+        let session = open_verified_session(&root, &digest, size).unwrap();
+        assert!(session.file.metadata().is_ok());
+        assert!(with_no_open_sessions(|| Ok(())).is_err());
+        drop(session);
+        assert!(with_no_open_sessions(|| Ok(())).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn open_rejects_tampering_or_symlink() {
+        let (root, digest, size) = fixture();
+        assert!(open_verified_session(&root, &digest, size+1).is_err());
+        fs::write(root.join(format!("{digest}.gguf")), b"GGUFwrong-bytes").unwrap();
+        assert!(open_verified_session(&root, &digest, size).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let model = root.join(format!("{digest}.gguf"));
+            fs::remove_file(&model).unwrap();
+            symlink("/dev/null", &model).unwrap();
+            assert!(open_verified_session(&root, &digest, size).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exclusive_maintenance_prevents_concurrent_managed_opens() {
+        let (root, digest, size) = fixture();
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_for_thread = barrier.clone();
+        let root2 = root.clone();
+        let digest2 = digest.clone();
+        let worker = thread::spawn(move || {
+            with_no_open_sessions(|| {
+                barrier_for_thread.wait();
+                // No one may open while maintenance is locked.
+                assert!(open_verified_session(&root2, &digest2, size).is_err());
+                Ok(())
+            })
+        });
+        barrier.wait();
+        worker.join().unwrap().unwrap();
+        assert!(open_verified_session(&root, &digest, size).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
