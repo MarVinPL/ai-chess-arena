@@ -57,7 +57,6 @@ def test_worker_status_reads_do_not_become_install_or_checkpoint_authority():
     for path in paths:
         source = (root / path).read_text(encoding="utf-8")
         assert "WorkerTokenStore(" in source
-        assert "install_allowed": False if False else True
         assert "assign_from_arena(" not in source
         assert "reconcile_resume(" not in source
         assert "checkpoint_json" not in source
