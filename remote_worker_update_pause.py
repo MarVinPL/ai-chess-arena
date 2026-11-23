@@ -53,11 +53,16 @@ class WorkerUpdatePause:
                 row[2] is None or row[2] <= self.clock()
             ):
                 raise ValueError("No active verified job to pause")
-            if db.execute(
-                "SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?",
-                (worker_id,),
-            ).fetchone():
-                raise ValueError("Pause is already requested")
+            existing = db.execute(
+                "SELECT job_id,request_id,phase FROM worker_update_pause_requests "
+                "WHERE worker_id=?", (worker_id,),
+            ).fetchone()
+            if existing is not None:
+                # Retry after a lost coordinator response: the same running
+                # job reuses the durable STOP request, never forges an ACK.
+                if existing[0] == job_id and existing[2] == "requested":
+                    return existing[1]
+                raise ValueError("Pause is already requested for another state")
             db.execute(
                 """INSERT INTO worker_update_pause_requests
                 (worker_id,job_id,request_id,phase,created_at,acknowledged_at)
