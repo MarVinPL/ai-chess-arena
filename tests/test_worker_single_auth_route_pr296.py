@@ -31,7 +31,9 @@ def test_one_worker_authentication_handler_in_http_entrypoint():
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in post
 
 
-def test_worker_authentication_ignores_admin_cookie_and_rejects_invalid_token():
+def test_worker_authentication_ignores_admin_cookie_and_rejects_invalid_token(tmp_path, monkeypatch):
+    # Other HTTP tests may alter the module DB; never touch a shared Arena path.
+    monkeypatch.setattr(server, "DB", tmp_path / "worker-token-test.sqlite")
     payload = b'{"worker_id":"worker_12345678","token":"invalid"}'
     handler = HandlerStub(payload)
     with patch.object(server.remote_worker_tokens.WorkerTokenStore, "authenticate",
