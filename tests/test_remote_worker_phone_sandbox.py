@@ -474,3 +474,42 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     assert instruction["lease_token_sha256"] != job["lease_token"]
     assert instruction["request_id"] == request_id
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+
+
+def test_coordinator_stop_retry_reuses_request_without_faking_ack(sandbox):
+    """Lost STOP response can be retried without minting a new STOP generation."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    first = WorkerUpdatePause(path).request(WORKER, job_id)
+    # Independent coordinator instance simulates a restart after losing reply.
+    retry = WorkerUpdatePause(path)
+    assert retry.request(WORKER, job_id) == first
+    assert retry.request(WORKER, job_id) == first
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 1
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+    for _ in range(2):
+        assert post("update-pause-poll", who)[1]["instruction"] == {
+            "action": "stop_checkpoint", "job_id": job_id, "request_id": first,
+        }
+    with pytest.raises(ValueError):
+        retry.request(WORKER, "another_job_123456")
+    retry.acknowledge(WORKER, job_id, first,
+                      worker_stopped=True, checkpoint_verified=True)
+    with pytest.raises(ValueError, match="another state"):
+        retry.request(WORKER, job_id)
+    assert post("job-poll", who)[1]["state"] == "blocked"
