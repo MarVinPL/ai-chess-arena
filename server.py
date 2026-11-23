@@ -23,6 +23,7 @@ import tournament_checkpoint
 import remote_worker_tokens
 import worker_backend
 import web_panel_backend
+import web_panel_auth
 import arena_auth
 import model_permissions
 
@@ -1641,45 +1642,7 @@ class Handler(BaseHTTPRequestHandler):
             worker_live_snapshot = dict(live_status)
         if worker_backend.dispatch_worker_post(self, path, DB, worker_live_snapshot):
             return
-        if path == '/api/auth/login':
-            if not arena_auth.is_configured():
-                self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
-                return
-            if not arena_auth.origin_allowed(self.headers.get('Origin')):
-                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
-                return
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if length < 1 or length > 4096:
-                    raise ValueError('Nieprawidłowy rozmiar żądania logowania')
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Nieprawidłowe dane logowania')
-                username = payload.get('username', '')
-                password = payload.get('password', '')
-                if not isinstance(username, str) or not isinstance(password, str):
-                    raise ValueError('Nieprawidłowe dane logowania')
-                if len(username) > 128 or len(password) > 1024:
-                    raise ValueError('Dane logowania przekraczają dozwoloną długość')
-                remote_key = arena_auth.client_key(
-                    self.headers.get('X-Forwarded-For'), self.client_address[0])
-                ok, reason = arena_auth.check_login(username, password, remote_key)
-                if not ok:
-                    if reason == 'rate_limited':
-                        self.send_json({'error': 'Zbyt wiele prób logowania. Spróbuj ponownie za 10 minut.'}, 429)
-                    else:
-                        self.send_json({'error': 'Nieprawidłowy login lub hasło.'}, 401)
-                    return
-                token = arena_auth.create_session_token(username)
-                self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.session_cookie(token))])
-            except (ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 400)
-            return
-        if path == '/api/auth/logout':
-            if not arena_auth.origin_allowed(self.headers.get('Origin')):
-                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
-                return
-            self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.expired_cookie())])
+        if web_panel_auth.dispatch_panel_auth_post(self, path):
             return
         if not self.authenticated_user():
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
