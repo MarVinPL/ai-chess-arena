@@ -1,6 +1,8 @@
 """Regression guard: Android ARM64 CI must not reinstall unused Rust targets."""
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def test_android_workflow_reuses_pinned_arm64_target():
     workflow = (Path(__file__).resolve().parents[1] /
@@ -11,3 +13,18 @@ def test_android_workflow_reuses_pinned_arm64_target():
     assert 'npx tauri android init --ci\n' not in workflow
     assert 'aarch64-linux-android' in workflow
     assert 'WORKER_ANDROID_DEBUG_KEYSTORE_B64' in workflow
+
+
+def test_gradle_distribution_has_its_own_cache_key_before_tauri_init():
+    workflow = (ROOT / '.github/workflows/android-worker-apk.yml').read_text()
+    key_path = '.github/gradle-cache/gradle-wrapper.properties'
+    key = (ROOT / key_path).read_text()
+    setup = workflow.split('name: Set up Java with Gradle cache', 1)[1].split(
+        'name: Install pinned official Android CLI', 1
+    )[0]
+    assert 'cache: gradle' in setup
+    assert f'cache-dependency-path: {key_path}' in setup
+    assert 'gradle-9.6.1-bin.zip' in key
+    assert 'distributionPath=wrapper/dists' in key
+    assert 'cache-directories: ~/.gradle/wrapper/dists' not in workflow
+    assert 'The generated Gradle wrapper version differs from the cache key.' in workflow

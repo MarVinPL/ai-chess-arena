@@ -32,10 +32,14 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
+      - name: Set up Java with Gradle cache
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
+          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
+          cache-jdk: false
       - name: Install pinned official Android CLI
         shell: bash
         run: |
@@ -84,6 +88,18 @@ jobs:
           npm ci
           # ARM64 is installed above by rustup; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+          cache_pin="$GITHUB_WORKSPACE/.github/gradle-cache/gradle-wrapper.properties"
+          wrapper=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
+          expected="$(sed -n 's/^distributionUrl=//p' "$cache_pin")"
+          actual="$(sed -n 's/^distributionUrl=//p' "$wrapper" | tr -d '\r')"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::warning::The generated Gradle wrapper version differs from the cache key."
+          elif find "${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/gradle-9.6.1-bin" \
+                    -name 'gradle-launcher-9.6.1.jar' -print -quit 2>/dev/null | grep -q .; then
+            echo 'Gradle 9.6.1 distribution restored; no wrapper download needed.'
+          else
+            echo 'Gradle 9.6.1 cache miss; setup-java saves it after a successful build.'
+          fi
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
