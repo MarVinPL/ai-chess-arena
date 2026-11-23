@@ -48,7 +48,7 @@
   if (hfShortcut) views.models.prepend(hfShortcut);
   if (modelPermissions) views.settings.append(panel('Uprawnienia operacyjne', modelPermissions));
   if (storageInfo) views.settings.append(panel('Pamięć i magazyn', storageInfo));
-  if (message) views.settings.append(panel('Komunikaty administracyjne', message));
+  if (message) nav.insertAdjacentElement('afterend', message);
   league.remove();
 
   const links = Array.from(nav.querySelectorAll('[data-view-link]'));
