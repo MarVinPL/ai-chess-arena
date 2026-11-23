@@ -359,6 +359,10 @@ class DurableWorkerJobs:
                 'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            maintenance = db.execute(
+                'SELECT 1 FROM worker_model_maintenance_holds WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
             pause = db.execute(
                 'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
                 (worker_id,)
@@ -370,7 +374,7 @@ class DurableWorkerJobs:
         now = self.clock()
         # An in-flight stop request is never fresh idle evidence, even if
         # another process has just committed a terminal job result.
-        if not row or hold or pause or resume:
+        if not row or hold or maintenance or pause or resume:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
