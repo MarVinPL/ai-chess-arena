@@ -101,3 +101,13 @@ legacy exclusion of model ID 6 from review and the `eligible`/`restricted`
 statuses. Authorization and admission decisions remain in the shared domain
 modules, with `league.connect()` providing the authoritative connection.
 No separate model registry or allowlist is introduced.
+
+## Model storage administration
+
+`web_panel_model_storage_api` implements only the authenticated panel's
+`/api/models/download` and `/api/models/cleanup` operations. It preserves
+explicit confirmations, shared `model_store` service and its
+`MODEL_LIFECYCLE_LOCK` for non-blocking cleanup admission and guaranteed
+unlock in `finally`. Browser-session and Origin checks remain in the
+composition root; no Worker token is accepted, no separate filesystem
+registry or model ownership is introduced.
