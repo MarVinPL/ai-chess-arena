@@ -304,6 +304,138 @@ class WorkerUpdatePause:
             "checkpoint_sha256": saved["sha256"],
         }
 
+    def prepare_trusted_resume_offer(self, worker_id, *,
+                                     installed_identity_verified,
+                                     stopped_engine_verified,
+                                     checkpoint_verifier):
+        """Read-only, private resume payload for a future trusted dispatcher.
+
+        NEVER expose this method via machine-token HTTP or the WebView. The
+        caller must attest the installed APK's version and signing identity,
+        and confirm the old engine is stopped *after* update reconciliation.
+        Preparing an offer is not execution, not STOP/ACK and not a lease.
+        The later reconcile_resume CAS still checks the digest and consumes
+        the saved checkpoint only after a real, authenticated worker ACK.
+        """
+        self.jobs._id(worker_id)
+        if installed_identity_verified is not True or stopped_engine_verified is not True:
+            raise ValueError("Trusted installed identity and engine STOP required")
+        if not callable(checkpoint_verifier):
+            raise ValueError("Trusted resume checkpoint verifier required")
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            self.jobs._reject_model_maintenance_hold(db, worker_id)
+            row = db.execute(
+                "SELECT job_id,request_id,checkpoint_json,checkpoint_sha256 "
+                "FROM worker_update_resume WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("No durable resume checkpoint")
+            job_id, request_id, raw, digest = row
+            pause = db.execute(
+                "SELECT job_id,request_id,phase "
+                "FROM worker_update_pause_requests WHERE worker_id=?", (worker_id,)
+            ).fetchone()
+            worker = db.execute(
+                "SELECT job_id,state FROM worker_job_safety WHERE worker_id=?",
+                (worker_id,),
+            ).fetchone()
+            if pause != (job_id, request_id, "acknowledged") or worker != (None, "unknown"):
+                raise ValueError("Worker pause and execution state not reconciled")
+            if not isinstance(digest, str) or len(digest) != 64 or (
+                not secrets.compare_digest(hashlib.sha256(raw.encode("utf-8")).hexdigest(), digest)
+            ):
+                raise ValueError("Corrupted durable resume checkpoint")
+            try:
+                checkpoint = json.loads(raw)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Malformed resume checkpoint") from error
+            if not isinstance(checkpoint, dict) or (
+                checkpoint.get("schema_version") != 1 or
+                checkpoint.get("job_id") != job_id or
+                checkpoint.get("resume_mode") not in ("resume", "restart") or
+                not isinstance(checkpoint.get("payload"), dict)
+            ):
+                raise ValueError("Resume checkpoint identity mismatch")
+            if checkpoint_verifier(checkpoint) is not True:
+                raise ValueError("Coordinator rejected resume checkpoint")
+            return {
+                "worker_id": worker_id,
+                "job_id": job_id,
+                "request_id": request_id,
+                "checkpoint_sha256": digest,
+                "resume_mode": checkpoint["resume_mode"],
+                "checkpoint": checkpoint,
+            }
+
+    def dispatch_trusted_resume(self, worker_id, *, installed_identity_verified,
+                                stopped_engine_verified, checkpoint_verifier,
+                                send_and_verify, timeout_seconds=60):
+        """Private versioned offer -> verified worker receipt -> atomic CAS.
+
+        send_and_verify is a *trusted coordinator-owned transport callback*,
+        not an untrusted HTTP payload or a UI hook. The transport must enforce
+        the authenticated worker identity and verify actual engine acceptance
+        before returning. This method never makes that network/engine claim
+        itself. No transport is wired to production here.
+        """
+        if not callable(send_and_verify):
+            raise ValueError("Trusted resume delivery transport required")
+        if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
+            raise ValueError("Invalid resume dispatch lease")
+        saved = self.prepare_trusted_resume_offer(
+            worker_id,
+            installed_identity_verified=installed_identity_verified,
+            stopped_engine_verified=stopped_engine_verified,
+            checkpoint_verifier=checkpoint_verifier,
+        )
+        nonce = secrets.token_hex(16)
+        proposal = {
+            "version": 1,
+            "worker_id": saved["worker_id"],
+            "job_id": saved["job_id"],
+            "request_id": saved["request_id"],
+            "checkpoint_sha256": saved["checkpoint_sha256"],
+            "resume_mode": saved["resume_mode"],
+            "nonce": nonce,
+            "checkpoint": saved["checkpoint"],
+        }
+        # A request to deliver the payload is not permission to resume.
+        # At this boundary the transport must attest persistence/acceptance
+        # by the same worker and report an authenticated receipt.
+        started = time.monotonic()
+        receipt = send_and_verify(proposal)
+        elapsed = time.monotonic() - started
+        if elapsed < 0 or elapsed > 30:
+            raise ValueError("Resume delivery confirmation timed out")
+        if not isinstance(receipt, dict) or (
+            receipt.get("version") != 1 or
+            receipt.get("authenticated") is not True or
+            receipt.get("engine_accepted_verified") is not True or
+            receipt.get("worker_id") != saved["worker_id"] or
+            receipt.get("job_id") != saved["job_id"] or
+            receipt.get("request_id") != saved["request_id"] or
+            receipt.get("resume_mode") != saved["resume_mode"] or
+            not isinstance(receipt.get("nonce"), str) or
+            not secrets.compare_digest(receipt["nonce"], nonce) or
+            not isinstance(receipt.get("checkpoint_sha256"), str) or
+            not secrets.compare_digest(
+                receipt["checkpoint_sha256"], saved["checkpoint_sha256"]
+            )
+        ):
+            raise ValueError("Unverified or mismatched resume worker receipt")
+        # This independently rechecks the durable checkpoint, lease state,
+        # pause gate, hold and digest under BEGIN IMMEDIATE. Replay is rejected.
+        return self.reconcile_resume(
+            worker_id, saved["job_id"], saved["request_id"],
+            checkpoint_sha256=saved["checkpoint_sha256"],
+            timeout_seconds=timeout_seconds,
+            worker_ready_verified=True,
+            resume_accepted_verified=True,
+            checkpoint_verifier=checkpoint_verifier,
+        )
+
     def reconcile_resume(self, worker_id, job_id, request_id, *,
                          checkpoint_sha256, timeout_seconds,
                          worker_ready_verified, resume_accepted_verified,

@@ -2,7 +2,8 @@ name: Python test suite
 
 on:
   pull_request:
-    branches: [main]
+    # Temporary integration target for stacked updater PR #197; remove before main.
+    branches: [main, feat/issue-194-worker-defaults]
   push:
     branches:
       - "feat/**"
@@ -13,14 +14,65 @@ on:
 # Repository Actions allowlist must permit both pinned major versions.
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: python-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  tests:
+  select-runner:
+    # This job must always start on GitHub's runner; otherwise an offline VPS
+    # would queue the fallback decision indefinitely.
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      target: ${{ steps.choose.outputs.target }}
+    steps:
+      - name: Prefer an idle VPS runner, otherwise use GitHub-hosted
+        id: choose
+        shell: bash
+        env:
+          # Optional free fine-grained PAT: repo Administration: read.
+          # GITHUB_TOKEN is tried when absent, but may lack that permission.
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          target='["ubuntu-latest"]'
+          if [[ "$TRUSTED_SOURCE" == "true" ]]; then
+            auth_token="${RUNNER_STATUS_TOKEN:-$GH_TOKEN}"
+            runners_json="$(curl -fsS --max-time 10 \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Authorization: Bearer ${auth_token}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100" \
+              2>/dev/null || true)"
+            if printf '%s' "$runners_json" | python3 -c '
+          import json, sys
+          try:
+              runners = json.load(sys.stdin)["runners"]
+              available = any(
+                  item.get("status") == "online"
+                  and item.get("busy") is False
+                  and {"self-hosted", "Linux"}.issubset({
+                      label.get("name") for label in item.get("labels", [])
+                  })
+                  for item in runners
+              )
+          except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+              available = False
+          sys.exit(0 if available else 1)
+          '; then
+              target='["self-hosted","Linux"]'
+            fi
+          fi
+          printf 'target=%s\n' "$target" >> "$GITHUB_OUTPUT"
+          echo "Selected runner: $target"
+
+  tests:
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.target) }}
     timeout-minutes: 15
     steps:
       - name: Checkout

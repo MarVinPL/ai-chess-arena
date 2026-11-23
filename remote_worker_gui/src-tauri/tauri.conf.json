@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Chess Arena Worker",
+  "version": "0.1.2",
+  "identifier": "pl.marvin.aichessarena.worker",
+  "build": {
+    "frontendDist": "../public"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "AI Chess Arena — Worker",
+        "width": 1024,
+        "height": 760,
+        "minWidth": 680,
+        "minHeight": 540
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

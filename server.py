@@ -44,6 +44,10 @@ import web_panel_live_state_api
 import web_panel_game_control_api
 import arena_auth
 import model_permissions
+import remote_worker_metrics
+import remote_worker_tokens
+import remote_worker_job_registry
+import remote_worker_jobs
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -133,6 +137,11 @@ def set_live(stage, message, **fields):
             fields.setdefault('generation_started_at', now)
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
+        # Worker attribution is per event. Never inherit identifiers from
+        # a previous live event when the tournament changes jobs or players.
+        for identity_key in ('worker_id', 'job_id'):
+            if identity_key not in fields:
+                live_status.pop(identity_key, None)
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
         event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
@@ -529,6 +538,23 @@ def _prepare_game_models(white, black):
     return prepared
 
 
+def _prepare_game_execution_assets(white, black, *, phone_inference_enabled=False):
+    """Avoid downloading large GGUF files onto the VPS in phone-only mode.
+
+    Arena still validates registry SHA, model eligibility and checkpoint.
+    The on-phone model runtime is solely responsible for actual inference.
+    When phone mode is off, retain the original local model lifecycle.
+    """
+    if phone_inference_enabled:
+        for player in (white, black):
+            digest = player.get('model_sha256')
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                raise ValueError('Phone inference requires pinned GGUF SHA-256')
+        return ({'path': None, 'draft_path': None},
+                {'path': None, 'draft_path': None})
+    return _prepare_game_models(white, black)
+
+
 def live_moves_snapshot(move):
     with live_lock:
         previous = list(live_status.get('moves') or [])
@@ -581,12 +607,30 @@ def tournament_preflight(tournament_id):
         tournament = connection.execute('SELECT format FROM tournaments WHERE id=?',
                                          (tournament_id,)).fetchone()
     tournament_format = tournament['format'] if tournament else ''
-    # The runner starts Llamafile only after this preflight succeeds.
-    # Requiring /health here would deadlock the lazy-start lifecycle.
-    runtime_available = llm_runtime_available()
+    # The VPS needs Llamafile only for local model execution. Explicitly
+    # selected phone mode requires a freshly ready on-device model for every
+    # entrant instead. No silent fallback to the VPS runner.
+    phone_mode = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+    if phone_mode:
+        from remote_worker_inference_delivery import WorkerInferenceDelivery
+        phone_delivery = WorkerInferenceDelivery(DB)
+        runtime_available = True
+    else:
+        # The local runner starts Llamafile only after preflight succeeds.
+        # Requiring /health here would deadlock the lazy-start lifecycle.
+        runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
+        if phone_mode:
+            try:
+                model = _version_record(entry['version_id'])
+                sha = model.get('sha256')
+                if phone_delivery.find_ready_worker(sha) is None:
+                    raise ValueError('no ready matching phone')
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error):
+                reasons.append('brak gotowego telefonu z wymaganym lokalnym modelem')
+                runtime_available = False
         if allowlist_error is not None:
             reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
         else:
@@ -596,7 +640,7 @@ def tournament_preflight(tournament_id):
                 license_name=entry.get('license'),
                 license_verified=entry.get('license_verified') is True,
                 tournament_format=tournament_format))
-        if not runtime_available:
+        if not phone_mode and not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
         entry['download_on_demand'] = bool(
@@ -770,6 +814,27 @@ def _select_tournament_pairing(tournament_id, draft_enabled):
     return None, None
 
 
+def _exclusive_tournament_coordinator(run):
+    """Keep one coordinator owner throughout tournament checkpoint writes."""
+    from functools import wraps
+    from remote_worker_coordinator_lock import CoordinatorLock
+
+    @wraps(run)
+    def locked_run(*args, **kwargs):
+        # The main server already holds the same flock for its lifetime.
+        # flock on a second descriptor would conflict even in this process.
+        process_lock = globals().get('_coordinator_lock')
+        if process_lock is not None:
+            if process_lock._fd is None:
+                raise RuntimeError('Process coordinator lock was released')
+            return run(*args, **kwargs)
+        # Direct invocation (tests/CLI) still requires exclusive ownership.
+        with CoordinatorLock(DB):
+            return run(*args, **kwargs)
+    return locked_run
+
+
+@_exclusive_tournament_coordinator
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -861,7 +926,35 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
 
-        game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
+        # Optional phone-only inference uses the SAME Arena-owned sequential
+        # runner and checkpoint writer. No remote fallback after assignment,
+        # and no code path enables this without operator opt-in.
+        from remote_worker_runner_selection import select_game_runner
+        phone_inference_enabled = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+        phone_move_provider = None
+        if phone_inference_enabled:
+            from remote_worker_phone_move_provider import ArenaPhonePoolProvider
+
+            def report_phone_assignment(worker_id, job_id, fen, player):
+                # Arena controls the FEN and worker association: this event
+                # powers the Android read-only board, NOT local phone state.
+                set_live(
+                    'generating', 'Model oblicza ruch na telefonie',
+                    worker_id=worker_id, job_id=job_id, fen=fen,
+                    model=player.get('name'), white=runtime_context.get('white'),
+                    black=runtime_context.get('black'),
+                    pairing_id=pairing['id'],
+                )
+
+            phone_move_provider = ArenaPhonePoolProvider(
+                DB, on_assignment=report_phone_assignment,
+            )
+        game_runner = select_game_runner(
+            'local',
+            local_factory=lambda: engine_runner.SequentialChessRunner(
+                tournament_runtime, move_provider=phone_move_provider,
+            ),
+        )
         while True:
             if tournament_stop_event.is_set():
                 break
@@ -895,7 +988,9 @@ def tournament_loop(tournament_id):
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen))
             set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
-            white_assets, black_assets = _prepare_game_models(white, black)
+            white_assets, black_assets = _prepare_game_execution_assets(
+                white, black, phone_inference_enabled=phone_inference_enabled,
+            )
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             set_live('game_running','Wznowiono partię' if resume_moves else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
@@ -905,9 +1000,17 @@ def tournament_loop(tournament_id):
                 checkpoint_moves.append(dict(move))
                 checkpoint_times.append(float(move.get('seconds') or 0))
                 saved_fen = move.get('fen')
-                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                next_checkpoint = _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen))
+                    checkpoint_moves, checkpoint_times, saved_fen)
+                if phone_move_provider is None:
+                    tournament_checkpoint.save(DB, tournament_id, next_checkpoint)
+                else:
+                    # Same SQLite IMMEDIATE transaction commits the ONLY Arena
+                    # checkpoint and releases the phone result/lease. A crash
+                    # can never leave an idle phone with an uncommitted move.
+                    phone_move_provider.commit_checkpoint_for_record(
+                        tournament_id, next_checkpoint, move)
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
@@ -1400,6 +1503,14 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
             return
+        if path == '/api/remote-workers/metrics':
+            try:
+                self.send_json({'period': 'all', 'workers': remote_worker_metrics.WorkerMetrics(DB).summary()})
+            except Exception:
+                self.send_json({'error': 'Nie udało się odczytać statystyk agentów'}, 500)
+            return
+        if path == '/remote-workers':
+            self.send_html_file('remote_workers.html')
         if path in web_panel_backend.ASSETS:
             self.send_panel_asset(path)
             return
@@ -1493,6 +1604,11 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    # Exclusive local coordinator ownership is required before state recovery.
+    from remote_worker_coordinator_lock import CoordinatorLock
+    _coordinator_lock = CoordinatorLock(DB).acquire()
+    # Invalidate stale worker state before any background worker or HTTP listener starts.
+    remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()

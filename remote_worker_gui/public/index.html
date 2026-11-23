@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Chess Arena — Worker</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#0d1422;color:#f1f5f9}*{box-sizing:border-box}body{margin:0;padding:24px}.shell{max-width:920px;margin:auto}.eyebrow{color:#a5b4fc;letter-spacing:.12em;font-size:12px;font-weight:700}.top{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap}h1{font-size:29px;margin:8px 0}p{color:#aab7ca}.pill{background:#273346;border:1px solid #40506b;border-radius:99px;padding:8px 14px;font-size:13px}.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-top:20px}.panel{background:#182335;border:1px solid #324259;border-radius:18px;padding:22px}h2{font-size:17px;margin:0 0 18px}.muted{color:#aab7ca;font-size:13px}label{display:block;margin:14px 0 6px;font-size:13px}input[type=text]{width:100%;background:#0d1422;border:1px solid #53627b;border-radius:9px;color:#fff;padding:12px;font:inherit}input[type=range]{width:100%;accent-color:#8b9aff}button{border:0;border-radius:10px;padding:12px 17px;background:#7c8cff;color:#0b1020;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}.worker-board{width:min(100%,380px);aspect-ratio:1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));border:2px solid #77869b;border-radius:7px;overflow:hidden;margin:12px auto}.worker-square{display:flex;align-items:center;justify-content:center;font-size:clamp(19px,5vw,38px);line-height:1;font-family:"DejaVu Sans",system-ui,sans-serif}.worker-square.light{background:#e8dfce;color:#182335}.worker-square.dark{background:#8195aa;color:#182335}.worker-square.last{box-shadow:inset 0 0 0 4px #fbbf24}.worker-square:empty::after{content:""}.secondary{background:#33435a;color:#fff}.buttons{display:flex;gap:9px;flex-wrap:wrap;margin-top:20px}.metric{display:flex;justify-content:space-between;border-bottom:1px solid #324259;padding:12px 0}.metric:last-child{border:0}.notice{margin-top:18px;border-left:3px solid #8b9aff;padding:12px 16px;background:#182335;color:#d6deeb;font-size:13px}.status{font-weight:700;color:#fbbf24}@media(max-width:680px){.grid{grid-template-columns:1fr}body{padding:14px}}
+</style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">AI CHESS ARENA · REMOTE WORKER</div><h1>Udostępnij moc komputera</h1><p>Ty decydujesz, kiedy i ile zasobów udostępniasz.</p></div><span class="pill" id="version">Wersja: sprawdzanie…</span><span class="pill" id="status">● Niepołączony</span></header><div class="grid"><section class="panel"><h2>Połącz z Areną</h2><label for="server">Adres serwera HTTPS</label><input id="server" type="text" value="https://arena.148-113-182-137.sslip.io" placeholder="https://arena.148-113-182-137.sslip.io" autocomplete="off"><label for="workerId">Identyfikator komputera</label><input id="workerId" type="text" placeholder="np. komputer_domowy_01" autocomplete="off"><label for="code">Token dostępu</label><input id="code" type="password" placeholder="Token wygenerowany w panelu Areny" autocomplete="off"><label><input id="rememberToken" type="checkbox" checked> Zapamiętaj token bezpiecznie na tym komputerze</label><div class="buttons"><button id="saveToken" type="button">Zapisz token</button><button id="pair" type="button">Sprawdź połączenie HTTPS</button><button class="secondary" id="forgetToken" type="button">Usuń zapisany token</button><button class="secondary" id="disconnect" disabled>Odłącz</button></div><p class="muted">Token musi zostać wcześniej wygenerowany przez administratora Areny.</p></section><section class="panel"><h2>Limity zasobów</h2><label for="cpu">CPU: <strong id="cpuValue">50%</strong></label><input id="cpu" type="range" min="10" max="90" step="10" value="50"><label for="ram">RAM: <strong id="ramValue">2048 MB</strong></label><input id="ram" type="range" min="512" max="8192" step="512" value="2048"><label for="gpu">GPU: <strong id="gpuValue">Wyłączone</strong></label><input id="gpu" type="checkbox"><div class="buttons"><button id="start" disabled>Start lokalnie</button><button id="pause" class="secondary" disabled>Pauza po ruchu</button><button id="stop" class="secondary" disabled>Stop po ruchu</button></div><div class="buttons"><button id="checkLocalModel" type="button" class="secondary">Sprawdź model lokalny</button></div><p id="localModelStatus" class="muted" role="status" aria-live="polite">Sprawdzanie dostępności lokalnego modelu na porcie 8088…</p><div class="buttons"><button id="checkEmbeddedLlama" type="button" class="secondary">Sprawdź silnik bez Termux</button></div><p id="embeddedLlamaStatus" class="muted" role="status" aria-live="polite">Wbudowany llama.cpp: nie sprawdzono. Sama obecność biblioteki nie oznacza gotowości inferencji.</p><p id="localModelStorageStatus" class="muted" role="status" aria-live="polite">Wolne miejsce na modele: sprawdzanie…</p><div class="buttons"><button id="checkQuicProtocol" type="button" class="secondary">Sprawdź QUIC / HTTP3</button></div><p id="quicProtocolStatus" class="muted" role="status" aria-live="polite">Protokół transferu: nie sprawdzono.</p><p class="muted">Wykryty alias SHA-256 służy do identyfikacji modelu; nie potwierdza integralności pliku GGUF.</p><p id="localInferenceStatus" class="muted" role="status" aria-live="polite">Aby liczyć na telefonie, uruchom lokalny llama.cpp na porcie 8088, a następnie sprawdź połączenie z Areną.</p></section><section class="panel"><h2>Aktualne zadanie</h2><div class="metric"><span class="muted">Model SHA-256</span><strong id="myAssignedModel">Brak</strong></div><div class="metric"><span class="muted">Zadanie</span><strong id="myAssignedGame">—</strong></div><div class="metric"><span class="muted">Wykonywanie</span><strong id="myAssignedStatus">Brak przydziału</strong></div><div id="myWorkerBoardSection" hidden><p class="muted" id="myWorkerBoardTitle"></p><div id="myWorkerBoard" class="worker-board" role="img" aria-label="Szachownica partii wykonywanej przez ten telefon"></div><p class="muted" id="myWorkerBoardProgress" role="status"></p></div><p class="muted" id="myWorkerBoardEmpty">Brak aktywnej partii przypisanej do tego telefonu.</p></section><section class="panel"><h2>Stan urządzenia</h2><div class="metric"><span class="muted">Połączenie</span><span class="status" id="connectionStatus">Nieaktywne</span></div><div class="metric"><span class="muted">Wykonywanie obliczeń</span><strong>Wyłączone</strong></div><div class="metric"><span class="muted">Wykorzystanie zasobów</span><strong>0%</strong></div></section></div><section class="panel" style="margin-top:16px" aria-labelledby="updateTitle"><h2 id="updateTitle">Aktualizacje aplikacji</h2><p class="muted" id="updateStatus" role="status">Sprawdź, czy dostępna jest nowa wersja. Instalacja aktualizacji nie jest jeszcze obsługiwana.</p><label for="autoUpdateCheck"><input id="autoUpdateCheck" type="checkbox" checked> Automatycznie sprawdzaj dostępność nowych wersji (maksymalnie raz na 24 godziny przy uruchomieniu aplikacji)</label>
+<button id="checkUpdate" type="button" class="secondary">Sprawdź aktualizacje</button><a id="manualWorkerUpdate" href="#" target="_blank" rel="noopener noreferrer" hidden style="display:none;margin-left:10px;color:#b9c6ff">Otwórz wydanie APK w przeglądarce</a><button id="downloadWorkerApk" type="button" class="secondary" hidden disabled>Pobierz APK</button><button id="installWorkerApk" type="button" hidden disabled>Zainstaluj aktualizację</button><button id="resumeWorkerGame" type="button" disabled title="Wznowienie wymaga lokalnego silnika obliczeń na tym telefonie">Wznów</button><p class="muted" id="resumeWorkerStatus" role="status" aria-live="polite">Sprawdzanie możliwości wznowienia…</p><progress id="apkDownloadProgress" max="100" value="0" hidden aria-label="Postęp pobierania APK"></progress><p class="muted" id="apkDownloadStatus" role="status">Instalacja APK pozostaje wyłączona do czasu weryfikacji certyfikatu i stanu zadań.</p><button id="checkUpdateSafety" type="button" class="secondary">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p><button id="checkCoordinatorStop" type="button" class="secondary">Sprawdź polecenie STOP z Areny</button><p class="muted" id="coordinatorStopStatus" role="status" aria-live="polite">Odczyt poleceń nie wstrzymuje obliczeń ani nie zezwala na instalację.</p><p class="muted" id="updateRecoveryStatus" role="status" aria-live="polite">Sprawdzanie lokalnej rezerwacji aktualizacji…</p><button id="inspectUpdateHold" type="button" class="secondary" hidden disabled>Sprawdź rezerwację na serwerze</button><p class="muted" id="updateHoldRemoteStatus" role="status" aria-live="polite"></p><button id="inspectAndroidSessions" type="button" class="secondary" hidden disabled>Sprawdź sesje instalatora Android</button><p class="muted" id="androidSessionsStatus" role="status" aria-live="polite"></p></section>
+<aside class="notice" role="status"><span id="backendStatus">Sprawdzanie lokalnego backendu…</span> Token można zapisać i usunąć lokalnie. Weryfikacja tokenu przez VPS jest dostępna po kliknięciu „Sprawdź połączenie HTTPS”. Obliczenia nie są jeszcze podłączone, a przyciski sterowania pozostają nieaktywne.</aside></main><script>
+'use strict';
+// Persist the actual registered Worker ID (including user-chosen IDs like
+// android_marvin_01), not only auto-generated names. Android WebView
+// localStorage survives a same-package, same-certificate APK update; it is
+// non-secret. The token remains exclusively in native Android Keystore.
+const workerIdentityKey='arena-worker-installation-id-v1';
+const workerIdField=document.getElementById('workerId');
+function validWorkerIdentity(id){
+ return typeof id==='string' && /^[A-Za-z0-9_-]{8,96}$/.test(id);
+}
+function persistWorkerIdentity(){
+ const id=workerIdField.value.trim();
+ if(!validWorkerIdentity(id))return false;
+ try {
+  localStorage.setItem(workerIdentityKey,id);
+  return true;
+ }catch(_error){
+  document.getElementById('backendStatus').textContent='Nie udało się zapamiętać identyfikatora Workera na urządzeniu.';
+  return false;
+ }
+}
+try {
+ let id=localStorage.getItem(workerIdentityKey);
+ if(!validWorkerIdentity(id)){
+  const bytes=new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  id='android_'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  localStorage.setItem(workerIdentityKey,id);
+ }
+ workerIdField.value=id;
+}catch(_error){
+ document.getElementById('backendStatus').textContent='Nie udało się wczytać identyfikatora urządzenia. Wpisz go ręcznie.';
+}
+// Save a typed ID when editing ends; also save after successful HTTPS auth.
+// Do not replace an existing valid ID during startup or auto-update.
+workerIdField.addEventListener('change',persistWorkerIdentity);
+const cpu=document.getElementById('cpu'),ram=document.getElementById('ram'),gpu=document.getElementById('gpu');
+function update(){document.getElementById('cpuValue').textContent=cpu.value+'%';document.getElementById('ramValue').textContent=ram.value+' MB';document.getElementById('gpuValue').textContent=gpu.checked?'Włączone':'Wyłączone'}
+for(const el of [cpu,ram,gpu])el.addEventListener('input',update);
+update();
+// Experimental Android inference loop. Computation goes ONLY to the user's
+// localhost llama.cpp. Arena keeps chess state/checkpoints. Foreground only;
+// Pause/Stop prevent new jobs but cannot abort an already running model call.
+let phoneWorkerEnabled=false;
+let phoneWorkerRunning=false;
+let phonePaired=false;
+let phoneSupported=false;
+let localModelProbeInFlight=false;
+let localModelLastCheck=0;
+let quicProbeInFlight=false;
+document.getElementById('checkQuicProtocol').addEventListener('click',async()=>{
+ const button=document.getElementById('checkQuicProtocol');
+ const label=document.getElementById('quicProtocolStatus');
+ if(quicProbeInFlight)return;
+ quicProbeInFlight=true;button.disabled=true;
+ label.textContent='Sprawdzanie protokołu HTTPS do Hugging Face…';
+ try{
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(typeof invoke!=='function')throw Error('Brak interfejsu Android');
+  const protocol=await invoke('inspect_phone_quic_protocol');
+  if(!['h3','h2','http/1.1'].includes(protocol))throw Error('Nieznany protokół');
+  label.textContent=protocol==='h3'
+   ?'QUIC / HTTP3 (h3) potwierdzony dla testowego połączenia HTTPS.'
+   :'Połączenie testowe: '+protocol+'. QUIC nie został wynegocjowany; transfer HTTPS jest dostępny.';
+ }catch(_error){
+  label.textContent='Nie udało się sprawdzić protokołu. Pobieranie modeli pozostaje wyłączone.';
+ }finally{quicProbeInFlight=false;button.disabled=false;}
+});
+let localModelStorageProbeInFlight=false;
+async function checkPhoneModelStorage(){
+ const label=document.getElementById('localModelStorageStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(localModelStorageProbeInFlight||document.hidden)return;
+ localModelStorageProbeInFlight=true;
+ try{
+  if(typeof invoke!=='function')throw Error('Wymagana aplikacja Android Worker');
+  const storage=await invoke('inspect_phone_model_storage');
+  if(!storage||!Number.isSafeInteger(storage.free_bytes)||
+     !Number.isSafeInteger(storage.reserve_bytes)||
+     !Number.isSafeInteger(storage.available_for_models_bytes)||
+     !Number.isSafeInteger(storage.cached_models)||
+     !Number.isSafeInteger(storage.cached_bytes)||
+     storage.cached_models<0||storage.cached_bytes<0||
+     storage.free_bytes<0||storage.reserve_bytes<0||
+     storage.available_for_models_bytes!==Math.max(0,storage.free_bytes-storage.reserve_bytes)){
+   throw Error('Nieprawidłowa odpowiedź systemu');
+  }
+  const gib=bytes=>(bytes/(1024**3)).toFixed(1);
+  label.textContent='Wolne: '+gib(storage.free_bytes)+' GiB · rezerwa: '+
+   gib(storage.reserve_bytes)+' GiB · na kolejne GGUF: '+
+   gib(storage.available_for_models_bytes)+' GiB (szacunek; brak rezerwacji miejsca). '+
+   'Cache GGUF: '+storage.cached_models+' modeli · '+gib(storage.cached_bytes)+' GiB.';
+ }catch(_error){
+  label.textContent='Nie udało się potwierdzić wolnego miejsca. Pobieranie modeli nie jest dozwolone.';
+ }finally{localModelStorageProbeInFlight=false;}
+}
+let embeddedLlamaProbeInFlight=false;
+async function checkEmbeddedLlama(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ const status=document.getElementById('embeddedLlamaStatus');
+ const button=document.getElementById('checkEmbeddedLlama');
+ if(embeddedLlamaProbeInFlight)return;
+ embeddedLlamaProbeInFlight=true;button.disabled=true;
+ status.textContent='Sprawdzanie natywnej biblioteki llama.cpp w APK…';
+ try{
+  if(typeof invoke!=='function')throw Error('Wymagana aplikacja Android Worker');
+  const available=await invoke('inspect_embedded_llama_engine');
+  if(available!==true)throw Error('Niepotwierdzony silnik natywny');
+  status.textContent='Biblioteka llama.cpp w APK jest dostępna i ma wymagane funkcje. Inferencja bez Termux pozostaje wyłączona do testu pełnego cyklu.';
+ }catch(_error){
+  status.textContent='Wbudowana biblioteka llama.cpp nie jest jeszcze gotowa w APK. Obecna inferencja nadal korzysta z zewnętrznego localhost; automatyczny start bez Termux jest wyłączony.';
+ }finally{embeddedLlamaProbeInFlight=false;button.disabled=false;}
+}
+document.getElementById('checkEmbeddedLlama').addEventListener('click',()=>{
+ void checkEmbeddedLlama();
+});
+async function checkPhoneLocalModel(force=false){
+ const invoke=window.__TAURI__?.core?.invoke;
+ const status=document.getElementById('localModelStatus');
+ const button=document.getElementById('checkLocalModel');
+ if(localModelProbeInFlight||phoneWorkerRunning||(!force&&document.hidden))return;
+ if(!force&&Date.now()-localModelLastCheck<30000)return;
+ localModelProbeInFlight=true;localModelLastCheck=Date.now();
+ button.disabled=true;
+ status.textContent='Sprawdzanie modelu na 127.0.0.1:8088…';
+ try{
+  if(typeof invoke!=='function')throw Error('Wymagana aplikacja Android Worker');
+  const alias=await invoke('inspect_phone_local_model');
+  if(typeof alias!=='string'||!/^[0-9a-f]{64}$/.test(alias))throw Error('Nieprawidłowy alias modelu');
+  status.textContent='Model dostępny lokalnie · alias '+alias.slice(0,12)+'… (niezweryfikowany hash pliku GGUF).';
+ }catch(error){
+  // The probe is local and read-only; failure never mutates Arena readiness.
+  status.textContent='Model niedostępny lub alias nieprawidłowy. Uruchom llama-server w Termux na porcie 8088 z aliasem SHA-256. '+String(error||'');
+ }finally{localModelProbeInFlight=false;button.disabled=false;}
+}
+document.getElementById('checkLocalModel').addEventListener('click',()=>{
+ void checkPhoneLocalModel(true);
+ void checkPhoneModelStorage();
+});
+document.addEventListener('visibilitychange',()=>{
+ if(!document.hidden){
+  void checkPhoneLocalModel();
+  void checkPhoneModelStorage();
+ }
+});
+void checkPhoneLocalModel();
+void checkPhoneModelStorage();
+const phoneStartButton=document.getElementById('start');
+const phonePauseButton=document.getElementById('pause');
+const phoneStopButton=document.getElementById('stop');
+const phoneInferenceStatus=document.getElementById('localInferenceStatus');
+function refreshPhoneButtons(){
+ phoneStartButton.disabled=!phoneSupported||!phonePaired||phoneWorkerEnabled;
+ phonePauseButton.disabled=!phoneWorkerEnabled;
+ phoneStopButton.disabled=!phoneWorkerEnabled;
+ const resume=document.getElementById('resumeWorkerGame');
+ if(resume)resume.disabled=phoneWorkerEnabled||resumeReadinessState!=='no_checkpoint';
+}
+async function processOnePhoneMove(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!phoneWorkerEnabled||phoneWorkerRunning||document.hidden||typeof invoke!=='function')return;
+ phoneWorkerRunning=true;
+ try{
+  const result=await invoke('execute_phone_inference_once',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  if(result?.state==='received_not_applied'||result?.state==='already_received'){
+   phoneInferenceStatus.textContent='Telefon wykonał obliczenie. Ruch przekazany Arenie; zatwierdzenie partii należy do Areny.';
+  }else if(result?.state==='awaiting_arena'){
+   phoneInferenceStatus.textContent='Wynik oczekuje na zatwierdzenie przez Arenę.';
+  }else if(result?.state==='ready'){
+   phoneInferenceStatus.textContent='Lokalny model telefonu gotowy. Arena może teraz przydzielić temu Workerowi ruch.';
+  }else if(result?.state==='none'){
+   phoneInferenceStatus.textContent='Worker aktywny. Arena nie przydzieliła aktualnie zadania.';
+  }else if(result?.state==='expired'||result?.state==='blocked'){
+   phoneInferenceStatus.textContent='Arena wstrzymała zadanie lub wygasła dzierżawa. Obliczenia nie są uruchamiane.';
+  }else{
+   phoneInferenceStatus.textContent='Stan lokalnego wykonawcy nie został potwierdzony.';
+  }
+ }catch(error){
+  phoneWorkerEnabled=false;
+  phoneInferenceStatus.textContent='Lokalna inferencja zatrzymana: '+String(error||'nieznany błąd')+
+    '. Sprawdź, czy llama.cpp na tym telefonie działa i reklamuje SHA-256 modelu jako alias.';
+ }finally{
+  phoneWorkerRunning=false;
+  refreshPhoneButtons();
+ }
+}
+function activatePhoneJobPolling(){
+ if(!phoneSupported||!phonePaired)return false;
+ phoneWorkerEnabled=true;
+ refreshPhoneButtons();
+ phoneInferenceStatus.textContent='Telefon odbiera zadania Areny. Obliczenia będą wykonywane lokalnie.';
+ void processOnePhoneMove();
+ return true;
+}
+phoneStartButton.addEventListener('click',()=>{activatePhoneJobPolling();});
+function stopNewPhoneJobs(){
+ phoneWorkerEnabled=false;
+ phoneInferenceStatus.textContent=phoneWorkerRunning
+  ?'Nowe zadania wstrzymane. Bieżące obliczenie zakończy się lub przekroczy limit czasu.'
+  :'Nowe zadania na telefonie zostały wstrzymane.';
+ refreshPhoneButtons();
+}
+phonePauseButton.addEventListener('click',stopNewPhoneJobs);
+phoneStopButton.addEventListener('click',stopNewPhoneJobs);
+setInterval(()=>{void processOnePhoneMove();},7000);
+
+// Read-only assignment polling. These labels do NOT claim model inference.
+let workerJobPollInFlight=false;
+async function refreshMyInferenceAssignment(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(workerJobPollInFlight||document.hidden||typeof invoke!=='function')return;
+ workerJobPollInFlight=true;
+ const model=document.getElementById('myAssignedModel');
+ const game=document.getElementById('myAssignedGame');
+ const status=document.getElementById('myAssignedStatus');
+ try{
+  const assigned=await invoke('poll_my_inference_job',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  if(assigned?.state==='assigned' && assigned.job){
+   model.textContent=String(assigned.job.model_sha256||'').slice(0,12)+'…';
+   game.textContent=String(assigned.job.job_id||'').slice(0,96);
+   status.textContent=phoneWorkerRunning?'Obliczanie ruchu na telefonie': 'Przydzielone — oczekiwanie na wykonawcę telefonu';
+  }else{
+   model.textContent='Brak';game.textContent='—';
+   status.textContent=assigned?.state==='awaiting_arena'
+    ?'Ruch przyjęty — oczekiwanie na zatwierdzenie przez Arenę'
+    :assigned?.state==='expired'
+    ?'Przydział wygasł — Arena musi uzgodnić stan'
+    :assigned?.state==='blocked'
+    ?'Zablokowane na czas aktualizacji lub uzgodnienia'
+    :'Brak przydziału';
+  }
+ }catch(_){
+  model.textContent='Brak';game.textContent='—';
+  status.textContent='Brak potwierdzonego przydziału';
+ }finally{workerJobPollInFlight=false;}
+}
+setInterval(()=>{void refreshMyInferenceAssignment();},8000);
+document.addEventListener('visibilitychange',()=>{
+ if(!document.hidden)void refreshMyInferenceAssignment();
+});
+void refreshMyInferenceAssignment();
+
+// Arena is authoritative: no local chess state, checkpoints or game clock.
+// We render ONLY a nonce-authenticated, worker+job-bound Arena board view.
+const workerPieceSymbols={
+ K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',
+ k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'
+};
+function renderWorkerArenaBoard(view){
+ const section=document.getElementById('myWorkerBoardSection');
+ const empty=document.getElementById('myWorkerBoardEmpty');
+ const board=document.getElementById('myWorkerBoard');
+ const active=view?.active===true && typeof view.fen==='string';
+ if(!active){
+  section.hidden=true;empty.hidden=false;board.replaceChildren();
+  empty.textContent='Brak aktywnej partii przypisanej do tego telefonu.';
+  return;
+ }
+ const fields=view.fen.split(' ');
+ if(fields.length!==6){section.hidden=true;empty.hidden=false;board.replaceChildren();return;}
+ const ranks=fields[0].split('/');
+ if(ranks.length!==8){section.hidden=true;empty.hidden=false;board.replaceChildren();return;}
+ const last=typeof view.last_move_uci==='string' ? view.last_move_uci : '';
+ const marked=new Set(last.length>=4 ? [last.slice(0,2),last.slice(2,4)] : []);
+ const cells=[];
+ for(let rank=0;rank<8;rank++){
+  const row=[];
+  for(const ch of ranks[rank]){
+   if(/[1-8]/.test(ch))row.push(...Array(Number(ch)).fill(''));
+   else if(Object.hasOwn(workerPieceSymbols,ch))row.push(ch);
+   else {section.hidden=true;empty.hidden=false;board.replaceChildren();return;}
+  }
+  if(row.length!==8){section.hidden=true;empty.hidden=false;board.replaceChildren();return;}
+  for(let file=0;file<8;file++){
+   const square=document.createElement('span');
+   const squareName='abcdefgh'[file]+String(8-rank);
+   square.className='worker-square '+((rank+file)%2===0?'light':'dark')+
+     (marked.has(squareName)?' last':'');
+   square.textContent=workerPieceSymbols[row[file]]||'';
+   square.setAttribute('aria-label',squareName+(row[file]?' '+row[file]:''));
+   cells.push(square);
+  }
+ }
+ board.replaceChildren(...cells);
+ document.getElementById('myWorkerBoardTitle').textContent=
+  (view.white||'Białe')+' — '+(view.black||'Czarne');
+ document.getElementById('myWorkerBoardProgress').textContent=
+  (view.model?'Oblicza: '+view.model+' · ':'')+
+  (fields[1]==='w'?'Ruch białych':'Ruch czarnych')+
+  (last?' · Ostatni ruch: '+last:'');
+ section.hidden=false;empty.hidden=true;
+}
+let workerBoardPollInFlight=false;
+async function refreshMyWorkerBoard(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(workerBoardPollInFlight||document.hidden||typeof invoke!=='function')return;
+ workerBoardPollInFlight=true;
+ try{
+  const view=await invoke('get_my_worker_board',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  renderWorkerArenaBoard(view);
+ }catch(_){
+  renderWorkerArenaBoard(null);
+  document.getElementById('myWorkerBoardEmpty').textContent=
+   'Podgląd niedostępny — nie można potwierdzić partii tego Workera.';
+ }finally{workerBoardPollInFlight=false;}
+}
+setInterval(()=>{void refreshMyWorkerBoard();},5000);
+document.addEventListener('visibilitychange',()=>{
+ if(!document.hidden)void refreshMyWorkerBoard();
+});
+void refreshMyWorkerBoard();
+async function checkLocalBackend(){
+  const message=document.getElementById('backendStatus');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(typeof invoke!=='function'){
+    message.textContent='Podgląd w przeglądarce — backend Tauri niedostępny.';
+    return;
+  }
+  try {
+    const result=await invoke('worker_status');
+    if(typeof result?.connected!=='boolean'||typeof result?.running!=='boolean') throw Error('Nieprawidłowy status');
+    document.getElementById('status').textContent=result.connected?'● Połączony':'● Niepołączony';
+    document.getElementById('connectionStatus').textContent=result.connected?'Połączony':'Nieaktywne';
+    message.textContent=String(result.message||'Lokalny backend działa.');
+  }catch(_error){
+    message.textContent='Nie udało się odczytać stanu lokalnego backendu.';
+  }
+}
+checkLocalBackend();
+(async()=>{
+  const label=document.getElementById('version');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){label.textContent='Wersja: podgląd';return;}
+  try{
+    const version=await invoke('worker_version');
+    label.textContent=/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(version)?'Wersja: '+version:'Wersja: nieznana';
+  }catch(_){label.textContent='Wersja: niedostępna';}
+})();
+const updateToggle=document.getElementById('autoUpdateCheck');
+const updatePrefKey='arena-worker-auto-update-check-v1';
+const updateLastKey='arena-worker-last-update-check-v1';
+const updateInterval=24*60*60*1000;
+function readUpdatePref(){try{return localStorage.getItem(updatePrefKey)!=='off';}catch(_){return false;}}
+function saveUpdatePref(enabled){try{localStorage.setItem(updatePrefKey,enabled?'on':'off');return true;}catch(_){return false;}}
+updateToggle.checked=readUpdatePref();
+updateToggle.addEventListener('change',()=>{
+ if(!saveUpdatePref(updateToggle.checked)){
+  updateToggle.checked=false;
+  document.getElementById('updateStatus').textContent='Nie można zapisać ustawienia automatycznego sprawdzania.';
+ }
+});
+let checkingUpdate=false;
+async function checkForWorkerUpdate(){
+ if(checkingUpdate)return;
+ const status=document.getElementById('updateStatus');
+ const button=document.getElementById('checkUpdate');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){status.textContent='Sprawdzanie wydań wymaga aplikacji Tauri.';return;}
+ const download=document.getElementById('downloadWorkerApk');
+ const manual=document.getElementById('manualWorkerUpdate');
+ manual.hidden=true;manual.style.display='none';manual.removeAttribute('href');
+ download.hidden=true;download.disabled=true;
+ checkingUpdate=true;button.disabled=true;status.textContent='Sprawdzanie wydań GitHub…';
+ try{
+  const info=await invoke('check_worker_release');
+  status.textContent=info.update_available
+   ?`Dostępna wersja ${info.latest_version} (zainstalowana: ${info.current_version}). ${info.apk_asset_available===true?'Dostępny APK ARM64 do bezpiecznego pobrania.':'Brak kwalifikującego się pliku APK ARM64 w wydaniu.'} Instalacja pozostaje wyłączona.`
+   :info.latest_version?`Masz aktualną wersję (${info.current_version}).`:`Brak opublikowanych wydań. Wersja: ${info.current_version}.`;
+  download.hidden=!(info.update_available && info.apk_asset_available===true);
+  download.disabled=download.hidden;
+  // Only the native Rust release checker supplies this validated GitHub URL.
+  // Manual Android install remains user-confirmed by the operating system.
+  if(info.update_available===true && info.apk_asset_available===true &&
+     typeof info.release_notes_url==='string' &&
+     /^https:\/\/github\.com\/MarVinPL\/ai-chess-arena\/releases\/tag\/worker-v[0-9]+\.[0-9]+\.[0-9]+$/.test(info.release_notes_url)){
+   manual.href=info.release_notes_url;
+   manual.hidden=false;manual.style.display='inline-block';
+  }
+ }catch(_){status.textContent='Nie udało się sprawdzić wydań. Spróbuj później.';}
+ finally{checkingUpdate=false;button.disabled=false;}
+}
+document.getElementById('checkUpdate').addEventListener('click',checkForWorkerUpdate);
+let downloadingWorkerApk=false;
+const apkProgress=document.getElementById('apkDownloadProgress');
+const apkStatus=document.getElementById('apkDownloadStatus');
+const downloadApkButton=document.getElementById('downloadWorkerApk');
+const installApkButton=document.getElementById('installWorkerApk');
+// The app emits progress from the native transfer; JS supplies no URL, hash,
+// filename or destination and can never authorize APK installation.
+if(window.__TAURI__?.event?.listen){
+ void window.__TAURI__.event.listen('worker-apk-download-progress', event=>{
+  const n=Number(event.payload?.received),total=Number(event.payload?.total);
+  if(!downloadingWorkerApk||!Number.isSafeInteger(n)||!Number.isSafeInteger(total)||total<=0||n<0||n>total)return;
+  apkProgress.value=Math.round(n/total*100);
+  apkStatus.textContent=`Pobieranie APK: ${apkProgress.value}%`;
+ }).catch(()=>{apkStatus.textContent='Nie można odczytać postępu pobierania.';});
+}
+downloadApkButton.addEventListener('click',async()=>{
+ if(downloadingWorkerApk || downloadApkButton.disabled)return;
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){apkStatus.textContent='Pobieranie wymaga aplikacji Android.';return;}
+ installApkButton.hidden=true;installApkButton.disabled=true;
+ downloadingWorkerApk=true;downloadApkButton.disabled=true;apkProgress.hidden=false;apkProgress.value=0;
+ apkStatus.textContent='Pobieranie i weryfikacja SHA-256 APK…';
+ try{
+  await invoke('download_worker_apk');
+  apkProgress.value=100;
+  apkStatus.textContent='APK pobrany. Sprawdzanie certyfikatu i wersji przez Android…';
+  const identity=await invoke('verify_downloaded_worker_apk');
+  if(identity?.verified===true && identity.installer_permission===true){
+   installApkButton.hidden=false;installApkButton.disabled=false;
+  }
+  apkStatus.textContent=identity?.verified===true
+   ?(identity.installer_permission===true
+     ?'APK: certyfikat, pakiet i versionCode zgodne. Android dopuszcza zgłoszenie instalacji, ale instalator jest nadal wyłączony do czasu rezerwacji koordynatora i zgody użytkownika.'
+     :'APK: certyfikat, pakiet i versionCode zgodne, ale Android nie udzielił aplikacji uprawnienia do żądania instalacji APK. Instalacja wyłączona.')
+   :'APK odrzucony: certyfikat, pakiet lub wersja nie spełniają warunków. Instalacja wyłączona.';
+ }catch(_){
+  installApkButton.hidden=true;installApkButton.disabled=true;
+  apkStatus.textContent='Nie udało się bezpiecznie pobrać APK. Żadna instalacja nie została uruchomiona.';
+ }finally{downloadingWorkerApk=false;downloadApkButton.disabled=false;}
+});
+// The native command rechecks coordinator state, SHA-256 and signer
+// immediately before the OS PackageInstaller transaction.
+installApkButton.addEventListener('click',async()=>{
+ if(installApkButton.disabled)return;
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){apkStatus.textContent='Instalacja wymaga Workera na Androidzie.';return;}
+ installApkButton.disabled=true;
+ apkStatus.textContent='Weryfikowanie APK i rezerwowanie instalacji…';
+ try{
+  const result=await invoke('install_downloaded_worker_apk',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  apkStatus.textContent=result==='submitted'
+   ?'Przekazano APK do instalatora Android. Potwierdź aktualizację w systemie. Po uruchomieniu nowej wersji nastąpi sprawdzenie.'
+   :'Niepotwierdzony stan instalatora Android.';
+ }catch(error){
+  apkStatus.textContent='Nie można rozpocząć instalacji: '+String(error||'nieznany błąd')+
+   '. Przy niepewnym stanie nie próbuj ponownie bez uzgodnienia rezerwacji.';
+  await refreshUpdateRecoveryStatus();
+ }
+});
+async function reconcileInstalledApkAtStartup(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke)return;
+ try{
+  const state=await invoke('reconcile_installed_worker_update');
+  if(state==='installed_confirmed'){
+   apkStatus.textContent='Android potwierdził nową wersję. Odbieranie nowych zadań można wznowić po kontroli Areny; przerwany checkpoint wymaga osobnego uzgodnienia.';
+  }else if(state==='installation_cancelled'){
+   apkStatus.textContent='Android potwierdził nieudaną lub anulowaną instalację. Oryginalna aplikacja działa; koordynator uzgodnił zwolnienie blokady.';
+  }else if(state==='not_confirmed'){
+   apkStatus.textContent='Instalacja nie jest potwierdzona: wynik Androida lub uruchomiona wersja Workera nie pozwala zakończyć aktualizacji.';
+  }
+ }catch(error){
+  apkStatus.textContent='Nie udało się uzgodnić instalacji po uruchomieniu: '+String(error);
+ }finally{
+  // Only check resume readiness after the update hold has been reconciled.
+  await refreshWorkerResumeReadiness();
+ }
+}
+void reconcileInstalledApkAtStartup();
+// This is a verified one-tap restart of LOCAL job polling after an idle APK
+// update, NOT a replay of an interrupted game from a pending checkpoint.
+// A real pending checkpoint stays blocked until Arena dispatch/ACK exists.
+let resumeReadinessState=null;
+async function refreshWorkerResumeReadiness(){
+ const button=document.getElementById('resumeWorkerGame');
+ const label=document.getElementById('resumeWorkerStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ button.disabled=true;resumeReadinessState=null;
+ if(!invoke){label.textContent='Wznowienie wymaga aplikacji Android.';return;}
+ try{
+  const state=await invoke('inspect_worker_resume_readiness',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  resumeReadinessState=state;
+  const supported=await invoke('phone_inference_supported');
+  button.disabled=!(state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled);
+  label.textContent=state==='no_checkpoint'
+   ?'Nie ma przerwanego checkpointu. Możesz bezpiecznie wznowić odbieranie zadań Areny.'
+   :state==='waiting_update_reconciliation'
+   ?'Aktualizacja wymaga jeszcze potwierdzenia i uzgodnienia.'
+   :state==='awaiting_local_engine'
+   ?'Checkpoint przerwanego zadania jest zachowany w Arenie. Wznowienie tego zadania wymaga potwierdzonego nowego przydziału.'
+   :'Wznowienie jest zablokowane do czasu uzgodnienia stanu Workera.';
+ }catch(_){
+  resumeReadinessState=null;
+  label.textContent='Nie udało się uwierzytelnić stanu wznowienia w Arenie.';
+ }
+}
+document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
+ const button=document.getElementById('resumeWorkerGame');
+ const label=document.getElementById('resumeWorkerStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||resumeReadinessState!=='no_checkpoint')return;
+ button.disabled=true;
+ const server=document.getElementById('server').value.trim();
+ const workerId=document.getElementById('workerId').value.trim();
+ try{
+  // Recheck the coordinator after the APK installer has reconciled its hold.
+  const state=await invoke('inspect_worker_resume_readiness',{server,workerId});
+  const authenticated=await invoke('verify_worker_connection',{server,workerId});
+  const supported=authenticated&&await invoke('phone_inference_supported');
+  if(state!=='no_checkpoint'||!supported){
+   throw Error('Checkpoint lub autoryzacja Workera blokuje wznowienie');
+  }
+  // The old idle lease is UNKNOWN after APK installation. Only the trusted
+  // hold-release receipt plus freshly probed on-device model may restore it.
+  // This native command never runs inference or touches Arena's checkpoint.
+  const reconciled=await invoke('reconcile_idle_phone_after_update',{server,workerId});
+  if(reconciled!=='ready'){
+   throw Error('Arena nie potwierdziła bezczynności po aktualizacji');
+  }
+  const safety=await invoke('check_update_safety',{server,workerId});
+  if(safety!=='idle_confirmed'){
+   throw Error('Nadal brak potwierdzonej bezczynności Workera');
+  }
+  phoneSupported=true;phonePaired=true;
+  if(!activatePhoneJobPolling())throw Error('Nie udało się włączyć odbioru zadań');
+  label.textContent='Odbieranie zadań wznowione na telefonie. Arena nadal prowadzi partię i checkpointy.';
+ }catch(error){
+  phoneWorkerEnabled=false;refreshPhoneButtons();
+  label.textContent='Nie można jeszcze wznowić odbierania zadań: '+String(error);
+ }finally{
+  if(!phoneWorkerEnabled)button.disabled=resumeReadinessState!=='no_checkpoint';
+ }
+});
+
+document.getElementById('checkUpdateSafety').addEventListener('click',async()=>{
+ const button=document.getElementById('checkUpdateSafety');
+ const label=document.getElementById('updateSafetyStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){label.textContent='Wymagana aplikacja Tauri.';return;}
+ button.disabled=true;label.textContent='Sprawdzanie stanu zadań…';
+ try{
+  const state=await invoke('check_update_safety',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  label.textContent=state==='idle_confirmed'?'Koordynator potwierdza brak aktywnych zadań. Instalacja nadal wyłączona.':
+   state==='running'?'Worker wykonuje zadanie — aktualizacja wstrzymana.':
+   'Stan zadań niepotwierdzony — aktualizacja wstrzymana.';
+ }catch(_){label.textContent='Nie udało się potwierdzić stanu zadań — aktualizacja wstrzymana.';}
+ finally{button.disabled=false;}
+});
+// Startup-only check; no polling while inference is running. No network
+// request occurs when the user has disabled the preference.
+if(updateToggle.checked && window.__TAURI__?.core?.invoke){
+ try{
+  const now=Date.now(), last=Number(localStorage.getItem(updateLastKey)||0);
+  if(!Number.isFinite(last)||last<=0||now-last>=updateInterval||last>now){
+   localStorage.setItem(updateLastKey,String(now));
+   void checkForWorkerUpdate();
+  }
+ }catch(_){updateToggle.checked=false;}
+}
+// Read-only startup recovery check: never expose the hold token to JS.
+async function refreshUpdateRecoveryStatus(){
+ const label=document.getElementById('updateRecoveryStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){label.textContent='Odczyt rezerwacji wymaga aplikacji Tauri.';return;}
+ try{
+  const result=await invoke('update_recovery_status');
+  label.textContent=String(result?.message||'Niepotwierdzony stan rezerwacji.');
+  const inspect=document.getElementById('inspectUpdateHold');
+  inspect.hidden=result?.pending!==true;
+  inspect.disabled=result?.pending!==true;
+  const sessions=document.getElementById('inspectAndroidSessions');
+  sessions.hidden=result?.pending!==true;
+  sessions.disabled=result?.pending!==true;
+  if(result?.blocked!==false){
+   document.getElementById('saveToken').disabled=true;
+   document.getElementById('forgetToken').disabled=true;
+  }
+ }catch(_){
+  label.textContent='Nie można sprawdzić rezerwacji. Zmiana tokenu zablokowana.';
+  document.getElementById('saveToken').disabled=true;
+  document.getElementById('forgetToken').disabled=true;
+ }
+}
+// Worker commands use the saved native machine token, never JS secrets.
+// Until a native execution engine is connected this is an authenticated
+// transport diagnostic only. It never claims a completed STOP or checkpoint.
+let coordinatorStopCheckInFlight=false;
+document.getElementById('checkCoordinatorStop').addEventListener('click',async()=>{
+ const button=document.getElementById('checkCoordinatorStop');
+ const label=document.getElementById('coordinatorStopStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||coordinatorStopCheckInFlight){
+  label.textContent='Odczyt poleceń wymaga aplikacji Workera.';
+  return;
+ }
+ coordinatorStopCheckInFlight=true;button.disabled=true;
+ label.textContent='Pobieranie polecenia z uwierzytelnionego koordynatora HTTPS…';
+ try{
+  const state=await invoke('poll_worker_update_pause',{
+    server:document.getElementById('server').value.trim(),
+    workerId:document.getElementById('workerId').value.trim()
+  });
+  label.textContent=state==='none'
+   ?'Brak polecenia STOP. Instalacja nadal wyłączona.'
+   :state==='stop_checkpoint'
+   ?'Arena żąda zatrzymania i checkpointu. Wykonawca obliczeń nie jest jeszcze podłączony — STOP nie został wykonany.'
+   :state==='await_reconciliation'
+   ?'Polecenie pauzy wymaga uzgodnienia checkpointu; przydziały pozostają zablokowane.'
+   :'Stan zadania niepewny lub polecenie niedostępne; żadna instalacja nie jest dozwolona.';
+ }catch(_){
+  label.textContent='Nie można zweryfikować polecenia Areny. Brak STOP/ACK; instalacja zablokowana.';
+ }finally{coordinatorStopCheckInFlight=false;button.disabled=false;}
+});
+document.getElementById('inspectUpdateHold').addEventListener('click',async()=>{
+ const button=document.getElementById('inspectUpdateHold');
+ const label=document.getElementById('updateHoldRemoteStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||button.disabled)return;
+ button.disabled=true;
+ label.textContent='Odczytywanie stanu rezerwacji z koordynatora…';
+ try{
+  const state=await invoke('inspect_update_hold');
+  label.textContent=state==='active'
+   ?'Rezerwacja jest aktywna. Przydziały zablokowane; instalacja nadal wyłączona.'
+   :state==='expired'
+   ?'Rezerwacja wygasła, ale nadal blokuje przydziały. Wymagane uzgodnienie instalatora.'
+   :state==='absent'
+   ?'Koordynator nie ma tej rezerwacji. Lokalny zapis pozostaje do uzgodnienia.'
+   :'Niepotwierdzony stan rezerwacji. Instalacja wyłączona.';
+ }catch(_){
+  label.textContent='Nie udało się potwierdzić rezerwacji. Lokalny zapis pozostaje nienaruszony.';
+ }finally{button.disabled=false;}
+});
+document.getElementById('inspectAndroidSessions').addEventListener('click',async()=>{
+ const button=document.getElementById('inspectAndroidSessions');
+ const label=document.getElementById('androidSessionsStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||button.disabled)return;
+ button.disabled=true;
+ label.textContent='Odczytywanie własnych sesji PackageInstaller…';
+ try{
+  const state=await invoke('inspect_android_install_sessions');
+  label.textContent=state==='not_visible'
+    ?'Brak widocznej sesji: to NIE potwierdza zakończenia instalacji. Rezerwacja pozostaje.'
+    :state==='uncommitted'
+    ?'Wykryto niezatwierdzoną sesję instalatora. Rezerwacja pozostaje.'
+    :state==='committed_or_pending'
+    ?'Sesja zatwierdzona lub oczekuje na decyzję systemu. To NIE oznacza sukcesu instalacji.'
+    :'Stan sesji niejednoznaczny. Brak zgody na instalację lub zwolnienie rezerwacji.';
+ }catch(_){
+  label.textContent='Nie udało się zweryfikować sesji Android. Rezerwacja pozostaje zablokowana.';
+ }finally{button.disabled=false;}
+});
+void refreshUpdateRecoveryStatus();
+const tokenMessage=document.getElementById('backendStatus');
+async function refreshTokenState(){
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke)return;
+  try {
+    const saved=await invoke('has_saved_worker_token');
+    tokenMessage.textContent=saved?'Token zapisany w systemowym magazynie poświadczeń.':'Brak zapisanego tokenu.';
+  }catch(_error){tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
+}
+document.getElementById('saveToken').addEventListener('click',async()=>{
+  const field=document.getElementById('code');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
+  if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
+  try {
+    await invoke('store_worker_token',{token:field.value});
+    field.value='';
+    await refreshTokenState();
+  }catch(_error){tokenMessage.textContent='Nie udało się zapisać tokenu. Sprawdź format i systemowy magazyn poświadczeń.';}
+});
+document.getElementById('forgetToken').addEventListener('click',async()=>{
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){tokenMessage.textContent='Usuwanie tokenu wymaga aplikacji desktopowej.';return;}
+  try{await invoke('forget_worker_token');document.getElementById('code').value='';await refreshTokenState();}
+  catch(_error){tokenMessage.textContent='Nie udało się usunąć tokenu.';}
+});
+refreshTokenState();
+document.getElementById('pair').addEventListener('click',async()=>{
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){tokenMessage.textContent='Połączenie wymaga aplikacji desktopowej.';return;}
+ const server=document.getElementById('server').value.trim();
+ const workerId=document.getElementById('workerId').value.trim();
+ try{
+  const ok=await invoke('verify_worker_connection',{server,workerId});
+  phoneSupported=ok && await invoke('phone_inference_supported');
+  phonePaired=ok;
+  phoneWorkerEnabled=false;
+  refreshPhoneButtons();
+  if(ok && !persistWorkerIdentity()){
+   tokenMessage.textContent='Token zaakceptowany, ale nie udało się zapisać identyfikatora Workera.';
+   return;
+  }
+  tokenMessage.textContent=ok
+    ?phoneSupported
+      ?'Arena zaakceptowała token. Możesz uruchomić lokalne obliczenia na tym telefonie.'
+      :'Arena zaakceptowała token. Obliczenia lokalne dostępne tylko na Androidzie.'
+    :'VPS odrzucił token.';
+ }catch(_){
+  phonePaired=false;phoneWorkerEnabled=false;refreshPhoneButtons();
+  tokenMessage.textContent='Błąd połączenia lub konfiguracji HTTPS. Sprawdź adres i token.';
+ }
+});
+</script></body></html>
