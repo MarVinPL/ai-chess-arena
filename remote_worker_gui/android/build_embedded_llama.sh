@@ -21,7 +21,7 @@ git -C "$STAGING/source" init -q
 git -C "$STAGING/source" remote add origin "$LLAMA_REPO"
 # Fail closed if this exact object is not available. No branch/tag fallback.
 git -C "$STAGING/source" fetch --no-tags --depth 1 origin "$LLAMA_COMMIT"
-test "$(git -C "$STAGING/source" rev-parse HEAD)" = "$LLAMA_COMMIT"
+test "$(git -C "$STAGING/source" rev-parse FETCH_HEAD)" = "$LLAMA_COMMIT"
 git -C "$STAGING/source" -c advice.detachedHead=false checkout -q --detach "$LLAMA_COMMIT"
 test -s "$STAGING/source/LICENSE"
 test -f "$STAGING/source/CMakeLists.txt"
