@@ -189,3 +189,26 @@ def test_stacked_android_quic_build_runs_without_exposing_signing_secrets():
     assert "WORKER_ANDROID_DEBUG_KEYSTORE_B64" in signed
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in apk
     assert 'python3 android/inject_package_installer.py' in apk
+
+
+def test_android_quic_probe_is_fixed_host_head_only_without_model_side_effects():
+    root = BASE / "remote_worker_gui"
+    bridge = (root / "android/WorkerQuicTransport.kt").read_text()
+    ui = (root / "public/index.html").read_text()
+    assert '@JvmStatic\n    fun probeProtocol(context: Context): String' in bridge
+    section = bridge.split('fun probeProtocol(context: Context): String', 1)[1].split(
+        'fun downloadApproved(', 1
+    )[0]
+    assert 'https://huggingface.co/robots.txt' in section
+    assert '.setHttpMethod("HEAD")' in section
+    assert 'done.await(20, TimeUnit.SECONDS)' in section
+    assert 'request.cancel()' in section
+    assert 'FileOutputStream' not in section
+    assert 'sha.digest()' not in section
+    assert 'inspect_phone_quic_protocol' in LIB
+    assert 'spawn_blocking' in LIB
+    assert 'probeProtocol' in LIB
+    assert 'inspect_phone_quic_protocol' in ui
+    assert 'checkQuicProtocol' in ui
+    assert "protocol==='h3'" in ui
+    assert 'https://huggingface.co/robots.txt' not in ui
