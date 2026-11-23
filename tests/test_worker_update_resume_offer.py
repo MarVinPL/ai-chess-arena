@@ -122,3 +122,27 @@ def test_offer_does_not_expose_checkpoint_via_http_or_skip_verifier(tmp_path):
     from pathlib import Path
     server = (Path(__file__).resolve().parents[1] / "server.py").read_text()
     assert "prepare_trusted_resume_offer(" not in server
+
+
+def test_resume_offer_only_becomes_running_after_verified_worker_acceptance(tmp_path):
+    pause, _ = seed_resume(tmp_path)
+    prepared = offer(pause)
+    args = dict(
+        checkpoint_sha256=prepared["checkpoint_sha256"],
+        timeout_seconds=60,
+        worker_ready_verified=True,
+        resume_accepted_verified=False,
+        checkpoint_verifier=lambda checkpoint: checkpoint == CHECKPOINT,
+    )
+    with pytest.raises(ValueError, match="acceptance"):
+        pause.reconcile_resume(WORKER, JOB, REQUEST, **args)
+    assert pause.jobs.state(WORKER) == "unknown"
+    assert pause.read_resume_checkpoint(WORKER) is not None
+    args["resume_accepted_verified"] = True
+    resumed = pause.reconcile_resume(WORKER, JOB, REQUEST, **args)
+    assert resumed == {"worker_id": WORKER, "job_id": JOB, "state": "running"}
+    assert pause.jobs.state(WORKER) == "running"
+    assert pause.read_resume_checkpoint(WORKER) is None
+    assert pause.pending(WORKER) is None
+    with pytest.raises(ValueError):
+        pause.reconcile_resume(WORKER, JOB, REQUEST, **args)
