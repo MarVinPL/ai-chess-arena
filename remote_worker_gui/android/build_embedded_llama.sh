@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Offline-safe-to-inspect, reproducible upstream Android llama.cpp packaging.
+# Requires GitHub Actions runner tools, Android NDK 27.2 and Ninja/CMake.
+# No tokens, model downloads, executable servers or arbitrary caller URL.
+set -euo pipefail
+umask 022
+
+LLAMA_COMMIT=b1b770d90d94cad9e9ea5b993bdbc383a522fb28
+LLAMA_REPO=https://github.com/ggml-org/llama.cpp.git
+: "${ANDROID_HOME:?Android SDK is required}"
+NDK="${ANDROID_HOME}/ndk/27.2.12479018"
+test -f "$NDK/build/cmake/android.toolchain.cmake"
+
+# Invoked from remote_worker_gui after tauri android init.
+APP=src-tauri/gen/android/app
+test -d "$APP/src/main"
+STAGING="${RUNNER_TEMP:?GitHub Actions RUNNER_TEMP required}/arena-llama-android"
+test ! -e "$STAGING" || { echo 'Staging path already exists; refuse overwrite' >&2; exit 1; }
+mkdir -p "$STAGING/source"
+git -C "$STAGING/source" init -q
+git -C "$STAGING/source" remote add origin "$LLAMA_REPO"
+# Fail closed if this exact object is not available. No branch/tag fallback.
+git -C "$STAGING/source" fetch --no-tags --depth 1 origin "$LLAMA_COMMIT"
+test "$(git -C "$STAGING/source" rev-parse HEAD)" = "$LLAMA_COMMIT"
+git -C "$STAGING/source" -c advice.detachedHead=false checkout -q --detach "$LLAMA_COMMIT"
+test -s "$STAGING/source/LICENSE"
+test -f "$STAGING/source/CMakeLists.txt"
+
+cmake -S "$STAGING/source" -B "$STAGING/build" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-31 \
+  -DCMAKE_ANDROID_STL_TYPE=c++_static \
+  -DBUILD_SHARED_LIBS=ON \
+  -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF \
+  -DLLAMA_BUILD_COMMON=OFF -DLLAMA_OPENSSL=OFF \
+  -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF \
+  -DGGML_VULKAN=OFF -DGGML_CUDA=OFF
+cmake --build "$STAGING/build" --parallel 2 --target llama
+
+# CMake upstream builds libllama + ggml dynamic dependencies.
+LIB_DIR="$APP/src/main/jniLibs/arm64-v8a"
+mkdir -p "$LIB_DIR"
+for lib in llama ggml ggml-base ggml-cpu; do
+  so="$(find "$STAGING/build" -type f -name "lib${lib}.so" -print -quit)"
+  test -n "$so" && test -s "$so" || {
+    echo "Missing required upstream library: lib${lib}.so" >&2
+    exit 1
+  }
+  cp "$so" "$LIB_DIR/lib${lib}.so"
+done
+
+NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+for sym in llama_backend_init llama_model_load_from_file llama_new_context_with_model llama_decode llama_sampler_init_greedy; do
+  "$NM" -D --defined-only "$LIB_DIR/libllama.so" | awk '{print $NF}' | grep -Fxq "$sym" || {
+    echo "Pinned llama.cpp ABI missing symbol $sym" >&2
+    exit 1
+  }
+done
+for so in "$LIB_DIR"/*.so; do
+  "$READELF" -h "$so" | grep -Fq 'AArch64'
+done
+printf 'Packaged pinned llama.cpp: %s\n' "$LLAMA_COMMIT"
+(cd "$LIB_DIR" && sha256sum ./*.so)
