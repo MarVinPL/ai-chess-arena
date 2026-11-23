@@ -1321,6 +1321,7 @@ class Handler(BaseHTTPRequestHandler):
             '/assets/arena.js': ('web/js/arena.js', 'text/javascript; charset=utf-8'),
             '/assets/navigation.js': ('web/js/navigation.js', 'text/javascript; charset=utf-8'),
             '/assets/navigation.css': ('web/css/navigation.css', 'text/css; charset=utf-8'),
+            '/assets/board-redesign.css': ('web/css/board-redesign.css', 'text/css; charset=utf-8'),
         }
         entry = assets.get(url_path)
         if entry is None:
