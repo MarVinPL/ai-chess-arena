@@ -26,6 +26,7 @@ def initialize_arena_checkpoint(db, *, tournament_id=1):
     payload = {
         "schema_version": 1, "tournament_id": tournament_id,
         "fen": chess.STARTING_FEN, "moves": [], "move_times": [],
+        "side_to_move": "white",
         "pairing": {"id": 42}, "white": {"model_sha256": MODEL},
         "black": {"model_sha256": "b" * 64},
     }
@@ -43,6 +44,7 @@ def next_arena_checkpoint(previous, uci, *, seconds=1.0):
         "ply": len(previous["moves"]) + 1, "seconds": seconds,
     }
     updated = {**previous, "fen": board.fen(),
+               "side_to_move": "white" if board.turn else "black",
                "moves": previous["moves"] + [record],
                "move_times": previous["move_times"] + [seconds]}
     return updated, record
