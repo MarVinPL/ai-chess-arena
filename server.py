@@ -31,6 +31,7 @@ import web_panel_hf_review_api
 import web_panel_model_review_api
 import web_panel_model_storage_api
 import web_panel_model_license_api
+import web_panel_download_status_api
 import arena_auth
 import model_permissions
 
@@ -1353,6 +1354,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web_panel_model_api.dispatch_panel_model_get(self, path):
             return
+        if web_panel_download_status_api.dispatch_panel_download_get(self, path, raw_path):
+            return
         if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
@@ -1480,33 +1483,6 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/hf-candidates/runtime-preflight':
             try: self.send_json(hf_candidate_runtime.snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/download-plan':
-            try: self.send_json(hf_candidate_downloads.plan_snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-history':
-            try: self.send_json({'jobs': hf_candidate_downloads.history()})
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-events':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
-                self.send_json({'events': hf_candidate_downloads.events(job_id)} if job_id else {'error': 'Brak job_id'}, 200 if job_id else 422)
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-files':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                catalog_id = parse_qs(urlparse(raw_path).query).get('catalog_id', [''])[0]
-                self.send_json(hf_candidate_downloads.list_files(catalog_id))
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-jobs':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
-                job = hf_candidate_downloads.get(job_id) if job_id else hf_candidate_downloads.current()
-                self.send_json(job if job else {'error': 'Nie znaleziono zadania.'}, 200 if job else 404)
-            except (OSError, ValueError) as exc:
-                self.send_json({'error': str(exc)}, 422)
         elif path == '/api/hf-candidates/audit':
             try:
                 from urllib.parse import urlparse, parse_qs
