@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _REV = re.compile(r"^[0-9a-fA-F]{40}$")
-_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\\.gguf$")
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}\.gguf$")
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _MAX_BYTES = 16 * 1024**3
 
