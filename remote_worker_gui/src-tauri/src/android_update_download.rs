@@ -6,7 +6,7 @@
 use crate::android_update_asset::{verify_apk_stream, ApkCandidate};
 use reqwest::{redirect, Client, Url};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

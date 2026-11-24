@@ -51,7 +51,9 @@ mod android_update_install_state;
 use serde::Serialize;
 use std::time::Duration;
 
+#[cfg(not(target_os = "android"))]
 const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
+#[cfg(not(target_os = "android"))]
 const TOKEN_ACCOUNT: &str = "worker-token";
 
 // A pending coordinator hold requires the *original* machine token for

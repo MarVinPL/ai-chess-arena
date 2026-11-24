@@ -56,7 +56,7 @@ pub(crate) struct EmbeddedLlamaModel {
     close: CloseModel,
     is_open: IsModelOpen,
     generate: GenerateGreedy,
-    lib: NativeLibrary,
+    _lib: NativeLibrary,
     _verified_file: ModelSession,
     _not_send: PhantomData<*mut ()>,
 }
@@ -209,7 +209,7 @@ pub(crate) fn load_verified_embedded_model(
         return Err("Wbudowany silnik nie załadował modelu GGUF".into());
     }
     Ok(EmbeddedLlamaModel {
-        close, is_open, generate, lib, _verified_file: verified,
+        close, is_open, generate, _lib: lib, _verified_file: verified,
         _not_send: PhantomData,
     })
 }

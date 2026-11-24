@@ -382,10 +382,8 @@ pub(crate) async fn submit_my_inference_move(
         || machine_token.is_empty() {
         return Err("Nieprawidłowa tożsamość wyniku inferencji".into());
     }
-    if !(4..=5).contains(&uci.len())
-        || !uci.is_ascii()
-        || !uci.bytes().all(|b|
-            matches!(b, b'a'..=b'h' | b'1'..=b'8' | b'q' | b'r' | b'b' | b'n')) {
+    if !crate::android_local_llama::parse_exact_uci_answer(uci)
+        .is_ok_and(|parsed| parsed == uci) {
         return Err("Nieprawidłowa składnia UCI".into());
     }
     let endpoint = coordinator_endpoint(base, "job-result")?;
