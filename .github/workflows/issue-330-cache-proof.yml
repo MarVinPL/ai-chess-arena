@@ -1,0 +1,35 @@
+name: Shared action source cache independent proof
+on:
+  push:
+    branches: [ci/issue-330-cache-proof]
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: source
+        with:
+          path: .github/actions/setup-java
+          key: action-source-v1-Linux-X64-setup-java-d1374f8ac74474200d16ef8ecee22c7ae7a51880
+          fail-on-cache-miss: true
+      - name: Require exact hit and verified source
+        env:
+          CACHE_HIT: ${{ steps.source.outputs.cache-hit }}
+        run: |
+          set -eu
+          test "$CACHE_HIT" = true
+          python3 scripts/verify_cached_setup_java.py
+          echo SHARED_ACTION_CACHE_PROOF_OK
+      - uses: ./.github/actions/setup-java
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache-jdk: false
+      - run: java -version && test -x "$JAVA_HOME/bin/java"
