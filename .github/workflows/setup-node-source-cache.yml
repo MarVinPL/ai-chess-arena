@@ -1,0 +1,99 @@
+name: Setup-node source cache proof
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - '.github/actions/setup-node'
+      - 'scripts/verify_cached_setup_node.py'
+      - '.github/workflows/setup-node-source-cache.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - '.github/actions/setup-node'
+      - 'scripts/verify_cached_setup_node.py'
+      - '.github/workflows/setup-node-source-cache.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: setup-node-source-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      key: ${{ steps.pin.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Read and validate pinned gitlink
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-node | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test "$(git config -f .gitmodules --get submodule.setup-node.url)" = 'https://github.com/actions/setup-node.git'
+          test "$(git config -f .gitmodules --get submodule.setup-node.path)" = '.github/actions/setup-node'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-node-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: source
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.pin.outputs.key }}
+      - name: Fetch only the pinned submodule on cache miss
+        if: steps.source.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-node
+          test "$(git -C .github/actions/setup-node rev-parse HEAD)" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test -f .github/actions/setup-node/.git
+          rm .github/actions/setup-node/.git
+          echo 'ACTION_SOURCE_FETCHED'
+      - name: Verify every cached file before use
+        run: python scripts/verify_cached_setup_node.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.pin.outputs.key }}
+      - uses: ./.github/actions/setup-node
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - shell: bash
+        run: node -e "if (process.versions.node.split('.')[0] !== '22') process.exit(1)" && npm --version
+  restore:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: source
+        with:
+          path: .github/actions/setup-node
+          key: ${{ needs.prepare.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Require exact cache hit and verify bytes
+        env:
+          CACHE_HIT: ${{ steps.source.outputs.cache-hit }}
+        run: |
+          test "$CACHE_HIT" = true
+          python scripts/verify_cached_setup_node.py
+          echo 'ACTION_SOURCE_CACHE_PROOF_OK'
+      - uses: ./.github/actions/setup-node
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - shell: bash
+        run: node -e "if (process.versions.node.split('.')[0] !== '22') process.exit(1)" && npm --version
