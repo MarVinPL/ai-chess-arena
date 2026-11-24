@@ -109,3 +109,10 @@ button.stop{background:#744b4b;border-color:#986363}
 
 
 .hf-shortcut{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-8px 0 18px;padding:10px 13px;border:1px solid #28645f;border-radius:11px;background:#102b2c;color:#d8f4ef;font-size:13px}.hf-shortcut a{color:#8ce5d9;font-weight:700;text-decoration:none}.hf-dashboard{margin:12px 0 18px;padding:14px;border:1px solid #38605e;border-radius:13px;background:linear-gradient(145deg,#122a30,#101f29)}.hf-dashboard__heading{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.hf-dashboard__heading h4{margin:0}.hf-dashboard__metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}.hf-dashboard__metrics .metric{padding:10px}.hf-dashboard__metrics .metric strong{font-size:18px}.hf-dashboard__columns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.hf-dashboard__box{min-width:0;padding:10px;border:1px solid #2b4852;border-radius:9px;background:#0d1b24}.hf-dashboard__box h5{margin:0 0 6px}.hf-dashboard h5{margin:12px 0 6px}.hf-queue-item{padding:9px 10px;border-top:1px solid #29414b;overflow-wrap:anywhere}.hf-queue-item strong{display:block;color:#e8f1f0}.hf-queue-item small{display:block;color:#9eb4b6;margin-top:4px}.hf-status-blocked{color:#ffd0a1}.hf-status-done{color:#9ce3c4}@media(max-width:650px){.hf-dashboard__metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.hf-dashboard__columns{grid-template-columns:1fr}.hf-dashboard{padding:11px}}
+
+/* Tournament detail tabs */
+.tournament-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}
+.tournament-tabs button{flex:1 1 90px;min-width:0}
+.tournament-tabs [aria-selected="true"]{border:2px solid #8ed9ce;background:#224840;color:#fff}
+.tournament-tabs button:focus-visible,[id^="tournament-pane-"]:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+[id^="tournament-pane-"][hidden]{display:none!important}
