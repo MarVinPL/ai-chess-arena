@@ -539,6 +539,23 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     lease_digest = instruction["lease_token_sha256"]
 
     pause = WorkerUpdatePause(path)
+    report = {**who, "job_id": job_id, "request_id": request_id, "lease_token": job["lease_token"]}
+    for wrong in ({"request_id": "wrong"}, {"lease_token": lease_digest}):
+        assert post("native-stop-report", {**report, **wrong})[0] == 409
+    assert post("native-stop-report", {**report, "token": "invalid"})[0] == 401
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM worker_native_stop_reports").fetchone() == (0,)
+        original_report = None
+        for _ in range(2):
+            status, reply = post("native-stop-report", report)
+            assert status == 200 and reply["state"] == "stop_report_received"
+            assert reply["install_allowed"] is False and "lease_token" not in reply
+            stored = db.execute("SELECT * FROM worker_native_stop_reports").fetchone()
+            assert stored[:4] == (WORKER, job_id, request_id, lease_digest)
+            if original_report is not None:
+                assert stored == original_report
+            original_report = stored
+    assert pause.pending(WORKER)["phase"] == "requested"
     for evidence in (None, "0" * 64, job["lease_token"]):
         with pytest.raises(ValueError, match="stale or missing lease"):
             pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,

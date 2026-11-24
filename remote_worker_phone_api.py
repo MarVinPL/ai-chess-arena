@@ -15,6 +15,7 @@ ROUTES = frozenset({
     "/api/remote-workers/ready",
     "/api/remote-workers/job-result",
     "/api/remote-workers/update-pause-poll",
+    "/api/remote-workers/native-stop-report",
     "/api/remote-workers/board-view",
 })
 MAX_REQUEST_BYTES = 2048
@@ -40,6 +41,8 @@ def handle_phone_request(handler, path, db, live):
             if path.endswith("/ready") else
             {"worker_id", "token", "nonce", "result"}
             if path.endswith("/job-result") else
+            {"worker_id", "token", "nonce", "job_id", "request_id", "lease_token"}
+            if path.endswith("/native-stop-report") else
             {"worker_id", "token", "nonce"}
         ):
             raise ValueError("Unexpected protocol fields")
@@ -77,6 +80,12 @@ def handle_phone_request(handler, path, db, live):
             response.update(WorkerInferenceDelivery(db).submit_inference_result(
                 worker_id, payload["result"],
             ))
+        elif path.endswith("/native-stop-report"):
+            from remote_worker_update_pause import WorkerUpdatePause
+            WorkerUpdatePause(db).record_native_stop(
+                worker_id, payload["job_id"], payload["request_id"], payload["lease_token"],
+            )
+            response.update(state="stop_report_received", install_allowed=False)
         elif path.endswith("/update-pause-poll"):
             from remote_worker_update_pause import WorkerUpdatePause
             response["instruction"] = WorkerUpdatePause(db).poll_stop_instruction(worker_id)
@@ -87,7 +96,7 @@ def handle_phone_request(handler, path, db, live):
         handler.send_json(response)
     except (ValueError, TypeError, json.JSONDecodeError):
         # A stale/invalid result is a conflict; no lease or checkpoint changed.
-        code = 409 if path.endswith("/job-result") else 400
+        code = 409 if path.endswith(("/job-result", "/native-stop-report")) else 400
         handler.send_json({"error": "Niedozwolony lub nieaktualny stan Workera"}, code)
     except Exception:
         # Never disclose secrets, private paths, database schemas or tracebacks.

@@ -28,6 +28,10 @@ class WorkerUpdatePause:
                 created_at REAL NOT NULL,
                 acknowledged_at REAL
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_native_stop_reports (
+                worker_id TEXT PRIMARY KEY, job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL, received_at REAL NOT NULL
+            )""")
             db.execute("""CREATE TABLE IF NOT EXISTS worker_update_resume (
                 worker_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
@@ -160,6 +164,40 @@ class WorkerUpdatePause:
         ):
             raise ValueError("Invalid STOP assignment lease")
         return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+    def record_native_stop(self, worker_id, job_id, request_id, lease_token):
+        """Record the executor's report. Only the coordinator may verify a checkpoint."""
+        self.jobs._id(worker_id)
+        self.jobs._id(job_id)
+        if not isinstance(request_id, str) or len(request_id) != 32:
+            raise ValueError("Invalid STOP request")
+        if not isinstance(lease_token, str) or len(lease_token) != 64 or any(
+            ch not in "0123456789abcdef" for ch in lease_token
+        ):
+            raise ValueError("Invalid execution lease")
+        digest = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            now = self.clock()
+            pending = db.execute(
+                "SELECT 1 FROM worker_update_pause_requests p JOIN worker_job_safety j "
+                "ON j.worker_id=p.worker_id AND j.job_id=p.job_id "
+                "WHERE p.worker_id=? AND p.job_id=? AND p.request_id=? "
+                "AND p.phase='requested' AND j.state='running' AND j.deadline>?",
+                (worker_id, job_id, request_id, now),
+            ).fetchone()
+            expected = self._stop_lease_digest(db, worker_id, job_id)
+            if not pending or expected is None or not secrets.compare_digest(expected, digest):
+                raise ValueError("Stale native STOP report")
+            db.execute(
+                "INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?) "
+                "ON CONFLICT(worker_id) DO UPDATE SET job_id=excluded.job_id, "
+                "request_id=excluded.request_id, lease_sha256=excluded.lease_sha256, "
+                "received_at=excluded.received_at WHERE request_id!=excluded.request_id "
+                "OR job_id!=excluded.job_id OR lease_sha256!=excluded.lease_sha256",
+                (worker_id, job_id, request_id, digest, now),
+            )
 
     def acknowledge(self, worker_id, job_id, request_id, *,
                     worker_stopped, checkpoint_verified, lease_token_sha256=None):
