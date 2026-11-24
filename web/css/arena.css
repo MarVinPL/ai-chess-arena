@@ -116,3 +116,10 @@ button.stop{background:#744b4b;border-color:#986363}
 .tournament-tabs [aria-selected="true"]{border:2px solid #8ed9ce;background:#224840;color:#fff}
 .tournament-tabs button:focus-visible,[id^="tournament-pane-"]:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
 [id^="tournament-pane-"][hidden]{display:none!important}
+
+.tournament-fixture-group{margin:12px 0}
+.tournament-fixture-group h6{font-size:14px;margin:0 0 6px;color:#c8d9e3}
+.tournament-fixture{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:5px 12px;padding:10px;margin:6px 0;border:1px solid #38515c;border-radius:8px;overflow-wrap:anywhere}
+.tournament-fixture-status{color:#c8d9e3}
+.tournament-fixture a:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+@media(max-width:760px){.tournament-fixture{grid-template-columns:minmax(0,1fr)}}

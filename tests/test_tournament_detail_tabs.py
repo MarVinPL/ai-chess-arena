@@ -38,5 +38,27 @@ d.progress.league.completed=1;standings[0].points=1;standings[0].played=1;standi
 assert.deepEqual(tournamentStandingRows(d).rows,[[1,'A',1,1,1,0,0]]);
 """],check=True)
 
+    def test_fixture_status_result_and_pgn(self):
+        js = (ROOT / 'web/js/arena.js').read_text()
+        helper = js[js.index('function tournamentFixturePresentation('):js.index('function renderTournamentFixtures(')]
+        subprocess.run(['node', '-e', helper + """
+const assert=require('node:assert/strict');
+const base={stage:'league',leg:1,saved_game_id:42,result:'1/2-1/2',game_url:'/api/games/42/pgn'};
+for(const [status,label] of [['pending','Zaplanowana'],['planned','Zaplanowana'],['running','Trwa'],['failed','Nieudana']]){
+ const x=tournamentFixturePresentation({...base,status});
+ assert.equal(x.status,label);assert.equal(x.result,'—');assert.equal(x.pgn,null);
+}
+let x=tournamentFixturePresentation({...base,status:'completed'});
+assert.equal(x.status,'Zakończona');assert.equal(x.result,'1/2-1/2');assert.equal(x.pgn,base.game_url);
+x=tournamentFixturePresentation({...base,status:'completed',saved_game_id:null});
+assert.equal(x.status,'Nieudana');assert.equal(x.result,'—');
+for(const game_url of [null,'https://example.com','javascript:alert(1)','/api/games/43/pgn']){
+ x=tournamentFixturePresentation({...base,status:'completed',game_url});
+ assert.equal(x.pgn,null);assert.equal(x.result,'1/2-1/2');
+}
+x=tournamentFixturePresentation({...base,status:'completed',stage:'draft',round_no:0,adjudication_status:'adjudicated'});
+assert.equal(x.group,'Puchar · runda 0');assert.equal(x.adjudicated,true);
+"""],check=True)
+
 if __name__ == '__main__':
     unittest.main()

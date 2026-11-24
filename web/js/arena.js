@@ -74,6 +74,44 @@ function tournamentStandingRows(d){
  return {ranked,headers:ranked?['#','Zawodnik','Pkt','Partie','W','R','P']:['Zawodnik','Pkt','Partie'],
  rows:(d.standings||[]).map((x,i)=>ranked?[i+1,x.name,x.points,x.played,x.wins,x.draws,x.losses]:[x.name,'—',0])};
 }
+function tournamentFixturePresentation(x){
+ const saved=x.status==='completed'&&Number.isSafeInteger(x.saved_game_id)&&x.saved_game_id>0&&['1-0','0-1','1/2-1/2'].includes(x.result);
+ const labels={pending:'Zaplanowana',planned:'Zaplanowana',running:'Trwa',completed:'Zakończona',failed:'Nieudana'};
+ const status=x.status==='completed'&&!saved?'Nieudana':(labels[x.status]||'Nieznany status');
+ const pgn=saved&&x.game_url==='/api/games/'+x.saved_game_id+'/pgn'?x.game_url:null;
+ return {group:x.stage==='league'?'Liga · kolejka '+(x.leg??'—'):x.stage==='draft'?'Puchar · runda '+(x.round_no??'—'):'Inna faza',
+  status,result:saved?x.result:'—',pgn,saved,adjudicated:saved&&x.adjudication_status==='adjudicated'};
+}
+function renderTournamentFixtures(fixtures){
+ const host=$('tournament-fixtures');host.replaceChildren();
+ $('tournament-game-previews').replaceChildren();
+ if(!fixtures.length){host.textContent='Brak zaplanowanych partii.';return;}
+ const groups=new Map();
+ for(const x of fixtures){
+  const info=tournamentFixturePresentation(x);
+  if(!groups.has(info.group))groups.set(info.group,[]);
+  groups.get(info.group).push([x,info]);
+ }
+ for(const [name,rows] of groups){
+  const section=document.createElement('section');section.className='tournament-fixture-group';
+  const heading=document.createElement('h6');heading.textContent=name;section.appendChild(heading);
+  for(const [x,info] of rows){
+   const match=document.createElement('article');match.className='tournament-fixture';
+   const pair=document.createElement('strong');pair.textContent=x.white_name+' vs '+x.black_name;
+   const status=document.createElement('span');status.className='tournament-fixture-status';status.textContent=info.status+(info.adjudicated?' · Rozstrzygnięta decyzją sędziego':'');
+   const result=document.createElement('span');result.textContent='Wynik: '+info.result;
+   match.append(pair,status,result);
+   if(info.saved){
+    const record=document.createElement('span');record.textContent='Partia #'+x.saved_game_id;match.appendChild(record);
+   }
+   if(info.pgn){
+    const link=document.createElement('a');link.href=info.pgn;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz PGN partii #'+x.saved_game_id;match.appendChild(link);
+   }
+   section.appendChild(match);
+  }
+  host.appendChild(section);
+ }
+}
 function renderTournamentRosterCounts(counts){
  const host=$('tournament-roster-counters');host.textContent='';
  if(!counts){host.textContent='Brak aktywnego turnieju';return}
@@ -104,15 +142,7 @@ async function loadTournamentView(id){
   const standings=tournamentStandingRows(d);
   $('tournament-heading-standings').textContent=standings.ranked?'Klasyfikacja ligowa':'Uczestnicy — jeszcze bez klasyfikacji';
   tableRows('tournament-standings',standings.rows,standings.headers);
-  const fixtureRows=(d.fixtures||[]).map(x=>{
-   const round=x.stage==='league'?'Liga · leg '+(x.leg||'—'):'Puchar · runda '+(x.round_no??'—');
-   const result=x.saved_game_id?x.result:'—';
-   const status=x.status==='running'?'AKTYWNA · running':x.status; const adjudication=x.adjudication_status==='adjudicated'?' · ADJUDYKOWANA':'';
-   return [round,x.white_name+' vs '+x.black_name,status,result,x.saved_game_id?'partia #'+x.saved_game_id:'—'];
-  });
-  tableRows('tournament-fixtures',fixtureRows,['Faza','Para','Status','Wynik','Zapis']);
-  const previewHost=$('tournament-game-previews');previewHost.textContent='';
-  (d.fixtures||[]).filter(x=>x.game_url).forEach(x=>{const link=document.createElement('a');link.href=x.game_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz PGN partii #'+x.saved_game_id+' · '+x.white_name+' vs '+x.black_name;link.style.display='block';link.style.margin='5px 0';previewHost.appendChild(link)});
+  renderTournamentFixtures(d.fixtures||[]);
   const bracketHost=$('tournament-bracket');bracketHost.textContent='';
   if(d.bracket_status!=='available'){
    bracketHost.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
