@@ -19,3 +19,11 @@
  .arena-rankings{grid-template-columns:minmax(0,1fr)}
 }
 @media(max-width:380px){.arena-navigation{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.model-tabs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:0 0 16px}
+.model-tabs button{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.model-tabs button[aria-selected="true"]{background:#245d54;color:#fff;border:1px solid #8ce0c4}
+.model-tabs button:focus-visible,.model-pane:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+.model-pane[hidden]{display:none!important}
+.model-pane{min-width:0;overflow-wrap:anywhere}
+@media(orientation:portrait),(max-width:760px){.model-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}

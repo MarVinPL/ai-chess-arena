@@ -346,8 +346,8 @@ function renderTournaments(rows){
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
   const diagnostic=document.createElement('section');diagnostic.className='tournament-preflight';diagnostic.hidden=true;diagnostic.setAttribute('aria-live','polite');
   card.appendChild(diagnostic);
-  const openRegistry=(target)=>{const el=$(target);if(el){el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
-  const openModelAdmission=(modelId)=>{const target=$('model-admission-'+modelId);if(!target){openRegistry('model-admission-list');$('league-message').textContent='Model '+modelId+' nie ma osobnego wpisu na jawnej allowliście. Sprawdź manifest i zakres dopuszczenia.';return;}target.scrollIntoView({behavior:'smooth',block:'center'});target.focus({preventScroll:true});target.style.outline='3px solid #f1d99d';target.style.outlineOffset='3px';};
+  const openRegistry=(target)=>{const el=$(target);if(el){window.arenaRevealTarget?.(target);el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
+  const openModelAdmission=(modelId)=>{const target=$('model-admission-'+modelId);if(!target){openRegistry('model-admission-list');$('league-message').textContent='Model '+modelId+' nie ma osobnego wpisu na jawnej allowliście. Sprawdź manifest i zakres dopuszczenia.';return;}window.arenaRevealTarget?.(target.id);target.scrollIntoView({behavior:'smooth',block:'center'});target.focus({preventScroll:true});target.style.outline='3px solid #f1d99d';target.style.outlineOffset='3px';};
   const showPreflight=async()=>{
    expandedTournamentDiagnostics.add(t.id);
    diagnostic.hidden=false;diagnostic.dataset.ready='unknown';diagnostic.textContent='Sprawdzam warunki startu…';
