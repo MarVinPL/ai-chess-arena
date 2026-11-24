@@ -1,0 +1,11 @@
+name: Issue 333 - Android local setup-java integration
+on:
+  push:
+    branches: [ci/issue-333-android-integration]
+permissions:
+  contents: read
+jobs:
+  android:
+    uses: ./.github/workflows/android-worker-apk.yml
+    permissions:
+      contents: read

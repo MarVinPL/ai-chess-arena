@@ -32,8 +32,52 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - name: Set up Java with Gradle cache
-        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
+      - name: Read and validate setup-java gitlink
+        id: java-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-java | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test "$(git config -f .gitmodules --get submodule.setup-java.url)" = 'https://github.com/actions/setup-java.git'
+          test "$(git config -f .gitmodules --get submodule.setup-java.path)" = '.github/actions/setup-java'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-java-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: java-source
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Fetch pinned setup-java only on cache miss
+        if: steps.java-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-java
+          test "$(git -C .github/actions/setup-java rev-parse HEAD)" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test -f .github/actions/setup-java/.git
+          rm .github/actions/setup-java/.git
+      - name: Verify setup-java source
+        working-directory: .
+        run: python3 scripts/verify_cached_setup_java.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.java-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Isolate upstream test fixtures from Gradle cache discovery
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java hashes all **/gradle-wrapper.properties. The verified
+          # upstream source includes test fixtures; keep them out of the
+          # workspace after saving the full verified source.
+          test -d .github/actions/setup-java/__tests__
+          mv .github/actions/setup-java/__tests__ "$(mktemp -d "$RUNNER_TEMP/setup-java-fixtures.XXXXXX")/"
+          test -z "$(find .github/actions/setup-java -name gradle-wrapper.properties -print -quit)"
+      - uses: ./.github/actions/setup-java
         with:
           distribution: temurin
           java-version: '21'
