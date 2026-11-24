@@ -5,12 +5,16 @@ on:
     paths:
       - '.github/workflows/gradle-dependencies-warmup.yml'
       - 'scripts/gradle_dependency_cache_key.py'
+      - 'scripts/retry_http_429.py'
+      - 'tests/test_retry_http_429.py'
       - 'tests/test_gradle_dependency_cache_key.py'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/gradle-dependencies-warmup.yml'
       - 'scripts/gradle_dependency_cache_key.py'
+      - 'scripts/retry_http_429.py'
+      - 'tests/test_retry_http_429.py'
       - 'tests/test_gradle_dependency_cache_key.py'
   workflow_dispatch:
   schedule:
@@ -189,7 +193,7 @@ jobs:
           path: ~/.gradle/caches/modules-2
           key: ${{ steps.modules.outputs.key }}
       - name: Populate dependencies with representative Android build
-        run: npx tauri android build --apk --target aarch64 --ci --debug
+        run: python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug
       - name: Verify Gradle offline APK build
         shell: bash
         run: |

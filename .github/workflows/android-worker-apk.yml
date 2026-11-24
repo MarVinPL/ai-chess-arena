@@ -214,7 +214,7 @@ jobs:
           # Pinned to the cert in the original installed APK on the owner's VPS.
           test "$actual" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
       - name: Compile Android Worker
-        run: npx tauri android build --apk --target aarch64 --ci --debug
+        run: python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug
       - name: Verify signature and SHA-256
         shell: bash
         run: |
