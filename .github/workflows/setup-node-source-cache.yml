@@ -83,7 +83,8 @@ jobs:
       - name: Populate npm cache with local fixture (no registry download)
         shell: bash
         run: |
-          npm cache add ./.github/setup-node-proof
+          npm pack ./.github/setup-node-proof --ignore-scripts --offline
+          npm cache add ./arena-cache-proof-1.0.0.tgz --offline
           npm cache verify
   restore:
     needs: prepare
@@ -142,5 +143,5 @@ jobs:
           NPM_CACHE_HIT: ${{ steps.node.outputs.cache-hit }}
         run: |
           test "$NPM_CACHE_HIT" = true
-          npm cache ls | grep -F 'arena-cache-proof' || npm cache ls | grep -F 'setup-node-proof'
+          npm cache ls | grep -F 'arena-cache-proof-1.0.0.tgz'
           echo NPM_CACHE_PROOF_OK
