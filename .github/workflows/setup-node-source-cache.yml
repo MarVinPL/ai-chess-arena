@@ -66,6 +66,21 @@ jobs:
         with:
           path: .github/actions/setup-node
           key: ${{ steps.pin.outputs.key }}
+      - name: Probe changed SHA key (never execute or save)
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: changed-pin
+        with:
+          path: .github/actions/setup-node
+          key: action-source-v1-${{ runner.os }}-${{ runner.arch }}-setup-node-0000000000000000000000000000000000000000
+          lookup-only: true
+      - name: Require changed SHA cache miss
+        shell: bash
+        env:
+          CHANGED_HIT: ${{ steps.changed-pin.outputs.cache-hit }}
+        run: |
+          test "$CHANGED_HIT" != true
+          python scripts/verify_cached_setup_node.py
+          echo CHANGED_SHA_CACHE_MISS_OK
       - name: Prepare deterministic npm fixture
         shell: bash
         run: |
