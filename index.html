@@ -62,7 +62,8 @@
 <div class="league-grid">
  <div><h4>Ranking Elo PURE_AI</h4><div id="pure-ranking" class="moves">Brak zawodników.</div></div>
  <div><h4>Ranking Elo AI_ENGINE</h4><div id="engine-ranking" class="moves">Brak zawodników.</div></div>
- <div><h4>Modele w rejestrze</h4><div id="model-list" class="moves">Brak zarejestrowanych modeli.</div>
+ <div><h4>Modele w rejestrze</h4><div class="formrow"><label for="registry-query">Szukaj modelu</label><input id="registry-query" class="field" type="search" placeholder="Nazwa lub źródło"><label for="registry-filter">Lokalne pliki</label><select id="registry-filter" class="field"><option value="all">Wszystkie</option><option value="local">Kopia lokalna</option><option value="missing">Brak pełnej kopii</option><option value="unknown">Stan nieznany</option></select></div><p id="registry-count-filtered" role="status" class="notice"></p><div id="model-list" class="moves">Brak zarejestrowanych modeli.</div>
+<section data-model-group="audits" aria-label="Dopuszczenie i propozycje">
   <h4>Kontrolowane dopuszczenie do rejestru</h4>
   <p class="notice">Decyzja jest zapisywana lokalnie w audycie rejestru. Nie zmienia allowlisty turniejowej, nie uruchamia modelu i nie pobiera wag.</p>
   <button type="button" id="model-review-open" class="secondary" style="margin:8px 0">Uzupełnij blokady modelu</button>
@@ -84,6 +85,7 @@
   <p class="notice">Akceptacja przenosi wyłącznie propozycję do etapu PR. Nie dopuszcza modelu i nie zmienia allowlisty ani gotowości technicznej.</p>
   <div class="formrow"><button type="button" class="secondary" id="model-review-refresh">Odśwież kolejkę</button><span id="model-review-queue-status" class="notice" role="status" aria-live="polite">Ładowanie kolejki…</span></div>
   <div id="model-review-queue" class="moves">Ładowanie zgłoszeń…</div>
+</section>
   <section id="model-permissions" class="hf-dashboard" aria-live="polite">
    <div class="hf-dashboard__heading"><div><h4>Uprawnienia operacyjne modeli</h4><p class="notice">TEST_ONLY i EVALUATION są przypięte do konkretnej rewizji i SHA-256. Żądanie nie jest zgodą. Ten rejestr nie dopuszcza do turniejów i nie uruchamia modeli.</p></div><button type="button" class="secondary" id="model-permissions-refresh">Odśwież</button></div>
    <form id="model-permission-request-form">
@@ -96,6 +98,7 @@
    <div id="model-permissions-status" class="notice" role="status" aria-live="polite">Ładowanie rejestru…</div>
    <div id="model-permissions-list" class="moves">Odczytuję uprawnienia…</div>
   </section>
+<section data-model-group="audits" aria-label="Audyt i testy">
   <section id="hf-quarantine-dashboard" class="hf-dashboard" aria-live="polite">
    <div class="hf-dashboard__heading"><div><h4>Kolejka audytu i testów modeli</h4><p class="notice">Podgląd modeli w kwarantannie. Audyt metadanych nie uruchamia wag; test runtime pozostaje wyłączony do czasu wdrożenia bezpiecznego wykonawcy i jawnego zatwierdzenia.</p></div><button type="button" class="secondary" id="hf-dashboard-refresh">Odśwież</button></div>
    <div class="hf-dashboard__metrics">
@@ -109,10 +112,12 @@
     <div class="hf-dashboard__box"><h5>Blokady sprzętowe</h5><div id="hf-dash-hardware" class="notice">Preflight RAM / VRAM / swap / dysku nie jest jeszcze podłączony do kolejki runtime. Żaden model nie zostanie uruchomiony z tego widoku.</div></div>
    </div>
    <h5>Kolejka kandydatów</h5><div id="hf-dash-queue" class="moves">Odczytuję katalog…</div>
-   <h5>Historia audytów i wyniki</h5><div id="hf-dash-history" class="moves">Odczytuję historię…</div>
+   <section data-model-group="history" aria-label="Historia audytów i wyniki"><h5>Historia audytów i wyniki</h5><div id="hf-dash-history" class="moves">Odczytuję historię…</div></section>
    <h5>Preflight testów modeli z kwarantanny</h5><div id="hf-dash-runtime-queue" class="moves">Odczytuję preflight…</div>
    <p class="notice">Testy runtime są wyłączone. Ta kolejka wyłącznie ocenia rozmiar, zasoby i status allowlisty. Nie uruchamia modeli ani nie udostępnia plików silnikowi. Przed przyszłym uruchomieniem wymagane będzie osobne zatwierdzenie konkretnej partii i ponowna kontrola SHA-256. Maksymalnie jeden model naraz; modele przekraczające budżet są pomijane.</p>
   </section>
+</section>
+<section data-model-group="catalog" aria-label="Katalog kandydatów">
   <h4>Wstępny audyt kandydatów Hugging Face</h4>
   <p class="notice">Bezpłatny audyt publicznych metadanych i małych plików tekstowych. Nie pobiera wag GGUF, nie uruchamia modeli i nie zatwierdza licencji ani dopuszczenia.</p>
   <div class="formrow"><input class="field" id="hf-candidate-query" placeholder="Szukaj po nazwie lub repo_id…"><select class="field" id="hf-candidate-status-filter" aria-label="Filtr statusu kandydata"><option value="all">Wszystkie statusy</option><option value="no_audit">Bez audytu</option><option value="needs_review">Po audycie · oczekuje na ręczny przegląd</option><option value="review_in_progress">Ręczny przegląd rozpoczęty</option><option value="inactive">Nieaktywne źródło</option></select><button type="button" id="hf-candidate-refresh" class="secondary">Odśwież katalog</button></div>
@@ -123,6 +128,8 @@
   <div id="hf-candidate-count" class="notice">Odczytuję katalog kandydatów…</div>
   <div id="hf-candidate-list" class="moves">Odczytuję katalog…</div>
   <div id="hf-candidate-audit-result" class="moves" aria-live="polite"></div>
+</section>
+<section data-model-group="downloads" aria-label="Kolejka pobierania">
   <section class="panel history" id="hf-download-status" aria-live="polite" style="margin-top:12px">
    <h4 style="margin:0 0 8px">Pobieranie modeli — bieżący status</h4>
    <div id="hf-download-status-body" class="notice" role="status">Sprawdzam stan pobierania…</div>
@@ -132,18 +139,22 @@
    <p class="notice">Panel sam analizuje wcześniej zatwierdzone artefakty, przypięte rewizje, rozmiary, SHA-256 i wolne miejsce. Pobieranie nigdy nie startuje samo — każda partia wymaga osobnego zatwierdzenia w panelu. Pliki pozostają w kwarantannie.</p>
    <div class="formrow"><button type="button" class="secondary" id="hf-download-plan-refresh">Przelicz plan</button><span id="hf-download-plan-summary" class="notice" role="status" aria-live="polite">Odczytuję plan…</span></div>
    <div id="hf-download-plan-body" class="moves">Odczytuję kolejkę…</div>
-   <h5>Historia pobierania</h5><div id="hf-download-history" class="moves">Odczytuję historię…</div>
+   <section data-model-group="history" aria-label="Historia pobierania"><h5>Historia pobierania</h5><div id="hf-download-history" class="moves">Odczytuję historię…</div></section>
   </section>
 
   <section id="hf-download-workspace" class="moves" aria-live="polite" style="margin-top:10px"></section>
+</section>
   <div id="model-admission-list" class="moves">Odczytuję allowlistę i warunki dopuszczenia…</div>
   <form id="model-form"><div class="formrow"><input class="field" id="model-name" placeholder="Nazwa zawodnika" required><select class="field" id="model-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><select class="field" id="model-thinking"><option value="off">Thinking OFF</option><option value="on">Thinking ON</option></select><input class="field" id="model-temperature" type="number" min="0" max="2" step="0.05" value="0" title="Temperature"><input class="field" id="model-max-tokens" type="number" min="1" max="8192" value="16" title="Max tokens"></div>
   <div class="formrow"><input class="field" id="model-source" placeholder="Źródło (opcjonalnie)"><input class="field" id="model-license" placeholder="Licencja (wymagana do użycia)"></div>
   <div class="formrow"><input class="field" id="model-file" placeholder="Plik GGUF (opcjonalnie)"><label style="font-size:12px;color:#aebbd0"><input type="checkbox" id="license-confirm"> Potwierdzam sprawdzenie źródła i licencji</label></div><button type="submit">Dodaj do rejestru</button></form>
+<section data-model-group="catalog" aria-label="Wyszukiwanie">
 <h4>Znajdź model do Areny (Hugging Face · GGUF)</h4>
   <div class="formrow"><input class="field" id="model-search-query" placeholder="Np. small instruct, Qwen, Llama 3.2"/><button type="button" id="model-search-button">Szukaj modeli</button><button type="button" id="model-random-button" class="secondary">🎲 Wylosuj model</button></div>
   <div id="model-search-results" class="moves">Wyszukaj modele GGUF dostępne publicznie.</div>
   <p class="notice">Wyniki są propozycjami, nie rekomendacją licencyjną. Sprawdź kartę modelu, warunki użycia i plik. Po sprawdzeniu i zatwierdzeniu licencji model może grać bez lokalnego GGUF; Arena pobierze plik na czas partii.</p>
+</section>
+<section data-model-group="downloads" aria-label="Pobieranie ręczne">
   <h4>Cache GGUF — pobieranie na żądanie</h4>
 <p class="notice">Wymagane: zatwierdzona licencja w rejestrze, bezpośredni URL HTTPS, rozmiar i SHA-256. Plik trafi do prywatnego katalogu areny. Współdzielone GGUF pozostają nietknięte.</p>
 <form id="download-form">
@@ -151,7 +162,10 @@
 <div class="formrow"><input class="field" id="download-file" placeholder="Nazwa pliku .gguf" required><input class="field" id="download-sha" placeholder="SHA-256 (64 znaki)" required></div>
 <div class="formrow"><input class="field" id="download-size" type="number" min="1" placeholder="Rozmiar w bajtach" required><label style="font-size:12px;color:#aebbd0"><input type="checkbox" id="download-license" required> Potwierdzam zweryfikowaną, bezpłatną licencję i źródło</label></div>
 <button type="submit">Pobierz model</button></form>
+</section>
+<section data-model-group="cache" aria-label="Lokalne pliki">
 <h4>Lokalny cache GGUF</h4><p class="notice">Usunięcie kopii usuwa wyłącznie plik GGUF. Wpis modelu, jego licencja i status na liście dostępnych zawodników pozostają; brakujący plik można pobrać ponownie.</p><div id="managed-models" class="moves">Brak kopii.</div>
+</section>
  </div>
  <div><h4>Nowy turniej</h4><form id="tournament-form"><div class="formrow"><input class="field" id="tournament-name" placeholder="Nazwa turnieju" required></div><div class="formrow"><select class="field" id="tournament-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><label for="draft-qualification">Awans do draftu</label><select class="field" id="draft-qualification"><option value="75">75%</option><option value="80" selected>80%</option><option value="85">85%</option><option value="90">90%</option></select><button type="submit">Zaplanuj każdy z każdym</button></div></form><div id="tournament-list" class="moves">Brak turniejów.</div>
 <div class="panel" style="margin-top:12px"><h4>Tabela i drabinka</h4><div id="tournament-detail-title" class="notice">Wybierz turniej, aby zobaczyć tabelę, terminarz i drabinkę.</div><div id="tournament-progress" class="notice"></div><div class="tournament-tabs" role="tablist" aria-label="Szczegóły turnieju"><button type="button" id="tournament-tab-standings" role="tab" aria-controls="tournament-pane-standings" aria-selected="true" tabindex="0">Tabela</button><button type="button" id="tournament-tab-fixtures" role="tab" aria-controls="tournament-pane-fixtures" aria-selected="false" tabindex="-1">Terminarz</button><button type="button" id="tournament-tab-bracket" role="tab" aria-controls="tournament-pane-bracket" aria-selected="false" tabindex="-1">Drabinka</button></div><section id="tournament-pane-standings" role="tabpanel" aria-labelledby="tournament-tab-standings" tabindex="0"><h5 id="tournament-heading-standings">Uczestnicy</h5><div id="tournament-standings" class="moves"></div></section><section id="tournament-pane-fixtures" role="tabpanel" aria-labelledby="tournament-tab-fixtures" tabindex="0" hidden><h5 id="tournament-heading-fixtures">Terminarz</h5><div id="tournament-fixtures" class="moves"></div><div id="tournament-game-previews" class="moves"></div></section><section id="tournament-pane-bracket" role="tabpanel" aria-labelledby="tournament-tab-bracket" tabindex="0" hidden><h5 id="tournament-heading-bracket">Drabinka pucharowa</h5><div id="tournament-bracket" class="moves"></div></section><div id="tournament-champion" class="notice"></div></div></div>
