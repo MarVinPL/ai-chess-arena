@@ -15,6 +15,8 @@ mod android_update_package_installer;
 mod android_update_coordinator;
 mod android_update_recovery;
 mod android_update_install_journal;
+#[cfg(target_os = "android")]
+mod android_native_stop_outbox;
 mod android_local_llama;
 // Verified app-private GGUF staging and retirement; not wired to dispatch yet.
 #[allow(dead_code)]
@@ -732,7 +734,8 @@ async fn execute_fenced_native_inference(
     let text = |key| job.get(key).and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("Brak pola {key} w zadaniu natywnym"));
     let job_id = text("job_id")?;
-    let lease_digest = format!("{:x}", Sha256::digest(text("lease_token")?.as_bytes()));
+    let lease_token = text("lease_token")?.to_owned();
+    let lease_digest = format!("{:x}", Sha256::digest(lease_token.as_bytes()));
     let fen = text("fen")?.to_owned();
     let moves = job.get("legal_moves").and_then(serde_json::Value::as_array)
         .ok_or("Brak legalnych ruchów w zadaniu natywnym")?
@@ -793,13 +796,22 @@ async fn execute_fenced_native_inference(
     let signal = android_llama_runtime::request_embedded_inference_stop();
     // Join observes the exit of the actual inference thread, including the
     // destruction of the native model. A STOP signal alone is not evidence.
-    tauri::async_runtime::spawn_blocking(move || engine.join().is_ok())
-        .await.map_err(|_| "Nie można zweryfikować zakończenia llama.cpp")
-        .and_then(|joined| if joined { Ok(()) } else { Err("Błąd wątku llama.cpp") })?;
-    signal?;
-    let request_id = stop?;
+    let stop_worker = worker_id.to_owned();
+    let stop_job = job_id.to_owned();
+    let stop_lease = lease_token.clone();
+    let stop_permit = Arc::clone(permit);
+    let request_id = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = stop_permit;
+        android_native_stop_outbox::complete_joined_stop(
+            engine, signal, stop, |request_id| {
+                android_native_stop_outbox::StopOutbox::persist_after_join(
+                    &stop_worker, &stop_job, request_id, &stop_lease,
+                )
+            },
+        )
+    }).await.map_err(|_| "Nie można zweryfikować zakończenia llama.cpp")??;
     android_update_coordinator::report_native_stop(
-        server, worker_id, token, job_id, &request_id, text("lease_token")?,
+        server, worker_id, token, job_id, &request_id, &lease_token,
     ).await?;
     Ok(None)
 }

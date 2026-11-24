@@ -1,0 +1,25 @@
+name: Issue 325 - isolated Android integration
+on:
+  push:
+    branches:
+      - ci/issue-325-android-integration
+permissions:
+  contents: read
+concurrency:
+  group: issue-325-android-integration
+  cancel-in-progress: true
+jobs:
+  outbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Test durable STOP outbox
+        run: |
+          rustc --edition=2021 --test remote_worker_gui/src-tauri/src/android_native_stop_outbox.rs -o "$RUNNER_TEMP/outbox-tests"
+          "$RUNNER_TEMP/outbox-tests"
+  android:
+    needs: outbox
+    uses: ./.github/workflows/android-worker-apk.yml
+    permissions:
+      contents: read
