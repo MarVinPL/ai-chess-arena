@@ -78,12 +78,15 @@ No tournament is started automatically when a model is added. Real inference and
 - When a game needs a model, the runner may retrieve its target and optional draft into the private Arena cache only when that exact artifact has both a positive licence review and a separately recorded explicit download approval. Licence verification alone never authorizes or triggers retrieval. The VPS downloads directly from the upstream source using a full immutable commit revision; expected size and SHA-256 are verified on the VPS before activation. Failed downloads do not create results or remove entrants.
 - A missing/incomplete manifest, unapproved licence or artifact download, unavailable runtime, insufficient disk space, or integrity failure remains a visible blocker. No automatic download is performed merely because a model is catalogued, licensed, selected, or needed by a game.
 
+- Źródło decyzji allowlisty to **wyłącznie SQLite**: model_admission_decisions
+  i model_versions (z model_admission_history dla audytu). Dopuszczenie dotyczy
+  dokładnego repozytorium, rewizji i licencji; brak decyzji blokuje udział.
+- Preflight turnieju, API decyzji i akcje audytowe czytają bazę. Ani czystość
+  checkoutu Git, ani zgodność z origin/main nie są warunkiem dopuszczenia.
+  Wersjonowanie kodu nadal wymaga PR do main.
 ### Versioned model admission register
 
-- `manifests/model-allowlist.json` is the GitHub-sourced decision register. `main` is the sole source of truth; every change must be made on a dedicated branch and PR.
 - The allowlist is informational and read-only for consumers. `eligible` and `restricted` are explicit review decisions, not proof of runtime readiness. The licence review is governed by [`docs/model-license-qualification-policy.md`](docs/model-license-qualification-policy.md): it checks the exact model version and applicable binding terms, without requiring a full training-data audit as part of the licence decision. A positive licence result does not download weights, verify local-file integrity, prove runtime health, or automatically add a model to a tournament. Recorded restrictions and applicable age conditions must be respected; unresolved terms remain `review_required`.
-- `model_allowlist.load_allowlist()` validates each entry against the pinned model manifest, including repository, exact revision, license status, evidence references, and required restrictions. It never writes to the database or changes a tournament.
-- `scripts/check_model_allowlist_sync.py` checks whether the checkout is exactly at `origin/main` and whether the allowlist file has local changes. It is read-only: it does not fetch, merge, reset, or overwrite anything. Refresh Git refs separately before running it.
 - Use `python -m pytest -q tests/test_model_allowlist.py` to test validation, changes, withdrawals, and stale/dirty consumer detection.
 
 ### Weekly metadata check for existing Hugging Face models

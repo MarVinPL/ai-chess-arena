@@ -1,0 +1,115 @@
+name: Shared Gradle wrapper cache
+
+# A lightweight warm-up independent of the Worker source tree and APK build.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/gradle-cache/gradle-wrapper.properties'
+      - '.github/workflows/gradle-wrapper-warmup.yml'
+      - '.github/actions/setup-java'
+      - '.gitmodules'
+      - 'scripts/verify_cached_setup_java.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/gradle-cache/gradle-wrapper.properties'
+      - '.github/workflows/gradle-wrapper-warmup.yml'
+      - '.github/actions/setup-java'
+      - '.gitmodules'
+      - 'scripts/verify_cached_setup_java.py'
+  workflow_dispatch:
+  schedule:
+    # Access the cache twice weekly so inactive periods do not evict it.
+    - cron: '19 5 * * 1,4'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gradle-wrapper-warmup-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warmup:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Read and validate setup-java gitlink
+        id: java-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-java | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test "$(git config -f .gitmodules --get submodule.setup-java.url)" = 'https://github.com/actions/setup-java.git'
+          test "$(git config -f .gitmodules --get submodule.setup-java.path)" = '.github/actions/setup-java'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-java-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: java-source
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Fetch pinned setup-java only on cache miss
+        if: steps.java-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-java
+          test "$(git -C .github/actions/setup-java rev-parse HEAD)" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test -f .github/actions/setup-java/.git
+          rm .github/actions/setup-java/.git
+      - name: Verify setup-java source
+        working-directory: .
+        run: python3 scripts/verify_cached_setup_java.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.java-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Isolate upstream test fixtures from Gradle cache discovery
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java hashes all **/gradle-wrapper.properties. The verified
+          # upstream source includes test fixtures; keep them out of the
+          # workspace after saving the full verified source.
+          test -d .github/actions/setup-java/__tests__
+          mv .github/actions/setup-java/__tests__ "$(mktemp -d "$RUNNER_TEMP/setup-java-fixtures.XXXXXX")/"
+          test -z "$(find .github/actions/setup-java -name gradle-wrapper.properties -print -quit)"
+      - uses: ./.github/actions/setup-java
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          # The additional gradle-wrapper cache is keyed on wrapper properties
+          # independently. Do not seed the real build's dependency cache key.
+          cache-dependency-path: .github/workflows/gradle-wrapper-warmup.yml
+          cache-jdk: false
+      - name: Verify and prepare Gradle 9.6.1 wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$GITHUB_WORKSPACE/.github/gradle-cache/gradle-wrapper.properties"
+          work="$(mktemp -d "$RUNNER_TEMP/gradle-warmup.XXXXXX")"
+          trap 'rm -rf -- "$work"' EXIT
+          expected='https\://services.gradle.org/distributions/gradle-9.6.1-bin.zip'
+          test "$(sed -n 's/^distributionUrl=//p' "$pin")" = "$expected"
+          cp "$pin" "$work/gradle-wrapper.properties"
+          # Official checksums: https://gradle.org/release-checksums/
+          echo 'distributionSha256Sum=9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14' >> "$work/gradle-wrapper.properties"
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://raw.githubusercontent.com/gradle/gradle/v9.6.1/gradle/wrapper/gradle-wrapper.jar' \
+            --output "$work/gradle-wrapper.jar"
+          echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  $work/gradle-wrapper.jar" | sha256sum --check -
+          java -classpath "$work/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain --version | tee "$work/version.txt"
+          grep -Fx 'Gradle 9.6.1' "$work/version.txt"
+          find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -name 'gradle-9.6.1-bin.zip.ok' -print -quit | grep -q .
+          echo 'Gradle wrapper distribution ready; setup-java saves the independent wrapper cache.'
