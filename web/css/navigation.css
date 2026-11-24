@@ -13,7 +13,7 @@
 .arena-rankings>*{min-width:0}
 #view-tournaments>.panel>div,#view-models>.panel>div{min-width:0}
 #view-tournaments .moves,#view-models .moves{overflow-wrap:anywhere}
-@media(max-width:760px){
+@media(orientation:portrait),(max-width:760px){
  .arena-navigation{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:5px}
  .arena-navigation a{padding:10px 5px;font-size:12px;min-width:0;white-space:normal;text-align:center}
  .arena-rankings{grid-template-columns:minmax(0,1fr)}

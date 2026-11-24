@@ -49,6 +49,161 @@ refreshModelPermissions();
 refresh();loadLeague();refreshLive();setInterval(refresh,1200);setInterval(refreshLive,1000);setInterval(loadLeague,10000);
 function tableRows(target,rows,headers){const host=$(target);host.textContent='';if(!rows.length){host.textContent='Brak danych.';return}const t=document.createElement('table');t.className='league-table';const head=document.createElement('tr');headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;head.appendChild(th)});t.appendChild(head);rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(v=>{const td=document.createElement('td');td.textContent=String(v);tr.appendChild(td)});t.appendChild(tr)});host.appendChild(t)}
 let selectedTournamentId=null;
+let tournamentViewRequest=0;
+const tournamentTabs=['standings','fixtures','bracket'];
+function selectTournamentTab(name,focus=false){
+ if(!tournamentTabs.includes(name))return;
+ tournamentTabs.forEach(key=>{
+  const tab=$('tournament-tab-'+key),active=key===name;
+  tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;
+  $('tournament-pane-'+key).hidden=!active;
+  if(active&&focus)tab.focus();
+ });
+}
+tournamentTabs.forEach((key,index)=>{
+ const tab=$('tournament-tab-'+key);
+ tab.addEventListener('click',()=>selectTournamentTab(key));
+ tab.addEventListener('keydown',event=>{
+  const next={ArrowRight:(index+1)%3,ArrowLeft:(index+2)%3,Home:0,End:2}[event.key];
+  if(next===undefined)return;
+  event.preventDefault();selectTournamentTab(tournamentTabs[next],true);
+ });
+});
+function tournamentStandingRows(d){
+ const ranked=Number(d.progress?.league?.completed)>0;
+ return {ranked,headers:ranked?['#','Zawodnik','Pkt','Partie','W','R','P']:['Zawodnik','Pkt','Partie'],
+ rows:(d.standings||[]).map((x,i)=>ranked?[i+1,x.name,x.points,x.played,x.wins,x.draws,x.losses]:[x.name,'—',0])};
+}
+function tournamentFixturePresentation(x){
+ const saved=x.status==='completed'&&Number.isSafeInteger(x.saved_game_id)&&x.saved_game_id>0&&['1-0','0-1','1/2-1/2'].includes(x.result);
+ const labels={pending:'Zaplanowana',planned:'Zaplanowana',running:'Trwa',completed:'Zakończona',failed:'Nieudana'};
+ const status=x.status==='completed'&&!saved?'Nieudana':(labels[x.status]||'Nieznany status');
+ const pgn=saved&&x.game_url==='/api/games/'+x.saved_game_id+'/pgn'?x.game_url:null;
+ return {group:x.stage==='league'?'Liga · kolejka '+(x.leg??'—'):x.stage==='draft'?'Puchar · runda '+(x.round_no??'—'):'Inna faza',
+  status,result:saved?x.result:'—',pgn,saved,adjudicated:saved&&x.adjudication_status==='adjudicated'};
+}
+function renderTournamentFixtures(fixtures){
+ const host=$('tournament-fixtures');host.replaceChildren();
+ $('tournament-game-previews').replaceChildren();
+ if(!fixtures.length){host.textContent='Brak zaplanowanych partii.';return;}
+ const groups=new Map();
+ for(const x of fixtures){
+  const info=tournamentFixturePresentation(x);
+  if(!groups.has(info.group))groups.set(info.group,[]);
+  groups.get(info.group).push([x,info]);
+ }
+ for(const [name,rows] of groups){
+  const section=document.createElement('section');section.className='tournament-fixture-group';
+  const heading=document.createElement('h6');heading.textContent=name;section.appendChild(heading);
+  for(const [x,info] of rows){
+   const match=document.createElement('article');match.className='tournament-fixture';
+   const pair=document.createElement('strong');pair.textContent=x.white_name+' vs '+x.black_name;
+   const status=document.createElement('span');status.className='tournament-fixture-status';status.textContent=info.status+(info.adjudicated?' · Rozstrzygnięta decyzją sędziego':'');
+   const result=document.createElement('span');result.textContent='Wynik: '+info.result;
+   match.append(pair,status,result);
+   if(info.saved){
+    const record=document.createElement('span');record.textContent='Partia #'+x.saved_game_id;match.appendChild(record);
+   }
+   if(info.pgn){
+    const link=document.createElement('a');link.href=info.pgn;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz PGN partii #'+x.saved_game_id;match.appendChild(link);
+   }
+   section.appendChild(match);
+  }
+  host.appendChild(section);
+ }
+}
+function tournamentBracketMatch(m){
+ const info=tournamentFixturePresentation(m);
+ const winner=info.saved&&m.winner_model_id!=null?
+  (m.winner_model_id===m.white_model_id?m.white_name:m.winner_model_id===m.black_model_id?m.black_name:null):null;
+ return {...info,winner};
+}
+function tournamentChampion(d){
+ // A latest-round winner is not necessarily a champion (play-in or unfinished tournament).
+ if(d.tournament?.status!=='completed'||!d.champion)return null;
+ const rounds=[...(d.bracket||[])].sort((a,b)=>a.round_no-b.round_no);
+ const final=rounds[rounds.length-1];
+ if(!final||final.round_no===0||final.matches?.length!==1)return null;
+ const m=final.matches[0],info=tournamentBracketMatch(m);
+ return info.winner&&m.winner_model_id===d.champion.winner_model_id?info.winner:null;
+}
+function tournamentBracketEdges(rounds){
+ const edges=[];
+ const ordered=[...rounds].sort((a,b)=>a.round_no-b.round_no);
+ for(let i=1;i<ordered.length;i++){
+  const prev=ordered[i-1],next=ordered[i];
+  if(next.round_no!==prev.round_no+1)continue;
+  const sources=(prev.matches||[]).filter(m=>tournamentBracketMatch(m).winner).map(m=>({key:'match-'+m.id,player:m.winner_model_id}));
+  for(const b of prev.byes||[])sources.push({key:'bye-'+prev.round_no+'-'+b.model_id,player:b.model_id});
+  for(const source of sources){
+   const targets=(next.matches||[]).filter(m=>m.white_model_id===source.player||m.black_model_id===source.player);
+   if(source.player!=null&&targets.length===1)edges.push([source.key,'match-'+targets[0].id]);
+  }
+ }
+ return edges;
+}
+function drawTournamentBracketEdges(layout,edges){
+ const layer=layout.querySelector('svg');
+ if(!layer)return;
+ layer.replaceChildren();
+ if(!layout.clientWidth||matchMedia('(orientation:portrait),(max-width:760px)').matches)return;
+ const bounds=layout.getBoundingClientRect();
+ layer.setAttribute('width',String(layout.scrollWidth));layer.setAttribute('height',String(layout.scrollHeight));
+ const cards=new Map(Array.from(layout.querySelectorAll('[data-bracket-key]'),el=>[el.dataset.bracketKey,el]));
+ for(const [from,to] of edges){
+  const a=cards.get(from),b=cards.get(to);
+  if(!a||!b)continue;
+  const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();
+  const x1=ar.right-bounds.left+layout.scrollLeft,x2=br.left-bounds.left+layout.scrollLeft;
+  const y1=ar.top+ar.height/2-bounds.top,y2=br.top+br.height/2-bounds.top,mid=(x1+x2)/2;
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d','M '+x1+' '+y1+' H '+mid+' V '+y2+' H '+x2);
+  layer.appendChild(path);
+ }
+}
+let tournamentBracketObserver=null;
+function renderTournamentBracket(d){
+ if(tournamentBracketObserver){tournamentBracketObserver.disconnect();tournamentBracketObserver=null;}
+ const host=$('tournament-bracket');host.replaceChildren();
+ if(d.bracket_status!=='available'||!d.bracket?.length){
+  host.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':d.bracket_status==='available'?'Rozstawienia zapisane. Brak zapisanych par pucharowych.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
+  return;
+ }
+ const layout=document.createElement('div');layout.className='tournament-bracket-rounds';
+ for(const round of [...d.bracket].sort((a,b)=>a.round_no-b.round_no)){
+  const section=document.createElement('section');section.className='tournament-bracket-round';
+  const heading=document.createElement('h6');heading.textContent=round.round_no===0?'Runda 0 · eliminacyjna':'Runda '+round.round_no;section.appendChild(heading);
+  for(const m of round.matches||[]){
+   const card=document.createElement('article');card.className='tournament-bracket-match';
+   card.dataset.bracketKey='match-'+m.id;
+   const info=tournamentBracketMatch(m);
+   for(const color of ['white','black']){
+    const player=document.createElement('div');player.className='tournament-bracket-player';
+    player.textContent=(m[color+'_seed']!=null?'#'+m[color+'_seed']+' · ':'')+m[color+'_name'];
+    if(info.winner&&m.winner_model_id===m[color+'_model_id']){player.classList.add('tournament-bracket-winner');player.textContent+=' · Awans';}
+    card.appendChild(player);
+   }
+   const result=document.createElement('p');result.textContent=info.status+' · Wynik: '+info.result;card.appendChild(result);
+   if(info.winner){const note=document.createElement('p');note.textContent='Awansujący: '+info.winner;card.appendChild(note);}
+   if(info.pgn){const link=document.createElement('a');link.href=info.pgn;link.textContent='PGN partii #'+m.saved_game_id;card.appendChild(link);}
+   section.appendChild(card);
+  }
+  for(const b of round.byes||[]){
+   const card=document.createElement('article');card.className='tournament-bracket-match';
+   card.dataset.bracketKey='bye-'+round.round_no+'-'+b.model_id;
+   card.textContent='Wolny los · #'+b.seed+' · '+b.name;section.appendChild(card);
+  }
+  layout.appendChild(section);
+ }
+ const layer=document.createElementNS('http://www.w3.org/2000/svg','svg');
+ layer.setAttribute('class','tournament-bracket-edges');layer.setAttribute('aria-hidden','true');layout.prepend(layer);
+ host.appendChild(layout);
+ const edges=tournamentBracketEdges(d.bracket);
+ const redraw=()=>drawTournamentBracketEdges(layout,edges);
+ tournamentBracketObserver=new ResizeObserver(redraw);tournamentBracketObserver.observe(layout);
+ for(const section of layout.querySelectorAll('.tournament-bracket-round'))tournamentBracketObserver.observe(section);
+ redraw();
+}
 function renderTournamentRosterCounts(counts){
  const host=$('tournament-roster-counters');host.textContent='';
  if(!counts){host.textContent='Brak aktywnego turnieju';return}
@@ -59,10 +214,16 @@ function renderTournamentRosterCounts(counts){
  host.append(eliminated,remaining);
 }
 async function loadTournamentView(id){
- selectedTournamentId=Number(id);
+ const requestedId=Number(id),request=++tournamentViewRequest;
+ if(selectedTournamentId!==requestedId){
+  selectTournamentTab('standings');
+  for(const key of ['standings','fixtures','bracket','game-previews','champion','progress'])$('tournament-'+key).textContent='';
+ }
+ selectedTournamentId=requestedId;
  try{
   const r=await fetch('/api/tournaments/'+selectedTournamentId+'/view',{cache:'no-store'});
   const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
+  if(request!==tournamentViewRequest)return;
   const t=d.tournament;
   renderTournamentRosterCounts(d.roster_counts);
   $('tournament-detail-title').textContent='#'+t.id+' · '+t.name+' · '+t.status+' · '+t.format+(d.active_pairing?' · AKTYWNA PARA: '+d.active_pairing.white_name+' vs '+d.active_pairing.black_name:'');
@@ -70,29 +231,14 @@ async function loadTournamentView(id){
   if(d.active_pairing&&liveMoves.length){$('tournament-detail-title').textContent+=' · ostatni ruch: '+(liveMoves[liveMoves.length-1].san||liveMoves[liveMoves.length-1].uci||'—')}
   const p=d.progress;
   $('tournament-progress').textContent='Liga: '+p.league.completed+'/'+p.league.planned+' · Puchar: '+p.draft.completed+'/'+p.draft.planned+' · Łącznie: '+p.total.completed+'/'+p.total.planned+' rozegranych (wyłącznie zapisane, poprawnie powiązane wyniki).';
-  tableRows('tournament-standings',(d.standings||[]).map((x,i)=>[i+1,x.name,x.points,x.played,x.wins,x.draws,x.losses]),['#','Zawodnik','Pkt','Partie','W','R','P']);
-  const fixtureRows=(d.fixtures||[]).map(x=>{
-   const round=x.stage==='league'?'Liga · leg '+(x.leg||'—'):'Puchar · runda '+(x.round_no??'—');
-   const result=x.saved_game_id?x.result:'—';
-   const status=x.status==='running'?'AKTYWNA · running':x.status; const adjudication=x.adjudication_status==='adjudicated'?' · ADJUDYKOWANA':'';
-   return [round,x.white_name+' vs '+x.black_name,status,result,x.saved_game_id?'partia #'+x.saved_game_id:'—'];
-  });
-  tableRows('tournament-fixtures',fixtureRows,['Faza','Para','Status','Wynik','Zapis']);
-  const previewHost=$('tournament-game-previews');previewHost.textContent='';
-  (d.fixtures||[]).filter(x=>x.game_url).forEach(x=>{const link=document.createElement('a');link.href=x.game_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Otwórz PGN partii #'+x.saved_game_id+' · '+x.white_name+' vs '+x.black_name;link.style.display='block';link.style.margin='5px 0';previewHost.appendChild(link)});
-  const bracketHost=$('tournament-bracket');bracketHost.textContent='';
-  if(d.bracket_status!=='available'){
-   bracketHost.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
-  }else{
-   (d.bracket||[]).forEach(round=>{
-    const section=document.createElement('div');section.style.margin='8px 0';
-    const title=document.createElement('strong');title.textContent='Runda '+round.round_no;section.appendChild(title);
-    (round.matches||[]).forEach(m=>{const line=document.createElement('div');line.className='notice';line.textContent=(m.white_seed?'#'+m.white_seed+' ':'')+m.white_name+' vs '+(m.black_seed?'#'+m.black_seed+' ':'')+m.black_name+' · '+m.status+' · '+(m.result||'—');section.appendChild(line)});
-    (round.byes||[]).forEach(b=>{const line=document.createElement('div');line.className='notice';line.textContent='Bye · seed '+b.seed+' · '+b.name;section.appendChild(line)});
-    bracketHost.appendChild(section);
-   });
-  }
-  const championHost=$('tournament-champion');championHost.textContent=d.champion?'Mistrz: '+d.champion.name:'Mistrz: jeszcze nierozstrzygnięty';
+  const standings=tournamentStandingRows(d);
+  $('tournament-heading-standings').textContent=standings.ranked?'Klasyfikacja ligowa':'Uczestnicy — jeszcze bez klasyfikacji';
+  tableRows('tournament-standings',standings.rows,standings.headers);
+  renderTournamentFixtures(d.fixtures||[]);
+  renderTournamentBracket(d);
+  const championHost=$('tournament-champion');
+  const champion=tournamentChampion(d);
+  championHost.textContent=champion?'Mistrz: '+champion:'Mistrz: jeszcze nierozstrzygnięty';
   const admission=d.late_admission||{};
   if(t.parent_tournament_id){const note=document.createElement('div');note.className='notice';note.textContent='Turniej eliminacyjny nowych zawodników dla turnieju #'+t.parent_tournament_id+'. Kryterium awansu: co najmniej jedno zwycięstwo; ranking: punkty, zwycięstwa, remisy, nazwa.';championHost.appendChild(note)}
   else {
@@ -134,10 +280,31 @@ async function loadTournamentView(id){
    }
    if((admission.results||[]).length){const title=document.createElement('strong');title.textContent='Historia kwalifikacji nowych zawodników';championHost.appendChild(title);const list=document.createElement('div');list.className='notice';(admission.results||[]).forEach(item=>{const line=document.createElement('div');line.textContent='#'+item.rank+' '+item.name+' · '+item.points+' pkt · W '+item.wins+' · R '+item.draws+' · '+({qualified:'dopuszczony',not_qualified:'nie spełnił kryterium',capacity_exhausted:'brak miejsca w limicie'}[item.outcome]||item.outcome);list.appendChild(line)});championHost.appendChild(list)}
   }
- }catch(e){$('tournament-detail-title').textContent='Nie udało się odczytać turnieju: '+e}
+ }catch(e){if(request===tournamentViewRequest)$('tournament-detail-title').textContent='Nie udało się odczytać turnieju: '+e}
+}
+function tournamentCardProgress(t){
+ const completed=Number(t.completed_games??0),planned=Number(t.total_games_planned??t.games_planned??0);
+ const valid=Number.isSafeInteger(completed)&&completed>=0&&Number.isSafeInteger(planned)&&planned>0&&completed<=planned;
+ const phase=t.status==='completed'?'Zakończony':Number(t.draft_games_played_or_planned)>0?'Puchar':Number(t.games_planned)>0?'Liga':'Brak zapisanych par';
+ return {completed,planned,valid,phase};
+}
+const tournamentReadiness=new Map();
+const expandedTournamentDiagnostics=new Set();
+function tournamentReadinessLabel(t){
+ if(t.resume_blocked)return 'Wznowienie zablokowane — wymagany przegląd';
+ if(t.status==='running')return 'Turniej trwa';
+ if(t.status==='completed')return 'Turniej zakończony';
+ const cached=tournamentReadiness.get(t.id);
+ if(!cached)return 'Gotowość: sprawdź warunki startu';
+ return cached;
 }
 function renderTournaments(rows){
  const host=$('tournament-list');
+ // Preserve an open diagnostic (and its focused controls) across routine polling.
+ if(host.contains(document.activeElement))return;
+ const activeIds=new Set(rows.filter(t=>['planned','stopped','failed'].includes(t.status)).map(t=>t.id));
+ for(const id of tournamentReadiness.keys())if(!activeIds.has(id))tournamentReadiness.delete(id);
+ for(const id of expandedTournamentDiagnostics)if(!activeIds.has(id))expandedTournamentDiagnostics.delete(id);
  host.classList.add('tournament-list');
  host.textContent='';
  if(!rows.length){host.textContent='Brak turniejów.';return}
@@ -161,15 +328,20 @@ function renderTournaments(rows){
   status.textContent=statusLabels[t.status]||('Status: '+(t.status||'nieznany'));
   header.append(title,status);card.appendChild(header);
   const fields=document.createElement('dl');fields.className='tournament-card__fields';
-  const completed=Number(t.completed_games??0);
-  const planned=Number(t.total_games_planned??t.games_planned??0);
+  const {completed,planned,valid,phase}=tournamentCardProgress(t);
   addField(fields,'Format',t.format||'—');
   addField(fields,'Uczestnicy',Number(t.players??0));
   addField(fields,'Postęp partii',completed+' / '+planned);
+  addField(fields,'Faza',phase);
   addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
   if(!t.parent_tournament_id&&t.initial_entrant_count!=null)addField(fields,'Limit nowych zawodników',Number(t.late_admission_used||0)+' / '+Number(t.late_admission_limit||0));
   if(t.status==='stopped'||t.status==='running'||t.resume_blocked)addField(fields,'Checkpoint',t.resume_blocked?'brak · wznowienie zablokowane — wymagany przegląd':(t.has_checkpoint?'zapisany · gotowy do wznowienia':'brak aktywnej partii do odtworzenia'));
   card.appendChild(fields);
+  const meter=document.createElement('progress');meter.className='tournament-card-progress';
+  meter.setAttribute('aria-label','Postęp zapisanych partii turnieju #'+t.id);
+  if(valid){meter.max=planned;meter.value=completed;card.appendChild(meter);}
+  const readinessSummary=document.createElement('p');readinessSummary.className='tournament-readiness-summary';
+  readinessSummary.textContent=tournamentReadinessLabel(t);card.appendChild(readinessSummary);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
   const diagnostic=document.createElement('section');diagnostic.className='tournament-preflight';diagnostic.hidden=true;diagnostic.setAttribute('aria-live','polite');
@@ -177,10 +349,15 @@ function renderTournaments(rows){
   const openRegistry=(target)=>{const el=$(target);if(el){el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
   const openModelAdmission=(modelId)=>{const target=$('model-admission-'+modelId);if(!target){openRegistry('model-admission-list');$('league-message').textContent='Model '+modelId+' nie ma osobnego wpisu na jawnej allowliście. Sprawdź manifest i zakres dopuszczenia.';return;}target.scrollIntoView({behavior:'smooth',block:'center'});target.focus({preventScroll:true});target.style.outline='3px solid #f1d99d';target.style.outlineOffset='3px';};
   const showPreflight=async()=>{
+   expandedTournamentDiagnostics.add(t.id);
    diagnostic.hidden=false;diagnostic.dataset.ready='unknown';diagnostic.textContent='Sprawdzam warunki startu…';
    try{
     const r=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
-    const entrants=d.entrants||[];const blocked=d.blocked||[];diagnostic.replaceChildren();diagnostic.dataset.ready=String(Boolean(d.ready));
+    if(!card.isConnected)return;
+    const entrants=d.entrants||[];const blocked=d.blocked||[];
+    tournamentReadiness.set(t.id,d.ready===true?'Ostatnie sprawdzenie: gotowy do startu':'Ostatnie sprawdzenie: start zablokowany · '+blocked.length+' zawodników z blokadą');
+    readinessSummary.textContent=tournamentReadinessLabel(t);
+    diagnostic.replaceChildren();diagnostic.dataset.ready=String(Boolean(d.ready));
     const heading=document.createElement('div');heading.className='tournament-preflight__title';heading.textContent=d.ready?'Gotowy do startu — wszystkie warunki spełnione':'Start zablokowany — '+blocked.length+' zawodników wymaga działania';diagnostic.appendChild(heading);
     const runtime=document.createElement('p');runtime.textContent='Runtime Llamafile: '+(d.runtime_available?'dostępny':'niedostępny')+'. Brak lokalnego GGUF nie blokuje startu — modele są pobierane na żądanie, jeśli ich manifest i dopuszczenie są poprawne.';diagnostic.appendChild(runtime);
     entrants.forEach(e=>{
@@ -202,8 +379,9 @@ function renderTournaments(rows){
      diagnostic.appendChild(row);
     });
     const refresh=document.createElement('button');refresh.type='button';refresh.textContent='Ponów diagnostykę';refresh.onclick=showPreflight;diagnostic.appendChild(refresh);
+    const close=document.createElement('button');close.type='button';close.textContent='Zwiń diagnostykę';close.onclick=()=>{expandedTournamentDiagnostics.delete(t.id);diagnostic.hidden=true;};diagnostic.appendChild(close);
     $('league-message').textContent='Diagnostyka turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.';
-   }catch(e){diagnostic.textContent='Nie udało się sprawdzić gotowości: '+e;$('league-message').textContent=diagnostic.textContent}
+   }catch(e){if(!card.isConnected)return;tournamentReadiness.delete(t.id);readinessSummary.textContent='Gotowość: błąd sprawdzenia';diagnostic.textContent='Nie udało się sprawdzić gotowości: '+e;$('league-message').textContent=diagnostic.textContent}
   };
   if(['planned','stopped','failed'].includes(t.status)){
    const check=document.createElement('button');check.textContent='Dlaczego nie startuje?';check.onclick=showPreflight;actions.appendChild(check);
@@ -226,7 +404,7 @@ function renderTournaments(rows){
    };actions.appendChild(stop);
   }
   card.appendChild(actions);host.appendChild(card);
-  if(t.status==='planned')showPreflight();
+  if(expandedTournamentDiagnostics.has(t.id))showPreflight();
  });
 }
 function renderModelStatus(models,storage){
@@ -537,7 +715,7 @@ function renderModelAdmission(items){
   host.appendChild(card)
  });
 }
-async function loadLeague(){try{const urls=['/api/league','/api/league/engine','/api/models','/api/tournaments','/api/storage','/api/model-admission'];const results=await Promise.allSettled(urls.map(async u=>{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(u+' HTTP '+r.status);return r.json()}));const [pureResult,engineResult,modelsResult,tournamentsResult,storageResult,admissionResult]=results;const pure=pureResult.status==='fulfilled'?pureResult.value:[];const engine=engineResult.status==='fulfilled'?engineResult.value:[];const models=modelsResult.status==='fulfilled'?modelsResult.value:[];const tournaments=tournamentsResult.status==='fulfilled'&&Array.isArray(tournamentsResult.value)?tournamentsResult.value:[];const storage=storageResult.status==='fulfilled'?storageResult.value:null;if(admissionResult.status==='fulfilled')renderModelAdmission(admissionResult.value);else $('league-message').textContent='Nie udało się odświeżyć rejestru dopuszczeń: '+admissionResult.reason;renderTournaments(tournaments);if(tournamentsResult.status!=='fulfilled')$('tournament-list').textContent='Nie udało się odczytać turniejów: '+tournamentsResult.reason;renderModelStatus(models,storage);if(pureResult.status!=='fulfilled'||engineResult.status!=='fulfilled')$('league-message').textContent='Nie udało się odczytać części rankingu: '+[pureResult,engineResult].filter(r=>r.status!=='fulfilled').map(r=>String(r.reason)).join('; ');tableRows('pure-ranking',pure.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('engine-ranking',engine.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('model-list',models.map(x=>[x.name,((x.inference?.thinking?'thinking ON':'thinking OFF')+' · T '+(x.inference?.temperature??0)),((x.token_budget?.current_max_tokens??x.inference?.max_tokens??16)+' tok'+(x.token_budget?.pending_max_tokens!=null?' → '+x.token_budget.pending_max_tokens+' w następnym':'')+(x.token_budget?.last_reason?' · '+x.token_budget.last_reason:'')), x.format,'v'+(x.version_id||'—'),(x.filename||'brak manifestu')+(x.draft_filename?' + '+x.draft_filename:''),x.license_verified?(x.filename&&x.sha256&&x.size_bytes&&(!x.draft_filename||(x.draft_sha256&&x.draft_size_bytes))?'gotowy · pobierany na żądanie':'brak manifestu'):'oczekuje na licencję',x.license_verified?'licencja OK':'licencja niezatwierdzona']),['Zawodnik','Thinking / temperatura','Limit tokenów','Format','Wersja ID','Plik źródłowy','Dostępność','Licencja']);if(modelsResult.status!=='fulfilled')$('model-list').textContent='Nie udało się odczytać modeli: '+modelsResult.reason;models.filter(x=>!x.license_verified&&x.version_id&&x.source).forEach(x=>{const evidenceButton=document.createElement('button');evidenceButton.textContent='Pobierz dowody licencji: '+x.name;evidenceButton.style.margin='5px 5px 0 0';evidenceButton.onclick=async()=>{evidenceButton.disabled=true;try{const r=await fetch('/api/models/license-evidence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);const ev=d.evidence;const files=(ev.license_files||[]).join(' | ');$('league-message').textContent='Dowody z Hugging Face: licencja='+(ev.license||'brak deklaracji')+'; pliki licencji='+(files||'nie znaleziono')+'; model bazowy='+(ev.base_model||'brak')+'. Zapisano dowody i czas pobrania. To nie zatwierdza licencji — otwórz plik i sprawdź warunki ręcznie.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się pobrać dowodów licencji: '+e}finally{evidenceButton.disabled=false}};$('model-list').appendChild(evidenceButton);if((!x.license||x.license.toLowerCase()==='nieustalona')&&!(x.license_evidence&&(x.license_evidence.license_files||[]).length))return;const b=document.createElement('button');b.textContent='Potwierdź sprawdzenie licencji: '+x.name;b.style.margin='5px 5px 0 0';b.onclick=async()=>{const reviewedLicense=x.license||prompt('Otwórz plik licencji w repozytorium, sprawdź warunki i wpisz dokładny identyfikator (np. Apache-2.0):');if(!reviewedLicense)return;if(!confirm('Czy otworzyłeś dokument licencji i samodzielnie sprawdziłeś, że pozwala na użycie modelu w tym projekcie?'))return;try{const r=await fetch('/api/models/verify-license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_review:true,license:reviewedLicense})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Licencja oznaczona jako sprawdzona. Model może być uwzględniony w nowym turnieju.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się zatwierdzić licencji: '+e}};$('model-list').appendChild(b)});if(!selectedTournamentId||!tournaments.some(t=>Number(t.id)===selectedTournamentId)){const preferred=tournaments.find(t=>t.status==='running')||tournaments[0];if(preferred)selectedTournamentId=Number(preferred.id)}if(selectedTournamentId)await loadTournamentView(selectedTournamentId);else renderTournamentRosterCounts(null);if(storage){$('storage-info').textContent='Wolne miejsce: '+(storage.free_bytes/1073741824).toFixed(1)+' GiB. Magazyn areny: '+storage.managed_models.length+' plików; wolne '+(storage.managed_free_bytes/1073741824).toFixed(1)+' GiB. Współdzielone modele nie są usuwane.';const host=$('managed-models');host.textContent='';const owned=models.filter(x=>(x.managed_copy&&x.filename)||(x.draft_managed_copy&&x.draft_filename));if(!owned.length)host.textContent='Brak kopii pobranych przez arenę.';owned.forEach(x=>{const row=document.createElement('div');row.style.margin='8px 0';const label=document.createElement('span');label.textContent=`${x.name} · wersja ${x.version_id} · ${x.filename||'brak target'}${x.draft_filename?' + '+x.draft_filename:''} `;const btn=document.createElement('button');btn.className='stop';btn.textContent='Usuń kopię areny';btn.onclick=async()=>{if(!confirm('Usunąć wyłącznie tę kopię pobraną przez arenę? Metadane i wyniki pozostaną.'))return;try{const r=await fetch('/api/models/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_delete:true})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Usunięto kopię areny; metadane zachowane.';await loadLeague()}catch(e){$('league-message').textContent='Nie usunięto pliku: '+e}};row.append(label,btn);host.appendChild(row)})}else{$('storage-info').textContent='Nie udało się odczytać stanu magazynu: '+storageResult.reason;$('managed-models').textContent='Stan magazynu niedostępny.'}}catch(e){renderTournamentRosterCounts(null);$('league-message').textContent='Błąd odczytu ligi: '+e}}
+async function loadLeague(){try{const urls=['/api/league','/api/league/engine','/api/models','/api/tournaments','/api/storage','/api/model-admission'];const results=await Promise.allSettled(urls.map(async u=>{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(u+' HTTP '+r.status);return r.json()}));const [pureResult,engineResult,modelsResult,tournamentsResult,storageResult,admissionResult]=results;const pure=pureResult.status==='fulfilled'?pureResult.value:[];const engine=engineResult.status==='fulfilled'?engineResult.value:[];const models=modelsResult.status==='fulfilled'?modelsResult.value:[];const tournaments=tournamentsResult.status==='fulfilled'&&Array.isArray(tournamentsResult.value)?tournamentsResult.value:[];const storage=storageResult.status==='fulfilled'?storageResult.value:null;if(admissionResult.status==='fulfilled')renderModelAdmission(admissionResult.value);else $('league-message').textContent='Nie udało się odświeżyć rejestru dopuszczeń: '+admissionResult.reason;renderTournaments(tournaments);if(tournamentsResult.status!=='fulfilled')$('tournament-list').textContent='Nie udało się odczytać turniejów: '+tournamentsResult.reason;renderModelStatus(models,storage);if(pureResult.status!=='fulfilled'||engineResult.status!=='fulfilled')$('league-message').textContent='Nie udało się odczytać części rankingu: '+[pureResult,engineResult].filter(r=>r.status!=='fulfilled').map(r=>String(r.reason)).join('; ');tableRows('pure-ranking',pure.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('engine-ranking',engine.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('model-list',models.map(x=>[x.name,((x.inference?.thinking?'thinking ON':'thinking OFF')+' · T '+(x.inference?.temperature??0)),((x.token_budget?.current_max_tokens??x.inference?.max_tokens??16)+' tok'+(x.token_budget?.pending_max_tokens!=null?' → '+x.token_budget.pending_max_tokens+' w następnym':'')+(x.token_budget?.last_reason?' · '+x.token_budget.last_reason:'')), x.format,'v'+(x.version_id||'—'),(x.filename||'brak manifestu')+(x.draft_filename?' + '+x.draft_filename:''),x.license_verified?(x.filename&&x.sha256&&x.size_bytes&&(!x.draft_filename||(x.draft_sha256&&x.draft_size_bytes))?'gotowy · pobierany na żądanie':'brak manifestu'):'oczekuje na licencję',x.license_verified?'licencja OK':'licencja niezatwierdzona']),['Zawodnik','Thinking / temperatura','Limit tokenów','Format','Wersja ID','Plik źródłowy','Dostępność','Licencja']);if(modelsResult.status!=='fulfilled')$('model-list').textContent='Nie udało się odczytać modeli: '+modelsResult.reason;models.filter(x=>!x.license_verified&&x.version_id&&x.source).forEach(x=>{const evidenceButton=document.createElement('button');evidenceButton.textContent='Pobierz dowody licencji: '+x.name;evidenceButton.style.margin='5px 5px 0 0';evidenceButton.onclick=async()=>{evidenceButton.disabled=true;try{const r=await fetch('/api/models/license-evidence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);const ev=d.evidence;const files=(ev.license_files||[]).join(' | ');$('league-message').textContent='Dowody z Hugging Face: licencja='+(ev.license||'brak deklaracji')+'; pliki licencji='+(files||'nie znaleziono')+'; model bazowy='+(ev.base_model||'brak')+'. Zapisano dowody i czas pobrania. To nie zatwierdza licencji — otwórz plik i sprawdź warunki ręcznie.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się pobrać dowodów licencji: '+e}finally{evidenceButton.disabled=false}};$('model-list').appendChild(evidenceButton);if((!x.license||x.license.toLowerCase()==='nieustalona')&&!(x.license_evidence&&(x.license_evidence.license_files||[]).length))return;const b=document.createElement('button');b.textContent='Potwierdź sprawdzenie licencji: '+x.name;b.style.margin='5px 5px 0 0';b.onclick=async()=>{const reviewedLicense=x.license||prompt('Otwórz plik licencji w repozytorium, sprawdź warunki i wpisz dokładny identyfikator (np. Apache-2.0):');if(!reviewedLicense)return;if(!confirm('Czy otworzyłeś dokument licencji i samodzielnie sprawdziłeś, że pozwala na użycie modelu w tym projekcie?'))return;try{const r=await fetch('/api/models/verify-license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_review:true,license:reviewedLicense})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Licencja oznaczona jako sprawdzona. Model może być uwzględniony w nowym turnieju.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się zatwierdzić licencji: '+e}};$('model-list').appendChild(b)});if(!selectedTournamentId||!tournaments.some(t=>Number(t.id)===selectedTournamentId)){const preferred=tournaments.find(t=>t.status==='running')||tournaments[0];if(preferred)await loadTournamentView(preferred.id);else renderTournamentRosterCounts(null)}else await loadTournamentView(selectedTournamentId);if(storage){$('storage-info').textContent='Wolne miejsce: '+(storage.free_bytes/1073741824).toFixed(1)+' GiB. Magazyn areny: '+storage.managed_models.length+' plików; wolne '+(storage.managed_free_bytes/1073741824).toFixed(1)+' GiB. Współdzielone modele nie są usuwane.';const host=$('managed-models');host.textContent='';const owned=models.filter(x=>(x.managed_copy&&x.filename)||(x.draft_managed_copy&&x.draft_filename));if(!owned.length)host.textContent='Brak kopii pobranych przez arenę.';owned.forEach(x=>{const row=document.createElement('div');row.style.margin='8px 0';const label=document.createElement('span');label.textContent=`${x.name} · wersja ${x.version_id} · ${x.filename||'brak target'}${x.draft_filename?' + '+x.draft_filename:''} `;const btn=document.createElement('button');btn.className='stop';btn.textContent='Usuń kopię areny';btn.onclick=async()=>{if(!confirm('Usunąć wyłącznie tę kopię pobraną przez arenę? Metadane i wyniki pozostaną.'))return;try{const r=await fetch('/api/models/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_delete:true})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Usunięto kopię areny; metadane zachowane.';await loadLeague()}catch(e){$('league-message').textContent='Nie usunięto pliku: '+e}};row.append(label,btn);host.appendChild(row)})}else{$('storage-info').textContent='Nie udało się odczytać stanu magazynu: '+storageResult.reason;$('managed-models').textContent='Stan magazynu niedostępny.'}}catch(e){renderTournamentRosterCounts(null);$('league-message').textContent='Błąd odczytu ligi: '+e}}
 
 async function addModelVariant(m,f,draft=null,thinking=false){
  const label=(draft?'target + MTP draft':'target solo')+' · thinking '+(thinking?'ON':'OFF');

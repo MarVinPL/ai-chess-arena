@@ -81,7 +81,7 @@ if(!markup.includes('marker-end="url(#arrow-black)"'))throw Error('black arrow m
     def test_layout_has_square_board_and_desktop_height_constraint(self):
         self.assertIn("aspect-ratio:1/1", CSS)
         self.assertIn("100dvh - 445px", CSS)
-        self.assertIn("@media(max-width:760px)", CSS)
+        self.assertIn("@media(orientation:portrait),(max-width:760px)", CSS)
         self.assertIn("@media(max-width:390px)", CSS)
         self.assertIn("button:focus-visible", CSS)
 

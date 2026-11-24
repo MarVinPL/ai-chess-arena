@@ -509,6 +509,24 @@ class ArenaSmokeTests(unittest.TestCase):
         self.assertEqual(by_id[empty_tournament_id]['completed_games'], 0)
         self.assertEqual(by_id[empty_tournament_id]['total_games_planned'], 0)
 
+    def test_all_panel_assets_are_served_with_correct_mime(self):
+        for path, mime in (
+            ('arena.css', 'text/css'),
+            ('navigation.css', 'text/css'),
+            ('board-redesign.css', 'text/css'),
+            ('arena.js', 'text/javascript'),
+            ('navigation.js', 'text/javascript'),
+        ):
+            with self.subTest(path=path):
+                with urllib.request.urlopen(self.base + '/assets/' + path) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn(mime, response.headers['Content-Type'])
+                    self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                    self.assertTrue(response.read())
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(self.base + '/assets/not-allowlisted.css')
+        self.assertEqual(error.exception.code, 404)
+
     def test_tournament_view_api_and_saved_pgn_preview_are_read_only(self):
         with sqlite3.connect(server.DB) as db:
             db.execute("INSERT INTO league_models(name,format,created_at) VALUES('View API Alpha','PURE_AI','now')")

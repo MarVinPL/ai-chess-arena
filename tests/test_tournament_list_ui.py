@@ -69,7 +69,8 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("check.textContent='Dlaczego nie startuje?'", self.renderer)
         self.assertIn("check.onclick=showPreflight", self.renderer)
-        self.assertIn("if(t.status==='planned')showPreflight()", self.renderer)
+        self.assertIn("if(expandedTournamentDiagnostics.has(t.id))showPreflight()", self.renderer)
+        self.assertNotIn("if(t.status==='planned')showPreflight()", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
 
@@ -100,7 +101,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn(".tournament-card__fields{grid-template-columns:repeat(2,minmax(0,1fr))}", HTML)
         self.assertIn(".tournament-card__actions button{flex:1 1 100%}", HTML)
         self.assertIn(".tournament-card button:focus-visible", HTML)
-        self.assertRegex(HTML, r"@media\(max-width:760px\)")
+        self.assertRegex(HTML, r"@media\(orientation:portrait\),\(max-width:760px\)")
         self.assertIn("overflow-x:hidden", HTML)
 
     def test_renderer_uses_dom_text_nodes_for_model_data(self):
