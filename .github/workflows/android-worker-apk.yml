@@ -27,7 +27,42 @@ jobs:
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - name: Read and validate setup-node gitlink
+        id: node-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-node | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test "$(git config -f .gitmodules --get submodule.setup-node.url)" = 'https://github.com/actions/setup-node.git'
+          test "$(git config -f .gitmodules --get submodule.setup-node.path)" = '.github/actions/setup-node'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-node-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: node-source
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - name: Fetch pinned setup-node only on cache miss
+        if: steps.node-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-node
+          test "$(git -C .github/actions/setup-node rev-parse HEAD)" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test -f .github/actions/setup-node/.git
+          rm .github/actions/setup-node/.git
+      - name: Verify setup-node source
+        working-directory: .
+        shell: bash
+        run: python scripts/verify_cached_setup_node.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.node-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - uses: ./.github/actions/setup-node
         with:
           node-version: '22'
           cache: npm
@@ -81,9 +116,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
-          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
           cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
       - name: Install pinned official Android CLI
         shell: bash
         run: |
@@ -131,6 +170,15 @@ jobs:
           npm ci
           # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+      - name: Fingerprint generated Gradle dependency inputs
+        id: modules
+        working-directory: .
+        run: python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: modules-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.modules.outputs.key }}
       - name: Install branded Android pawn launcher resources
         shell: bash
         run: |
@@ -170,7 +218,7 @@ jobs:
           # Pinned to the cert in the original installed APK on the owner's VPS.
           test "$actual" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
       - name: Compile Android Worker
-        run: npx tauri android build --apk --target aarch64 --ci --debug
+        run: python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug
       - name: Verify signature and SHA-256
         shell: bash
         run: |
