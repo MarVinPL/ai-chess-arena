@@ -1,0 +1,64 @@
+name: Shared Gradle wrapper cache
+
+# A lightweight warm-up independent of the Worker source tree and APK build.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/gradle-cache/gradle-wrapper.properties'
+      - '.github/workflows/gradle-wrapper-warmup.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/gradle-cache/gradle-wrapper.properties'
+      - '.github/workflows/gradle-wrapper-warmup.yml'
+  workflow_dispatch:
+  schedule:
+    # Access the cache twice weekly so inactive periods do not evict it.
+    - cron: '19 5 * * 1,4'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gradle-wrapper-warmup-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warmup:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          # The additional gradle-wrapper cache is keyed on wrapper properties
+          # independently. Do not seed the real build's dependency cache key.
+          cache-dependency-path: .github/workflows/gradle-wrapper-warmup.yml
+          cache-jdk: false
+      - name: Verify and prepare Gradle 9.6.1 wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$GITHUB_WORKSPACE/.github/gradle-cache/gradle-wrapper.properties"
+          work="$(mktemp -d "$RUNNER_TEMP/gradle-warmup.XXXXXX")"
+          trap 'rm -rf -- "$work"' EXIT
+          expected='https\://services.gradle.org/distributions/gradle-9.6.1-bin.zip'
+          test "$(sed -n 's/^distributionUrl=//p' "$pin")" = "$expected"
+          cp "$pin" "$work/gradle-wrapper.properties"
+          # Official checksums: https://gradle.org/release-checksums/
+          echo 'distributionSha256Sum=9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14' >> "$work/gradle-wrapper.properties"
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://raw.githubusercontent.com/gradle/gradle/v9.6.1/gradle/wrapper/gradle-wrapper.jar' \
+            --output "$work/gradle-wrapper.jar"
+          echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  $work/gradle-wrapper.jar" | sha256sum --check -
+          java -classpath "$work/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain --version | tee "$work/version.txt"
+          grep -Fx 'Gradle 9.6.1' "$work/version.txt"
+          find "$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin" -name 'gradle-9.6.1-bin.zip.ok' -print -quit | grep -q .
+          echo 'Gradle wrapper distribution ready; setup-java saves the independent wrapper cache.'
