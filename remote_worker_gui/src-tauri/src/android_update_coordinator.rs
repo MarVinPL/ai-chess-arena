@@ -123,7 +123,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -693,6 +693,57 @@ pub(crate) async fn fetch_resume_status(
         Some("awaiting_local_engine") => Ok("awaiting_local_engine"),
         _ => Err("Nieznany stan gotowości do wznowienia".into()),
     }
+}
+
+/// Retry an ambiguous delivery with the same STOP identity. Each HTTP attempt
+/// builds its own nonce. Definitive rejection and invalid receipts stop immediately.
+#[cfg(target_os = "android")]
+async fn deliver_stop_report<F, Fut>(mut attempt: F) -> Result<(), String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Option<()>, String>>,
+{
+    for index in 0..3 {
+        if index > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(250 * index)).await;
+        }
+        if attempt().await?.is_some() {
+            return Ok(());
+        }
+    }
+    Err("Silnik zatrzymany. Brak potwierdzenia odbioru raportu STOP przez Arenę".into())
+}
+
+#[cfg(target_os = "android")]
+pub(crate) async fn report_native_stop(
+    base: &str, worker_id: &str, machine_token: &str,
+    job_id: &str, request_id: &str, lease_token: &str,
+) -> Result<(), String> {
+    let endpoint = coordinator_endpoint(base, "native-stop-report")?;
+    let client = update_http_client()?;
+    deliver_stop_report(|| async {
+        let nonce = random_nonce()?;
+        let reply = client.post(endpoint.clone()).json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce,
+            "job_id": job_id, "request_id": request_id, "lease_token": lease_token,
+        })).send().await;
+        let Ok(reply) = reply else { return Ok(None); };
+        if reply.status().is_server_error() {
+            return Ok(None);
+        }
+        if !reply.status().is_success() {
+            return Err("Silnik zatrzymany. Arena odrzuciła raport STOP".into());
+        }
+        let Ok(bytes) = reply.bytes().await else { return Ok(None); };
+        let body: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| "Nieprawidłowe potwierdzenie raportu STOP")?;
+        if body["authenticated"] != true || body["source"] != "coordinator"
+            || body["worker_id"] != worker_id || body["nonce"] != nonce
+            || body["state"] != "stop_report_received" || body["install_allowed"] != false {
+            return Err("Niepotwierdzony odbiór raportu STOP".into());
+        }
+        Ok(Some(()))
+    }).await
 }
 
 /// Future native executor may poll while inference is active, then stop at a

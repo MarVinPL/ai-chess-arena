@@ -176,7 +176,7 @@ async function processOnePhoneMove(){
    phoneInferenceStatus.textContent='Telefon wykonał obliczenie. Ruch przekazany Arenie; zatwierdzenie partii należy do Areny.';
   }else if(result?.state==='native_stopped'){
    phoneWorkerEnabled=false;
-   phoneInferenceStatus.textContent='Natywny llama.cpp zakończył generowanie. Arena musi jeszcze uzgodnić STOP i checkpoint.';
+   phoneInferenceStatus.textContent='Silnik llama.cpp zatrzymany. Arena odebrała raport STOP i musi jeszcze zweryfikować checkpoint.';
   }else if(result?.state==='awaiting_arena'){
    phoneInferenceStatus.textContent='Wynik oczekuje na zatwierdzenie przez Arenę.';
   }else if(result?.state==='ready'){

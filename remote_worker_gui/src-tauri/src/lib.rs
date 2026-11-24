@@ -797,7 +797,10 @@ async fn execute_fenced_native_inference(
         .await.map_err(|_| "Nie można zweryfikować zakończenia llama.cpp")
         .and_then(|joined| if joined { Ok(()) } else { Err("Błąd wątku llama.cpp") })?;
     signal?;
-    stop?;
+    let request_id = stop?;
+    android_update_coordinator::report_native_stop(
+        server, worker_id, token, job_id, &request_id, text("lease_token")?,
+    ).await?;
     Ok(None)
 }
 

@@ -592,5 +592,8 @@ def test_native_llama_stop_is_sticky_until_model_is_reopened():
     assert dispatch.index("spawn_blocking(move || engine.join().is_ok())") < dispatch.index(
         "Ok(None)"
     )
+    assert dispatch.index("signal?;") < dispatch.index("let request_id = stop?;")
+    assert dispatch.index("let request_id = stop?;") < dispatch.index("::report_native_stop(")
+    assert dispatch.index("::report_native_stop(") < dispatch.index("Ok(None)")
     assert 'job.remove("lease_token")' in LIB
     assert "embedded_inference_quiesced(" not in LIB
