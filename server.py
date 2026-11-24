@@ -1338,6 +1338,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.wfile.write(body)
+    def send_panel_asset(self, url_path):
+        # Exact URL allowlist: never interpolate user input into a filesystem path.
+        assets = {
+            '/assets/arena.css': ('web/css/arena.css', 'text/css; charset=utf-8'),
+            '/assets/arena.js': ('web/js/arena.js', 'text/javascript; charset=utf-8'),
+            '/assets/navigation.js': ('web/js/navigation.js', 'text/javascript; charset=utf-8'),
+            '/assets/navigation.css': ('web/css/navigation.css', 'text/css; charset=utf-8'),
+            '/assets/board-redesign.css': ('web/css/board-redesign.css', 'text/css; charset=utf-8'),
+        }
+        entry = assets.get(url_path)
+        if entry is None:
+            self.send_error(404)
+            return
+        filename, content_type = entry
+        body = (ROOT / filename).read_bytes()
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
     def authenticated_user(self):
         return arena_auth.session_user(self.headers.get('Cookie'))
     def do_GET(self):
@@ -1358,6 +1380,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
+            return
+        if path in ('/assets/arena.css', '/assets/arena.js'):
+            self.send_panel_asset(path)
             return
         if path == '/api/model-permissions':
             try:
