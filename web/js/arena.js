@@ -112,6 +112,53 @@ function renderTournamentFixtures(fixtures){
   host.appendChild(section);
  }
 }
+function tournamentBracketMatch(m){
+ const info=tournamentFixturePresentation(m);
+ const winner=info.saved&&m.winner_model_id!=null?
+  (m.winner_model_id===m.white_model_id?m.white_name:m.winner_model_id===m.black_model_id?m.black_name:null):null;
+ return {...info,winner};
+}
+function tournamentChampion(d){
+ // A latest-round winner is not necessarily a champion (play-in or unfinished tournament).
+ if(d.tournament?.status!=='completed'||!d.champion)return null;
+ const rounds=[...(d.bracket||[])].sort((a,b)=>a.round_no-b.round_no);
+ const final=rounds[rounds.length-1];
+ if(!final||final.round_no===0||final.matches?.length!==1)return null;
+ const m=final.matches[0],info=tournamentBracketMatch(m);
+ return info.winner&&m.winner_model_id===d.champion.winner_model_id?info.winner:null;
+}
+function renderTournamentBracket(d){
+ const host=$('tournament-bracket');host.replaceChildren();
+ if(d.bracket_status!=='available'||!d.bracket?.length){
+  host.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':d.bracket_status==='available'?'Rozstawienia zapisane. Brak zapisanych par pucharowych.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
+  return;
+ }
+ const layout=document.createElement('div');layout.className='tournament-bracket-rounds';
+ for(const round of [...d.bracket].sort((a,b)=>a.round_no-b.round_no)){
+  const section=document.createElement('section');section.className='tournament-bracket-round';
+  const heading=document.createElement('h6');heading.textContent=round.round_no===0?'Runda 0 · eliminacyjna':'Runda '+round.round_no;section.appendChild(heading);
+  for(const m of round.matches||[]){
+   const card=document.createElement('article');card.className='tournament-bracket-match';
+   const info=tournamentBracketMatch(m);
+   for(const color of ['white','black']){
+    const player=document.createElement('div');player.className='tournament-bracket-player';
+    player.textContent=(m[color+'_seed']!=null?'#'+m[color+'_seed']+' · ':'')+m[color+'_name'];
+    if(info.winner&&m.winner_model_id===m[color+'_model_id']){player.classList.add('tournament-bracket-winner');player.textContent+=' · Awans';}
+    card.appendChild(player);
+   }
+   const result=document.createElement('p');result.textContent=info.status+' · Wynik: '+info.result;card.appendChild(result);
+   if(info.winner){const note=document.createElement('p');note.textContent='Awansujący: '+info.winner;card.appendChild(note);}
+   if(info.pgn){const link=document.createElement('a');link.href=info.pgn;link.textContent='PGN partii #'+m.saved_game_id;card.appendChild(link);}
+   section.appendChild(card);
+  }
+  for(const b of round.byes||[]){
+   const card=document.createElement('article');card.className='tournament-bracket-match';
+   card.textContent='Wolny los · #'+b.seed+' · '+b.name;section.appendChild(card);
+  }
+  layout.appendChild(section);
+ }
+ host.appendChild(layout);
+}
 function renderTournamentRosterCounts(counts){
  const host=$('tournament-roster-counters');host.textContent='';
  if(!counts){host.textContent='Brak aktywnego turnieju';return}
@@ -143,19 +190,10 @@ async function loadTournamentView(id){
   $('tournament-heading-standings').textContent=standings.ranked?'Klasyfikacja ligowa':'Uczestnicy — jeszcze bez klasyfikacji';
   tableRows('tournament-standings',standings.rows,standings.headers);
   renderTournamentFixtures(d.fixtures||[]);
-  const bracketHost=$('tournament-bracket');bracketHost.textContent='';
-  if(d.bracket_status!=='available'){
-   bracketHost.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
-  }else{
-   (d.bracket||[]).forEach(round=>{
-    const section=document.createElement('div');section.style.margin='8px 0';
-    const title=document.createElement('strong');title.textContent='Runda '+round.round_no;section.appendChild(title);
-    (round.matches||[]).forEach(m=>{const line=document.createElement('div');line.className='notice';line.textContent=(m.white_seed?'#'+m.white_seed+' ':'')+m.white_name+' vs '+(m.black_seed?'#'+m.black_seed+' ':'')+m.black_name+' · '+m.status+' · '+(m.result||'—');section.appendChild(line)});
-    (round.byes||[]).forEach(b=>{const line=document.createElement('div');line.className='notice';line.textContent='Bye · seed '+b.seed+' · '+b.name;section.appendChild(line)});
-    bracketHost.appendChild(section);
-   });
-  }
-  const championHost=$('tournament-champion');championHost.textContent=d.champion?'Mistrz: '+d.champion.name:'Mistrz: jeszcze nierozstrzygnięty';
+  renderTournamentBracket(d);
+  const championHost=$('tournament-champion');
+  const champion=tournamentChampion(d);
+  championHost.textContent=champion?'Mistrz: '+champion:'Mistrz: jeszcze nierozstrzygnięty';
   const admission=d.late_admission||{};
   if(t.parent_tournament_id){const note=document.createElement('div');note.className='notice';note.textContent='Turniej eliminacyjny nowych zawodników dla turnieju #'+t.parent_tournament_id+'. Kryterium awansu: co najmniej jedno zwycięstwo; ranking: punkty, zwycięstwa, remisy, nazwa.';championHost.appendChild(note)}
   else {

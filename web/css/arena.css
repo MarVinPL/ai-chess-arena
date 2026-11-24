@@ -123,3 +123,12 @@ button.stop{background:#744b4b;border-color:#986363}
 .tournament-fixture-status{color:#c8d9e3}
 .tournament-fixture a:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
 @media(max-width:760px){.tournament-fixture{grid-template-columns:minmax(0,1fr)}}
+
+.tournament-bracket-rounds{display:flex;align-items:flex-start;gap:18px;overflow-x:auto;padding:6px 2px 12px}
+.tournament-bracket-round{flex:1 0 190px;min-width:0}
+.tournament-bracket-round h6{font-size:14px;margin:0 0 8px;color:#c8d9e3}
+.tournament-bracket-match{border:1px solid #38515c;border-radius:8px;padding:9px;margin:8px 0;overflow-wrap:anywhere}
+.tournament-bracket-player{padding:6px;border-bottom:1px solid #38515c}
+.tournament-bracket-winner{font-weight:700;color:#a9e5cf}
+.tournament-bracket-match p{font-size:12px;margin:6px 0}
+@media(max-width:760px){.tournament-bracket-rounds{display:grid;grid-template-columns:minmax(0,1fr);overflow-x:visible;gap:12px}}

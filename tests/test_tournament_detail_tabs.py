@@ -60,5 +60,23 @@ x=tournamentFixturePresentation({...base,status:'completed',stage:'draft',round_
 assert.equal(x.group,'Puchar · runda 0');assert.equal(x.adjudicated,true);
 """],check=True)
 
+    def test_bracket_winner_and_champion_require_saved_evidence(self):
+        js = (ROOT / 'web/js/arena.js').read_text()
+        helper = js[js.index('function tournamentFixturePresentation('):js.index('function renderTournamentFixtures(')]
+        helper += js[js.index('function tournamentBracketMatch('):js.index('function renderTournamentBracket(')]
+        subprocess.run(['node', '-e', helper + """
+const assert=require('node:assert/strict');
+const m={status:'completed',saved_game_id:42,result:'1/2-1/2',white_model_id:1,black_model_id:2,white_name:'A',black_name:'B',winner_model_id:2};
+assert.equal(tournamentBracketMatch(m).winner,'B');
+for(const changes of [{saved_game_id:null},{status:'failed'},{winner_model_id:99},{winner_model_id:null}])
+ assert.equal(tournamentBracketMatch({...m,...changes}).winner,null);
+const d={tournament:{status:'completed'},champion:{winner_model_id:2},bracket:[{round_no:1,matches:[m]}]};
+assert.equal(tournamentChampion(d),'B');
+assert.equal(tournamentChampion({...d,tournament:{status:'running'}}),null);
+assert.equal(tournamentChampion({...d,bracket:[{round_no:0,matches:[m]}]}),null);
+assert.equal(tournamentChampion({...d,bracket:[{round_no:1,matches:[m,m]}]}),null);
+assert.equal(tournamentChampion({...d,champion:{winner_model_id:1}}),null);
+"""],check=True)
+
 if __name__ == '__main__':
     unittest.main()
