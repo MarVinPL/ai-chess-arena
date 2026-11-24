@@ -606,6 +606,55 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     assert post("update-pause-poll", who)[1]["instruction"] == {"action": "await_reconciliation"}
     assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
 
+    params = dict(
+        hold_token="a" * 64,
+        checkpoint={"schema_version": 1, "job_id": job_id,
+                    "resume_mode": "resume", "payload": {"fen": chess.STARTING_FEN}},
+        worker_stopped_verified=True, checkpoint_verifier=lambda _: True,
+    )
+
+    def assert_blocked(pattern):
+        with pytest.raises(ValueError, match=pattern):
+            WorkerUpdatePause(path).finalize_verified_pause(WORKER, job_id, request_id, **params)
+        assert pause.pending(WORKER)["phase"] == "acknowledged"
+        assert pause.read_resume_checkpoint(WORKER) is None
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                              (WORKER,)).fetchone() == ("running", job_id)
+            assert db.execute("SELECT count(*) FROM worker_update_holds").fetchone()[0] == 0
+
+    with sqlite3.connect(path) as db:
+        db.execute("DELETE FROM worker_native_stop_reports WHERE worker_id=?", (WORKER,))
+    assert_blocked("native STOP report")
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?)", original_report)
+        db.execute("UPDATE worker_native_stop_reports SET lease_sha256=? WHERE worker_id=?",
+                   ("0" * 64 if lease_digest != "0" * 64 else "1" * 64, WORKER))
+    assert_blocked("native STOP report")
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_native_stop_reports SET lease_sha256=? WHERE worker_id=?",
+                   (lease_digest, WORKER))
+        old_json = db.execute("SELECT job_json FROM worker_inference_assignments WHERE worker_id=?",
+                              (WORKER,)).fetchone()[0]
+        changed = dict(job, lease_token="f" * 64 if job["lease_token"] != "f" * 64 else "e" * 64)
+        import json
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (json.dumps(changed), WORKER))
+    assert_blocked("stale or missing lease")
+    with sqlite3.connect(path) as db:
+        legacy = dict(job, version=2)
+        legacy.pop("lease_token")
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (json.dumps(legacy), WORKER))
+    assert_blocked("stale or missing lease")
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (old_json, WORKER))
+    final = WorkerUpdatePause(path).finalize_verified_pause(WORKER, job_id, request_id, **params)
+    assert pause.read_resume_checkpoint(WORKER)["sha256"] == final["sha256"]
+    assert pause.jobs.validate_update_hold(WORKER, params["hold_token"])
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+
 
 def test_stop_poll_works_before_inference_schema_exists(sandbox, tmp_path, monkeypatch):
     from remote_worker_jobs import DurableWorkerJobs
