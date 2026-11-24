@@ -145,6 +145,23 @@ impl StopOutbox {
     }
 }
 
+/// Join and persist in the same blocking task. The caller must retain its
+/// generation permit throughout this call, even if the async waiter is dropped.
+/// Never invoke persistence for a panic, a failed STOP signal, or an invalid
+/// STOP instruction. A failed write cannot produce a successful STOP identity.
+pub(crate) fn complete_joined_stop<T>(
+    engine: std::thread::JoinHandle<T>,
+    signal: std::result::Result<(), String>,
+    stop: std::result::Result<String, String>,
+    persist: impl FnOnce(&str) -> Result<()>,
+) -> std::result::Result<String, String> {
+    engine.join().map_err(|_| "Błąd wątku llama.cpp".to_owned())?;
+    signal?;
+    let request_id = stop?;
+    persist(&request_id).map_err(|_| "Nie zapisano trwałego raportu STOP".to_owned())?;
+    Ok(request_id)
+}
+
 #[cfg(target_os = "android")]
 impl StopOutbox {
     /// Resolve Android's private, explicitly excluded-from-backup directory.
@@ -261,6 +278,53 @@ mod tests {
         assert!((a == Ok(()) && b == Err(OutboxError::Conflict)) || (b == Ok(()) && a == Err(OutboxError::Conflict)));
         assert!(q.load().unwrap().as_ref() == Some(if a.is_ok() { &r } else { &o }));
     }
+    #[test]
+    fn joined_stop_persists_only_after_thread_exit() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        struct Exited(Arc<AtomicBool>);
+        impl Drop for Exited {
+            fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+        }
+        let t = Temp::new(); let q = StopOutbox::open(&t.0).unwrap();
+        let exited = Arc::new(AtomicBool::new(false));
+        let thread_flag = Arc::clone(&exited);
+        let engine = std::thread::spawn(move || {
+            let _exited = Exited(thread_flag);
+        });
+        let id = "a".repeat(32);
+        let result = complete_joined_stop(engine, Ok(()), Ok(id.clone()), |request| {
+            assert!(exited.load(Ordering::Acquire));
+            q.store(&StopReport::new("worker_1234", "job_12345678", request, &"b".repeat(64))?)
+        }).unwrap();
+        assert_eq!(result, id);
+        assert!(q.load().unwrap().as_ref() == Some(&report()));
+    }
+
+    #[test]
+    fn failed_join_signal_or_instruction_never_persists() {
+        let t = Temp::new(); let q = StopOutbox::open(&t.0).unwrap();
+        for (panic, signal_ok, stop_ok) in [(true,true,true), (false,false,true), (false,true,false)] {
+            let engine = std::thread::spawn(move || { if panic { panic!("test"); } });
+            let signal = if signal_ok { Ok(()) } else { Err("signal".into()) };
+            let stop = if stop_ok { Ok("a".repeat(32)) } else { Err("instruction".into()) };
+            assert!(complete_joined_stop(engine, signal, stop, |_| {
+                panic!("persistence must not run")
+            }).is_err());
+            assert!(q.load().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn write_failure_or_conflict_cannot_return_successful_stop() {
+        let t = Temp::new(); let q = StopOutbox::open(&t.0).unwrap();
+        q.store(&other()).unwrap();
+        let result = complete_joined_stop(std::thread::spawn(|| ()), Ok(()), Ok("a".repeat(32)), |_| q.store(&report()));
+        assert_eq!(result, Err("Nie zapisano trwałego raportu STOP".into()));
+        assert!(q.load().unwrap().as_ref() == Some(&other()));
+        let result = complete_joined_stop(std::thread::spawn(|| ()), Ok(()), Ok("a".repeat(32)), |_| Err(OutboxError::Storage));
+        assert!(result.is_err());
+    }
+
     #[test]
     fn strict_schema_and_crc_vector() {
         assert_eq!(crc32(b"123456789"), 0xcbf43926);
