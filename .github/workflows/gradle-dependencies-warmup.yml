@@ -192,9 +192,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd src-tauri/gen/android
-          ./gradlew --offline --no-daemon :app:assembleUniversalDebug
-          test -s app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          # Tauri must keep its CLI options server alive during Gradle tasks.
+          # Use a temporary Gradle init script to enforce offline resolution
+          # without disabling Rust tasks or changing the generated project.
+          init_dir="$HOME/.gradle/init.d"
+          mkdir -p "$init_dir"
+          init="$(mktemp "$init_dir/arena-offline.XXXXXX.gradle")"
+          trap 'rm -f -- "$init"' EXIT
+          cat > "$init" <<'GRADLE'
+          gradle.startParameter.offline = true
+          gradle.startParameter.rerunTasks = true
+          println("ARENA_GRADLE_OFFLINE_ENFORCED=" + gradle.startParameter.offline)
+          GRADLE
+          rm -f src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          npx --no-install tauri android build --apk --target aarch64 --ci --debug 2>&1 | tee "$RUNNER_TEMP/gradle-offline-build.log"
+          grep -Fx 'ARENA_GRADLE_OFFLINE_ENFORCED=true' "$RUNNER_TEMP/gradle-offline-build.log"
+          test -s src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           echo GRADLE_OFFLINE_APK_OK
       - name: Inspect cache scope
         shell: bash
