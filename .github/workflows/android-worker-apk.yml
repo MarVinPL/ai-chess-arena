@@ -166,6 +166,15 @@ jobs:
           npm ci
           # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+      - name: Fingerprint generated Gradle dependency inputs
+        id: modules
+        working-directory: .
+        run: python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: modules-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.modules.outputs.key }}
       - name: Install branded Android pawn launcher resources
         shell: bash
         run: |
