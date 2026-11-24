@@ -385,10 +385,17 @@ jobs:
           set -euo pipefail
           # setup-java can restore its older, broad dependency cache. Do not
           # let that cache or runner-preinstalled modules satisfy this proof.
-          proof_home="$(mktemp -d "$RUNNER_TEMP/arena-gradle-proof.XXXXXX")"
-          mkdir -p "$proof_home/wrapper"
-          cp -a "$HOME/.gradle/wrapper/dists" "$proof_home/wrapper/"
-          echo "GRADLE_USER_HOME=$proof_home" >> "$GITHUB_ENV"
+          test "${GRADLE_USER_HOME:-$HOME/.gradle}" = "$HOME/.gradle"
+          test -d "$HOME/.gradle/wrapper/dists"
+          quarantine="$(mktemp -d "$RUNNER_TEMP/arena-gradle-quarantine.XXXXXX")"
+          # Preserve the literal cache path (part of GitHub's cache version).
+          # Quarantine every existing Gradle cache, not the wrapper distribution.
+          if test -d "$HOME/.gradle/caches"; then
+            mv "$HOME/.gradle/caches" "$quarantine/caches"
+          fi
+          test ! -e "$HOME/.gradle/caches"
+          echo "GRADLE_USER_HOME=$HOME/.gradle" >> "$GITHUB_ENV"
+          echo GRADLE_FRESH_CACHE_DIRECTORY_OK
       - name: Fingerprint generated Gradle dependency inputs
         id: modules
         working-directory: .
@@ -396,7 +403,7 @@ jobs:
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
         id: modules-cache
         with:
-          path: ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+          path: ~/.gradle/caches/modules-2
           key: ${{ steps.modules.outputs.key }}
           fail-on-cache-miss: true
       - name: Require exact dependency cache hit
