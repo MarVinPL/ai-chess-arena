@@ -5,11 +5,13 @@ on:
     paths:
       - '.github/workflows/gradle-dependencies-warmup.yml'
       - 'scripts/gradle_dependency_cache_key.py'
+      - 'tests/test_gradle_dependency_cache_key.py'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/gradle-dependencies-warmup.yml'
       - 'scripts/gradle_dependency_cache_key.py'
+      - 'tests/test_gradle_dependency_cache_key.py'
   workflow_dispatch:
   schedule:
     - cron: '37 5 * * 1,4'
@@ -406,6 +408,34 @@ jobs:
           path: ~/.gradle/caches/modules-2
           key: ${{ steps.modules.outputs.key }}
           fail-on-cache-miss: true
+      - name: Probe changed dependency fingerprint
+        id: changed-modules
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=remote_worker_gui/src-tauri/gen/android/app/build.gradle.kts
+          backup="$(mktemp "$RUNNER_TEMP/arena-gradle-input.XXXXXX")"
+          cp "$file" "$backup"
+          trap 'cp "$backup" "$file"; rm -f "$backup"' EXIT
+          printf '\n// fingerprint-change-test\n' >> "$file"
+          python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: changed-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.changed-modules.outputs.key }}
+          lookup-only: true
+      - name: Verify changed fingerprint misses without modifying cache
+        shell: bash
+        env:
+          ORIGINAL: ${{ steps.modules.outputs.key }}
+          CHANGED: ${{ steps.changed-modules.outputs.key }}
+          HIT: ${{ steps.changed-cache.outputs.cache-hit }}
+        run: |
+          test "$ORIGINAL" != "$CHANGED"
+          test "$HIT" != true
+          echo CHANGED_GRADLE_FINGERPRINT_MISS_OK
       - name: Require exact dependency cache hit
         shell: bash
         env:
