@@ -109,5 +109,14 @@ assert.deepEqual(tournamentBracketEdges([rounds[0],{...rounds[1],round_no:3}]),[
 assert.deepEqual(tournamentBracketEdges([{...rounds[0],matches:[{...m,saved_game_id:null}]},rounds[1]]),[['bye-0-3','match-20']]);
 """],check=True)
 
+    def test_orientation_breakpoint_matches_css_and_bracket_js(self):
+        query = '(orientation:portrait),(max-width:760px)'
+        for name in ('arena.css', 'navigation.css', 'board-redesign.css'):
+            css = (ROOT / 'web/css' / name).read_text()
+            self.assertIn('@media' + query, css)
+            self.assertNotIn('@media(max-width:760px)', css)
+        js = (ROOT / 'web/js/arena.js').read_text()
+        self.assertIn("matchMedia('" + query + "')", js)
+
 if __name__ == '__main__':
     unittest.main()

@@ -101,7 +101,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn(".tournament-card__fields{grid-template-columns:repeat(2,minmax(0,1fr))}", HTML)
         self.assertIn(".tournament-card__actions button{flex:1 1 100%}", HTML)
         self.assertIn(".tournament-card button:focus-visible", HTML)
-        self.assertRegex(HTML, r"@media\(max-width:760px\)")
+        self.assertRegex(HTML, r"@media\(orientation:portrait\),\(max-width:760px\)")
         self.assertIn("overflow-x:hidden", HTML)
 
     def test_renderer_uses_dom_text_nodes_for_model_data(self):

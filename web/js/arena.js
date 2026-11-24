@@ -146,7 +146,7 @@ function drawTournamentBracketEdges(layout,edges){
  const layer=layout.querySelector('svg');
  if(!layer)return;
  layer.replaceChildren();
- if(!layout.clientWidth||matchMedia('(max-width:760px)').matches)return;
+ if(!layout.clientWidth||matchMedia('(orientation:portrait),(max-width:760px)').matches)return;
  const bounds=layout.getBoundingClientRect();
  layer.setAttribute('width',String(layout.scrollWidth));layer.setAttribute('height',String(layout.scrollHeight));
  const cards=new Map(Array.from(layout.querySelectorAll('[data-bracket-key]'),el=>[el.dataset.bracketKey,el]));

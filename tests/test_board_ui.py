@@ -36,7 +36,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('--arena-accent:#35d2c0', HTML)
         self.assertIn('background:var(--arena-light)', HTML)
         self.assertIn('background:var(--arena-dark)', HTML)
-        self.assertRegex(HTML, r'@media\(max-width:760px\)')
+        self.assertRegex(HTML, r'@media\(orientation:portrait\),\(max-width:760px\)')
         self.assertIn('overflow-x:hidden', HTML)
 
     def test_piece_inventory_is_above_board_and_updates_for_both_views(self):

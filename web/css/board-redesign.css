@@ -19,13 +19,13 @@
 #view-live button:disabled{cursor:not-allowed}
 #view-live .controls-note{min-height:19px;margin-top:4px;color:#edcc91;font-size:12px;line-height:1.5}
 #view-live button:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
-@media(min-width:761px){
+@media(orientation:landscape) and (width > 760px){
  #view-live .board{max-width:min(100%,560px,max(300px,calc(100dvh - 445px)))}
  #view-live .layout>.panel{padding:13px}
  #view-live .board-topline{margin-bottom:6px}
  #view-live .tournament-roster-counters{padding:7px 9px;margin:5px 0}
 }
-@media(max-width:760px){
+@media(orientation:portrait),(max-width:760px){
  #view-live .layout{grid-template-columns:minmax(0,1fr);gap:12px}
  #view-live .board{max-width:560px}
  #view-live .player-summary{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr)}
