@@ -237,8 +237,29 @@ async function loadTournamentView(id){
   }
  }catch(e){if(request===tournamentViewRequest)$('tournament-detail-title').textContent='Nie udało się odczytać turnieju: '+e}
 }
+function tournamentCardProgress(t){
+ const completed=Number(t.completed_games??0),planned=Number(t.total_games_planned??t.games_planned??0);
+ const valid=Number.isSafeInteger(completed)&&completed>=0&&Number.isSafeInteger(planned)&&planned>0&&completed<=planned;
+ const phase=t.status==='completed'?'Zakończony':Number(t.draft_games_played_or_planned)>0?'Puchar':Number(t.games_planned)>0?'Liga':'Brak zapisanych par';
+ return {completed,planned,valid,phase};
+}
+const tournamentReadiness=new Map();
+const expandedTournamentDiagnostics=new Set();
+function tournamentReadinessLabel(t){
+ if(t.resume_blocked)return 'Wznowienie zablokowane — wymagany przegląd';
+ if(t.status==='running')return 'Turniej trwa';
+ if(t.status==='completed')return 'Turniej zakończony';
+ const cached=tournamentReadiness.get(t.id);
+ if(!cached)return 'Gotowość: sprawdź warunki startu';
+ return cached;
+}
 function renderTournaments(rows){
  const host=$('tournament-list');
+ // Preserve an open diagnostic (and its focused controls) across routine polling.
+ if(host.querySelector('.tournament-preflight:not([hidden])')&&host.contains(document.activeElement))return;
+ const activeIds=new Set(rows.filter(t=>['planned','stopped','failed'].includes(t.status)).map(t=>t.id));
+ for(const id of tournamentReadiness.keys())if(!activeIds.has(id))tournamentReadiness.delete(id);
+ for(const id of expandedTournamentDiagnostics)if(!activeIds.has(id))expandedTournamentDiagnostics.delete(id);
  host.classList.add('tournament-list');
  host.textContent='';
  if(!rows.length){host.textContent='Brak turniejów.';return}
@@ -262,15 +283,20 @@ function renderTournaments(rows){
   status.textContent=statusLabels[t.status]||('Status: '+(t.status||'nieznany'));
   header.append(title,status);card.appendChild(header);
   const fields=document.createElement('dl');fields.className='tournament-card__fields';
-  const completed=Number(t.completed_games??0);
-  const planned=Number(t.total_games_planned??t.games_planned??0);
+  const {completed,planned,valid,phase}=tournamentCardProgress(t);
   addField(fields,'Format',t.format||'—');
   addField(fields,'Uczestnicy',Number(t.players??0));
   addField(fields,'Postęp partii',completed+' / '+planned);
+  addField(fields,'Faza',phase);
   addField(fields,'Awans do draftu',(t.qualification_percent||80)+'%');
   if(!t.parent_tournament_id&&t.initial_entrant_count!=null)addField(fields,'Limit nowych zawodników',Number(t.late_admission_used||0)+' / '+Number(t.late_admission_limit||0));
   if(t.status==='stopped'||t.status==='running'||t.resume_blocked)addField(fields,'Checkpoint',t.resume_blocked?'brak · wznowienie zablokowane — wymagany przegląd':(t.has_checkpoint?'zapisany · gotowy do wznowienia':'brak aktywnej partii do odtworzenia'));
   card.appendChild(fields);
+  const meter=document.createElement('progress');meter.className='tournament-card-progress';
+  meter.setAttribute('aria-label','Postęp zapisanych partii turnieju #'+t.id);
+  if(valid){meter.max=planned;meter.value=completed;card.appendChild(meter);}
+  const readinessSummary=document.createElement('p');readinessSummary.className='tournament-readiness-summary';
+  readinessSummary.textContent=tournamentReadinessLabel(t);card.appendChild(readinessSummary);
   const actions=document.createElement('div');actions.className='tournament-card__actions';actions.setAttribute('aria-label','Akcje turnieju '+(t.name||t.id));
   const view=document.createElement('button');view.textContent='Tabela i drabinka';view.onclick=()=>loadTournamentView(t.id);actions.appendChild(view);
   const diagnostic=document.createElement('section');diagnostic.className='tournament-preflight';diagnostic.hidden=true;diagnostic.setAttribute('aria-live','polite');
@@ -278,10 +304,15 @@ function renderTournaments(rows){
   const openRegistry=(target)=>{const el=$(target);if(el){el.scrollIntoView({behavior:'smooth',block:'start'});el.setAttribute('tabindex','-1');el.focus({preventScroll:true});}};
   const openModelAdmission=(modelId)=>{const target=$('model-admission-'+modelId);if(!target){openRegistry('model-admission-list');$('league-message').textContent='Model '+modelId+' nie ma osobnego wpisu na jawnej allowliście. Sprawdź manifest i zakres dopuszczenia.';return;}target.scrollIntoView({behavior:'smooth',block:'center'});target.focus({preventScroll:true});target.style.outline='3px solid #f1d99d';target.style.outlineOffset='3px';};
   const showPreflight=async()=>{
+   expandedTournamentDiagnostics.add(t.id);
    diagnostic.hidden=false;diagnostic.dataset.ready='unknown';diagnostic.textContent='Sprawdzam warunki startu…';
    try{
     const r=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);
-    const entrants=d.entrants||[];const blocked=d.blocked||[];diagnostic.replaceChildren();diagnostic.dataset.ready=String(Boolean(d.ready));
+    if(!card.isConnected)return;
+    const entrants=d.entrants||[];const blocked=d.blocked||[];
+    tournamentReadiness.set(t.id,d.ready===true?'Ostatnie sprawdzenie: gotowy do startu':'Ostatnie sprawdzenie: start zablokowany · '+blocked.length+' zawodników z blokadą');
+    readinessSummary.textContent=tournamentReadinessLabel(t);
+    diagnostic.replaceChildren();diagnostic.dataset.ready=String(Boolean(d.ready));
     const heading=document.createElement('div');heading.className='tournament-preflight__title';heading.textContent=d.ready?'Gotowy do startu — wszystkie warunki spełnione':'Start zablokowany — '+blocked.length+' zawodników wymaga działania';diagnostic.appendChild(heading);
     const runtime=document.createElement('p');runtime.textContent='Runtime Llamafile: '+(d.runtime_available?'dostępny':'niedostępny')+'. Brak lokalnego GGUF nie blokuje startu — modele są pobierane na żądanie, jeśli ich manifest i dopuszczenie są poprawne.';diagnostic.appendChild(runtime);
     entrants.forEach(e=>{
@@ -303,8 +334,9 @@ function renderTournaments(rows){
      diagnostic.appendChild(row);
     });
     const refresh=document.createElement('button');refresh.type='button';refresh.textContent='Ponów diagnostykę';refresh.onclick=showPreflight;diagnostic.appendChild(refresh);
+    const close=document.createElement('button');close.type='button';close.textContent='Zwiń diagnostykę';close.onclick=()=>{expandedTournamentDiagnostics.delete(t.id);diagnostic.hidden=true;};diagnostic.appendChild(close);
     $('league-message').textContent='Diagnostyka turnieju #'+t.id+': '+entrants.length+' uczestników, '+blocked.length+' z blokadą.';
-   }catch(e){diagnostic.textContent='Nie udało się sprawdzić gotowości: '+e;$('league-message').textContent=diagnostic.textContent}
+   }catch(e){if(!card.isConnected)return;tournamentReadiness.delete(t.id);readinessSummary.textContent='Gotowość: błąd sprawdzenia';diagnostic.textContent='Nie udało się sprawdzić gotowości: '+e;$('league-message').textContent=diagnostic.textContent}
   };
   if(['planned','stopped','failed'].includes(t.status)){
    const check=document.createElement('button');check.textContent='Dlaczego nie startuje?';check.onclick=showPreflight;actions.appendChild(check);
@@ -327,7 +359,7 @@ function renderTournaments(rows){
    };actions.appendChild(stop);
   }
   card.appendChild(actions);host.appendChild(card);
-  if(t.status==='planned')showPreflight();
+  if(expandedTournamentDiagnostics.has(t.id))showPreflight();
  });
 }
 function renderModelStatus(models,storage){

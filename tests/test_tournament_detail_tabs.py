@@ -78,5 +78,22 @@ assert.equal(tournamentChampion({...d,bracket:[{round_no:1,matches:[m,m]}]}),nul
 assert.equal(tournamentChampion({...d,champion:{winner_model_id:1}}),null);
 """],check=True)
 
+    def test_card_progress_and_readiness_do_not_invent_state(self):
+        js = (ROOT / 'web/js/arena.js').read_text()
+        helper = js[js.index('function tournamentCardProgress('):js.index('function renderTournaments(')]
+        subprocess.run(['node', '-e', helper + """
+const assert=require('node:assert/strict');
+const t={id:9,status:'planned',completed_games:0,games_planned:56,total_games_planned:56};
+assert.deepEqual(tournamentCardProgress(t),{completed:0,planned:56,valid:true,phase:'Liga'});
+assert.equal(tournamentCardProgress({...t,draft_games_played_or_planned:1}).phase,'Puchar');
+assert.equal(tournamentCardProgress({...t,total_games_planned:0}).valid,false);
+assert.equal(tournamentCardProgress({...t,completed_games:57}).valid,false);
+assert.equal(tournamentCardProgress({...t,status:'completed'}).phase,'Zakończony');
+assert.match(tournamentReadinessLabel(t),/sprawdź/);
+tournamentReadiness.set(9,'Ostatnie sprawdzenie: gotowy do startu');
+assert.match(tournamentReadinessLabel(t),/Ostatnie sprawdzenie/);
+assert.match(tournamentReadinessLabel({...t,resume_blocked:true}),/zablokowane/);
+"""],check=True)
+
 if __name__ == '__main__':
     unittest.main()

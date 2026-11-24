@@ -69,7 +69,8 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("check.textContent='Dlaczego nie startuje?'", self.renderer)
         self.assertIn("check.onclick=showPreflight", self.renderer)
-        self.assertIn("if(t.status==='planned')showPreflight()", self.renderer)
+        self.assertIn("if(expandedTournamentDiagnostics.has(t.id))showPreflight()", self.renderer)
+        self.assertNotIn("if(t.status==='planned')showPreflight()", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
 
