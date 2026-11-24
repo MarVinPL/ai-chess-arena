@@ -84,7 +84,12 @@ impl Drop for Stage { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
 impl StopOutbox {
     /// Caller supplies a trusted app-private, existing no-backup directory.
     pub(crate) fn open(root: &Path) -> Result<Self> {
-        private_dir(root)?;
+        // Android owns this root; platform versions may use a shared app
+        // group mode. Never chmod the platform directory. Only our dedicated
+        // child must be 0700, and neither path may be a symlink.
+        if !fs::symlink_metadata(root).map_err(storage)?.is_dir() {
+            return Err(OutboxError::Storage);
+        }
         let dir = root.join("native-stop-outbox");
         match fs::DirBuilder::new().mode(0o700).create(&dir) {
             Ok(()) => (),
@@ -137,6 +142,51 @@ impl StopOutbox {
         sync_dir(&self.dir)?;
         fs::remove_file(&stage.0).map_err(storage)?;
         sync_dir(&self.dir)
+    }
+}
+
+#[cfg(target_os = "android")]
+impl StopOutbox {
+    /// Resolve Android's private, explicitly excluded-from-backup directory.
+    /// The caller cannot supply a path through a WebView or remote message.
+    /// No JNI exception details or lease contents are returned.
+    pub(crate) fn open_android() -> Result<Self> {
+        use jni::objects::{JObject, JString};
+        use jni::JavaVM;
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|_| OutboxError::Storage)?;
+        let mut env = vm.attach_current_thread().map_err(|_| OutboxError::Storage)?;
+        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let root = (|| {
+            let files = env.call_method(&context, "getNoBackupFilesDir", "()Ljava/io/File;", &[])
+                .map_err(|_| OutboxError::Storage)?
+                .l().map_err(|_| OutboxError::Storage)?;
+            if files.is_null() { return Err(OutboxError::Storage); }
+            let path = env.call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])
+                .map_err(|_| OutboxError::Storage)?
+                .l().map_err(|_| OutboxError::Storage)?;
+            if path.is_null() { return Err(OutboxError::Storage); }
+            let path: String = env.get_string(&JString::from(path))
+                .map_err(|_| OutboxError::Storage)?.into();
+            if !Path::new(&path).is_absolute() { return Err(OutboxError::Storage); }
+            Ok(PathBuf::from(path))
+        })();
+        // Do not leave an exception pending on the attached worker thread.
+        if env.exception_check().map_err(|_| OutboxError::Storage)? {
+            env.exception_clear().map_err(|_| OutboxError::Storage)?;
+            return Err(OutboxError::Storage);
+        }
+        Self::open(&root?)
+    }
+
+    /// Internal call site: only after the actual engine join succeeded and
+    /// the coordinator's STOP identity matched. Does not send or clear STOP.
+    pub(crate) fn persist_after_join(
+        worker_id: &str, job_id: &str, request_id: &str, lease_token: &str,
+    ) -> Result<()> {
+        let report = StopReport::new(worker_id, job_id, request_id, lease_token)?;
+        Self::open_android()?.store(&report)
     }
 }
 
