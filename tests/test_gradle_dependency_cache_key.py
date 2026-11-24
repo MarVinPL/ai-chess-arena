@@ -1,5 +1,6 @@
 """Regression tests for the Gradle dependency cache fingerprint."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -15,8 +16,6 @@ class GradleDependencyCacheKeyTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.inputs = (
-            "remote_worker_gui/package-lock.json",
-            "remote_worker_gui/src-tauri/Cargo.lock",
             "remote_worker_gui/src-tauri/gen/android/app/build.gradle.kts",
             "remote_worker_gui/src-tauri/gen/android/settings.gradle.kts",
             "remote_worker_gui/src-tauri/gen/android/gradle.properties",
@@ -26,6 +25,18 @@ class GradleDependencyCacheKeyTests(unittest.TestCase):
         )
         for path in self.inputs:
             self.write(path, "fixture\n")
+        self.npm_path = "remote_worker_gui/package-lock.json"
+        self.cargo_path = "remote_worker_gui/src-tauri/Cargo.lock"
+        self.npm = {"packages": {"": {"version": "0.1.0"}, "node_modules/@tauri-apps/cli": {"version": "2.12.6", "integrity": "sha512-fixture"}}}
+        self.cargo = """[[package]]
+name = "tauri"
+version = "2.12.7"
+[[package]]
+name = "unrelated"
+version = "1.0.0"
+"""
+        self.write(self.npm_path, json.dumps(self.npm))
+        self.write(self.cargo_path, self.cargo)
 
     def write(self, path, content):
         p = self.root / path
@@ -62,13 +73,40 @@ class GradleDependencyCacheKeyTests(unittest.TestCase):
                 self.write(path, "fixture\n")
                 self.assertEqual(key, self.key())
 
+    def test_unrelated_lock_changes_do_not_invalidate(self):
+        key = self.key()
+        self.npm["packages"][""]["version"] = "0.2.0"
+        self.npm["packages"]["node_modules/unrelated"] = {"version": "9.0.0"}
+        self.write(self.npm_path, json.dumps(self.npm))
+        self.write(self.cargo_path, self.cargo.replace("1.0.0", "1.1.0"))
+        self.assertEqual(key, self.key())
+
+    def test_generator_versions_invalidate(self):
+        key = self.key()
+        self.npm["packages"]["node_modules/@tauri-apps/cli"]["version"] = "2.12.8"
+        self.write(self.npm_path, json.dumps(self.npm))
+        self.assertNotEqual(key, self.key())
+        self.npm["packages"]["node_modules/@tauri-apps/cli"]["version"] = "2.12.6"
+        self.write(self.npm_path, json.dumps(self.npm))
+        self.assertEqual(key, self.key())
+        self.write(self.cargo_path, self.cargo.replace("2.12.7", "2.12.8"))
+        self.assertNotEqual(key, self.key())
+
+    def test_buildsrc_and_verification_metadata_invalidate(self):
+        key = self.key()
+        self.write("remote_worker_gui/src-tauri/gen/android/buildSrc/src/main/kotlin/Plugin.kt", "plugin")
+        self.assertNotEqual(key, self.key())
+        key = self.key()
+        self.write("remote_worker_gui/src-tauri/gen/android/gradle/verification-metadata.xml", "<verification/>")
+        self.assertNotEqual(key, self.key())
+
     def test_platform_separation(self):
         key = self.key()
         self.assertNotEqual(key, self.key("Windows"))
         self.assertNotEqual(key, self.key(arch="ARM64"))
 
     def test_missing_generated_project_fails(self):
-        (self.root / self.inputs[2]).unlink()
+        (self.root / self.inputs[0]).unlink()
         with self.assertRaises(subprocess.CalledProcessError):
             self.key()
 
