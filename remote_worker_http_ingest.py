@@ -60,6 +60,7 @@ def make_handler(db_path, *, limiter=None):
 
         def do_POST(self):
             if self.path not in ('/internal/remote-worker/result', '/internal/remote-worker/job',
+                                  '/internal/remote-worker/inference-job',
                                   '/internal/remote-worker/heartbeat'):
                 return self.reply(404)
             peer = self.client_address[0]
@@ -82,10 +83,11 @@ def make_handler(db_path, *, limiter=None):
                         raise ValueError('Invalid payload')
                     heartbeats.record(body['worker_id'], body['token'])
                     return self.reply(202)
-                if self.path == '/internal/remote-worker/job':
+                if self.path in ('/internal/remote-worker/job', '/internal/remote-worker/inference-job'):
                     if set(body) != {'worker_id', 'token'}:
                         raise ValueError('Invalid payload')
-                    job = delivery.retrieve(body['worker_id'], body['token'])
+                    job = delivery.retrieve(body['worker_id'], body['token'],
+                        require_inference_manifest=(self.path == '/internal/remote-worker/inference-job'))
                     return self.reply(200, {'job': job})
                 if set(body) != {'worker_id', 'token', 'result'}:
                     raise ValueError('Invalid payload')

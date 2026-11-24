@@ -12,7 +12,9 @@ class AuthenticatedJobDelivery:
         self.tokens = WorkerTokenStore(db_path, **options)
         self.jobs = BoundWorkerResults(db_path, **options)
 
-    def retrieve(self, worker_id, token):
+    def retrieve(self, worker_id, token, *, require_inference_manifest=False):
+        if type(require_inference_manifest) is not bool:
+            raise ValueError('Invalid retrieval mode')
         if not self.tokens.authenticate(worker_id, token):
             raise ValueError('Invalid worker credentials')
         with self.jobs._db() as db:
@@ -37,4 +39,16 @@ class AuthenticatedJobDelivery:
             import hmac
             if not row or row[2] is not None or row[1] <= self.jobs.clock() or not hmac.compare_digest(row[0], self.tokens._digest(token)):
                 raise ValueError('Credentials revoked')
-            return {'version': 1, 'job_id': state[0], 'fen': binding[3]}
+            result = {'version': 1, 'job_id': state[0], 'fen': binding[3]}
+            if require_inference_manifest:
+                # Only coordinator-authored tasks with a pinned model hash and
+                # resource limits may be delivered to a real native client.
+                model = db.execute('''SELECT model_sha256,max_tokens,timeout_seconds
+                    FROM remote_inference_manifest WHERE job_id=?''', (state[0],)).fetchone()
+                if model is None:
+                    return None  # An old/partial binding is NOT executable.
+                result.update(model_sha256=model[0], max_tokens=model[1],
+                              timeout_seconds=model[2])
+                from remote_worker_protocol import validate_job
+                validate_job(result)  # Defensive validation before egress.
+            return result

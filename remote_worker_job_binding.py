@@ -17,8 +17,13 @@ class BoundWorkerResults(WorkerResultJournal):
                 job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL,
                 tournament_id INTEGER NOT NULL, pairing_id INTEGER NOT NULL,
                 checkpoint_sha256 TEXT NOT NULL, fen TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS remote_inference_manifest (
+                job_id TEXT PRIMARY KEY,
+                model_sha256 TEXT NOT NULL,
+                max_tokens INTEGER NOT NULL,
+                timeout_seconds INTEGER NOT NULL)''')
 
-    def assign_bound(self, worker_id, job_id, *, tournament_id, pairing_id, expected_sha256, timeout_seconds, require_fresh_heartbeat=False, heartbeat_max_age=30):
+    def assign_bound(self, worker_id, job_id, *, tournament_id, pairing_id, expected_sha256, timeout_seconds, require_fresh_heartbeat=False, heartbeat_max_age=30, model_sha256=None, max_tokens=None):
         """Bind a job and reserve worker atomically against a live checkpoint."""
         self._id(worker_id)
         self._id(job_id)
@@ -28,6 +33,15 @@ class BoundWorkerResults(WorkerResultJournal):
             raise ValueError('Invalid timeout')
         if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
             raise ValueError('Invalid checkpoint hash')
+        if (model_sha256 is None) != (max_tokens is None):
+            raise ValueError('Inference model and limits must be specified together')
+        inference_requested = model_sha256 is not None
+        if inference_requested:
+            import re
+            if not isinstance(model_sha256, str) or not re.fullmatch(r'[a-f0-9]{64}', model_sha256):
+                raise ValueError('Invalid model SHA-256')
+            if type(max_tokens) is not int or not 1 <= max_tokens <= 1024:
+                raise ValueError('Invalid inference token budget')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload_json,sha256 FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,)).fetchone()
@@ -87,6 +101,15 @@ class BoundWorkerResults(WorkerResultJournal):
                 deadline=excluded.deadline,updated_at=excluded.updated_at''', (worker_id, job_id, now + timeout_seconds, now))
             db.execute('INSERT INTO remote_job_binding VALUES (?,?,?,?,?,?)',
                        (job_id, worker_id, tournament_id, pairing_id, expected_sha256, checkpoint['fen']))
+            if inference_requested:
+                from remote_worker_protocol import validate_job
+                validate_job({'version': 1, 'job_id': job_id, 'fen': checkpoint['fen'],
+                              'model_sha256': model_sha256, 'max_tokens': max_tokens,
+                              'timeout_seconds': timeout_seconds})
+                # The job-to-model binding commits in the same transaction as
+                # the worker reservation and authoritative FEN binding.
+                db.execute('INSERT INTO remote_inference_manifest VALUES (?,?,?,?)',
+                           (job_id, model_sha256, max_tokens, timeout_seconds))
             return checkpoint['fen']
 
     def confirm_idle_after_restart(self, worker_id, *, operator_confirmed, worker_reconnected):
