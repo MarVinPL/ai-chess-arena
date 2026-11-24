@@ -5,7 +5,7 @@ import unittest
 class CandidateReviewPreviewFrontendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.html = (Path(__file__).resolve().parents[1] / 'index.html').read_text(encoding='utf-8')
+        cls.html = (Path(__file__).resolve().parents[1] / 'index.html').read_text(encoding='utf-8') + '\n' + (Path(__file__).resolve().parents[1] / 'web/css/arena.css').read_text(encoding='utf-8') + '\n' + (Path(__file__).resolve().parents[1] / 'web/js/arena.js').read_text(encoding='utf-8')
         start = cls.html.index("function renderHfCandidateReviewForm(")
         end = cls.html.index("async function loadHfCandidates()", start)
         cls.review_form = cls.html[start:end]

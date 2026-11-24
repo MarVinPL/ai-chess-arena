@@ -3,7 +3,7 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/arena.css").read_text(encoding="utf-8") + '\n' + (ROOT / "web/js/arena.js").read_text(encoding="utf-8")
 
 
 class TournamentListUiTests(unittest.TestCase):
