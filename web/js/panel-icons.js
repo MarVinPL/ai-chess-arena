@@ -29,5 +29,23 @@
     element.prepend(icon);
     return true;
   }
+  function decorate(root = document) {
+    if (root.nodeType === 1 && root.hasAttribute('data-icon')) setIcon(root, root.dataset.icon);
+    root.querySelectorAll?.('[data-icon]').forEach(element => setIcon(element, element.dataset.icon));
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    decorate();
+    const observer = new MutationObserver(records => {
+      const targets = new Set();
+      for (const record of records) {
+        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        const marked = target?.closest('[data-icon]');
+        if (marked) targets.add(marked);
+        for (const node of record.addedNodes) if (node.nodeType === 1 && !node.hasAttribute('data-arena-icon')) targets.add(node);
+      }
+      for (const target of targets) if (target.isConnected) decorate(target);
+    });
+    observer.observe(document.body, {childList:true, subtree:true, attributes:true, attributeFilter:['data-icon']});
+  }, {once:true});
   window.arenaIcons = Object.freeze({ createIcon, setIcon });
 })();

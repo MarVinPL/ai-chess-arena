@@ -35,3 +35,7 @@
 .registry-status-grid dt{color:#aebbd0}.registry-status-grid dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .registry-card summary{cursor:pointer;padding:8px 0;color:#bcd7ff}
 .registry-card summary:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+
+/* #348: local decorative SVG, preserve labels and existing layout. */
+.arena-icon{display:inline-block;vertical-align:-0.18em;width:1.1em;height:1.1em;flex:none;pointer-events:none;margin-inline-end:.4em}
+.arena-navigation a .arena-icon{margin-inline-end:.35em}

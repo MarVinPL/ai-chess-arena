@@ -78,6 +78,7 @@
       button.id = 'model-tab-' + key;
       button.type = 'button';
       button.textContent = label;
+      button.dataset.icon = ({registry:"database",catalog:"search",audits:"clipboard-check",downloads:"download",cache:"hard-drive",history:"history"})[key];
       button.setAttribute('role', 'tab');
       button.setAttribute('aria-controls', pane.id);
       button.addEventListener('click', () => selectModelTab(key));
