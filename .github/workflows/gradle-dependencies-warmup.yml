@@ -26,6 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   warmup:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
@@ -137,9 +138,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
-          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
           cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
       - name: Install pinned official Android CLI
         shell: bash
         run: |
@@ -193,6 +198,7 @@ jobs:
           path: ~/.gradle/caches/modules-2
           key: ${{ steps.modules.outputs.key }}
       - name: Populate dependencies with representative Android build
+        if: steps.modules-cache.outputs.cache-hit != 'true'
         run: python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug
       - name: Verify Gradle offline APK build
         shell: bash
@@ -225,6 +231,13 @@ jobs:
         with:
           path: ~/.gradle/caches/modules-2
           key: ${{ steps.modules.outputs.key }}
+
+      - name: Save independent wrapper on miss
+        if: steps.wrapper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
 
   restore:
     needs: warmup
@@ -339,9 +352,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
-          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
           cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
       - name: Install pinned official Android CLI
         shell: bash
         run: |

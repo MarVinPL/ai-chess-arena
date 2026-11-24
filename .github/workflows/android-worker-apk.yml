@@ -116,9 +116,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
-          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
           cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
       - name: Install pinned official Android CLI
         shell: bash
         run: |
