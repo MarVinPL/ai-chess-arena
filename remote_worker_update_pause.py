@@ -239,6 +239,12 @@ class WorkerUpdatePause:
                         or len(lease_token_sha256) != 64 or not lease_token_sha256.isascii()
                         or not secrets.compare_digest(lease_digest, lease_token_sha256)):
                     raise ValueError("STOP acknowledgment has a stale or missing lease")
+                report = db.execute(
+                    "SELECT job_id,request_id,lease_sha256 FROM worker_native_stop_reports "
+                    "WHERE worker_id=?", (worker_id,),
+                ).fetchone()
+                if report != (job_id, request_id, lease_digest):
+                    raise ValueError("Missing or mismatched native STOP report")
                 if row[2] == "acknowledged":
                     return
             elif lease_token_sha256 is not None:

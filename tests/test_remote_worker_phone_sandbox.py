@@ -539,6 +539,10 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
     lease_digest = instruction["lease_token_sha256"]
 
     pause = WorkerUpdatePause(path)
+    with pytest.raises(ValueError, match="native STOP report"):
+        pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+    assert pause.pending(WORKER)["phase"] == "requested"
     report = {**who, "job_id": job_id, "request_id": request_id, "lease_token": job["lease_token"]}
     for wrong in ({"request_id": "wrong"}, {"lease_token": lease_digest}):
         assert post("native-stop-report", {**report, **wrong})[0] == 409
@@ -556,6 +560,21 @@ def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
                 assert stored == original_report
             original_report = stored
     assert pause.pending(WORKER)["phase"] == "requested"
+    for column, wrong, correct in (
+        ("job_id", "job_wrong00", job_id),
+        ("request_id", "f" * 32 if request_id != "f" * 32 else "e" * 32, request_id),
+        ("lease_sha256", "0" * 64 if lease_digest != "0" * 64 else "1" * 64, lease_digest),
+    ):
+        with sqlite3.connect(path) as db:
+            db.execute(f"UPDATE worker_native_stop_reports SET {column}=? WHERE worker_id=?",
+                       (wrong, WORKER))
+        with pytest.raises(ValueError, match="native STOP report"):
+            pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                              checkpoint_verified=True, lease_token_sha256=lease_digest)
+        assert pause.pending(WORKER)["phase"] == "requested"
+        with sqlite3.connect(path) as db:
+            db.execute(f"UPDATE worker_native_stop_reports SET {column}=? WHERE worker_id=?",
+                       (correct, WORKER))
     for evidence in (None, "0" * 64, job["lease_token"]):
         with pytest.raises(ValueError, match="stale or missing lease"):
             pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
