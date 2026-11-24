@@ -1,0 +1,37 @@
+/* Issue #300: readable match card and fixed piece identity. */
+#view-live .layout{grid-template-columns:minmax(0,1.1fr) minmax(260px,.9fr);gap:14px;align-items:start}
+#view-live .layout>.panel{min-width:0}
+#view-live .board{width:100%;max-width:560px;aspect-ratio:1/1;margin:8px auto;isolation:isolate}
+#view-live .sq{min-width:0;min-height:0;line-height:1}
+#view-live .sq[data-piece-color="white"] .piece{color:#f8f5eb;-webkit-text-stroke:1.4px #253842;text-shadow:0 1px 2px #14262c,1px -1px #253842}
+#view-live .sq[data-piece-color="black"] .piece{color:#182b31;-webkit-text-stroke:.6px #e3e9e5;text-shadow:0 1px 1px #f6f2e4}
+#view-live .sq .piece{filter:drop-shadow(0 2px 1px #15262b65);font-size:clamp(25px,4.3vw,54px)}
+#view-live .sq[data-piece-color="empty"] .piece{display:none}
+#view-live .board-arrows{pointer-events:none;z-index:4}
+#view-live .player-summary{display:grid;grid-template-columns:minmax(120px,.92fr) minmax(0,1.3fr);gap:8px;align-items:stretch;margin:8px 0}
+#view-live .player-summary .player-badge{height:100%;overflow-wrap:anywhere;font-size:12px}
+#view-live .player-summary .piece-count{margin:0;padding:7px 10px}
+#view-live .player-summary .piece-count strong{font-size:10px;margin-bottom:2px}
+#view-live .player-summary .piece-count__summary{margin-top:2px}
+#view-live .player-summary .piece-count__captured{display:block;margin-top:3px;color:#c6e9df;font-size:11px}
+#view-live .last-move-note{min-height:25px;margin:6px 0;color:#c1e9e5;font-size:12px;font-weight:650}
+#view-live .controls{margin-top:8px}
+#view-live button:disabled{cursor:not-allowed}
+#view-live .controls-note{min-height:19px;margin-top:4px;color:#edcc91;font-size:12px;line-height:1.5}
+#view-live button:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+@media(min-width:761px){
+ #view-live .board{max-width:min(100%,560px,max(300px,calc(100dvh - 445px)))}
+ #view-live .layout>.panel{padding:13px}
+ #view-live .board-topline{margin-bottom:6px}
+ #view-live .tournament-roster-counters{padding:7px 9px;margin:5px 0}
+}
+@media(max-width:760px){
+ #view-live .layout{grid-template-columns:minmax(0,1fr);gap:12px}
+ #view-live .board{max-width:560px}
+ #view-live .player-summary{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr)}
+ #view-live .sq .piece{font-size:clamp(26px,8.7vw,54px)}
+}
+@media(max-width:390px){
+ #view-live .player-summary{grid-template-columns:minmax(0,1fr)}
+ #view-live .player-summary .piece-count{padding:7px}
+}

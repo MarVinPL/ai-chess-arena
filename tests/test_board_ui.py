@@ -7,13 +7,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/arena.css").read_text(encoding="utf-8") + '\n' + (ROOT / "web/js/arena.js").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/board-redesign.css").read_text(encoding="utf-8")
 
 
 class ChessBoardUiTests(unittest.TestCase):
-    def test_board_has_arena_pro_player_strip_and_accessible_label(self):
+    def test_board_has_arena_pro_player_cards_and_accessible_label(self):
         self.assertIn('class="board-topline"', HTML)
-        self.assertIn('class="player-strip"', HTML)
+        self.assertIn('class="player-summary player-summary--black"', HTML)
+        self.assertIn('class="player-summary player-summary--white"', HTML)
         self.assertIn('id="white" class="player-badge player-badge--white"', HTML)
         self.assertIn('id="black" class="player-badge player-badge--black"', HTML)
         self.assertIn('id="board" class="board" role="img"', HTML)
@@ -45,7 +46,8 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('overflow-x:hidden', HTML)
 
     def test_piece_inventory_is_above_board_and_updates_for_both_views(self):
-        self.assertIn('class="piece-count-strip"', HTML)
+        self.assertIn('class="piece-count piece-count--black"', HTML)
+        self.assertIn('id="last-move-note"', HTML)
         self.assertIn('id="white-piece-types"', HTML)
         self.assertIn('id="black-piece-types"', HTML)
         self.assertIn('id="white-piece-summary"', HTML)
@@ -57,7 +59,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
         self.assertIn('aria-live="polite"', HTML)
-        self.assertIn(".piece-count-strip{grid-template-columns:minmax(0,1fr)}", HTML)
+        self.assertIn(".player-summary{grid-template-columns:minmax(0,1fr)}", HTML)
 
     def test_material_and_registry_name_rendering_are_unchanged(self):
         self.assertIn('function materialAdvantage(fen)', HTML)
@@ -68,7 +70,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('formatMaterialScore(material.black)', HTML)
 
     def test_piece_inventory_is_derived_from_fen_and_counts_material(self):
-        self.assertIn('aria-label=\"Pozostałe bierki i materiał\"', HTML)
+        self.assertIn('aria-label=\"Zawodnik czarnymi\"', HTML)
         self.assertIn('id=\"white-piece-types\"', HTML)
         self.assertIn('id=\"black-piece-types\"', HTML)
         self.assertIn('renderPieceInventory(s.fen||START_FEN)', HTML)

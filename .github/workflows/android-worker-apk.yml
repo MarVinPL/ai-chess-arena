@@ -26,29 +26,98 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: actions/setup-java@v5
+      - name: Read and validate setup-java gitlink
+        id: java-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-java | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test "$(git config -f .gitmodules --get submodule.setup-java.url)" = 'https://github.com/actions/setup-java.git'
+          test "$(git config -f .gitmodules --get submodule.setup-java.path)" = '.github/actions/setup-java'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-java-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: java-source
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Fetch pinned setup-java only on cache miss
+        if: steps.java-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-java
+          test "$(git -C .github/actions/setup-java rev-parse HEAD)" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test -f .github/actions/setup-java/.git
+          rm .github/actions/setup-java/.git
+      - name: Verify setup-java source
+        working-directory: .
+        run: python3 scripts/verify_cached_setup_java.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.java-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Isolate upstream test fixtures from Gradle cache discovery
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java hashes all **/gradle-wrapper.properties. The verified
+          # upstream source includes test fixtures; keep them out of the
+          # workspace after saving the full verified source.
+          test -d .github/actions/setup-java/__tests__
+          mv .github/actions/setup-java/__tests__ "$(mktemp -d "$RUNNER_TEMP/setup-java-fixtures.XXXXXX")/"
+          test -z "$(find .github/actions/setup-java -name gradle-wrapper.properties -print -quit)"
+      - uses: ./.github/actions/setup-java
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v4
-        with:
-          # The legacy SDK 'tools' package was removed from Google's repository.
-          # v3 still defaults to requesting it unless packages is overridden.
-          packages: 'platform-tools'
-      - name: Install SDK and NDK
+          cache: gradle
+          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
+          cache-jdk: false
+      - name: Install pinned official Android CLI
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          # Android 17 SDK packages have minor-version names (37.0). The app
-          # needs no API 37 features: use the stable Android 16 API 36 SDK.
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          set -euo pipefail
+          # Official Android command-line tools Linux archive (v22.0).
+          # SHA-256 from developer.android.com/studio#command-line-tools-only.
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip" \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+          test -x "$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+      - name: Install SDK and NDK using Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install SDK packages directly using the official Android CLI.
+          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          # Android CLI prompts when a new Android SDK license must be accepted.
+          # Exit status must come from the installer, not the yes process.
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
           test -s "$ANDROID_HOME/platforms/android-36/android.jar"
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -60,7 +129,24 @@ jobs:
       - name: Initialize Android Worker
         run: |
           npm ci
-          npx tauri android init --ci
+          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          npx tauri android init --ci --skip-targets-install
+      - name: Install branded Android pawn launcher resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the Arena header pawn (U+265F) without modifying desktop icons.
+          npx tauri icon src-tauri/icons/android-pawn.svg --output src-tauri/icons/android-generated
+          source_dir=src-tauri/icons/android-generated/android
+          resource_dir=src-tauri/gen/android/app/src/main/res
+          test -s "$source_dir/mipmap-mdpi/ic_launcher.png"
+          test -s "$source_dir/mipmap-xxxhdpi/ic_launcher_foreground.png"
+          for file in "$source_dir"/mipmap-*/*.png; do
+            relative="${file#"$source_dir"/}"
+            install -D -m 644 "$file" "$resource_dir/$relative"
+          done
+          cmp "$source_dir/mipmap-mdpi/ic_launcher.png" "$resource_dir/mipmap-mdpi/ic_launcher.png"
+          cmp "$source_dir/mipmap-xxxhdpi/ic_launcher_foreground.png" "$resource_dir/mipmap-xxxhdpi/ic_launcher_foreground.png"
       - name: Restore original Android test signing key
         # Never provide the keystore to pull_request or untrusted source builds.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -101,7 +187,7 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/ai-chess-arena-worker-arm64-debug.apk
           (cd dist && sha256sum ai-chess-arena-worker-arm64-debug.apk > SHA256SUMS)
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: ai-chess-arena-worker-arm64-debug

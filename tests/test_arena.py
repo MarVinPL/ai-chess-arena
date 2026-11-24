@@ -159,14 +159,11 @@ class ArenaSmokeTests(unittest.TestCase):
         board.push(move)
         self.assertEqual(board.peek().uci(), 'e2e4')
 
-    def test_model_admission_api_lists_allowlist_candidates_without_activating_them(self):
-        from unittest.mock import patch
-        with patch.object(server.model_allowlist, 'check_repository_sync', return_value={'in_sync': True}):
-            with urllib.request.urlopen(self.base + '/api/model-admission') as response:
-                rows = __import__('json').loads(response.read().decode('utf-8'))
-        self.assertEqual(len(rows), 8)
-        self.assertFalse(any(row['can_admit'] for row in rows))
-        self.assertTrue(all(row['decision'] is None for row in rows))
+    def test_model_admission_api_reads_database_without_git_or_json(self):
+        with urllib.request.urlopen(self.base + '/api/model-admission') as response:
+            rows = __import__('json').loads(response.read().decode('utf-8'))
+        # Unit test database does not seed admissions. No fallback to a JSON file.
+        self.assertEqual(rows, [])
 
     def test_model_admission_api_success_persists_local_decision(self):
         from unittest.mock import patch
@@ -180,8 +177,7 @@ class ArenaSmokeTests(unittest.TestCase):
             self.base + '/api/model-admission/admit',
             data=b'{"model_id":999,"confirm":true}',
             headers={'Content-Type': 'application/json'}, method='POST')
-        with patch.object(server.model_allowlist, 'check_repository_sync', return_value={'in_sync': True}), \
-             patch.object(server.model_admission, 'evaluate_candidates', return_value=[candidate]):
+        with patch.object(server.model_admission, 'evaluate_candidates', return_value=[candidate]):
             with urllib.request.urlopen(request) as response:
                 result = __import__('json').loads(response.read().decode('utf-8'))
         self.assertEqual(result['status'], 'admitted')
@@ -191,17 +187,16 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertEqual(tuple(row), ('admitted', 'arena', 'org/model', 'a' * 40))
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM model_admission_history WHERE model_id=999').fetchone()[0], 1)
 
-    def test_model_admission_api_revalidates_blocked_model_on_backend(self):
+    def test_model_admission_api_rejects_unknown_model_on_backend(self):
         from unittest.mock import patch
         request = urllib.request.Request(
             self.base + '/api/model-admission/admit',
-            data=b'{"model_id":1,"confirm":true}',
+            data=b'{"model_id":999,"confirm":true}',
             headers={'Content-Type': 'application/json'}, method='POST')
-        with patch.object(server.model_allowlist, 'check_repository_sync', return_value={'in_sync': True}):
-            with self.assertRaises(urllib.error.HTTPError) as caught:
-                urllib.request.urlopen(request)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
         self.assertEqual(caught.exception.code, 422)
-        self.assertIn('Nie można dopuścić modelu', caught.exception.read().decode('utf-8'))
+        self.assertIn('Model nie znajduje się', caught.exception.read().decode('utf-8'))
         with server.league.connect() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM model_admission_history WHERE model_id=1').fetchone()[0], 0)
 
