@@ -35,6 +35,7 @@
     section.className = 'panel history arena-view-section';
     const heading = document.createElement('h2');
     heading.textContent = title;
+    heading.dataset.icon = ({"Turnieje i drabinka":"trophy","Rankingi Elo":"chart-bar","Rejestr i obsługa modeli":"database","Uprawnienia operacyjne":"lock","Pamięć i magazyn":"hard-drive"})[title] || "info";
     section.append(heading, content);
     return section;
   };
@@ -78,6 +79,7 @@
       button.id = 'model-tab-' + key;
       button.type = 'button';
       button.textContent = label;
+      button.dataset.icon = ({registry:"database",catalog:"search",audits:"clipboard-check",downloads:"download",cache:"hard-drive",history:"history"})[key];
       button.setAttribute('role', 'tab');
       button.setAttribute('aria-controls', pane.id);
       button.addEventListener('click', () => selectModelTab(key));
