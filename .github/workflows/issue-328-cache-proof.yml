@@ -1,0 +1,35 @@
+name: Gradle cache independent branch proof
+on:
+  push:
+    branches: [ci/issue-328-cache-proof]
+permissions:
+  contents: read
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: .github/gradle-cache/gradle-wrapper.properties
+          cache-jdk: false
+      - name: Require restored distribution before running anything Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="$HOME/.gradle/wrapper/dists/gradle-9.6.1-bin"
+          marker="$(find "$dist" -name 'gradle-9.6.1-bin.zip.ok' -print -quit)"
+          test -n "$marker"
+          launcher="$(find "$dist" -name 'gradle-launcher-9.6.1.jar' -print -quit)"
+          test -n "$launcher"
+          echo 'RESTORED_GRADLE_9_6_1_BEFORE_EXECUTION'
+          install_dir="$(dirname "$(dirname "$launcher")")"
+          test -x "$install_dir/bin/gradle"
+          "$install_dir/bin/gradle" --offline --version | grep -Fx 'Gradle 9.6.1'
+          echo 'CACHE_PROOF_OK'
