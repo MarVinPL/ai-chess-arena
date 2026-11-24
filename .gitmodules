@@ -1,0 +1,3 @@
+[submodule "setup-java"]
+	path = .github/actions/setup-java
+	url = https://github.com/actions/setup-java.git

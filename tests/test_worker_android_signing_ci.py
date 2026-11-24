@@ -44,7 +44,7 @@ def test_apk_certificate_checked_before_upload():
     workflow = CALLED.read_text(encoding="utf-8")
     assert workflow.index('"$signer" verify --verbose "$apk"') < workflow.index(
         'test "$signed_cert" = ' + FINGERPRINT
-    ) < workflow.index("actions/upload-artifact@v6")
+    ) < workflow.index("actions/upload-artifact@v7")
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert "if-no-files-found: error" in workflow
     assert "workflow_dispatch:" in workflow  # only in a comment, not a trigger
