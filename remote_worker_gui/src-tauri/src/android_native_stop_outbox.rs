@@ -78,6 +78,9 @@ fn private_dir(path: &Path) -> Result<()> {
     if !m.is_dir() || m.permissions().mode() & 0o077 != 0 { return Err(OutboxError::Storage); }
     Ok(())
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PublishStep { Staged, FileSynced, Published, DirectorySynced, Finished }
+
 struct Stage(PathBuf);
 impl Drop for Stage { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
 
@@ -117,6 +120,11 @@ impl StopOutbox {
     /// fsync staging bytes, atomically publish without replacement, then fsync
     /// directory. Interrupted staging files are never read as STOP evidence.
     pub(crate) fn store(&self, report: &StopReport) -> Result<()> {
+        self.store_observed(report, |_| {})
+    }
+
+    // Private test observer; production supplies a no-op, not a fault switch.
+    fn store_observed(&self, report: &StopReport, mut observe: impl FnMut(PublishStep)) -> Result<()> {
         if let Some(r) = self.load()? {
             return if &r == report { sync_dir(&self.dir) } else { Err(OutboxError::Conflict) };
         }
@@ -130,7 +138,9 @@ impl StopOutbox {
             }
         };
         file.write_all(&report.encode()).map_err(storage)?;
+        observe(PublishStep::Staged);
         file.sync_all().map_err(storage)?;
+        observe(PublishStep::FileSynced);
         drop(file);
         match fs::hard_link(&stage.0, self.dir.join(PENDING)) {
             Ok(()) => (),
@@ -139,9 +149,13 @@ impl StopOutbox {
             }
             Err(e) => return Err(storage(e)),
         }
+        observe(PublishStep::Published);
         sync_dir(&self.dir)?;
+        observe(PublishStep::DirectorySynced);
         fs::remove_file(&stage.0).map_err(storage)?;
-        sync_dir(&self.dir)
+        sync_dir(&self.dir)?;
+        observe(PublishStep::Finished);
+        Ok(())
     }
 }
 
@@ -323,6 +337,87 @@ mod tests {
         assert!(q.load().unwrap().as_ref() == Some(&other()));
         let result = complete_joined_stop(std::thread::spawn(|| ()), Ok(()), Ok("a".repeat(32)), |_| Err(OutboxError::Storage));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn crash_child() {
+        let Some(root) = std::env::var_os("ARENA_OUTBOX_TEST_CHILD_ROOT") else { return; };
+        let step = match std::env::var("ARENA_OUTBOX_TEST_CHILD_STEP").unwrap().as_str() {
+            "staged" => PublishStep::Staged,
+            "file_synced" => PublishStep::FileSynced,
+            "published" => PublishStep::Published,
+            "directory_synced" => PublishStep::DirectorySynced,
+            "finished" => PublishStep::Finished,
+            _ => panic!("unknown test step"),
+        };
+        let q = StopOutbox::open(Path::new(&root)).unwrap();
+        q.store_observed(&report(), |current| {
+            if current == step {
+                println!("OUTBOX_TEST_BOUNDARY");
+                std::io::stdout().flush().unwrap();
+                loop { std::thread::park(); }
+            }
+        }).unwrap();
+        panic!("expected storage boundary not reached");
+    }
+
+    fn kill_at_boundary(root: &Path, step: &str) {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Child, Command, Stdio};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        struct ChildGuard(Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!("{module}::crash_child");
+        let mut child = ChildGuard(Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env("ARENA_OUTBOX_TEST_CHILD_ROOT", root)
+            .env("ARENA_OUTBOX_TEST_CHILD_STEP", step)
+            .stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().unwrap());
+        let stdout = child.0.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let reached = BufReader::new(stdout).lines()
+                .map_while(std::result::Result::ok)
+                .any(|line| line.trim() == "OUTBOX_TEST_BOUNDARY");
+            let _ = tx.send(reached);
+        });
+        let reached = rx.recv_timeout(Duration::from_secs(10));
+        child.0.kill().unwrap();
+        let status = child.0.wait().unwrap();
+        reader.join().unwrap();
+        assert_eq!(status.signal(), Some(9));
+        assert_eq!(reached.unwrap(), true);
+    }
+
+    #[test]
+    fn abrupt_process_death_at_real_storage_boundaries() {
+        for (step, visible) in [
+            ("staged", false), ("file_synced", false),
+            ("published", true), ("directory_synced", true), ("finished", true),
+        ] {
+            let t = Temp::new();
+            kill_at_boundary(&t.0, step);
+            let q = StopOutbox::open(&t.0).unwrap();
+            let found = q.load().unwrap();
+            if visible {
+                assert!(found.as_ref() == Some(&report()), "{step}");
+                assert_eq!(q.store(&other()), Err(OutboxError::Conflict), "{step}");
+            } else {
+                assert!(found.is_none(), "{step}");
+            }
+            // Storage retry only: #326 must independently verify authoritative STOP.
+            q.store(&report()).unwrap();
+            assert!(q.load().unwrap().as_ref() == Some(&report()), "{step}");
+        }
     }
 
     #[test]
