@@ -62,7 +62,7 @@
 <div class="league-grid">
  <div><h4>Ranking Elo PURE_AI</h4><div id="pure-ranking" class="moves">Brak zawodników.</div></div>
  <div><h4>Ranking Elo AI_ENGINE</h4><div id="engine-ranking" class="moves">Brak zawodników.</div></div>
- <div><h4>Modele w rejestrze</h4><div id="model-list" class="moves">Brak zarejestrowanych modeli.</div>
+ <div><h4>Modele w rejestrze</h4><div class="formrow"><label for="registry-query">Szukaj modelu</label><input id="registry-query" class="field" type="search" placeholder="Nazwa lub źródło"><label for="registry-filter">Lokalne pliki</label><select id="registry-filter" class="field"><option value="all">Wszystkie</option><option value="local">Kopia lokalna</option><option value="missing">Brak pełnej kopii</option><option value="unknown">Stan nieznany</option></select></div><p id="registry-count-filtered" role="status" class="notice"></p><div id="model-list" class="moves">Brak zarejestrowanych modeli.</div>
 <section data-model-group="audits" aria-label="Dopuszczenie i propozycje">
   <h4>Kontrolowane dopuszczenie do rejestru</h4>
   <p class="notice">Decyzja jest zapisywana lokalnie w audycie rejestru. Nie zmienia allowlisty turniejowej, nie uruchamia modelu i nie pobiera wag.</p>
