@@ -127,7 +127,43 @@ function tournamentChampion(d){
  const m=final.matches[0],info=tournamentBracketMatch(m);
  return info.winner&&m.winner_model_id===d.champion.winner_model_id?info.winner:null;
 }
+function tournamentBracketEdges(rounds){
+ const edges=[];
+ const ordered=[...rounds].sort((a,b)=>a.round_no-b.round_no);
+ for(let i=1;i<ordered.length;i++){
+  const prev=ordered[i-1],next=ordered[i];
+  if(next.round_no!==prev.round_no+1)continue;
+  const sources=(prev.matches||[]).filter(m=>tournamentBracketMatch(m).winner).map(m=>({key:'match-'+m.id,player:m.winner_model_id}));
+  for(const b of prev.byes||[])sources.push({key:'bye-'+prev.round_no+'-'+b.model_id,player:b.model_id});
+  for(const source of sources){
+   const targets=(next.matches||[]).filter(m=>m.white_model_id===source.player||m.black_model_id===source.player);
+   if(source.player!=null&&targets.length===1)edges.push([source.key,'match-'+targets[0].id]);
+  }
+ }
+ return edges;
+}
+function drawTournamentBracketEdges(layout,edges){
+ const layer=layout.querySelector('svg');
+ if(!layer)return;
+ layer.replaceChildren();
+ if(!layout.clientWidth||matchMedia('(max-width:760px)').matches)return;
+ const bounds=layout.getBoundingClientRect();
+ layer.setAttribute('width',String(layout.scrollWidth));layer.setAttribute('height',String(layout.scrollHeight));
+ const cards=new Map(Array.from(layout.querySelectorAll('[data-bracket-key]'),el=>[el.dataset.bracketKey,el]));
+ for(const [from,to] of edges){
+  const a=cards.get(from),b=cards.get(to);
+  if(!a||!b)continue;
+  const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();
+  const x1=ar.right-bounds.left+layout.scrollLeft,x2=br.left-bounds.left+layout.scrollLeft;
+  const y1=ar.top+ar.height/2-bounds.top,y2=br.top+br.height/2-bounds.top,mid=(x1+x2)/2;
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d','M '+x1+' '+y1+' H '+mid+' V '+y2+' H '+x2);
+  layer.appendChild(path);
+ }
+}
+let tournamentBracketObserver=null;
 function renderTournamentBracket(d){
+ if(tournamentBracketObserver){tournamentBracketObserver.disconnect();tournamentBracketObserver=null;}
  const host=$('tournament-bracket');host.replaceChildren();
  if(d.bracket_status!=='available'||!d.bracket?.length){
   host.textContent=d.bracket_status==='awaiting_bracket_generation'?'Liga jest zakończona. Drabinka oczekuje na zapisane rozstawienia; podgląd nie generuje jej automatycznie.':d.bracket_status==='available'?'Rozstawienia zapisane. Brak zapisanych par pucharowych.':'Drabinka pucharowa zostanie utworzona po zakończeniu fazy ligowej.';
@@ -139,6 +175,7 @@ function renderTournamentBracket(d){
   const heading=document.createElement('h6');heading.textContent=round.round_no===0?'Runda 0 · eliminacyjna':'Runda '+round.round_no;section.appendChild(heading);
   for(const m of round.matches||[]){
    const card=document.createElement('article');card.className='tournament-bracket-match';
+   card.dataset.bracketKey='match-'+m.id;
    const info=tournamentBracketMatch(m);
    for(const color of ['white','black']){
     const player=document.createElement('div');player.className='tournament-bracket-player';
@@ -153,11 +190,19 @@ function renderTournamentBracket(d){
   }
   for(const b of round.byes||[]){
    const card=document.createElement('article');card.className='tournament-bracket-match';
+   card.dataset.bracketKey='bye-'+round.round_no+'-'+b.model_id;
    card.textContent='Wolny los · #'+b.seed+' · '+b.name;section.appendChild(card);
   }
   layout.appendChild(section);
  }
+ const layer=document.createElementNS('http://www.w3.org/2000/svg','svg');
+ layer.setAttribute('class','tournament-bracket-edges');layer.setAttribute('aria-hidden','true');layout.prepend(layer);
  host.appendChild(layout);
+ const edges=tournamentBracketEdges(d.bracket);
+ const redraw=()=>drawTournamentBracketEdges(layout,edges);
+ tournamentBracketObserver=new ResizeObserver(redraw);tournamentBracketObserver.observe(layout);
+ for(const section of layout.querySelectorAll('.tournament-bracket-round'))tournamentBracketObserver.observe(section);
+ redraw();
 }
 function renderTournamentRosterCounts(counts){
  const host=$('tournament-roster-counters');host.textContent='';
@@ -256,7 +301,7 @@ function tournamentReadinessLabel(t){
 function renderTournaments(rows){
  const host=$('tournament-list');
  // Preserve an open diagnostic (and its focused controls) across routine polling.
- if(host.querySelector('.tournament-preflight:not([hidden])')&&host.contains(document.activeElement))return;
+ if(host.contains(document.activeElement))return;
  const activeIds=new Set(rows.filter(t=>['planned','stopped','failed'].includes(t.status)).map(t=>t.id));
  for(const id of tournamentReadiness.keys())if(!activeIds.has(id))tournamentReadiness.delete(id);
  for(const id of expandedTournamentDiagnostics)if(!activeIds.has(id))expandedTournamentDiagnostics.delete(id);

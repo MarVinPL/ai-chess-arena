@@ -135,3 +135,9 @@ button.stop{background:#744b4b;border-color:#986363}
 
 .tournament-card-progress{display:block;width:100%;height:12px;margin:12px 0 4px;accent-color:#8ed9ce}
 .tournament-readiness-summary{font-size:13px;color:#c8d9e3;margin:10px 0 4px;overflow-wrap:anywhere}
+
+.tournament-bracket-rounds{position:relative;gap:28px}
+.tournament-bracket-round{position:relative;z-index:1}
+.tournament-bracket-edges{position:absolute;top:0;left:0;pointer-events:none;overflow:hidden}
+.tournament-bracket-edges path{stroke:#8aa7b3;stroke-width:1.5;fill:none}
+@media(max-width:760px){.tournament-bracket-edges{display:none}}

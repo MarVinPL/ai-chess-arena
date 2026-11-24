@@ -95,5 +95,19 @@ assert.match(tournamentReadinessLabel(t),/Ostatnie sprawdzenie/);
 assert.match(tournamentReadinessLabel({...t,resume_blocked:true}),/zablokowane/);
 """],check=True)
 
+    def test_bracket_connections_require_stored_successor(self):
+        js = (ROOT / 'web/js/arena.js').read_text()
+        helper = js[js.index('function tournamentFixturePresentation('):js.index('function renderTournamentFixtures(')]
+        helper += js[js.index('function tournamentBracketMatch('):js.index('function drawTournamentBracketEdges(')]
+        subprocess.run(['node', '-e', helper + """
+const assert=require('node:assert/strict');
+const m={id:10,status:'completed',saved_game_id:42,result:'1-0',white_model_id:1,black_model_id:2,white_name:'A',black_name:'B',winner_model_id:1};
+const rounds=[{round_no:0,matches:[m],byes:[{model_id:3}]},{round_no:1,matches:[{id:20,white_model_id:1,black_model_id:3}]}];
+assert.deepEqual(tournamentBracketEdges(rounds),[['match-10','match-20'],['bye-0-3','match-20']]);
+assert.deepEqual(tournamentBracketEdges(rounds.slice(0,1)),[]);
+assert.deepEqual(tournamentBracketEdges([rounds[0],{...rounds[1],round_no:3}]),[]);
+assert.deepEqual(tournamentBracketEdges([{...rounds[0],matches:[{...m,saved_game_id:null}]},rounds[1]]),[['bye-0-3','match-20']]);
+"""],check=True)
+
 if __name__ == '__main__':
     unittest.main()
