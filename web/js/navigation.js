@@ -35,6 +35,7 @@
     section.className = 'panel history arena-view-section';
     const heading = document.createElement('h2');
     heading.textContent = title;
+    heading.dataset.icon = ({"Turnieje i drabinka":"trophy","Rankingi Elo":"chart-bar","Rejestr i obsługa modeli":"database","Uprawnienia operacyjne":"lock","Pamięć i magazyn":"hard-drive"})[title] || "info";
     section.append(heading, content);
     return section;
   };
