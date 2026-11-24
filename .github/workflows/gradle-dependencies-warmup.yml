@@ -1,0 +1,490 @@
+name: Shared Android Gradle dependency cache
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gradle-dependencies-warmup.yml'
+      - 'scripts/gradle_dependency_cache_key.py'
+      - 'scripts/retry_http_429.py'
+      - 'tests/test_retry_http_429.py'
+      - 'tests/test_gradle_dependency_cache_key.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/gradle-dependencies-warmup.yml'
+      - 'scripts/gradle_dependency_cache_key.py'
+      - 'scripts/retry_http_429.py'
+      - 'tests/test_retry_http_429.py'
+      - 'tests/test_gradle_dependency_cache_key.py'
+  workflow_dispatch:
+  schedule:
+    - cron: '37 5 * * 1,4'
+permissions:
+  contents: read
+concurrency:
+  group: gradle-dependencies-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  warmup:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned Worker fixture
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d "$RUNNER_TEMP/worker-fixture.XXXXXX")"
+          git -C "$fixture" init -q
+          git -C "$fixture" fetch --depth 1 https://github.com/MarVinPL/ai-chess-arena.git 7ccfedcf5eaa5887e7411b07647299ea4efc3b7c
+          test "$(git -C "$fixture" rev-parse FETCH_HEAD)" = 7ccfedcf5eaa5887e7411b07647299ea4efc3b7c
+          git -C "$fixture" archive FETCH_HEAD remote_worker_gui | tar -x -C "$GITHUB_WORKSPACE"
+      - name: Read and validate setup-node gitlink
+        id: node-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-node | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test "$(git config -f .gitmodules --get submodule.setup-node.url)" = 'https://github.com/actions/setup-node.git'
+          test "$(git config -f .gitmodules --get submodule.setup-node.path)" = '.github/actions/setup-node'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-node-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: node-source
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - name: Fetch pinned setup-node only on cache miss
+        if: steps.node-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-node
+          test "$(git -C .github/actions/setup-node rev-parse HEAD)" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test -f .github/actions/setup-node/.git
+          rm .github/actions/setup-node/.git
+      - name: Verify setup-node source
+        working-directory: .
+        shell: bash
+        run: python scripts/verify_cached_setup_node.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.node-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - uses: ./.github/actions/setup-node
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - name: Read and validate setup-java gitlink
+        id: java-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-java | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test "$(git config -f .gitmodules --get submodule.setup-java.url)" = 'https://github.com/actions/setup-java.git'
+          test "$(git config -f .gitmodules --get submodule.setup-java.path)" = '.github/actions/setup-java'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-java-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: java-source
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Fetch pinned setup-java only on cache miss
+        if: steps.java-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-java
+          test "$(git -C .github/actions/setup-java rev-parse HEAD)" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test -f .github/actions/setup-java/.git
+          rm .github/actions/setup-java/.git
+      - name: Verify setup-java source
+        working-directory: .
+        run: python3 scripts/verify_cached_setup_java.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.java-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Isolate upstream test fixtures from Gradle cache discovery
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java hashes all **/gradle-wrapper.properties. The verified
+          # upstream source includes test fixtures; keep them out of the
+          # workspace after saving the full verified source.
+          test -d .github/actions/setup-java/__tests__
+          mv .github/actions/setup-java/__tests__ "$(mktemp -d "$RUNNER_TEMP/setup-java-fixtures.XXXXXX")/"
+          test -z "$(find .github/actions/setup-java -name gradle-wrapper.properties -print -quit)"
+      - uses: ./.github/actions/setup-java
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
+      - name: Install pinned official Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Official Android command-line tools Linux archive (v22.0).
+          # SHA-256 from developer.android.com/studio#command-line-tools-only.
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip" \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+          test -x "$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+      - name: Install SDK and NDK using Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install SDK packages directly using the official Android CLI.
+          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          # Android CLI prompts when a new Android SDK license must be accepted.
+          # Exit status must come from the installer, not the yes process.
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Initialize Android Worker
+        run: |
+          npm ci
+          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          npx tauri android init --ci --skip-targets-install
+      - name: Fingerprint generated Gradle dependency inputs
+        id: modules
+        working-directory: .
+        run: python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: modules-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.modules.outputs.key }}
+      - name: Populate dependencies with representative Android build
+        if: steps.modules-cache.outputs.cache-hit != 'true'
+        run: python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug
+      - name: Verify Gradle offline APK build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tauri must keep its CLI options server alive during Gradle tasks.
+          # Use a temporary Gradle init script to enforce offline resolution
+          # without disabling Rust tasks or changing the generated project.
+          init_dir="$HOME/.gradle/init.d"
+          mkdir -p "$init_dir"
+          init="$(mktemp "$init_dir/arena-offline.XXXXXX.gradle")"
+          trap 'rm -f -- "$init"' EXIT
+          cat > "$init" <<'GRADLE'
+          gradle.startParameter.offline = true
+          gradle.startParameter.rerunTasks = true
+          println("ARENA_GRADLE_OFFLINE_ENFORCED=" + gradle.startParameter.offline)
+          GRADLE
+          rm -f src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          npx --no-install tauri android build --apk --target aarch64 --ci --debug 2>&1 | tee "$RUNNER_TEMP/gradle-offline-build.log"
+          grep -Fx 'ARENA_GRADLE_OFFLINE_ENFORCED=true' "$RUNNER_TEMP/gradle-offline-build.log"
+          test -s src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          echo GRADLE_OFFLINE_APK_OK
+      - name: Inspect cache scope
+        shell: bash
+        run: |
+          du -sh "$HOME/.gradle/caches/modules-2"
+          find "$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin" -maxdepth 2 -type d -name 2.3.21 | grep -q .
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.modules-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.modules.outputs.key }}
+
+      - name: Save independent wrapper on miss
+        if: steps.wrapper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
+
+  restore:
+    needs: warmup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned Worker fixture
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d "$RUNNER_TEMP/worker-fixture.XXXXXX")"
+          git -C "$fixture" init -q
+          git -C "$fixture" fetch --depth 1 https://github.com/MarVinPL/ai-chess-arena.git 7ccfedcf5eaa5887e7411b07647299ea4efc3b7c
+          test "$(git -C "$fixture" rev-parse FETCH_HEAD)" = 7ccfedcf5eaa5887e7411b07647299ea4efc3b7c
+          git -C "$fixture" archive FETCH_HEAD remote_worker_gui | tar -x -C "$GITHUB_WORKSPACE"
+      - name: Read and validate setup-node gitlink
+        id: node-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-node | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test "$(git config -f .gitmodules --get submodule.setup-node.url)" = 'https://github.com/actions/setup-node.git'
+          test "$(git config -f .gitmodules --get submodule.setup-node.path)" = '.github/actions/setup-node'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-node-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: node-source
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - name: Fetch pinned setup-node only on cache miss
+        if: steps.node-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-node
+          test "$(git -C .github/actions/setup-node rev-parse HEAD)" = '949feb2413d6458794dcd2491c4babbbce0c15c1'
+          test -f .github/actions/setup-node/.git
+          rm .github/actions/setup-node/.git
+      - name: Verify setup-node source
+        working-directory: .
+        shell: bash
+        run: python scripts/verify_cached_setup_node.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.node-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-node
+          key: ${{ steps.node-pin.outputs.key }}
+      - uses: ./.github/actions/setup-node
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - name: Read and validate setup-java gitlink
+        id: java-pin
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(git ls-tree HEAD -- .github/actions/setup-java | awk '$1=="160000" && $2=="commit" {print $3}')"
+          test "$pin" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test "$(git config -f .gitmodules --get submodule.setup-java.url)" = 'https://github.com/actions/setup-java.git'
+          test "$(git config -f .gitmodules --get submodule.setup-java.path)" = '.github/actions/setup-java'
+          echo "key=action-source-v1-${RUNNER_OS}-${RUNNER_ARCH}-setup-java-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: java-source
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Fetch pinned setup-java only on cache miss
+        if: steps.java-source.outputs.cache-hit != 'true'
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c protocol.file.allow=never submodule update --init --depth 1 -- .github/actions/setup-java
+          test "$(git -C .github/actions/setup-java rev-parse HEAD)" = 'd1374f8ac74474200d16ef8ecee22c7ae7a51880'
+          test -f .github/actions/setup-java/.git
+          rm .github/actions/setup-java/.git
+      - name: Verify setup-java source
+        working-directory: .
+        run: python3 scripts/verify_cached_setup_java.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        if: steps.java-source.outputs.cache-hit != 'true'
+        with:
+          path: .github/actions/setup-java
+          key: ${{ steps.java-pin.outputs.key }}
+      - name: Isolate upstream test fixtures from Gradle cache discovery
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java hashes all **/gradle-wrapper.properties. The verified
+          # upstream source includes test fixtures; keep them out of the
+          # workspace after saving the full verified source.
+          test -d .github/actions/setup-java/__tests__
+          mv .github/actions/setup-java/__tests__ "$(mktemp -d "$RUNNER_TEMP/setup-java-fixtures.XXXXXX")/"
+          test -z "$(find .github/actions/setup-java -name gradle-wrapper.properties -print -quit)"
+      - uses: ./.github/actions/setup-java
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache-jdk: false
+      - name: Restore independent Gradle wrapper cache
+        id: wrapper-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: /home/runner/.gradle/wrapper
+          key: setup-java-${{ runner.os }}-x64-gradle-wrapper-${{ hashFiles('.github/gradle-cache/gradle-wrapper.properties') }}
+      - name: Install pinned official Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Official Android command-line tools Linux archive (v22.0).
+          # SHA-256 from developer.android.com/studio#command-line-tools-only.
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip" \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+          test -x "$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+      - name: Install SDK and NDK using Android CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install SDK packages directly using the official Android CLI.
+          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          # Android CLI prompts when a new Android SDK license must be accepted.
+          # Exit status must come from the installer, not the yes process.
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Initialize Android Worker
+        run: |
+          npm ci
+          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          npx tauri android init --ci --skip-targets-install
+      - name: Isolate Gradle dependency cache before restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          # setup-java can restore its older, broad dependency cache. Do not
+          # let that cache or runner-preinstalled modules satisfy this proof.
+          test "${GRADLE_USER_HOME:-$HOME/.gradle}" = "$HOME/.gradle"
+          test -d "$HOME/.gradle/wrapper/dists"
+          quarantine="$(mktemp -d "$RUNNER_TEMP/arena-gradle-quarantine.XXXXXX")"
+          # Preserve the literal cache path (part of GitHub's cache version).
+          # Quarantine every existing Gradle cache, not the wrapper distribution.
+          if test -d "$HOME/.gradle/caches"; then
+            mv "$HOME/.gradle/caches" "$quarantine/caches"
+          fi
+          test ! -e "$HOME/.gradle/caches"
+          echo "GRADLE_USER_HOME=$HOME/.gradle" >> "$GITHUB_ENV"
+          echo GRADLE_FRESH_CACHE_DIRECTORY_OK
+      - name: Fingerprint generated Gradle dependency inputs
+        id: modules
+        working-directory: .
+        run: python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: modules-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.modules.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Probe changed dependency fingerprint
+        id: changed-modules
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=remote_worker_gui/src-tauri/gen/android/app/build.gradle.kts
+          backup="$(mktemp "$RUNNER_TEMP/arena-gradle-input.XXXXXX")"
+          cp "$file" "$backup"
+          trap 'cp "$backup" "$file"; rm -f "$backup"' EXIT
+          printf '\n// fingerprint-change-test\n' >> "$file"
+          python3 scripts/gradle_dependency_cache_key.py
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: changed-cache
+        with:
+          path: ~/.gradle/caches/modules-2
+          key: ${{ steps.changed-modules.outputs.key }}
+          lookup-only: true
+      - name: Verify changed fingerprint misses without modifying cache
+        shell: bash
+        env:
+          ORIGINAL: ${{ steps.modules.outputs.key }}
+          CHANGED: ${{ steps.changed-modules.outputs.key }}
+          HIT: ${{ steps.changed-cache.outputs.cache-hit }}
+        run: |
+          test "$ORIGINAL" != "$CHANGED"
+          test "$HIT" != true
+          echo CHANGED_GRADLE_FINGERPRINT_MISS_OK
+      - name: Require exact dependency cache hit
+        shell: bash
+        env:
+          MODULES_HIT: ${{ steps.modules-cache.outputs.cache-hit }}
+        run: test "$MODULES_HIT" = true
+      - name: Verify Gradle offline APK build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tauri must keep its CLI options server alive during Gradle tasks.
+          # Use a temporary Gradle init script to enforce offline resolution
+          # without disabling Rust tasks or changing the generated project.
+          init_dir="$GRADLE_USER_HOME/init.d"
+          mkdir -p "$init_dir"
+          init="$(mktemp "$init_dir/arena-offline.XXXXXX.gradle")"
+          trap 'rm -f -- "$init"' EXIT
+          cat > "$init" <<'GRADLE'
+          gradle.startParameter.offline = true
+          gradle.startParameter.rerunTasks = true
+          println("ARENA_GRADLE_OFFLINE_ENFORCED=" + gradle.startParameter.offline)
+          GRADLE
+          rm -f src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          npx --no-install tauri android build --apk --target aarch64 --ci --debug 2>&1 | tee "$RUNNER_TEMP/gradle-offline-build.log"
+          grep -Fx 'ARENA_GRADLE_OFFLINE_ENFORCED=true' "$RUNNER_TEMP/gradle-offline-build.log"
+          test -s src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          echo GRADLE_OFFLINE_APK_OK
+      - name: Inspect cache scope
+        shell: bash
+        run: |
+          du -sh "$GRADLE_USER_HOME/caches/modules-2"
+          find "$GRADLE_USER_HOME/caches/modules-2/files-2.1/org.jetbrains.kotlin" -maxdepth 2 -type d -name 2.3.21 | grep -q .
