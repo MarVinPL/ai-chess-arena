@@ -72,7 +72,7 @@ def test_phone_model_is_restricted_to_arenas_canonical_legal_moves():
     assert 'Legal UCI moves:' in LOCAL
     assert 'request["grammar"] = json!(grammar)' in LOCAL
     assert 'legal_moves.contains(&proposed.as_str())' in LOCAL
-    assert 'matches!((version, job.len()), (1, 6) | (2, 7))' in COORD
+    assert 'matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8))' in COORD
     assert 'let legal = job.get("legal_moves").and_then(Value::as_array)' in COORD
 
 
@@ -86,10 +86,11 @@ def test_real_phone_inference_checks_authenticated_stop_at_both_boundaries():
         '/// Arena is the sole owner of the chessboard', 1
     )[0]
     first = block.index('check_phone_stop_gate(&server, &worker_id, &token, job_id).await?')
-    infer = block.index('android_local_llama::infer_local_uci(job).await?')
+    infer = block.index('execute_fenced_native_inference(&server, &worker_id, &token, job, &permit).await?')
+    legacy = block.index('android_local_llama::infer_local_uci(job).await?')
     second = block.rindex('check_phone_stop_gate(&server, &worker_id, &token, job_id).await?')
     submit = block.index('android_update_coordinator::submit_my_inference_move(')
-    assert first < infer < second < submit
+    assert first < infer < legacy < second < submit
     assert 'android_local_llama::generation_active()' in LIB
     install = LIB.split('async fn install_downloaded_worker_apk(', 1)[1].split(
         '/// Inspect only the job that Arena', 1

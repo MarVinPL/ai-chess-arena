@@ -56,7 +56,7 @@ pub(crate) struct EmbeddedLlamaModel {
     close: CloseModel,
     is_open: IsModelOpen,
     generate: GenerateGreedy,
-    lib: NativeLibrary,
+    _lib: NativeLibrary,
     _verified_file: ModelSession,
     _not_send: PhantomData<*mut ()>,
 }
@@ -64,15 +64,14 @@ pub(crate) struct EmbeddedLlamaModel {
 impl EmbeddedLlamaModel {
     /// Internal experimental token generation; no dispatch, no remote
     /// authorization, and no chess move is accepted without a legal-list
-    /// membership check. No wallclock abort yet: do not enable jobs.
-    #[allow(dead_code)]
+    /// membership check.
     pub(crate) fn propose_uci(
-        &self, fen: &str, legal_moves: &[String],
+        &self, fen: &str, legal_moves: &[String], max_tokens: u64,
     ) -> Result<String, String> {
         if !self.is_open() || fen.len() > 120 || fen.split(' ').count() != 6 ||
            !fen.bytes().all(|b| b.is_ascii_alphanumeric() ||
               matches!(b, b'/' | b' ' | b'-')) ||
-           legal_moves.is_empty() || legal_moves.len() > 256 {
+           legal_moves.is_empty() || legal_moves.len() > 256 || max_tokens == 0 {
             return Err("Nieprawidłowa pozycja lub lista ruchów".into());
         }
         for mv in legal_moves {
@@ -91,7 +90,7 @@ FEN: {fen}\nLegal UCI moves: {}\nUCI:",
         let mut output = [0u8; 128];
         let written = unsafe {
             (self.generate)(input.as_ptr(), input.as_bytes().len() as c_int,
-                            16, output.as_mut_ptr().cast(), output.len() as c_int)
+                            max_tokens.min(16) as c_int, output.as_mut_ptr().cast(), output.len() as c_int)
         };
         if written < 0 || written as usize >= output.len() {
             return Err("Wbudowany silnik nie wygenerował ruchu".into());
@@ -210,7 +209,7 @@ pub(crate) fn load_verified_embedded_model(
         return Err("Wbudowany silnik nie załadował modelu GGUF".into());
     }
     Ok(EmbeddedLlamaModel {
-        close, is_open, generate, lib, _verified_file: verified,
+        close, is_open, generate, _lib: lib, _verified_file: verified,
         _not_send: PhantomData,
     })
 }

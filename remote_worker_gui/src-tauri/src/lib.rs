@@ -51,7 +51,9 @@ mod android_update_install_state;
 use serde::Serialize;
 use std::time::Duration;
 
+#[cfg(not(target_os = "android"))]
 const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
+#[cfg(not(target_os = "android"))]
 const TOKEN_ACCOUNT: &str = "worker-token";
 
 // A pending coordinator hold requires the *original* machine token for
@@ -679,9 +681,13 @@ async fn poll_my_inference_job(
     }
     let machine_token = token_entry()?.get_password()
         .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
-    android_update_coordinator::fetch_my_inference_job(
+    let mut assignment = android_update_coordinator::fetch_my_inference_job(
         &server, &worker_id, &machine_token,
-    ).await
+    ).await?;
+    if let Some(job) = assignment.get_mut("job").and_then(serde_json::Value::as_object_mut) {
+        job.remove("lease_token");
+    }
+    Ok(assignment)
 }
 
 /// Refuse new or completed inference when Arena has asked for STOP.
@@ -709,10 +715,98 @@ async fn check_phone_stop_gate(
     }
 }
 
+#[cfg(target_os = "android")]
+async fn execute_fenced_native_inference(
+    server: &str,
+    worker_id: &str,
+    token: &str,
+    job: &serde_json::Value,
+    permit: &std::sync::Arc<android_local_llama::LocalGenerationPermit>,
+) -> Result<Option<String>, String> {
+    use android_update_coordinator::StopInstruction;
+    use sha2::{Digest, Sha256};
+    use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+    use std::time::Duration;
+    use tokio::time::{sleep, timeout_at, Instant};
+
+    let text = |key| job.get(key).and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("Brak pola {key} w zadaniu natywnym"));
+    let job_id = text("job_id")?;
+    let lease_digest = format!("{:x}", Sha256::digest(text("lease_token")?.as_bytes()));
+    let fen = text("fen")?.to_owned();
+    let moves = job.get("legal_moves").and_then(serde_json::Value::as_array)
+        .ok_or("Brak legalnych ruchów w zadaniu natywnym")?
+        .iter().map(|value| value.as_str().map(str::to_owned)
+            .ok_or("Nieprawidłowy ruch w zadaniu natywnym"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let seconds = job.get("timeout_seconds").and_then(serde_json::Value::as_u64)
+        .ok_or("Brak limitu czasu w zadaniu natywnym")?;
+    let max_tokens = job.get("max_tokens").and_then(serde_json::Value::as_u64)
+        .ok_or("Brak limitu tokenów w zadaniu natywnym")?;
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let approved = timeout_at(deadline, android_update_coordinator::fetch_my_approved_gguf(
+        server, worker_id, token, job,
+    )).await.map_err(|_| "Minął czas zadania natywnego")??;
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let task_stop = Arc::clone(&stop_requested);
+    let task_permit = Arc::clone(permit);
+    let engine = std::thread::Builder::new().name("arena-native-llama".into())
+        .spawn(move || {
+            // Keep the generation guard even if the async command is dropped.
+            let _permit = task_permit;
+            if task_stop.load(Ordering::Acquire) {
+                return Err("Zatrzymano zadanie natywne".to_owned());
+            }
+            let model = android_llama_runtime::load_verified_embedded_model(
+                &approved.sha256, approved.size_bytes,
+            )?;
+            // Opening a model resets the bridge STOP flag. Check again before
+            // generation so STOP received during loading cannot be lost.
+            if task_stop.load(Ordering::Acquire) {
+                return Err("Zatrzymano ładowanie zadania natywnego".to_owned());
+            }
+            model.propose_uci(&fen, &moves, max_tokens)
+        }).map_err(|_| "Nie można uruchomić wątku llama.cpp")?;
+
+    let stop = loop {
+        if engine.is_finished() {
+            if Instant::now() >= deadline {
+                break Err("Minął czas zadania natywnego".to_owned());
+            }
+            return engine.join().map_err(|_| "Błąd wątku llama.cpp")?.map(Some);
+        }
+        match timeout_at(deadline, android_update_coordinator::poll_pause_instruction(
+            server, worker_id, token,
+        )).await {
+            Ok(Ok(StopInstruction::None)) => (),
+            Ok(Ok(StopInstruction::StopCheckpoint {
+                job_id: requested, request_id, lease_token_sha256: Some(digest),
+            })) if requested == job_id && digest == lease_digest => break Ok(request_id),
+            Ok(Ok(_)) => break Err("Arena unieważniła zadanie natywne lub lease STOP".into()),
+            Ok(Err(error)) => break Err(error),
+            Err(_) => break Err("Minął czas zadania natywnego".into()),
+        }
+        sleep(Duration::from_millis(500)).await;
+    };
+    stop_requested.store(true, Ordering::Release);
+    let signal = android_llama_runtime::request_embedded_inference_stop();
+    // Join observes the exit of the actual inference thread, including the
+    // destruction of the native model. A STOP signal alone is not evidence.
+    tauri::async_runtime::spawn_blocking(move || engine.join().is_ok())
+        .await.map_err(|_| "Nie można zweryfikować zakończenia llama.cpp")
+        .and_then(|joined| if joined { Ok(()) } else { Err("Błąd wątku llama.cpp") })?;
+    signal?;
+    let request_id = stop?;
+    android_update_coordinator::report_native_stop(
+        server, worker_id, token, job_id, &request_id, text("lease_token")?,
+    ).await?;
+    Ok(None)
+}
+
 /// Execute exactly one Arena-assigned move on THIS Android device, using a
-/// local llama.cpp service (for example in Termux). No VPS inference, no game
-/// state or checkpoint writes on the phone. The local llama-server model
-/// alias prevents accidental model mismatches but is not a GGUF hash proof.
+/// embedded llama.cpp for v3 or the existing loopback service for v1/v2.
+/// The phone proposes a move and Arena owns the game state and checkpoint.
 #[tauri::command]
 async fn execute_phone_inference_once(
     server: String, worker_id: String,
@@ -724,7 +818,7 @@ async fn execute_phone_inference_once(
     }
     #[cfg(target_os = "android")]
     {
-        let _permit = android_local_llama::acquire_generation()?;
+        let permit = std::sync::Arc::new(android_local_llama::acquire_generation()?);
         if android_update_recovery::load_pending()?.is_some()
             || android_update_install_journal::load()?.is_some() {
             return Err("Trwa aktualizacja APK — inferencja zablokowana".into());
@@ -756,7 +850,16 @@ async fn execute_phone_inference_once(
         // STOP and missing coordinator connectivity both fail closed. This
         // request does not ACK the pause nor release its lease.
         check_phone_stop_gate(&server, &worker_id, &token, job_id).await?;
-        let uci = android_local_llama::infer_local_uci(job).await?;
+        let lease_token = job.get("lease_token").and_then(serde_json::Value::as_str);
+        let uci = if lease_token.is_some() {
+            match execute_fenced_native_inference(&server, &worker_id, &token, job, &permit).await? {
+                Some(uci) => uci,
+                // Local thread termination alone cannot authorize coordinator ACK.
+                None => return Ok(serde_json::json!({"state": "native_stopped"})),
+            }
+        } else {
+            android_local_llama::infer_local_uci(job).await?
+        };
         check_phone_stop_gate(&server, &worker_id, &token, job_id).await?;
         // This check is also performed atomically by the coordinator result
         // endpoint. It guards against APK installation while generating.
@@ -772,7 +875,7 @@ async fn execute_phone_inference_once(
             return Err("Arena zmieniła lub unieważniła zadanie podczas obliczeń".into());
         }
         let result = android_update_coordinator::submit_my_inference_move(
-            &server, &worker_id, &token, job_id, &uci,
+            &server, &worker_id, &token, job_id, &uci, lease_token,
         ).await?;
         Ok(serde_json::json!({
             "state": result, "job_id": job_id,

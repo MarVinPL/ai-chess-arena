@@ -26,7 +26,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Read and validate setup-node gitlink
         id: node-pin
         working-directory: .
@@ -158,11 +158,12 @@ jobs:
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
+      - name: Install stable Rust with the ARM64 Android target
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-linux-android
+          rustup default stable
       - name: Restore Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: remote_worker_gui/src-tauri
           key: android-arm64-gradle-9.6.1
@@ -177,8 +178,20 @@ jobs:
       - name: Initialize Android Worker
         run: |
           npm ci
-          # ARM64 is installed above by rust-toolchain; avoid fetching 3 unused Android targets.
+          # ARM64 is installed above by rustup; avoid fetching 3 unused Android targets.
           npx tauri android init --ci --skip-targets-install
+          cache_pin="$GITHUB_WORKSPACE/.github/gradle-cache/gradle-wrapper.properties"
+          wrapper=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
+          expected="$(sed -n 's/^distributionUrl=//p' "$cache_pin")"
+          actual="$(sed -n 's/^distributionUrl=//p' "$wrapper" | tr -d '\r')"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::warning::The generated Gradle wrapper version differs from the cache key."
+          elif find "${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/gradle-9.6.1-bin" \
+                    -name 'gradle-launcher-9.6.1.jar' -print -quit 2>/dev/null | grep -q .; then
+            echo 'Gradle 9.6.1 distribution restored; no wrapper download needed.'
+          else
+            echo 'Gradle 9.6.1 cache miss; the shared warmup workflow populates it.'
+          fi
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
@@ -277,7 +290,7 @@ jobs:
           cp "$apk" "dist/$name"
           (cd dist && sha256sum "$name" > SHA256SUMS)
           (cd dist && sha256sum --check SHA256SUMS)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: ai-chess-arena-worker-arm64-debug

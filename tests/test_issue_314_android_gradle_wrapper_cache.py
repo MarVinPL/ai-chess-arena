@@ -39,7 +39,7 @@ def test_rust_cache_is_independent_of_gradle_wrapper_restore():
     rust = WORKFLOW.split("name: Restore Rust cache", 1)[1].split(
         "name: Report Gradle wrapper cache", 1
     )[0]
-    assert "uses: swatinem/rust-cache@v2" in rust
+    assert "uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0" in rust
     assert "cache-directories: ~/.gradle/wrapper/dists" not in rust
     report = WORKFLOW.split("name: Report Gradle wrapper cache", 1)[1].split(
         "name: Initialize Android Worker", 1
