@@ -440,7 +440,7 @@ def test_pinned_embedded_llama_build_and_apk_packaging_are_fail_closed():
     assert 'bash android/build_embedded_llama.sh' in workflow
     assert 'unzip -Z1 "$apk"' in workflow
     assert 'lib/arm64-v8a/lib${name}.so' in workflow
-    assert workflow.index('bash android/build_embedded_llama.sh') < workflow.index('npx tauri android build')
+    assert workflow.index('bash android/build_embedded_llama.sh') < workflow.index('python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug')
     assert 'LLAMA_COMMIT=master' not in script
     assert 'curl ' not in script
 

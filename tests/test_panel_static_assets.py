@@ -68,7 +68,7 @@ class PanelAssetTests(unittest.TestCase):
         start = source.index("    def do_GET(self):")
         segment = source[start:source.index("        if web_panel_model_api.dispatch_panel_model_get(self, path):", start)]
         self.assertLess(segment.index("if not user:"), segment.index("self.send_panel_asset(path)"))
-        self.assertIn("if path in web_panel_backend.ASSETS:", segment)
+        self.assertIn("if path.startswith('/assets/'):", segment)
 
 
 if __name__ == "__main__":

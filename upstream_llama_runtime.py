@@ -133,9 +133,11 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
             raise RunnerError("Binarium upstream znajduje się poza dedykowanym katalogiem runtime")
 
         with self._lock:
+            self._check_cancelled()
             if self.loaded_model == str(model) and self._healthy():
                 return
             self.stop()
+            self._check_cancelled()
             self._notify("model_loading", f"Ładowanie modelu upstream: {model.name}", model=model.name)
             args = self.profile.build_argv(model)
             self._process = self._popen(
@@ -151,6 +153,9 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
             self._desired_draft_model_path = None
             deadline = self._monotonic() + self.startup_timeout
             while self._monotonic() < deadline:
+                if self._cancel_requested.is_set():
+                    self.stop()
+                    self._check_cancelled()
                 if self._process.poll() is not None:
                     code = self._process.returncode
                     self._process = None
@@ -158,6 +163,7 @@ class UpstreamLlamaServerRuntime(LlamafileRuntime):
                     self._desired_model_path = None
                     raise RunnerError(f"llama-server zakończył start kodem {code}")
                 if self._healthy():
+                    self._check_cancelled()
                     self._notify("model_ready", f"Model upstream gotowy: {model.name}", model=model.name)
                     return
                 self._sleep(0.5)

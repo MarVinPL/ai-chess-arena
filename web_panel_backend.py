@@ -11,7 +11,15 @@ ASSETS = {
     "/assets/arena.js": ("web/js/arena.js", "text/javascript; charset=utf-8"),
     "/assets/navigation.js": ("web/js/navigation.js", "text/javascript; charset=utf-8"),
     "/assets/navigation.css": ("web/css/navigation.css", "text/css; charset=utf-8"),
+    "/assets/panel-icons.js": ("web/js/panel-icons.js", "text/javascript; charset=utf-8"),
+    "/assets/board-redesign.css": ("web/css/board-redesign.css", "text/css; charset=utf-8"),
 }
+
+for style in ("cburnett", "merida", "shapes", "chessnut"):
+    for color in "wb":
+        for piece in "KQRBNP":
+            name = color + piece + ".svg"
+            ASSETS[f"/assets/pieces/{style}/{name}"] = (f"web/pieces/{style}/{name}", "image/svg+xml")
 
 
 def serve_panel_asset(handler, url_path, root):
