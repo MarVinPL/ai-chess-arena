@@ -89,7 +89,8 @@ $('model-permission-request-form').addEventListener('submit',async event=>{
  try{const response=await fetch('/api/model-permissions/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||'Błąd żądania');status.textContent='Utworzono oczekujące żądanie #'+data.id+' — nie jest ono jeszcze zgodą.';$('model-permission-request-form').reset();await refreshModelPermissions()}catch(error){status.textContent='Nie udało się złożyć żądania: '+error}
 });
 refreshModelPermissions();
-refresh();loadLeague();refreshLive();setInterval(refresh,1200);setInterval(refreshLive,1000);setInterval(loadLeague,10000);
+const tournamentControl={pending:null,rows:[],signature:null,reading:false,epoch:0,dirty:false};
+refresh();loadLeague();refreshLive();setInterval(refresh,1200);setInterval(refreshLive,1000);setInterval(loadLeague,10000);setInterval(syncTournamentCards,1000);
 function tableRows(target,rows,headers){const host=$(target);host.textContent='';if(!rows.length){host.textContent='Brak danych.';return}const t=document.createElement('table');t.className='league-table';const head=document.createElement('tr');headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;head.appendChild(th)});t.appendChild(head);rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(v=>{const td=document.createElement('td');td.textContent=String(v);tr.appendChild(td)});t.appendChild(tr)});host.appendChild(t)}
 let selectedTournamentId=null;
 let tournamentViewRequest=0;
@@ -341,10 +342,73 @@ function tournamentReadinessLabel(t){
  if(!cached)return 'Gotowość: sprawdź warunki startu';
  return cached;
 }
-function renderTournaments(rows){
+function transitionLabel(action){
+ return {start:'Uruchamianie…',resume:'Wznawianie…',stop:'Zatrzymywanie…'}[action];
+}
+function beginTournamentControl(action,id){
+ if(tournamentControl.pending)return false;
+ tournamentControl.epoch++;
+ tournamentControl.pending={action,id:Number(id),accepted:false,started:Date.now()};
+ renderTournaments(tournamentControl.rows,true);
+ return true;
+}
+function clearTournamentControl(){
+ tournamentControl.pending=null;
+ tournamentControl.epoch++;
+ renderTournaments(tournamentControl.rows,true);
+}
+function tournamentControlOutcome(p,t){
+ if(!p?.accepted||!t)return null;
+ if(p.action==='stop')return t.status==='stopped'?'confirmed':(['failed','completed'].includes(t.status)?'terminal':null);
+ return t.status==='running'?'confirmed':(['completed','failed'].includes(t.status)?'terminal':null);
+}
+async function syncTournamentCards(){
+ if(tournamentControl.reading)return;
+ tournamentControl.reading=true;
+ const epoch=tournamentControl.epoch;
+ try{
+  const r=await fetch('/api/tournaments',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const rows=await r.json();
+  if(!Array.isArray(rows))throw Error('Nieprawidłowa lista turniejów');
+  if(epoch!==tournamentControl.epoch)return;
+  const p=tournamentControl.pending;
+  const t=p&&rows.find(row=>Number(row.id)===p.id);
+  let outcome=tournamentControlOutcome(p,t);
+  if(p?.accepted&&!outcome&&Date.now()-p.started>30000){
+   const runner=await fetch('/api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+   if(!runner.ok)throw Error('HTTP '+runner.status);
+   const state=await runner.json();
+   if(epoch!==tournamentControl.epoch)return;
+   if(state.tournament_running===false)outcome='unconfirmed';
+  }
+  const changed=JSON.stringify(rows.map(t=>[t.id,t.status,t.resume_blocked]))!==tournamentControl.signature;
+  if(outcome){
+   tournamentControl.pending=null;
+   tournamentControl.epoch++;
+   $('league-message').textContent=outcome==='unconfirmed'?'Runner nie działa; operacja nie została potwierdzona. Sprawdź diagnostykę turnieju #'+p.id+'.':'Turniej #'+p.id+' · '+t.status;
+  }else if(p?.accepted&&Date.now()-p.started>30000){
+   $('league-message').textContent='Operacja przyjęta; nadal oczekuję na potwierdzenie stanu turnieju #'+p.id+'.';
+  }
+  if(outcome||tournamentControl.dirty||JSON.stringify(rows)!==JSON.stringify(tournamentControl.rows))renderTournaments(rows,Boolean(outcome));
+  if(changed||outcome){
+   if(typeof selectedTournamentId!=='undefined'&&selectedTournamentId)void loadTournamentView(selectedTournamentId);
+   void refreshLive();
+  }
+ }catch(e){
+  if(tournamentControl.pending?.accepted)$('league-message').textContent='Operacja przyjęta, odczyt stanu niedostępny: '+e;
+  else if(tournamentControl.signature===null)$('tournament-list').textContent='Nie udało się odczytać turniejów: '+e;
+ }finally{tournamentControl.reading=false}
+}
+function renderTournaments(rows,force=false){
  const host=$('tournament-list');
  // Preserve an open diagnostic (and its focused controls) across routine polling.
- if(host.contains(document.activeElement))return;
+ const signature=JSON.stringify(rows.map(t=>[t.id,t.status,t.resume_blocked]));
+ const changed=signature!==tournamentControl.signature;
+ tournamentControl.rows=rows;
+ if(!force&&!changed&&(host.contains(document.activeElement)||expandedTournamentDiagnostics.size)){tournamentControl.dirty=true;return;}
+ tournamentControl.dirty=false;
+ tournamentControl.signature=signature;
  const activeIds=new Set(rows.filter(t=>['planned','stopped','failed'].includes(t.status)).map(t=>t.id));
  for(const id of tournamentReadiness.keys())if(!activeIds.has(id))tournamentReadiness.delete(id);
  for(const id of expandedTournamentDiagnostics)if(!activeIds.has(id))expandedTournamentDiagnostics.delete(id);
@@ -359,7 +423,7 @@ function renderTournaments(rows){
   field.append(term,detail);grid.appendChild(field);
  };
  rows.forEach(t=>{
-  const card=document.createElement('article');card.className='tournament-card';
+  const card=document.createElement('article');card.className='tournament-card';card.dataset.tournamentId=String(t.id);
   const header=document.createElement('div');header.className='tournament-card__header';
   const title=document.createElement('h5');title.className='tournament-card__title';title.dataset.icon='trophy';
   title.textContent=t.name||'Turniej bez nazwy';
@@ -370,6 +434,9 @@ function renderTournaments(rows){
   status.dataset.status=String(t.status||'unknown');
   status.dataset.icon=({planned:'calendar',running:'play',stopped:'pause',failed:'circle-alert',completed:'circle-check'})[t.status]||'circle-help';
   status.textContent=statusLabels[t.status]||('Status: '+(t.status||'nieznany'));
+  const pending=tournamentControl.pending;
+  const ownPending=pending&&pending.id===Number(t.id);
+  if(ownPending){status.textContent=transitionLabel(pending.action);status.dataset.icon='loader-circle';status.setAttribute('aria-live','polite');}
   header.append(title,status);card.appendChild(header);
   const fields=document.createElement('dl');fields.className='tournament-card__fields';
   const {completed,planned,valid,phase}=tournamentCardProgress(t);
@@ -432,19 +499,26 @@ function renderTournaments(rows){
   }
   if(['planned','stopped','failed'].includes(t.status)&&!t.resume_blocked){
    const start=document.createElement('button');start.textContent=t.status==='planned'?'Uruchom turniej':'Wznów turniej';start.dataset.icon='play';
+   start.disabled=Boolean(pending);
+   if(ownPending){start.textContent=transitionLabel(pending.action);start.dataset.icon='loader-circle';}
    start.onclick=async()=>{
-    try{const check=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const readiness=await check.json();if(!check.ok)throw Error(readiness.error||check.status);if(!readiness.ready){await showPreflight();diagnostic.scrollIntoView({behavior:'smooth',block:'nearest'});return;}
-     if(!confirm('Wszystkie warunki preflight są spełnione. Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.'))return;
-     const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok){await showPreflight();throw Error(d.error||r.status)}$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await loadLeague();
-    }catch(e){$('league-message').textContent='Nie uruchomiono turnieju: '+e}
+    if(!beginTournamentControl(t.status==='planned'?'start':'resume',t.id))return;
+    try{const check=await fetch('/api/tournaments/'+t.id+'/preflight',{cache:'no-store'});const readiness=await check.json();if(!check.ok)throw Error(readiness.error||check.status);if(!readiness.ready){clearTournamentControl();const current=Array.from($('tournament-list').querySelectorAll('.tournament-card')).find(c=>c.dataset.tournamentId===String(t.id));current?.querySelector('[data-icon="circle-help"]')?.click();return;}
+     if(!confirm('Wszystkie warunki preflight są spełnione. Uruchomić turniej? Modele będą ładowane pojedynczo, kolejno do RAM.')){clearTournamentControl();return;}
+     const r=await fetch('/api/tournaments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tournament_id:t.id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);tournamentControl.pending.accepted=true;tournamentControl.epoch++;$('league-message').textContent='Start turnieju przyjęty; sprawdzam stan runnera…';await syncTournamentCards();await refreshLive();
+    }catch(e){clearTournamentControl();$('league-message').textContent='Nie uruchomiono turnieju: '+e}
    };actions.appendChild(start);
   }
   if(t.status==='running'){
    const stop=document.createElement('button');stop.className='stop';stop.textContent='Zatrzymaj turniej';stop.dataset.icon='square';
+   stop.disabled=Boolean(pending);
+   if(ownPending){stop.textContent=transitionLabel(pending.action);stop.dataset.icon='loader-circle';}
    stop.onclick=async()=>{
+    if(tournamentControl.pending)return;
     if(!confirm('Bezpiecznie zatrzymać turniej? Ostatnia zweryfikowana pozycja zostanie zapisana i będzie można wznowić od tego miejsca.'))return;
-    try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent=d.status==='stop_requested'?'Żądanie zatrzymania przyjęte. Trwa zapis ostatniej zweryfikowanej pozycji.':'Turniej nie jest obecnie uruchomiony.';await loadLeague()}
-    catch(e){$('league-message').textContent='Nie udało się zatrzymać: '+e}
+    if(!beginTournamentControl('stop',t.id))return;
+    try{const r=await fetch('/api/tournaments/stop',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent=d.status==='stop_requested'?'Żądanie zatrzymania przyjęte. Trwa zapis ostatniej zweryfikowanej pozycji.':'Turniej nie jest obecnie uruchomiony.';tournamentControl.pending.accepted=true;tournamentControl.epoch++;await syncTournamentCards();await refreshLive()}
+    catch(e){clearTournamentControl();$('league-message').textContent='Nie udało się zatrzymać: '+e}
    };actions.appendChild(stop);
   }
   card.appendChild(actions);host.appendChild(card);
@@ -831,7 +905,7 @@ function renderModelAdmission(items){
   host.appendChild(card)
  });
 }
-async function loadLeague(){try{const urls=['/api/league','/api/league/engine','/api/models','/api/tournaments','/api/storage','/api/model-admission'];const results=await Promise.allSettled(urls.map(async u=>{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(u+' HTTP '+r.status);return r.json()}));const [pureResult,engineResult,modelsResult,tournamentsResult,storageResult,admissionResult]=results;const pure=pureResult.status==='fulfilled'?pureResult.value:[];const engine=engineResult.status==='fulfilled'?engineResult.value:[];const models=modelsResult.status==='fulfilled'?modelsResult.value:[];const tournaments=tournamentsResult.status==='fulfilled'&&Array.isArray(tournamentsResult.value)?tournamentsResult.value:[];const storage=storageResult.status==='fulfilled'?storageResult.value:null;if(admissionResult.status==='fulfilled')renderModelAdmission(admissionResult.value);else {$('model-admission-list').textContent='Rejestr dopuszczeń niedostępny. Odśwież dane przed wykonaniem akcji.';$('league-message').textContent='Nie udało się odświeżyć rejestru dopuszczeń: '+admissionResult.reason;}renderTournaments(tournaments);if(tournamentsResult.status!=='fulfilled')$('tournament-list').textContent='Nie udało się odczytać turniejów: '+tournamentsResult.reason;renderModelStatus(models,storage);if(pureResult.status!=='fulfilled'||engineResult.status!=='fulfilled')$('league-message').textContent='Nie udało się odczytać części rankingu: '+[pureResult,engineResult].filter(r=>r.status!=='fulfilled').map(r=>String(r.reason)).join('; ');tableRows('pure-ranking',pure.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('engine-ranking',engine.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);renderRegistryCards(models,storage,admissionResult.status==='fulfilled'?admissionResult.value:null);if(modelsResult.status!=='fulfilled')$('model-list').textContent='Nie udało się odczytać modeli: '+modelsResult.reason;models.filter(x=>!x.license_verified&&x.version_id&&x.source).forEach(x=>{const evidenceButton=document.createElement('button');evidenceButton.textContent='Pobierz dowody licencji: '+x.name;evidenceButton.dataset.icon='download';evidenceButton.style.margin='5px 5px 0 0';evidenceButton.onclick=async()=>{evidenceButton.disabled=true;try{const r=await fetch('/api/models/license-evidence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);const ev=d.evidence;const files=(ev.license_files||[]).join(' | ');$('league-message').textContent='Dowody z Hugging Face: licencja='+(ev.license||'brak deklaracji')+'; pliki licencji='+(files||'nie znaleziono')+'; model bazowy='+(ev.base_model||'brak')+'. Zapisano dowody i czas pobrania. To nie zatwierdza licencji — otwórz plik i sprawdź warunki ręcznie.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się pobrać dowodów licencji: '+e}finally{evidenceButton.disabled=false}};(registryCardFor(x)||$('model-list')).appendChild(evidenceButton);if((!x.license||x.license.toLowerCase()==='nieustalona')&&!(x.license_evidence&&(x.license_evidence.license_files||[]).length))return;const b=document.createElement('button');b.textContent='Potwierdź sprawdzenie licencji: '+x.name;b.dataset.icon='check';b.style.margin='5px 5px 0 0';b.onclick=async()=>{const reviewedLicense=x.license||prompt('Otwórz plik licencji w repozytorium, sprawdź warunki i wpisz dokładny identyfikator (np. Apache-2.0):');if(!reviewedLicense)return;if(!confirm('Czy otworzyłeś dokument licencji i samodzielnie sprawdziłeś, że pozwala na użycie modelu w tym projekcie?'))return;try{const r=await fetch('/api/models/verify-license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_review:true,license:reviewedLicense})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Licencja oznaczona jako sprawdzona. Model może być uwzględniony w nowym turnieju.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się zatwierdzić licencji: '+e}};(registryCardFor(x)||$('model-list')).appendChild(b)});applyRegistryFilters();if(!selectedTournamentId||!tournaments.some(t=>Number(t.id)===selectedTournamentId)){const preferred=tournaments.find(t=>t.status==='running')||tournaments[0];if(preferred)await loadTournamentView(preferred.id);else renderTournamentRosterCounts(null)}else await loadTournamentView(selectedTournamentId);if(storage){$('storage-info').textContent='Wolne miejsce: '+(storage.free_bytes/1073741824).toFixed(1)+' GiB. Magazyn areny: '+storage.managed_models.length+' plików; wolne '+(storage.managed_free_bytes/1073741824).toFixed(1)+' GiB. Współdzielone modele nie są usuwane.';const host=$('managed-models');host.textContent='';const owned=models.filter(x=>(x.managed_copy&&x.filename)||(x.draft_managed_copy&&x.draft_filename));if(!owned.length)host.textContent='Brak kopii pobranych przez arenę.';owned.forEach(x=>{const row=document.createElement('div');row.style.margin='8px 0';const label=document.createElement('span');label.textContent=`${x.name} · wersja ${x.version_id} · ${x.filename||'brak target'}${x.draft_filename?' + '+x.draft_filename:''} `;const btn=document.createElement('button');btn.className='stop';btn.textContent='Usuń kopię areny';btn.dataset.icon='trash-2';btn.onclick=async()=>{if(!confirm('Usunąć wyłącznie tę kopię pobraną przez arenę? Metadane i wyniki pozostaną.'))return;try{const r=await fetch('/api/models/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_delete:true})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Usunięto kopię areny; metadane zachowane.';await loadLeague()}catch(e){$('league-message').textContent='Nie usunięto pliku: '+e}};row.append(label,btn);host.appendChild(row)})}else{$('storage-info').textContent='Nie udało się odczytać stanu magazynu: '+storageResult.reason;$('managed-models').textContent='Stan magazynu niedostępny.'}}catch(e){renderTournamentRosterCounts(null);$('league-message').textContent='Błąd odczytu ligi: '+e}}
+async function loadLeague(){try{const urls=['/api/league','/api/league/engine','/api/models','/api/tournaments','/api/storage','/api/model-admission'];const results=await Promise.allSettled(urls.map(async u=>{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(u+' HTTP '+r.status);return r.json()}));const [pureResult,engineResult,modelsResult,tournamentsResult,storageResult,admissionResult]=results;const pure=pureResult.status==='fulfilled'?pureResult.value:[];const engine=engineResult.status==='fulfilled'?engineResult.value:[];const models=modelsResult.status==='fulfilled'?modelsResult.value:[];const tournaments=tournamentsResult.status==='fulfilled'&&Array.isArray(tournamentsResult.value)?tournamentsResult.value:[];const storage=storageResult.status==='fulfilled'?storageResult.value:null;if(admissionResult.status==='fulfilled')renderModelAdmission(admissionResult.value);else {$('model-admission-list').textContent='Rejestr dopuszczeń niedostępny. Odśwież dane przed wykonaniem akcji.';$('league-message').textContent='Nie udało się odświeżyć rejestru dopuszczeń: '+admissionResult.reason;}if(tournamentControl.signature===null&&!tournamentControl.pending&&tournamentsResult.status==='fulfilled')renderTournaments(tournaments);renderModelStatus(models,storage);if(pureResult.status!=='fulfilled'||engineResult.status!=='fulfilled')$('league-message').textContent='Nie udało się odczytać części rankingu: '+[pureResult,engineResult].filter(r=>r.status!=='fulfilled').map(r=>String(r.reason)).join('; ');tableRows('pure-ranking',pure.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);tableRows('engine-ranking',engine.map(x=>[x.name,x.elo,x.wins,x.draws,x.losses,x.games]),['Model','Elo','W','D','L','G']);renderRegistryCards(models,storage,admissionResult.status==='fulfilled'?admissionResult.value:null);if(modelsResult.status!=='fulfilled')$('model-list').textContent='Nie udało się odczytać modeli: '+modelsResult.reason;models.filter(x=>!x.license_verified&&x.version_id&&x.source).forEach(x=>{const evidenceButton=document.createElement('button');evidenceButton.textContent='Pobierz dowody licencji: '+x.name;evidenceButton.dataset.icon='download';evidenceButton.style.margin='5px 5px 0 0';evidenceButton.onclick=async()=>{evidenceButton.disabled=true;try{const r=await fetch('/api/models/license-evidence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);const ev=d.evidence;const files=(ev.license_files||[]).join(' | ');$('league-message').textContent='Dowody z Hugging Face: licencja='+(ev.license||'brak deklaracji')+'; pliki licencji='+(files||'nie znaleziono')+'; model bazowy='+(ev.base_model||'brak')+'. Zapisano dowody i czas pobrania. To nie zatwierdza licencji — otwórz plik i sprawdź warunki ręcznie.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się pobrać dowodów licencji: '+e}finally{evidenceButton.disabled=false}};(registryCardFor(x)||$('model-list')).appendChild(evidenceButton);if((!x.license||x.license.toLowerCase()==='nieustalona')&&!(x.license_evidence&&(x.license_evidence.license_files||[]).length))return;const b=document.createElement('button');b.textContent='Potwierdź sprawdzenie licencji: '+x.name;b.dataset.icon='check';b.style.margin='5px 5px 0 0';b.onclick=async()=>{const reviewedLicense=x.license||prompt('Otwórz plik licencji w repozytorium, sprawdź warunki i wpisz dokładny identyfikator (np. Apache-2.0):');if(!reviewedLicense)return;if(!confirm('Czy otworzyłeś dokument licencji i samodzielnie sprawdziłeś, że pozwala na użycie modelu w tym projekcie?'))return;try{const r=await fetch('/api/models/verify-license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_review:true,license:reviewedLicense})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Licencja oznaczona jako sprawdzona. Model może być uwzględniony w nowym turnieju.';await loadLeague()}catch(e){$('league-message').textContent='Nie udało się zatwierdzić licencji: '+e}};(registryCardFor(x)||$('model-list')).appendChild(b)});applyRegistryFilters();if(!selectedTournamentId||!tournaments.some(t=>Number(t.id)===selectedTournamentId)){const preferred=tournaments.find(t=>t.status==='running')||tournaments[0];if(preferred)await loadTournamentView(preferred.id);else renderTournamentRosterCounts(null)}else await loadTournamentView(selectedTournamentId);if(storage){$('storage-info').textContent='Wolne miejsce: '+(storage.free_bytes/1073741824).toFixed(1)+' GiB. Magazyn areny: '+storage.managed_models.length+' plików; wolne '+(storage.managed_free_bytes/1073741824).toFixed(1)+' GiB. Współdzielone modele nie są usuwane.';const host=$('managed-models');host.textContent='';const owned=models.filter(x=>(x.managed_copy&&x.filename)||(x.draft_managed_copy&&x.draft_filename));if(!owned.length)host.textContent='Brak kopii pobranych przez arenę.';owned.forEach(x=>{const row=document.createElement('div');row.style.margin='8px 0';const label=document.createElement('span');label.textContent=`${x.name} · wersja ${x.version_id} · ${x.filename||'brak target'}${x.draft_filename?' + '+x.draft_filename:''} `;const btn=document.createElement('button');btn.className='stop';btn.textContent='Usuń kopię areny';btn.dataset.icon='trash-2';btn.onclick=async()=>{if(!confirm('Usunąć wyłącznie tę kopię pobraną przez arenę? Metadane i wyniki pozostaną.'))return;try{const r=await fetch('/api/models/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version_id:x.version_id,confirm_delete:true})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);$('league-message').textContent='Usunięto kopię areny; metadane zachowane.';await loadLeague()}catch(e){$('league-message').textContent='Nie usunięto pliku: '+e}};row.append(label,btn);host.appendChild(row)})}else{$('storage-info').textContent='Nie udało się odczytać stanu magazynu: '+storageResult.reason;$('managed-models').textContent='Stan magazynu niedostępny.'}}catch(e){renderTournamentRosterCounts(null);$('league-message').textContent='Błąd odczytu ligi: '+e}}
 
 async function addModelVariant(m,f,draft=null,thinking=false){
  const label=(draft?'target + MTP draft':'target solo')+' · thinking '+(thinking?'ON':'OFF');
