@@ -527,6 +527,20 @@ class ArenaSmokeTests(unittest.TestCase):
             urllib.request.urlopen(self.base + '/assets/not-allowlisted.css')
         self.assertEqual(error.exception.code, 404)
 
+    def test_piece_svg_allowlist(self):
+        for style in ('cburnett', 'merida', 'shapes', 'chessnut'):
+            for color in 'wb':
+                for piece in 'KQRBNP':
+                    with self.subTest(style=style, color=color, piece=piece):
+                        with urllib.request.urlopen(self.base + f'/assets/pieces/{style}/{color}{piece}.svg') as response:
+                            self.assertEqual(response.headers['Content-Type'], 'image/svg+xml')
+                            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                            self.assertIn(b'<svg', response.read())
+        for path in ('pieces/unknown/wK.svg', 'pieces/cburnett/wX.svg', 'pieces/README.md'):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(self.base + '/assets/' + path)
+            self.assertEqual(error.exception.code, 404)
+
     def test_tournament_view_api_and_saved_pgn_preview_are_read_only(self):
         with sqlite3.connect(server.DB) as db:
             db.execute("INSERT INTO league_models(name,format,created_at) VALUES('View API Alpha','PURE_AI','now')")

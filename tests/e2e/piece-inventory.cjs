@@ -31,6 +31,7 @@ const root=path.resolve(__dirname,'../..');
      else if(u.pathname==='/api/model-admission')data={};
      return r.fulfill({json:data});
     });
+    await page.addInitScript(()=>localStorage.setItem('arena.piece-style','unicode'));
     await page.goto('http://arena.test/');
     const settings=page.locator('[data-view-link="settings"]'),live=page.locator('[data-view-link="live"]');
     const select=page.locator('#zero-piece-mode');
