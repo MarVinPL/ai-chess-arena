@@ -57,6 +57,7 @@ class LlamafileRuntime:
         self.monitor_interval = max(5.0, float(monitor_interval))
         self._desired_model_path: Path | None = None
         self._desired_draft_model_path: Path | None = None
+        self._cancel_requested = threading.Event()
         self._monitor_stop = threading.Event()
         self._monitor_thread = threading.Thread(
             target=self._monitor_loop, name='llamafile-watchdog', daemon=True)
@@ -86,7 +87,7 @@ class LlamafileRuntime:
         with self._lock:
             model_path = self._desired_model_path
             draft_path = self._desired_draft_model_path
-            if model_path is None:
+            if model_path is None or self._cancel_requested.is_set():
                 return
             proc = self._process
             process_alive = proc is not None and proc.poll() is None
@@ -102,7 +103,7 @@ class LlamafileRuntime:
                 # A failed recovery attempt must remain eligible for the next
                 # watchdog cycle. Preserve the desired model unless stop() was
                 # explicitly requested after this recovery attempt.
-                if self._desired_model_path is None:
+                if self._desired_model_path is None and not self._cancel_requested.is_set():
                     self._desired_model_path = model_path
                     self._desired_draft_model_path = draft_path
                 self._notify('model_watchdog_error',
@@ -117,12 +118,22 @@ class LlamafileRuntime:
                 self._notify('model_watchdog_error',
                              'Błąd watchdog llamafile: ' + str(exc), error=str(exc))
 
+    def request_cancel(self) -> None:
+        # Latch before taking the runtime lock: a loading thread can observe
+        # cancellation and release the lock without waiting for readiness.
+        self._cancel_requested.set()
+        self.stop()
+
+    def _check_cancelled(self) -> None:
+        if self._cancel_requested.is_set():
+            raise RunnerError('Turniej zatrzymany przez operatora')
+
     def stop(self) -> None:
         with self._lock:
             # Clearing the desired model disables watchdog restarts for intentional stops.
             self._desired_model_path = None
             self._desired_draft_model_path = None
-            proc, self._process = self._process, None
+            proc = self._process
             self._model_path = None
             self._draft_model_path = None
             if proc is None:
@@ -134,6 +145,7 @@ class LlamafileRuntime:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=5)
+            self._process = None
 
     def shutdown(self) -> None:
         """Stop the owned process and terminate the watchdog thread at runtime end."""
@@ -152,9 +164,11 @@ class LlamafileRuntime:
         if not self.binary.is_file() or not self.binary.stat().st_mode & 0o111:
             raise RunnerError(f'Brak wykonywalnego llamafile: {self.binary}')
         with self._lock:
+            self._check_cancelled()
             if self.loaded_model == str(path) and self._draft_model_path == draft_path and self._healthy():
                 return
             self.stop()
+            self._check_cancelled()
             self._notify('model_loading', f'Ładowanie modelu: {path.name}', model=path.name)
             # Single server slot and loopback-only binding are intentional.
             # The packaged llamafile on this VPS is a shell-polyglot executable
@@ -177,12 +191,16 @@ class LlamafileRuntime:
             self._desired_draft_model_path = draft_path
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
+                if self._cancel_requested.is_set():
+                    self.stop()
+                    self._check_cancelled()
                 if self._process.poll() is not None:
                     code = self._process.returncode
                     self._process = None; self._model_path = None; self._draft_model_path = None
                     self._desired_model_path = None; self._desired_draft_model_path = None
                     raise RunnerError(f'llamafile zakończył start kodem {code}')
                 if self._healthy():
+                    self._check_cancelled()
                     self._notify('model_ready', f'Model gotowy: {path.name}', model=path.name)
                     return
                 time.sleep(0.5)

@@ -847,6 +847,9 @@ def tournament_loop(tournament_id):
     # a later turn reloads it. Downloads and cleanup use the same re-entrant lock.
     model_store.MODEL_LIFECYCLE_LOCK.acquire()
     preflight_passed = False
+    cancel_watcher = None
+    cancel_watcher_done = threading.Event()
+    cancel_errors = []
     try:
         set_live('tournament_preflight', 'Sprawdzanie gotowości turnieju',
                  tournament_id=tournament_id, execution_phase='preflight')
@@ -898,6 +901,19 @@ def tournament_loop(tournament_id):
             set_live(stage, message, **fields)
 
         tournament_runtime = runtime_factory.create_runtime(on_status=publish_runtime_status)
+        # This watcher belongs to this tournament only. It is joined before
+        # the shared stop event can be cleared for the next tournament.
+        cancel_runtime = tournament_runtime
+        def cancel_on_stop():
+            while not cancel_watcher_done.is_set():
+                if tournament_stop_event.wait(0.1):
+                    try:
+                        cancel_runtime.request_cancel()
+                    except Exception as exc:
+                        cancel_errors.append(exc)
+                    return
+        cancel_watcher = threading.Thread(target=cancel_on_stop, name='arena-stop-watcher', daemon=True)
+        cancel_watcher.start()
 
         # Reuse completed answers for this competitor across tournaments. Once its
         # three knowledge answers are known, run at most one random health check per tournament.
@@ -1090,6 +1106,15 @@ def tournament_loop(tournament_id):
             except Exception as cleanup_exc:
                 set_live('model_cleanup_deferred', 'Usuwanie niepotrzebnych modeli odroczone: '+str(cleanup_exc),
                          tournament_id=tournament_id, pairing_id=pairing['id'])
+        # Always close the owned runtime before publishing any terminal state.
+        # STOP can arrive during finalization, not just during inference.
+        cancel_watcher_done.set()
+        if cancel_watcher is not None:
+            cancel_watcher.join()
+        tournament_runtime.shutdown()
+        tournament_runtime = None
+        if cancel_errors:
+            raise RuntimeError('Nie potwierdzono zatrzymania silnika: ' + str(cancel_errors[0]))
         with league.connect() as c:
             unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
@@ -1126,6 +1151,9 @@ def tournament_loop(tournament_id):
                 c.execute("UPDATE tournaments SET status='failed' WHERE id=?", (tournament_id,))
     finally:
         try:
+            cancel_watcher_done.set()
+            if cancel_watcher is not None:
+                cancel_watcher.join()
             if tournament_runtime:
                 try:
                     tournament_runtime.shutdown()
