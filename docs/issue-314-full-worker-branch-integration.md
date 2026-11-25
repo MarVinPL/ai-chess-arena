@@ -50,3 +50,32 @@ Ready for CI and independent review of the combined Draft PR branch.
    project one-Issue/one-PR policy before merging to main.
 
 Nothing in this integration authorizes updating the production APK or service.
+
+## Integrated staging regression — 2026-11-25
+
+The combined branch now has 13 exact Worker POST routes (including
+`native-stop-report`). The earlier twelve-route inventory above is historical.
+The new `tests/test_issue_314_worker_update_lifecycle_e2e.py` exercises the
+actual HTTP handlers on loopback and a temporary SQLite database, not the
+production database. Native STOP and installed APK evidence, and trusted
+resume transport acceptance, are simulated at their coordinator boundary.
+
+A regression exposed HTTP 200 for a stale v3 lease after resume. The resume
+CAS now checks the original STOP lease digest and durable native report,
+rotates the execution capability atomically with reopening the job, updates
+the assigned timeout, and removes stale result receipts and STOP reports.
+Old capability submissions return HTTP 409; the authenticated job poll
+returns the new capability, which accepts a valid result. Legacy inference
+assignments without fencing remain blocked pending explicit migration.
+
+Evidence: five lifecycle scenarios passed, including rollback during hold
+creation, rollback after lease rotation, competing resume attempts, missing
+STOP evidence and old-result fencing. Full local regression: 1174 tests and
+141 subtests passed, 55.08 s. The existing cache repair on 4676ef7 passed
+Python, Android ARM64 build and offline Gradle cache verification in CI.
+CI must be repeated on the new lease fix commit.
+
+**NO-GO for merge/deployment**: a real authenticated device resume transport
+is not wired, and physical Android interruption/install/recovery/rollback
+has not been validated. SQLite rollback is not APK rollback. Dependency PR
+reconciliation and final review remain required. No production changes.

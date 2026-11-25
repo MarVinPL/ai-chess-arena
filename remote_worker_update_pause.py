@@ -625,7 +625,7 @@ class WorkerUpdatePause:
             if checkpoint_verifier(checkpoint) is not True:
                 raise ValueError("Coordinator rejected resume checkpoint")
             pause = db.execute(
-                "SELECT job_id,request_id,phase "
+                "SELECT job_id,request_id,phase,stop_lease_sha256 "
                 "FROM worker_update_pause_requests WHERE worker_id=?",
                 (worker_id,)
             ).fetchone()
@@ -633,8 +633,49 @@ class WorkerUpdatePause:
                 "SELECT job_id,state FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,)
             ).fetchone()
-            if pause != (job_id, request_id, "acknowledged") or worker != (None, "unknown"):
+            if not pause or pause[:3] != (job_id, request_id, "acknowledged") or worker != (None, "unknown"):
                 raise ValueError("Worker state not reconciled after update")
+            # The previous execution is fenced even after the resume gates open.
+            # A phone fetches its new capability through authenticated job-poll
+            # AFTER this transaction commits. A trusted resume receipt accepts
+            # the checkpoint, not authority to submit a pre-commit result.
+            old_digest = self._stop_lease_digest(db, worker_id, job_id)
+            if old_digest != pause[3]:
+                raise ValueError("Resume assignment lease no longer matches STOP")
+            if db.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='worker_inference_assignments'").fetchone():
+                assignment = db.execute(
+                    "SELECT job_id,job_json FROM worker_inference_assignments WHERE worker_id=?", (worker_id,)
+                ).fetchone()
+                if assignment is not None:
+                    from remote_worker_protocol import validate_job
+                    job = validate_job(json.loads(assignment[1]))
+                    if assignment[0] != job_id or job["job_id"] != job_id:
+                        raise ValueError("Resume assignment mismatch")
+                    # Legacy inference has no capability to rotate. Keep it
+                    # blocked until an explicit trusted migration is available.
+                    if job["version"] != 3 or old_digest is None:
+                        raise ValueError("Resume requires a fenced inference assignment")
+                    report = db.execute(
+                        "SELECT job_id,request_id,lease_sha256 FROM worker_native_stop_reports WHERE worker_id=?", (worker_id,)
+                    ).fetchone()
+                    if report != (job_id, request_id, old_digest):
+                        raise ValueError("Resume requires matching native STOP report")
+                    if timeout_seconds > 600:
+                        raise ValueError("Invalid fenced resume lease duration")
+                    job["lease_token"] = secrets.token_hex(32)
+                    job["timeout_seconds"] = timeout_seconds
+                    if hashlib.sha256(job["lease_token"].encode("ascii")).hexdigest() == old_digest:
+                        raise ValueError("Resume lease rotation failed")
+                    encoded = json.dumps(validate_job(job), sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+                    changed = db.execute(
+                        "UPDATE worker_inference_assignments SET job_json=?,created_at=? WHERE worker_id=? AND job_id=? AND job_json=?",
+                        (encoded, now, worker_id, job_id, assignment[1]),
+                    )
+                    if changed.rowcount != 1:
+                        raise ValueError("Resume assignment changed concurrently")
+                    # Any receipt predating STOP belongs to the old execution.
+                    db.execute("DELETE FROM worker_inference_results WHERE worker_id=? AND job_id=?", (worker_id, job_id))
+                    db.execute("DELETE FROM worker_native_stop_reports WHERE worker_id=? AND job_id=? AND request_id=?", (worker_id, job_id, request_id))
             updated = db.execute(
                 "UPDATE worker_job_safety SET job_id=?,state='running',"
                 "deadline=?,updated_at=? "
