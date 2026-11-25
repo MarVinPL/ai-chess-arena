@@ -73,3 +73,22 @@ class DownloadProgressTests(unittest.TestCase):
             self.assertNotIn('download_received_bytes', server.live_status)
             server.set_live('model_loading', 'loading')
             self.assertNotIn('asset_kind', server.live_status)
+
+
+class GameLifecycleTests(unittest.TestCase):
+    def test_reservation_is_not_active_and_resume_is_explicit(self):
+        with patch.object(server, 'live_status', {'stage':'idle','events':[]}), patch.object(server, '_append_jsonl'):
+            for stage, expected in [('game_prepare','preparing'), ('model_loading','preparing'),
+                                    ('game_ready','preparing'), ('game_running','active'),
+                                    ('generating','active'), ('stopped','paused'),
+                                    ('game_resume_prepare','preparing'), ('game_resumed','active'),
+                                    ('game_finished','finished'), ('pairing_select','none')]:
+                server.set_live(stage, stage)
+                self.assertEqual(server.live_status['game_state'], expected, stage)
+
+    def test_executor_and_resources_are_explicit(self):
+        with patch.object(server, 'live_status', {'stage':'generating','execution_phase':'game','events':[{}]}), patch.object(server, '_local_execution_resources', return_value={'cpu_load_1m':1.5}):
+            state = server.get_live()
+        self.assertEqual(state['executor'], 'local')
+        self.assertEqual(state['remote_worker_status'], 'unavailable')
+        self.assertEqual(state['local_resources']['cpu_load_1m'], 1.5)

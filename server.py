@@ -108,7 +108,7 @@ def _read_jsonl(path, limit, retention_seconds):
 def set_live(stage, message, **fields):
     with live_lock:
         now = time.time()
-        boundary = stage in ('tournament_preflight', 'starting', 'passkey_prepare', 'pairing_select', 'game_prepare')
+        boundary = stage in ('tournament_preflight', 'starting', 'passkey_prepare', 'pairing_select', 'game_prepare', 'game_resume_prepare')
         if boundary:
             for key in ('model', 'color', 'question_no', 'response', 'proposed_move',
                         'elapsed_seconds', 'error', 'result', 'failure_reason'):
@@ -138,6 +138,20 @@ def set_live(stage, message, **fields):
         if stage != 'model_downloading':
             fields.pop('download_received_bytes', None)
             fields.pop('download_total_bytes', None)
+        # Pair reservation and checkpoint creation are not active inference.
+        if stage in ('game_prepare', 'game_resume_prepare', 'game_ready'):
+            fields['game_state'] = 'preparing'
+        elif stage in ('game_running', 'game_resumed'):
+            fields['game_state'] = 'active'
+        elif stage in ('game_finished', 'game_adjudicated'):
+            fields['game_state'] = 'finished'
+        elif stage in ('game_failed', 'error', 'failed', 'blocked'):
+            fields['game_state'] = 'failed'
+        elif stage == 'stopped':
+            fields['game_state'] = 'paused'
+        elif stage in ('idle', 'completed', 'starting', 'tournament_preflight',
+                       'passkey_prepare', 'pairing_select'):
+            fields['game_state'] = 'none'
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
         event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
@@ -159,6 +173,25 @@ def set_live(stage, message, **fields):
             live_status['log_write_error'] = str(exc)
 
 
+def _local_execution_resources():
+    # Host-level measurements, not process utilization or worker telemetry.
+    memory = {}
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            key, _, value = line.partition(':')
+            if key in ('MemAvailable', 'MemTotal'):
+                memory[key] = int(value.split()[0]) // 1024
+    except (OSError, ValueError, IndexError):
+        memory = {}
+    try:
+        load = round(os.getloadavg()[0], 2)
+    except (OSError, AttributeError):
+        load = None
+    return {'memory_available_mib': memory.get('MemAvailable'),
+            'memory_total_mib': memory.get('MemTotal'),
+            'cpu_load_1m': load, 'cpu_logical_count': os.cpu_count()}
+
+
 def get_live():
     with live_lock:
         snapshot = dict(live_status)
@@ -168,7 +201,11 @@ def get_live():
             if responses:
                 snapshot['response'] = responses[-1].get('response')
         snapshot['stop_requested'] = tournament_stop_event.is_set() and bool(tournament_thread and tournament_thread.is_alive())
-        return snapshot
+        snapshot.setdefault('game_state', 'none')
+        snapshot['executor'] = 'local' if snapshot.get('execution_phase') in ('model_test', 'game') and snapshot.get('stage') not in ('stopped', 'completed', 'error', 'failed', 'blocked') else None
+        snapshot['remote_worker_status'] = 'unavailable'
+    snapshot['local_resources'] = _local_execution_resources()
+    return snapshot
 
 
 def _is_managed_filename(filename):
@@ -933,11 +970,11 @@ def tournament_loop(tournament_id):
             tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen))
-            set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
+            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_models(white, black, on_status=set_live)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
-            set_live('game_running','Wznowiono partię' if resume_moves else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
+            set_live('game_resumed' if checkpoint else 'game_running','Wznowiono partię' if checkpoint else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
             checkpoint_moves = [dict(item) for item in resume_moves]
             checkpoint_times = [float(value) for value in resume_times]
             def publish_move(move):
@@ -1057,7 +1094,7 @@ def tournament_loop(tournament_id):
             unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
             c.execute('UPDATE tournaments SET status=? WHERE id=?', (status, tournament_id))
-        set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
+        set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else ('Turniej wstrzymany; możliwe wznowienie' if status == 'stopped' else 'Turniej zakończony błędem'), tournament_id=tournament_id)
         if status == 'completed':
             try:
                 admission_result = league.finalize_late_admission_batch(tournament_id)

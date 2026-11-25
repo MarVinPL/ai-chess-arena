@@ -14,7 +14,7 @@ const source = fs.readFileSync('web/js/arena.js', 'utf8');
 const start = source.indexOf('function renderExecutionProgress(');
 const end = source.indexOf('async function refreshLive()', start);
 assert(start >= 0 && end > start);
-const selectors = ['stage','context','time','download','bytes'];
+const selectors = ['stage','context','time','resources','download','bytes'];
 const cards = [0,1].map(() => {
   const nodes = Object.fromEntries(selectors.map(s => ['[data-execution-'+s+']',{textContent:'',hidden:false,max:1,value:0}]));
   return {querySelector: s => nodes[s]};
@@ -40,8 +40,12 @@ render({stage:'model_downloading',download_received_bytes:101,download_total_byt
 verify(n => assert(n('download').hidden));
 render({stage:'passkey_generating',execution_phase:'model_test',question_no:0,stop_requested:true},30);
 verify(n => {assert(n('stage').textContent.includes('odpowiedź testową'));assert(n('context').textContent.includes('Kontrola losowa'));assert(n('context').textContent.includes('Żądanie zatrzymania'));});
-render({stage:'game_running',execution_phase:'game',pairing_id:12},30);
-verify(n => assert(n('context').textContent.includes('Para #12')));
+render({stage:'game_running',execution_phase:'game',pairing_id:12,game_state:'active',executor:'local',remote_worker_status:'unavailable',local_resources:{memory_available_mib:100,memory_total_mib:200,cpu_load_1m:1.2,cpu_logical_count:2}},30);
+verify(n => {assert(n('context').textContent.includes('Para #12'));assert(n('context').textContent.includes('Partia aktywna'));assert(n('context').textContent.includes('lokalny VPS'));assert(n('context').textContent.includes('Zdalny Worker: brak danych'));assert(n('resources').textContent.includes('100 / 200 MiB'));assert(n('resources').textContent.includes('1.2'));});
+render({stage:'game_resume_prepare',game_state:'preparing'},30);
+verify(n => {assert(n('context').textContent.includes('Partia w przygotowaniu'));assert(!n('context').textContent.includes('Partia aktywna'));});
+render({stage:'stopped',game_state:'paused'},30);
+verify(n => assert(n('context').textContent.includes('Wstrzymano')));
 render({stage:'error',message:'Awaria',model:'Old'},30);
 verify(n => {assert(n('stage').textContent.includes('Awaria'));assert(!n('context').textContent.includes('Old'));});
 render({stage:'unavailable'},30);
