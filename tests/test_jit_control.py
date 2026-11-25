@@ -63,3 +63,28 @@ def test_first_game_precedes_third_model_test_and_resume_preserves_answers(arena
     assert calls[-2:]==[first_game,first_game]
     assert all(f.get('pairing_id') and f.get('white') and f.get('black') for stage,f in events if stage=='passkey_question')
     assert server.tournament_checkpoint.load(db,tid) is not None
+
+@pytest.mark.parametrize('result_status',['stopped','failed',None])
+def test_incomplete_control_answer_never_starts_game(arena,monkeypatch,result_status):
+    db,tid,events=arena
+    calls=[]
+    def answer(*a,**kw):
+        calls.append('test')
+        return {'status':result_status,'answer':'','seconds':None}
+    monkeypatch.setattr(passkey_test,'ask_passkey_question',answer)
+    class Runner:
+        def __init__(self,runtime): pass
+        def play_game(self,*a,**kw):
+            calls.append('game')
+            raise AssertionError('Incomplete control test must not start game')
+    monkeypatch.setattr(server.engine_runner,'SequentialChessRunner',Runner)
+    server.start_tournament(tid)
+    server.tournament_thread.join(5)
+    assert not server.tournament_thread.is_alive()
+    assert calls==['test']
+    assert 'Test kontrolny modelu nie został ukończony' in server.tournament_error
+    with sqlite3.connect(db) as c:
+        assert c.execute('select status from tournaments where id=?',(tid,)).fetchone()[0]=='failed'
+        assert c.execute('select count(*) from passkey_test_answers where tournament_id=?',(tid,)).fetchone()[0]==0
+        assert c.execute("select count(*) from tournament_pairings where tournament_id=? and status!='pending'",(tid,)).fetchone()[0]==0
+    assert server.tournament_checkpoint.load(db,tid) is None

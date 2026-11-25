@@ -955,8 +955,10 @@ def tournament_loop(tournament_id):
                     answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900, on_status=lambda: publish_test('passkey_generating', 'Oczekiwanie na odpowiedź testową modelu', model=player['name'], question_no=question_no, execution_phase='model_test'))
                     # A response that completed after stop was requested is not recorded;
                     # the unanswered question is reconstructed from durable answer rows.
-                    if tournament_stop_event.is_set() or answer.get('status') == 'stopped':
-                        break
+                    if tournament_stop_event.is_set():
+                        return False
+                    if answer.get('status') != 'answered':
+                        raise RuntimeError('Test kontrolny modelu nie został ukończony: ' + str(answer.get('status')))
                     with sqlite3.connect(DB) as db:
                         db.execute("INSERT OR REPLACE INTO passkey_test_answers (tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at,question_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (tournament_id, player_id, player['name'], question_no, question,
