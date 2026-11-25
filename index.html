@@ -42,6 +42,14 @@
 <section class="panel history"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3 style="margin:0 0 8px" data-icon="history">Zapisane partie</h3><div class="controls" style="margin:0"><a href="/api/export/pgn" style="color:#bcd7ff" data-icon="file-down">Eksport PGN</a><a href="/api/export/csv" style="color:#bcd7ff" data-icon="file-down">Eksport CSV</a></div></div><div id="games" class="moves">Brak zakończonych partii.</div></section></div>
 <section class="panel history" id="live-panel">
 <h3 style="margin:0 0 10px" data-icon="activity">Podgląd pracy modeli na żywo</h3>
+<section class="execution-progress" aria-label="Postęp wykonania turnieju">
+<h4 data-icon="activity">Aktualny etap wykonania</h4>
+<p data-execution-stage role="status" aria-live="polite">Odczytuję stan…</p>
+<p data-execution-context></p>
+<p data-execution-time></p>
+<progress data-execution-download max="1" value="0" hidden aria-label="Postęp pobierania GGUF"></progress>
+<p data-execution-bytes hidden></p>
+</section>
 <div id="live-stage" class="status">Oczekiwanie na turniej</div>
 <div class="metrics">
 <div class="metric"><small data-icon="cpu">Aktualny model</small><strong id="live-model" style="font-size:15px">—</strong></div>
@@ -167,7 +175,15 @@
 <h4 data-icon="hard-drive">Lokalny cache GGUF</h4><p class="notice">Usunięcie kopii usuwa wyłącznie plik GGUF. Wpis modelu, jego licencja i status na liście dostępnych zawodników pozostają; brakujący plik można pobrać ponownie.</p><div id="managed-models" class="moves">Brak kopii.</div>
 </section>
  </div>
- <div><h4 data-icon="plus">Nowy turniej</h4><form id="tournament-form"><div class="formrow"><input class="field" id="tournament-name" placeholder="Nazwa turnieju" required></div><div class="formrow"><select class="field" id="tournament-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><label for="draft-qualification">Awans do draftu</label><select class="field" id="draft-qualification"><option value="75">75%</option><option value="80" selected>80%</option><option value="85">85%</option><option value="90">90%</option></select><button type="submit" data-icon="calendar">Zaplanuj każdy z każdym</button></div></form><div id="tournament-list" class="moves">Brak turniejów.</div>
+ <div><h4 data-icon="plus">Nowy turniej</h4><form id="tournament-form"><div class="formrow"><input class="field" id="tournament-name" placeholder="Nazwa turnieju" required></div><div class="formrow"><select class="field" id="tournament-format"><option>PURE_AI</option><option>AI_ENGINE</option></select><label for="draft-qualification">Awans do draftu</label><select class="field" id="draft-qualification"><option value="75">75%</option><option value="80" selected>80%</option><option value="85">85%</option><option value="90">90%</option></select><button type="submit" data-icon="calendar">Zaplanuj każdy z każdym</button></div></form><section class="execution-progress" aria-label="Postęp wykonania turnieju">
+<h4 data-icon="activity">Aktualny etap wykonania</h4>
+<p data-execution-stage role="status" aria-live="polite">Odczytuję stan…</p>
+<p data-execution-context></p>
+<p data-execution-time></p>
+<progress data-execution-download max="1" value="0" hidden aria-label="Postęp pobierania GGUF"></progress>
+<p data-execution-bytes hidden></p>
+</section>
+<div id="tournament-list" class="moves">Brak turniejów.</div>
 <div class="panel" style="margin-top:12px"><h4 data-icon="git-branch">Tabela i drabinka</h4><div id="tournament-detail-title" class="notice">Wybierz turniej, aby zobaczyć tabelę, terminarz i drabinkę.</div><div id="tournament-progress" class="notice"></div><div class="tournament-tabs" role="tablist" aria-label="Szczegóły turnieju"><button type="button" id="tournament-tab-standings" role="tab" aria-controls="tournament-pane-standings" aria-selected="true" tabindex="0" data-icon="table">Tabela</button><button type="button" id="tournament-tab-fixtures" role="tab" aria-controls="tournament-pane-fixtures" aria-selected="false" tabindex="-1" data-icon="calendar">Terminarz</button><button type="button" id="tournament-tab-bracket" role="tab" aria-controls="tournament-pane-bracket" aria-selected="false" tabindex="-1" data-icon="git-branch">Drabinka</button></div><section id="tournament-pane-standings" role="tabpanel" aria-labelledby="tournament-tab-standings" tabindex="0"><h5 id="tournament-heading-standings" data-icon="users">Uczestnicy</h5><div id="tournament-standings" class="moves"></div></section><section id="tournament-pane-fixtures" role="tabpanel" aria-labelledby="tournament-tab-fixtures" tabindex="0" hidden><h5 id="tournament-heading-fixtures" data-icon="calendar">Terminarz</h5><div id="tournament-fixtures" class="moves"></div><div id="tournament-game-previews" class="moves"></div></section><section id="tournament-pane-bracket" role="tabpanel" aria-labelledby="tournament-tab-bracket" tabindex="0" hidden><h5 id="tournament-heading-bracket" data-icon="git-branch">Drabinka pucharowa</h5><div id="tournament-bracket" class="moves"></div></section><div id="tournament-champion" class="notice"></div></div></div>
 </div>
 <div id="storage-info" class="notice" data-icon="hard-drive">Odczyt stanu dysku…</div><div id="league-message" class="status"></div>
