@@ -89,7 +89,7 @@ $('model-permission-request-form').addEventListener('submit',async event=>{
  try{const response=await fetch('/api/model-permissions/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw Error(data.error||'Błąd żądania');status.textContent='Utworzono oczekujące żądanie #'+data.id+' — nie jest ono jeszcze zgodą.';$('model-permission-request-form').reset();await refreshModelPermissions()}catch(error){status.textContent='Nie udało się złożyć żądania: '+error}
 });
 refreshModelPermissions();
-const tournamentControl={pending:null,rows:[],signature:null,reading:false,epoch:0};
+const tournamentControl={pending:null,rows:[],signature:null,reading:false,epoch:0,dirty:false};
 refresh();loadLeague();refreshLive();setInterval(refresh,1200);setInterval(refreshLive,1000);setInterval(loadLeague,10000);setInterval(syncTournamentCards,1000);
 function tableRows(target,rows,headers){const host=$(target);host.textContent='';if(!rows.length){host.textContent='Brak danych.';return}const t=document.createElement('table');t.className='league-table';const head=document.createElement('tr');headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;head.appendChild(th)});t.appendChild(head);rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(v=>{const td=document.createElement('td');td.textContent=String(v);tr.appendChild(td)});t.appendChild(tr)});host.appendChild(t)}
 let selectedTournamentId=null;
@@ -367,22 +367,34 @@ async function syncTournamentCards(){
  tournamentControl.reading=true;
  const epoch=tournamentControl.epoch;
  try{
-  const r=await fetch('/api/tournaments',{cache:'no-store'});
+  const r=await fetch('/api/tournaments',{cache:'no-store',signal:AbortSignal.timeout(10000)});
   if(!r.ok)throw Error('HTTP '+r.status);
   const rows=await r.json();
   if(!Array.isArray(rows))throw Error('Nieprawidłowa lista turniejów');
   if(epoch!==tournamentControl.epoch)return;
   const p=tournamentControl.pending;
   const t=p&&rows.find(row=>Number(row.id)===p.id);
-  const outcome=tournamentControlOutcome(p,t);
+  let outcome=tournamentControlOutcome(p,t);
+  if(p?.accepted&&!outcome&&Date.now()-p.started>30000){
+   const runner=await fetch('/api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+   if(!runner.ok)throw Error('HTTP '+runner.status);
+   const state=await runner.json();
+   if(epoch!==tournamentControl.epoch)return;
+   if(state.tournament_running===false)outcome='unconfirmed';
+  }
+  const changed=JSON.stringify(rows.map(t=>[t.id,t.status,t.resume_blocked]))!==tournamentControl.signature;
   if(outcome){
    tournamentControl.pending=null;
    tournamentControl.epoch++;
-   $('league-message').textContent='Turniej #'+p.id+' · '+t.status;
+   $('league-message').textContent=outcome==='unconfirmed'?'Runner nie działa; operacja nie została potwierdzona. Sprawdź diagnostykę turnieju #'+p.id+'.':'Turniej #'+p.id+' · '+t.status;
   }else if(p?.accepted&&Date.now()-p.started>30000){
    $('league-message').textContent='Operacja przyjęta; nadal oczekuję na potwierdzenie stanu turnieju #'+p.id+'.';
   }
-  if(outcome||JSON.stringify(rows)!==JSON.stringify(tournamentControl.rows))renderTournaments(rows,Boolean(outcome));
+  if(outcome||tournamentControl.dirty||JSON.stringify(rows)!==JSON.stringify(tournamentControl.rows))renderTournaments(rows,Boolean(outcome));
+  if(changed||outcome){
+   if(typeof selectedTournamentId!=='undefined'&&selectedTournamentId)void loadTournamentView(selectedTournamentId);
+   void refreshLive();
+  }
  }catch(e){
   if(tournamentControl.pending?.accepted)$('league-message').textContent='Operacja przyjęta, odczyt stanu niedostępny: '+e;
   else if(tournamentControl.signature===null)$('tournament-list').textContent='Nie udało się odczytać turniejów: '+e;
@@ -394,7 +406,8 @@ function renderTournaments(rows,force=false){
  const signature=JSON.stringify(rows.map(t=>[t.id,t.status,t.resume_blocked]));
  const changed=signature!==tournamentControl.signature;
  tournamentControl.rows=rows;
- if(!force&&!changed&&(host.contains(document.activeElement)||expandedTournamentDiagnostics.size))return;
+ if(!force&&!changed&&(host.contains(document.activeElement)||expandedTournamentDiagnostics.size)){tournamentControl.dirty=true;return;}
+ tournamentControl.dirty=false;
  tournamentControl.signature=signature;
  const activeIds=new Set(rows.filter(t=>['planned','stopped','failed'].includes(t.status)).map(t=>t.id));
  for(const id of tournamentReadiness.keys())if(!activeIds.has(id))tournamentReadiness.delete(id);

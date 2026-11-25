@@ -17,9 +17,10 @@ const find=(root,fn)=>fn(root)?root:root.children.map(x=>find(x,fn)).find(Boolea
 const button=text=>find(host,x=>x.tag==='button'&&x.textContent===text);
 const status=()=>find(host,x=>x.className==='tournament-status').textContent;
 let rows=[],posts=0,accept=true,failRead=false,release=null;
-const context=vm.createContext({document:doc,$:id=>id==='tournament-list'?host:message,
+const context=vm.createContext({AbortSignal,document:doc,$:id=>id==='tournament-list'?host:message,
  confirm:()=>accept,refreshLive:async()=>{},loadTournamentView:async()=>{},
  fetch:async(url,options={})=>{
+  if(url==='/api/state')return {ok:true,json:async()=>({tournament_running:false})};
   if(url.endsWith('/preflight'))return {ok:true,json:async()=>({ready:true})};
   if(options.method==='POST'){posts++;return {ok:!failRead,status:500,json:async()=>failRead?{error:'test error'}:{status:url.endsWith('/stop')?'stop_requested':'starting'}};}
   if(release)return new Promise(resolve=>{release=()=>resolve({ok:true,json:async()=>[{id:7,status:'stopped'}]});});
@@ -46,5 +47,8 @@ async function update(state){rows=[{id:7,name:'Test',status:state}];await run('s
  failRead=false;await update('running');assert.equal(status(),'W trakcie');
  // External status change must override the focused stale control.
  doc.activeElement=button('Zatrzymaj turniej');await update('stopped');assert(button('Wznów turniej'));
+ await button('Wznów turniej').onclick();
+ run('tournamentControl.pending.started=Date.now()-31000');
+ await update('stopped');assert(button('Wznów turniej'));assert.match(message.textContent,/Runner nie działa/);
  console.log('START/STOP/RESUME, delayed status, duplicate click, cancellation, HTTP errors, focus: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1;});
