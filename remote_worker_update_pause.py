@@ -20,6 +20,7 @@ class WorkerUpdatePause:
         self.path = str(path)
         self.clock = clock
         with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
                 worker_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
@@ -27,6 +28,14 @@ class WorkerUpdatePause:
                 phase TEXT NOT NULL CHECK(phase IN ('requested','acknowledged')),
                 created_at REAL NOT NULL,
                 acknowledged_at REAL
+            )""")
+            if "stop_lease_sha256" not in {
+                row[1] for row in db.execute("PRAGMA table_info(worker_update_pause_requests)")
+            }:
+                db.execute("ALTER TABLE worker_update_pause_requests ADD COLUMN stop_lease_sha256 TEXT")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_native_stop_reports (
+                worker_id TEXT PRIMARY KEY, job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL, received_at REAL NOT NULL
             )""")
             db.execute("""CREATE TABLE IF NOT EXISTS worker_update_resume (
                 worker_id TEXT PRIMARY KEY,
@@ -53,16 +62,22 @@ class WorkerUpdatePause:
                 row[2] is None or row[2] <= self.clock()
             ):
                 raise ValueError("No active verified job to pause")
-            if db.execute(
-                "SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?",
-                (worker_id,),
-            ).fetchone():
-                raise ValueError("Pause is already requested")
+            lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+            existing = db.execute(
+                "SELECT job_id,request_id,phase,stop_lease_sha256 FROM worker_update_pause_requests "
+                "WHERE worker_id=?", (worker_id,),
+            ).fetchone()
+            if existing is not None:
+                # Retry after a lost coordinator response: the same running
+                # job reuses the durable STOP request, never forges an ACK.
+                if existing[0] == job_id and existing[2] == "requested" and existing[3] == lease_digest:
+                    return existing[1]
+                raise ValueError("Pause is already requested for another state")
             db.execute(
                 """INSERT INTO worker_update_pause_requests
-                (worker_id,job_id,request_id,phase,created_at,acknowledged_at)
-                VALUES (?,?,?,'requested',?,NULL)""",
-                (worker_id, job_id, request_id, self.clock()),
+                (worker_id,job_id,request_id,phase,created_at,acknowledged_at,stop_lease_sha256)
+                VALUES (?,?,?,'requested',?,NULL,?)""",
+                (worker_id, job_id, request_id, self.clock(), lease_digest),
             )
         return request_id
 
@@ -88,36 +103,120 @@ class WorkerUpdatePause:
         """
         self.jobs._id(worker_id)
         with self.jobs._db() as db:
+            # One SQLite read snapshot prevents torn STOP and lease reads
+            # during concurrent coordinator reconciliation. Polling stays
+            # read-only and is never an acknowledgment of model termination.
+            db.execute("BEGIN")
             pause = db.execute(
-                "SELECT job_id,request_id,phase FROM worker_update_pause_requests "
+                "SELECT job_id,request_id,phase,stop_lease_sha256 FROM worker_update_pause_requests "
                 "WHERE worker_id=?", (worker_id,)
             ).fetchone()
             active = db.execute(
                 "SELECT job_id,state,deadline FROM worker_job_safety "
                 "WHERE worker_id=?", (worker_id,)
             ).fetchone()
-        if pause is None:
-            return {"action": "none"}
-        job_id, request_id, phase = pause
-        if phase == "acknowledged":
-            return {"action": "await_reconciliation"}
-        if phase != "requested" or not active or (
-            active[0] != job_id or active[1] != "running" or
-            active[2] is None or active[2] <= self.clock()
-        ):
-            return {"action": "blocked"}
-        return {
+            if pause is None:
+                return {"action": "none"}
+            job_id, request_id, phase, bound_digest = pause
+            if phase == "acknowledged":
+                return {"action": "await_reconciliation"}
+            if phase != "requested" or not active or (
+                active[0] != job_id or active[1] != "running" or
+                active[2] is None or active[2] <= self.clock()
+            ):
+                return {"action": "blocked"}
+
+            try:
+                lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+                if lease_digest != bound_digest:
+                    return {"action": "blocked"}
+            except ValueError:
+                return {"action": "blocked"}
+        instruction = {
             "action": "stop_checkpoint",
             "job_id": job_id, "request_id": request_id,
         }
+        # Protocol v3: bind the STOP instruction to the exact execution
+        # generation without echoing its 256-bit bearer capability. A legacy
+        # v1/v2 job keeps the unchanged instruction format.
+        if lease_digest is not None:
+            instruction["lease_token_sha256"] = lease_digest
+        return instruction
+
+    @staticmethod
+    def _stop_lease_digest(db, worker_id, job_id):
+        """Read the execution lease in the caller's STOP transaction."""
+        # Fresh and legacy registries may predate inference assignment storage.
+        if not db.execute(
+            "SELECT 1 FROM sqlite_schema "
+            "WHERE type='table' AND name='worker_inference_assignments'"
+        ).fetchone():
+            return None
+        assignment = db.execute(
+            "SELECT job_id,job_json FROM worker_inference_assignments WHERE worker_id=?",
+            (worker_id,),
+        ).fetchone()
+        if assignment is None:
+            return None
+        job = json.loads(assignment[1])
+        if assignment[0] != job_id or not isinstance(job, dict) or job.get("job_id") != job_id:
+            raise ValueError("Mismatched STOP assignment")
+        version = job.get("version")
+        if type(version) is not int or version not in (1, 2, 3):
+            raise ValueError("Invalid STOP assignment protocol")
+        if version != 3:
+            return None
+        token = job.get("lease_token")
+        if not isinstance(token, str) or len(token) != 64 or any(
+            c not in "0123456789abcdef" for c in token
+        ):
+            raise ValueError("Invalid STOP assignment lease")
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+    def record_native_stop(self, worker_id, job_id, request_id, lease_token):
+        """Record the executor's report. Only the coordinator may verify a checkpoint."""
+        self.jobs._id(worker_id)
+        self.jobs._id(job_id)
+        if not isinstance(request_id, str) or len(request_id) != 32:
+            raise ValueError("Invalid STOP request")
+        if not isinstance(lease_token, str) or len(lease_token) != 64 or any(
+            ch not in "0123456789abcdef" for ch in lease_token
+        ):
+            raise ValueError("Invalid execution lease")
+        digest = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
+        with self.jobs._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
+            now = self.clock()
+            pending = db.execute(
+                "SELECT p.stop_lease_sha256 FROM worker_update_pause_requests p JOIN worker_job_safety j "
+                "ON j.worker_id=p.worker_id AND j.job_id=p.job_id "
+                "WHERE p.worker_id=? AND p.job_id=? AND p.request_id=? "
+                "AND p.phase='requested' AND j.state='running' AND j.deadline>?",
+                (worker_id, job_id, request_id, now),
+            ).fetchone()
+            expected = self._stop_lease_digest(db, worker_id, job_id)
+            if (not pending or pending[0] != expected or expected is None
+                    or not secrets.compare_digest(expected, digest)):
+                raise ValueError("Stale native STOP report")
+            db.execute(
+                "INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?) "
+                "ON CONFLICT(worker_id) DO UPDATE SET job_id=excluded.job_id, "
+                "request_id=excluded.request_id, lease_sha256=excluded.lease_sha256, "
+                "received_at=excluded.received_at WHERE request_id!=excluded.request_id "
+                "OR job_id!=excluded.job_id OR lease_sha256!=excluded.lease_sha256",
+                (worker_id, job_id, request_id, digest, now),
+            )
 
     def acknowledge(self, worker_id, job_id, request_id, *,
-                    worker_stopped, checkpoint_verified):
+                    worker_stopped, checkpoint_verified, lease_token_sha256=None):
         """Only coordinator-validated worker ACK+checkpoint can mark pause.
 
         This is a bookkeeping marker, NOT a scheduler idle transition:
         the running job remains running until the real worker's execution
         lease and saved checkpoint are integrated with atomic assignment.
+        For v3, the trusted caller must match the stopped execution lease.
+        A retry for that same live lease leaves the original ACK intact.
         """
         self.jobs._id(worker_id)
         self.jobs._id(job_id)
@@ -129,8 +228,9 @@ class WorkerUpdatePause:
             raise ValueError("Worker has not stopped with verified checkpoint")
         with self.jobs._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            self.jobs._reject_update_hold(db, worker_id)
             row = db.execute(
-                """SELECT job_id,request_id,phase
+                """SELECT job_id,request_id,phase,stop_lease_sha256
                 FROM worker_update_pause_requests WHERE worker_id=?""",
                 (worker_id,),
             ).fetchone()
@@ -138,9 +238,29 @@ class WorkerUpdatePause:
                 """SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?""",
                 (worker_id,),
             ).fetchone()
-            if (row != (job_id, request_id, "requested")
+            if (not row or row[:2] != (job_id, request_id)
                     or not active or active[:2] != (job_id, "running")
                     or active[2] is None or active[2] <= self.clock()):
+                raise ValueError("Stale pause acknowledgment")
+            lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+            if lease_digest != row[3]:
+                raise ValueError("STOP acknowledgment has a stale or missing lease")
+            if lease_digest is not None:
+                if (not isinstance(lease_token_sha256, str)
+                        or len(lease_token_sha256) != 64 or not lease_token_sha256.isascii()
+                        or not secrets.compare_digest(lease_digest, lease_token_sha256)):
+                    raise ValueError("STOP acknowledgment has a stale or missing lease")
+                report = db.execute(
+                    "SELECT job_id,request_id,lease_sha256 FROM worker_native_stop_reports "
+                    "WHERE worker_id=?", (worker_id,),
+                ).fetchone()
+                if report != (job_id, request_id, lease_digest):
+                    raise ValueError("Missing or mismatched native STOP report")
+                if row[2] == "acknowledged":
+                    return
+            elif lease_token_sha256 is not None:
+                raise ValueError("STOP acknowledgment lease does not match the job protocol")
+            if row[2] != "requested":
                 raise ValueError("Stale pause acknowledgment")
             db.execute(
                 """UPDATE worker_update_pause_requests
@@ -188,28 +308,38 @@ class WorkerUpdatePause:
         if not 0 < len(canonical.encode("utf-8")) <= 1024 * 1024:
             raise ValueError("Checkpoint exceeds safe limit")
         sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        now = self.clock()
         with self.jobs._db() as db:
             db.execute("PRAGMA synchronous=FULL")
             db.execute("BEGIN IMMEDIATE")
+            now = self.clock()
             self.jobs._reject_update_hold(db, worker_id)
             if db.execute(
                 "SELECT 1 FROM worker_update_resume WHERE worker_id=?", (worker_id,)
             ).fetchone():
                 raise ValueError("Existing resume checkpoint must be reconciled")
             pause = db.execute(
-                "SELECT job_id,request_id,phase FROM worker_update_pause_requests "
+                "SELECT job_id,request_id,phase,stop_lease_sha256 FROM worker_update_pause_requests "
                 "WHERE worker_id=?", (worker_id,)
             ).fetchone()
             job = db.execute(
                 "SELECT job_id,state,deadline FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,)
             ).fetchone()
-            if pause != (job_id, request_id, "acknowledged") or not job or (
+            if not pause or pause[:3] != (job_id, request_id, "acknowledged") or not job or (
                 job[0] != job_id or job[1] != "running" or
                 job[2] is None or job[2] <= now
             ):
                 raise ValueError("Pause ACK or execution lease no longer valid")
+            lease_digest = self._stop_lease_digest(db, worker_id, job_id)
+            if lease_digest != pause[3]:
+                raise ValueError("STOP finalization has a stale or missing lease")
+            if lease_digest is not None:
+                report = db.execute(
+                    "SELECT job_id,request_id,lease_sha256 FROM worker_native_stop_reports "
+                    "WHERE worker_id=?", (worker_id,),
+                ).fetchone()
+                if report != (job_id, request_id, lease_digest):
+                    raise ValueError("Missing or mismatched native STOP report")
             db.execute(
                 """INSERT INTO worker_update_resume
                 (worker_id,job_id,request_id,checkpoint_json,checkpoint_sha256,created_at)

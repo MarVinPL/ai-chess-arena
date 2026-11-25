@@ -72,7 +72,7 @@ def test_stop_ack_and_update_holds_block_cache_maintenance(tmp_path):
     path, d = setup(tmp_path)
     with sqlite3.connect(path) as db:
         db.execute(
-            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+            "INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,?,?,?)",
             (WORKER, "game_12345678", "b" * 32, "acknowledged", 990, 995)
         )
     with pytest.raises(ValueError):

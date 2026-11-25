@@ -62,7 +62,7 @@ def test_pause_ack_needs_stopped_worker_and_verified_checkpoint(tmp_path):
                           checkpoint_verified=True)
 
 
-def test_outdated_or_duplicate_pause_is_rejected(tmp_path):
+def test_outdated_pause_is_rejected_and_identical_retry_is_idempotent(tmp_path):
     db = tmp_path / "pause.db"
     now = [100.]
     jobs = running_registry(db, now)
@@ -70,8 +70,9 @@ def test_outdated_or_duplicate_pause_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="No active"):
         pause.request(WORKER, "job_87654321")
     req = pause.request(WORKER, JOB)
-    with pytest.raises(ValueError, match="already"):
-        pause.request(WORKER, JOB)
+    assert pause.request(WORKER, JOB) == req
+    assert pause.pending(WORKER)["phase"] == "requested"
+    assert jobs.state(WORKER) == "running"
     with pytest.raises(ValueError, match="mismatch"):
         pause.clear(WORKER, "f" * 32 if req != "f" * 32 else "e" * 32)
     assert pause.pending(WORKER)["request_id"] == req

@@ -28,7 +28,7 @@ def seed_resume(tmp_path):
         db.execute("INSERT INTO worker_job_safety VALUES (?,NULL,'unknown',NULL,?)",
                    (WORKER, 100.0))
         db.execute(
-            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,'acknowledged',?,?)",
+            "INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,'acknowledged',?,?)",
             (WORKER, JOB, REQUEST, 100.0, 101.0))
         db.execute(
             "INSERT INTO worker_update_resume VALUES (?,?,?,?,?,?)",

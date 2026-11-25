@@ -34,7 +34,7 @@ def test_saved_checkpoint_never_becomes_runnable_without_executor(tmp_path):
             ("worker_12345678", "job_12345678", "a" * 32, raw, digest, 1000),
         )
         db.execute(
-            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+            "INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,?,?,?)",
             ("worker_12345678", "job_12345678", "a" * 32,
              "acknowledged", 1000, 1000),
         )

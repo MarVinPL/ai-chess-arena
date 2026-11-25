@@ -69,7 +69,7 @@ def test_pause_blocks_existing_inference_job(tmp_path):
     delivery.assign_from_arena(WORKER, JOB)
     with sqlite3.connect(path) as db:
         db.execute(
-            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+            "INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,?,?,?)",
             (WORKER, JOB["job_id"], "c" * 32, "requested", 1001.0, None),
         )
     assert delivery.poll_assigned_job(WORKER) == {"state": "blocked"}
