@@ -42,6 +42,7 @@ class BoardMatchCardTests(unittest.TestCase):
                     JS.index("function formatMaterialScore(score)")]
         self.run_node(r"""
 const START_FEN='8/8/8/8/8/8/8/8 w - - 0 1';
+const pieces={K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 class Element {
  constructor(){this.children=[];this.dataset={};this.classList={add(){}};this.textContent='';}
  replaceChildren(){this.children=[];this.textContent='';}
@@ -50,7 +51,7 @@ class Element {
 }
 const document={createElement:()=>new Element(),createTextNode:text=>({textContent:text})};
 const nodes={};
-const $=id=>id==='zero-piece-mode'||id==='zero-piece-preview'?null:(nodes[id]||(nodes[id]=new Element()));
+const $=id=>['zero-piece-mode','zero-piece-preview','piece-style','piece-style-preview'].includes(id)?null:(nodes[id]||(nodes[id]=new Element()));
 """ + source + r"""
 const start='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 renderPieceInventory(start);
@@ -72,6 +73,8 @@ if(nodes['last-move-note'].textContent!=='Ostatni ruch: brak')throw Error('empty
                  JS.index("async function post(path)")]
         self.run_node(r"""
 const pieces={K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+let lastBoardFen,lastBoardMoves;
+const pieceMarkup=p=>pieces[p]||'';
 const nodes={board:{innerHTML:''}};
 const $=id=>nodes[id];
 """ + src + r"""

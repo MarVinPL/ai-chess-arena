@@ -1479,6 +1479,11 @@ class Handler(BaseHTTPRequestHandler):
             '/assets/navigation.css': ('web/css/navigation.css', 'text/css; charset=utf-8'),
             '/assets/board-redesign.css': ('web/css/board-redesign.css', 'text/css; charset=utf-8'),
         }
+        for style in ('cburnett', 'merida', 'shapes', 'chessnut'):
+            for color in 'wb':
+                for piece in 'KQRBNP':
+                    name = color + piece + '.svg'
+                    assets[f'/assets/pieces/{style}/{name}'] = (f'web/pieces/{style}/{name}', 'image/svg+xml')
         entry = assets.get(url_path)
         if entry is None:
             self.send_error(404)
