@@ -183,13 +183,17 @@ def test_tournament_stop_and_resume_preserves_answers(tmp_path, monkeypatch):
         if server.tournament_thread:
             server.tournament_thread.join(4)
 
-def test_tournament_stop_and_resume_preserves_completed_answers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("late_stop", [False, True])
+def test_tournament_stop_and_resume_preserves_completed_answers(tmp_path, monkeypatch, late_stop):
     import sqlite3
     import server
     import league
     db = tmp_path / "arena.sqlite3"
     monkeypatch.setattr(server, "DB", db)
     monkeypatch.setattr(league, "DB", db)
+    monkeypatch.setattr(server, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(server, "MODEL_RESPONSES_LOG", tmp_path / "responses.jsonl")
+    monkeypatch.setattr(server, "LIVE_EVENTS_LOG", tmp_path / "events.jsonl")
     monkeypatch.setattr(server, "set_live", lambda *a, **k: None)
     monkeypatch.setattr(server, "tournament_runtime", None)
     monkeypatch.setattr(server, "tournament_thread", None)
@@ -206,6 +210,8 @@ def test_tournament_stop_and_resume_preserves_completed_answers(tmp_path, monkey
     tid = league.create_round_robin("STOP test")["id"]
     entered = threading.Event()
     instances = []
+    closing = threading.Event()
+    release = threading.Event()
     class Runtime:
         def __init__(self):
             self.cancelled = threading.Event()
@@ -214,7 +220,11 @@ def test_tournament_stop_and_resume_preserves_completed_answers(tmp_path, monkey
         def ensure_loaded(self, *a): pass
         def request_cancel(self): self.cancelled.set()
         def stop(self): pass
-        def shutdown(self): self.closed = True
+        def shutdown(self):
+            if late_stop:
+                closing.set()
+                assert release.wait(3)
+            self.closed = True
     monkeypatch.setattr(server.runtime_factory, "create_runtime", lambda **kw: Runtime())
     calls = []
     def ask(runtime, path, question, event, **kwargs):
@@ -222,9 +232,28 @@ def test_tournament_stop_and_resume_preserves_completed_answers(tmp_path, monkey
         if len(calls) == 1:
             return {"status": "answered", "answer": "four", "seconds": 0.1}
         entered.set()
-        assert runtime.cancelled.wait(3)
+        if not late_stop:
+            assert runtime.cancelled.wait(3)
         return {"status": "stopped", "answer": "", "seconds": None}
     monkeypatch.setattr(passkey_test, "ask_passkey_question", ask)
+    if late_stop:
+        # Force exit from pairing selection with unfinished pairings.
+        monkeypatch.setattr(server, "_select_tournament_pairing", lambda *a: (None, None))
+    if late_stop:
+        server.start_tournament(tid)
+        try:
+            assert closing.wait(3), server.tournament_error
+            with sqlite3.connect(db) as c:
+                assert c.execute("select status from tournaments where id=?", (tid,)).fetchone()[0] == "running"
+            server.tournament_stop_event.set()
+        finally:
+            release.set()
+            server.tournament_thread.join(5)
+        assert not server.tournament_thread.is_alive()
+        assert instances[0].closed
+        with sqlite3.connect(db) as c:
+            assert c.execute("select status from tournaments where id=?", (tid,)).fetchone()[0] == "stopped"
+        return
     for expected_calls in (2, 3):
         entered.clear()
         server.start_tournament(tid)

@@ -1106,14 +1106,15 @@ def tournament_loop(tournament_id):
             except Exception as cleanup_exc:
                 set_live('model_cleanup_deferred', 'Usuwanie niepotrzebnych modeli odroczone: '+str(cleanup_exc),
                          tournament_id=tournament_id, pairing_id=pairing['id'])
-        if tournament_stop_event.is_set():
-            cancel_watcher_done.set()
-            if cancel_watcher is not None:
-                cancel_watcher.join()
-            if cancel_errors:
-                raise RuntimeError('Nie potwierdzono zatrzymania silnika: ' + str(cancel_errors[0]))
-            tournament_runtime.shutdown()
-            tournament_runtime = None
+        # Always close the owned runtime before publishing any terminal state.
+        # STOP can arrive during finalization, not just during inference.
+        cancel_watcher_done.set()
+        if cancel_watcher is not None:
+            cancel_watcher.join()
+        tournament_runtime.shutdown()
+        tournament_runtime = None
+        if cancel_errors:
+            raise RuntimeError('Nie potwierdzono zatrzymania silnika: ' + str(cancel_errors[0]))
         with league.connect() as c:
             unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
