@@ -9,7 +9,7 @@ HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/c
 class TournamentListUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        start = HTML.index("function renderTournaments(rows)")
+        start = HTML.index("function renderTournaments(rows,force=false)")
         end = HTML.index("\nfunction renderModelStatus", start)
         cls.renderer = HTML[start:end]
 
@@ -39,7 +39,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
-        self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
+        self.assertIn("if(!readiness.ready){clearTournamentControl()", self.renderer)
         self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
         self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
         self.assertIn("Przygotuj propozycję do audytu · model '+e.model_id", self.renderer)
