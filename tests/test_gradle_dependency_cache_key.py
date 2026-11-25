@@ -100,6 +100,21 @@ version = "1.0.0"
         self.write("remote_worker_gui/src-tauri/gen/android/gradle/verification-metadata.xml", "<verification/>")
         self.assertNotEqual(key, self.key())
 
+    def test_exact_native_packaging_override_preserves_dependency_key(self):
+        path = self.inputs[0]
+        original = 'android {\n    namespace = "example"\n}\ndependencies { implementation("example:lib:1") }\n'
+        self.write(path, original)
+        key = self.key()
+        patched = original.replace('android {\n', 'android {\n    packaging {\n        jniLibs.useLegacyPackaging = true\n    }\n', 1)
+        self.write(path, patched)
+        self.assertEqual(key, self.key())
+        self.write(path, patched.replace('example:lib:1', 'example:lib:2'))
+        self.assertNotEqual(key, self.key())
+        self.write(path, patched.replace('useLegacyPackaging = true', 'useLegacyPackaging = false'))
+        self.assertNotEqual(key, self.key())
+        self.write(path, patched.replace('jniLibs.useLegacyPackaging = true', 'jniLibs.useLegacyPackaging = true\n        resources.excludes.add("example")'))
+        self.assertNotEqual(key, self.key())
+
     def test_platform_separation(self):
         key = self.key()
         self.assertNotEqual(key, self.key("Windows"))
