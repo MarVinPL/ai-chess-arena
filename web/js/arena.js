@@ -1,7 +1,52 @@
 let arenaModels=[];let tournamentBoardActive=false;const START_FEN='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';const $=id=>document.getElementById(id);const pieces={K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 function materialAdvantage(fen){if(!fen)return {white:0,black:0};const values={p:1,n:3,b:3,r:5,q:9};let white=0,black=0;for(const piece of (fen.split(' ')[0]||'')){const value=values[piece.toLowerCase()]||0;if(piece>='A'&&piece<='Z')white+=value;else if(piece>='a'&&piece<='z')black+=value;}const balance=white-black;return {white:balance,black:-balance};}
 function pieceInventory(fen,color){const counts={k:0,q:0,r:0,b:0,n:0,p:0};const board=(fen||'').split(' ')[0]||'';for(const piece of board){const key=piece.toLowerCase();if(Object.prototype.hasOwnProperty.call(counts,key)&&((color==='white'&&piece===piece.toUpperCase())||(color==='black'&&piece===piece.toLowerCase())))counts[key]++;}const values={q:9,r:5,b:3,n:3,p:1};const material=Object.entries(values).reduce((sum,[key,value])=>sum+counts[key]*value,0);const figures=counts.q+counts.r+counts.b+counts.n;const pawns=counts.p;const total=Object.values(counts).reduce((sum,count)=>sum+count,0);return {counts,figures,pawns,total,material};}
-function renderPieceInventory(fen){const white=pieceInventory(fen,'white'),black=pieceInventory(fen,'black');const symbols={white:{q:'♕',r:'♖',b:'♗',n:'♘',p:'♙',k:'♔'},black:{q:'♛',r:'♜',b:'♝',n:'♞',p:'♟',k:'♚'}};for(const [color,data] of Object.entries({white,black})){const counts=data.counts;$(color+'-piece-types').textContent=['q','r','b','n','p'].map(key=>symbols[color][key]+counts[key]).join(' · ')+' · '+symbols[color].k+(counts.k?'✓':'—');$(color+'-piece-summary').textContent=data.figures+' figur · '+data.pawns+' pionków · '+data.total+' bierek · wartość materialna: '+data.material;const opponent=color==='white'?black:white;$(color+'-captured').textContent='Zbity materiał '+(color==='white'?'czarnych':'białych')+' (bilans względem startu): '+Math.max(0,39-opponent.material);}}
+const ZERO_PIECE_KEY='arena.zero-piece-mode';
+let zeroPieceMode='hide',lastInventoryFen=START_FEN;
+try{if(localStorage.getItem(ZERO_PIECE_KEY)==='strike')zeroPieceMode='strike';}catch(e){}
+const inventorySymbols={white:{q:'♕',r:'♖',b:'♗',n:'♘',p:'♙',k:'♔'},black:{q:'♛',r:'♜',b:'♝',n:'♞',p:'♟',k:'♚'}};
+const inventoryNames={q:'Hetman',r:'Wieża',b:'Goniec',n:'Skoczek',p:'Pionek',k:'Król'};
+function renderInventoryTypes(host,counts,color,mode=zeroPieceMode){
+ host.replaceChildren();
+ const keys=['q','r','b','n','p','k'].filter(key=>counts[key]>0||mode==='strike');
+ if(!keys.length){host.textContent='Brak bierek';return;}
+ keys.forEach((key,i)=>{
+  if(i)host.appendChild(document.createTextNode(' · '));
+  const item=document.createElement('span');
+  item.className='piece-inventory-item';
+  item.dataset.piece=key;
+  item.textContent=inventorySymbols[color][key]+(key==='k'&&counts[key]>0?'✓':counts[key]);
+  item.setAttribute('aria-label',inventoryNames[key]+': '+counts[key]);
+  if(!counts[key])item.classList.add('piece-inventory-item--zero');
+  host.appendChild(item);
+ });
+}
+function renderPieceInventory(fen){
+ lastInventoryFen=fen;
+ const white=pieceInventory(fen,'white'),black=pieceInventory(fen,'black');
+ for(const [color,data] of Object.entries({white,black})){
+  renderInventoryTypes($(color+'-piece-types'),data.counts,color);
+  $(color+'-piece-summary').textContent=data.figures+' figur · '+data.pawns+' pionków · '+data.total+' bierek · wartość materialna: '+data.material;
+  const opponent=color==='white'?black:white;
+  $(color+'-captured').textContent='Zbity materiał '+(color==='white'?'czarnych':'białych')+' (bilans względem startu): '+Math.max(0,39-opponent.material);
+ }
+}
+function updateZeroPiecePreview(){
+ const preview=$('zero-piece-preview');
+ if(preview)renderInventoryTypes(preview,{q:1,r:1,b:1,n:0,p:7,k:1},'white');
+}
+const zeroPieceSelect=$('zero-piece-mode');
+if(zeroPieceSelect){
+ zeroPieceSelect.value=zeroPieceMode;
+ zeroPieceSelect.addEventListener('change',()=>{
+  zeroPieceMode=zeroPieceSelect.value==='strike'?'strike':'hide';
+  try{localStorage.setItem(ZERO_PIECE_KEY,zeroPieceMode);}catch(e){}
+  renderPieceInventory(lastInventoryFen);
+  updateZeroPiecePreview();
+ });
+ updateZeroPiecePreview();
+}
+
 function renderLastMove(moves=[]){const last=Array.isArray(moves)?moves[moves.length-1]:null;const text=last&&/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(last.uci||'')?'Ostatni ruch: '+(last.san||last.uci)+' · '+last.uci:'Ostatni ruch: brak';$('last-move-note').textContent=text;}
 function formatMaterialScore(score){return score>0?'+'+score:String(score);}
 function draw(fen,moves=[]){if(!fen)return;const rows=fen.split(' ')[0].split('/');let html='';rows.forEach((row,r)=>{let files=[];for(const ch of row){if(/[1-8]/.test(ch))for(let i=0;i<+ch;i++)files.push('');else files.push(ch)}files.forEach((p,c)=>{html+=`<div class="sq ${(r+c)%2?'dark':'light'}" data-file="${String.fromCharCode(97+c)}" data-rank="${8-r}" aria-label="${String.fromCharCode(97+c)}${8-r}" data-piece-color="${p?(p===p.toUpperCase()?'white':'black'):'empty'}"><span class="piece">${pieces[p]||''}</span></div>`})});const last={white:[...moves].reverse().find(m=>m.color==='white'||(m.ply&&m.ply%2===1)),black:[...moves].reverse().find(m=>m.color==='black'||(m.ply&&m.ply%2===0))};const square=s=>{if(!/^[a-h][1-8]$/.test(s||''))return null;return {x:(s.charCodeAt(0)-97)*100+50,y:(8-Number(s[1]))*100+50}};let arrows='';for(const [color,move] of Object.entries(last)){if(!move||!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move.uci||''))continue;const from=square(move.uci.slice(0,2)),to=square(move.uci.slice(2,4));const x1=from.x,y1=from.y,x2=to.x,y2=to.y;const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1;const ex=x2-dx/len*17,ey=y2-dy/len*17;const stroke=color==='white'?'#35d2c0':'#f2b65e';const marker=color==='white'?'arrow-white':'arrow-black';arrows+=`<path d="M ${x1} ${y1} L ${ex} ${ey}" stroke="${stroke}" stroke-width="9" stroke-linecap="round" opacity=".95" marker-end="url(#${marker})"/>`;}const marks=['white','black'].map(color=>{const m=last[color];if(!m||!/^[a-h][1-8][a-h][1-8]/.test(m.uci||''))return '';return [m.uci.slice(0,2),m.uci.slice(2,4)].map(s=>{const q=square(s);const col=s.charCodeAt(0)-97,row=8-Number(s[1]);return `<rect x="${col*100+3}" y="${row*100+3}" width="94" height="94" rx="7" fill="none" stroke="${color==='white'?'#35d2c0':'#f2b65e'}" stroke-width="5" opacity=".85"/>`}).join('')}).join('');const overlay=`<svg class="board-arrows" viewBox="0 0 800 800" aria-hidden="true"><defs><marker id="arrow-white" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#35d2c0" stroke="#173b3a" stroke-width=".6"/></marker><marker id="arrow-black" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f2b65e"/></marker></defs>${marks}${arrows}</svg>`;$('board').innerHTML=html+overlay}
