@@ -108,10 +108,50 @@ def _read_jsonl(path, limit, retention_seconds):
 def set_live(stage, message, **fields):
     with live_lock:
         now = time.time()
+        boundary = stage in ('tournament_preflight', 'starting', 'passkey_prepare', 'pairing_select', 'game_prepare', 'game_resume_prepare')
+        if boundary:
+            for key in ('model', 'color', 'question_no', 'response', 'proposed_move',
+                        'elapsed_seconds', 'error', 'result', 'failure_reason'):
+                live_status.pop(key, None)
+        if stage in ('tournament_preflight', 'starting', 'passkey_prepare', 'pairing_select'):
+            for key in ('pairing_id', 'pairing_stage', 'game_id', 'white', 'black',
+                        'last_move', 'fen', 'moves', 'legal_moves'):
+                live_status.pop(key, None)
+            live_status.update(moves=[], legal_moves=[])
+        context_changed = any(key in fields and fields[key] != live_status.get(key)
+                              for key in ('tournament_id', 'pairing_id', 'model', 'question_no', 'execution_phase', 'asset_kind'))
+        if stage != live_status.get('stage') or context_changed or boundary:
+            live_status['stage_started_at'] = now
+        else:
+            live_status.setdefault('stage_started_at', now)
+        if stage != 'model_downloading':
+            live_status.pop('download_received_bytes', None)
+            live_status.pop('download_total_bytes', None)
+        if stage not in ('model_downloading', 'model_verifying', 'model_asset_ready'):
+            live_status.pop('asset_kind', None)
         if stage == 'generating':
-            fields.setdefault('generation_started_at', now)
+            fields.setdefault('generation_started_at', live_status['stage_started_at'])
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
+        if stage not in ('model_downloading', 'model_verifying', 'model_asset_ready'):
+            fields.pop('asset_kind', None)
+        if stage != 'model_downloading':
+            fields.pop('download_received_bytes', None)
+            fields.pop('download_total_bytes', None)
+        # Pair reservation and checkpoint creation are not active inference.
+        if stage in ('game_prepare', 'game_resume_prepare', 'game_ready'):
+            fields['game_state'] = 'preparing'
+        elif stage in ('game_running', 'game_resumed'):
+            fields['game_state'] = 'active'
+        elif stage in ('game_finished', 'game_adjudicated'):
+            fields['game_state'] = 'finished'
+        elif stage in ('game_failed', 'error', 'failed', 'blocked'):
+            fields['game_state'] = 'failed'
+        elif stage == 'stopped':
+            fields['game_state'] = 'paused'
+        elif stage in ('idle', 'completed', 'starting', 'tournament_preflight',
+                       'passkey_prepare', 'pairing_select'):
+            fields['game_state'] = 'none'
         live_status.update({'stage':stage,'message':message,'updated_at':now,**fields})
         event_fields = ('white','black','model','color','response','proposed_move','last_move','pairing_id','question_no','error','result','tournament_id','game_id','move_count','elapsed_seconds','adjudication_status','adjudication_reason','failure_reason','pairing_stage')
         event = {'at':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
@@ -133,6 +173,25 @@ def set_live(stage, message, **fields):
             live_status['log_write_error'] = str(exc)
 
 
+def _local_execution_resources():
+    # Host-level measurements, not process utilization or worker telemetry.
+    memory = {}
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            key, _, value = line.partition(':')
+            if key in ('MemAvailable', 'MemTotal'):
+                memory[key] = int(value.split()[0]) // 1024
+    except (OSError, ValueError, IndexError):
+        memory = {}
+    try:
+        load = round(os.getloadavg()[0], 2)
+    except (OSError, AttributeError):
+        load = None
+    return {'memory_available_mib': memory.get('MemAvailable'),
+            'memory_total_mib': memory.get('MemTotal'),
+            'cpu_load_1m': load, 'cpu_logical_count': os.cpu_count()}
+
+
 def get_live():
     with live_lock:
         snapshot = dict(live_status)
@@ -141,7 +200,12 @@ def get_live():
             responses = _read_jsonl(MODEL_RESPONSES_LOG, 1, MODEL_RESPONSE_RETENTION_SECONDS)
             if responses:
                 snapshot['response'] = responses[-1].get('response')
-        return snapshot
+        snapshot['stop_requested'] = tournament_stop_event.is_set() and bool(tournament_thread and tournament_thread.is_alive())
+        snapshot.setdefault('game_state', 'none')
+        snapshot['executor'] = 'local' if snapshot.get('execution_phase') in ('model_test', 'game') and snapshot.get('stage') not in ('stopped', 'completed', 'error', 'failed', 'blocked') else None
+        snapshot['remote_worker_status'] = 'unavailable'
+    snapshot['local_resources'] = _local_execution_resources()
+    return snapshot
 
 
 def _is_managed_filename(filename):
@@ -390,7 +454,17 @@ def _version_record(version_id):
     return dict(row)
 
 
-def _ensure_version_file(version_id):
+def _asset_progress(on_status, version, kind, stage, received=None, total=None):
+    if on_status is None:
+        return
+    messages = {'model_downloading': 'Pobieranie GGUF',
+                'model_verifying': 'Weryfikacja GGUF',
+                'model_asset_ready': 'Plik GGUF gotowy'}
+    on_status(stage, messages[stage], model=version['name'], asset_kind=kind,
+              download_received_bytes=received, download_total_bytes=total)
+
+
+def _ensure_version_file(version_id, on_status=None):
     """Fetch a missing GGUF on demand, then verify it against the pinned manifest."""
     version = _version_record(version_id)
     expected = model_store.MANAGED_DIR / version['filename']
@@ -413,19 +487,26 @@ def _ensure_version_file(version_id):
                 raise RuntimeError(f'Wersja {version_id} nie ma URL przypiętego do pełnego commita Hugging Face')
         elif url != version['source']:
             raise RuntimeError(f'URL pobrania wersji {version_id} nie zgadza się ze źródłem rejestru')
+        kwargs = {}
+        if on_status is not None:
+            kwargs['on_progress'] = lambda received, total: _asset_progress(
+                on_status, version, 'target', 'model_downloading', received, total)
         model_store.download_version(
             version_id, url, version['filename'], version['sha256'],
-            version['size_bytes'], True
+            version['size_bytes'], True, **kwargs
         )
         version = _version_record(version_id)
     if version['managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
         raise RuntimeError('Plik GGUF nie jest oznaczoną kopią zarządzaną przez Arenę')
-    return str(_version_path(version))
+    _asset_progress(on_status, version, 'target', 'model_verifying')
+    path = str(_version_path(version))
+    _asset_progress(on_status, version, 'target', 'model_asset_ready')
+    return path
 
 
-def _ensure_version_assets(version_id):
+def _ensure_version_assets(version_id, on_status=None):
     """Fetch missing target/draft files only when a game actually needs them."""
-    target_path = _ensure_version_file(version_id)
+    target_path = _ensure_version_file(version_id, on_status=on_status)
     version = _version_record(version_id)
     draft_path = None
     if version.get('draft_filename'):
@@ -439,13 +520,18 @@ def _ensure_version_assets(version_id):
                 raise RuntimeError('Plik draft nie ma URL przypiętego do pełnego commita Hugging Face')
         expected = model_store.MANAGED_DIR / version['draft_filename']
         if not expected.is_file():
+            kwargs = {}
+            if on_status is not None:
+                kwargs['on_progress'] = lambda received, total: _asset_progress(
+                    on_status, version, 'draft', 'model_downloading', received, total)
             model_store.download_draft_version(
                 version_id, version['draft_download_url'], version['draft_filename'],
-                version['draft_sha256'], version['draft_size_bytes'], True
+                version['draft_sha256'], version['draft_size_bytes'], True, **kwargs
             )
             version = _version_record(version_id)
         if version['draft_managed_copy'] != 1 or expected.resolve().parent != model_store.MANAGED_DIR.resolve():
             raise RuntimeError('Plik draft nie jest oznaczoną kopią zarządzaną przez Arenę')
+        _asset_progress(on_status, version, 'draft', 'model_verifying')
         digest = hashlib.sha256()
         actual_size = 0
         with expected.open('rb') as draft_file:
@@ -454,6 +540,7 @@ def _ensure_version_assets(version_id):
         if actual_size != version['draft_size_bytes'] or digest.hexdigest().lower() != version['draft_sha256'].lower():
             raise RuntimeError('Plik draft nie zgadza się z manifestem SHA-256/rozmiaru')
         draft_path = str(expected)
+        _asset_progress(on_status, version, 'draft', 'model_asset_ready')
     return {'path': target_path, 'draft_path': draft_path}
 
 
@@ -475,7 +562,7 @@ def cleanup_unneeded_models(keep_version_ids=()):
     return removed
 
 
-def _prepare_single_model(player):
+def _prepare_single_model(player, on_status=None):
     model_store.MANAGED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     version_id = player['version_id']
     version = _version_record(version_id)
@@ -483,28 +570,32 @@ def _prepare_single_model(player):
     required_bytes = 0 if expected.is_file() else int(version['size_bytes'])
     if version['draft_filename'] and not (model_store.MANAGED_DIR / version['draft_filename']).is_file():
         required_bytes += int(version['draft_size_bytes'])
+    if on_status is not None:
+        on_status('storage_check', 'Sprawdzanie miejsca na modele')
     usage = shutil.disk_usage(model_store.MANAGED_DIR)
     if usage.free < required_bytes + model_store.MIN_FREE_MARGIN:
         raise OSError('Za mało miejsca na model i jego draft do testu tej partii; turniej pozostaje możliwy do wznowienia')
     try:
-        return _ensure_version_assets(version_id)
+        return _ensure_version_assets(version_id, on_status=on_status)
     except Exception:
         raise
 
 
-def _prepare_game_models(white, black):
+def _prepare_game_models(white, black, on_status=None):
     model_store.MANAGED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     needed = {white['version_id'], black['version_id']}
     versions = [_version_record(value) for value in (white['version_id'], black['version_id'])]
     required_bytes = sum((int(v['size_bytes']) if not (model_store.MANAGED_DIR / v['filename']).is_file() else 0) +
                          (int(v['draft_size_bytes'] or 0) if v['draft_filename'] and not (model_store.MANAGED_DIR / v['draft_filename']).is_file() else 0)
                          for v in versions)
+    if on_status is not None:
+        on_status('storage_check', 'Sprawdzanie miejsca na modele')
     usage = shutil.disk_usage(model_store.MANAGED_DIR)
     if usage.free < required_bytes + model_store.MIN_FREE_MARGIN:
         raise OSError('Za mało miejsca na modele potrzebne w tej partii; turniej pozostaje możliwy do wznowienia')
     prepared = []
     for player in (white, black):
-        prepared.append(_ensure_version_assets(player['version_id']))
+        prepared.append(_ensure_version_assets(player['version_id'], on_status=on_status))
     return prepared
 
 
@@ -757,6 +848,8 @@ def tournament_loop(tournament_id):
     model_store.MODEL_LIFECYCLE_LOCK.acquire()
     preflight_passed = False
     try:
+        set_live('tournament_preflight', 'Sprawdzanie gotowości turnieju',
+                 tournament_id=tournament_id, execution_phase='preflight')
         preflight = tournament_preflight(tournament_id)
         if not preflight['ready']:
             raise TournamentPreflightError(_preflight_error_message(preflight))
@@ -769,7 +862,7 @@ def tournament_loop(tournament_id):
             entries = c.execute("SELECT e.model_id,e.version_id,m.name FROM tournament_entries e JOIN league_models m ON m.id=e.model_id WHERE e.tournament_id=?", (tournament_id,)).fetchall()
             players = {r['model_id']: {'model_id': r['model_id'], 'name': r['name'], 'version_id': r['version_id']} for r in entries}
             registry_names_by_filename = {}
-            runtime_context = {'white': None, 'black': None}
+            runtime_context = {'white': None, 'black': None, 'execution_phase': 'model_test'}
             budget_snapshots = league.prepare_tournament_budgets(tournament_id)
             for model_id, player in players.items():
                 manifest = _version_record(player['version_id'])
@@ -790,7 +883,7 @@ def tournament_loop(tournament_id):
             if not pairings and c.execute("SELECT COUNT(*) FROM tournament_entries WHERE tournament_id=?", (tournament_id,)).fetchone()[0] < 2:
                 raise RuntimeError('Turniej nie ma wystarczającej liczby zawodników')
             c.execute("UPDATE tournaments SET status='running' WHERE id=?", (tournament_id,))
-        set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id)
+        set_live('starting','Przygotowanie turnieju', tournament_id=tournament_id, execution_phase='model_test')
         def publish_runtime_status(stage, message, **fields):
             runtime_label = fields.get('model')
             if runtime_label:
@@ -800,6 +893,8 @@ def tournament_loop(tournament_id):
             if runtime_context['white'] and runtime_context['black']:
                 fields.setdefault('white', runtime_context['white'])
                 fields.setdefault('black', runtime_context['black'])
+            fields.setdefault('tournament_id', tournament_id)
+            fields.setdefault('execution_phase', runtime_context['execution_phase'])
             set_live(stage, message, **fields)
 
         tournament_runtime = runtime_factory.create_runtime(on_status=publish_runtime_status)
@@ -815,8 +910,8 @@ def tournament_loop(tournament_id):
             questions = passkey_test.questions_for_tournament([row[0] for row in known_rows], random_done)
             if not questions or tournament_stop_event.is_set():
                 continue
-            set_live('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'])
-            assets = _prepare_single_model(player)
+            set_live('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'], execution_phase='model_test')
+            assets = _prepare_single_model(player, on_status=set_live)
             player.update(assets)
             try:
                 for question_no, question in questions:
@@ -824,7 +919,7 @@ def tournament_loop(tournament_id):
                     set_live('passkey_question',f'Test Passkey: {label}', model=player['name'], question_no=question_no)
                     if tournament_stop_event.is_set():
                         break
-                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900)
+                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900, on_status=lambda: set_live('passkey_generating', 'Oczekiwanie na odpowiedź testową modelu', model=player['name'], question_no=question_no, execution_phase='model_test'))
                     # A response that completed after stop was requested is not recorded;
                     # the unanswered question is reconstructed from durable answer rows.
                     if tournament_stop_event.is_set() or answer.get('status') == 'stopped':
@@ -840,10 +935,12 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
 
+        runtime_context['execution_phase'] = 'game'
         game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
         while True:
             if tournament_stop_event.is_set():
                 break
+            set_live('pairing_select', 'Wybór następnej pary', tournament_id=tournament_id, execution_phase='pairing_selection', pairing_id=None, model=None, question_no=None)
             pairing, checkpoint = _select_tournament_pairing(tournament_id, draft_enabled)
             if pairing is None:
                 break
@@ -873,11 +970,11 @@ def tournament_loop(tournament_id):
             tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen))
-            set_live('game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
-            white_assets, black_assets = _prepare_game_models(white, black)
+            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
+            white_assets, black_assets = _prepare_game_models(white, black, on_status=set_live)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
-            set_live('game_running','Wznowiono partię' if resume_moves else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
+            set_live('game_resumed' if checkpoint else 'game_running','Wznowiono partię' if checkpoint else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
             checkpoint_moves = [dict(item) for item in resume_moves]
             checkpoint_times = [float(value) for value in resume_times]
             def publish_move(move):
@@ -997,7 +1094,7 @@ def tournament_loop(tournament_id):
             unfinished = c.execute("SELECT COUNT(*) FROM tournament_pairings WHERE tournament_id=? AND status IN ('pending','running')", (tournament_id,)).fetchone()[0]
             status = 'completed' if unfinished == 0 else ('stopped' if tournament_stop_event.is_set() else 'failed')
             c.execute('UPDATE tournaments SET status=? WHERE id=?', (status, tournament_id))
-        set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else f'Turniej: {status}', tournament_id=tournament_id)
+        set_live('completed' if status == 'completed' else status, 'Turniej zakończony' if status == 'completed' else ('Turniej wstrzymany; możliwe wznowienie' if status == 'stopped' else 'Turniej zakończony błędem'), tournament_id=tournament_id)
         if status == 'completed':
             try:
                 admission_result = league.finalize_late_admission_batch(tournament_id)
