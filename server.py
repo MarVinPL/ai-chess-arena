@@ -897,6 +897,8 @@ def tournament_loop(tournament_id):
                 fields.setdefault('white', runtime_context['white'])
                 fields.setdefault('black', runtime_context['black'])
             fields.setdefault('tournament_id', tournament_id)
+            if runtime_context.get('pairing_id') is not None:
+                fields.setdefault('pairing_id', runtime_context['pairing_id'])
             fields.setdefault('execution_phase', runtime_context['execution_phase'])
             set_live(stage, message, **fields)
 
@@ -915,27 +917,42 @@ def tournament_loop(tournament_id):
         cancel_watcher = threading.Thread(target=cancel_on_stop, name='arena-stop-watcher', daemon=True)
         cancel_watcher.start()
 
+        tested_players = set()
         # Reuse completed answers for this competitor across tournaments. Once its
         # three knowledge answers are known, run at most one random health check per tournament.
-        for player_id, player in players.items():
+        def ensure_player_test(player, pairing):
+            player_id = player["model_id"]
+            if tournament_stop_event.is_set():
+                return False
+            if player_id in tested_players:
+                return True
             with sqlite3.connect(DB) as db:
                 known_rows = db.execute("SELECT DISTINCT question_fingerprint FROM passkey_test_answers WHERE model_id=? AND status='answered' AND question_no>0 AND question_fingerprint IS NOT NULL",
                                         (player_id,)).fetchall()
-                random_done = db.execute("SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND question_no=0 AND status='answered'",
+                random_done = db.execute("SELECT 1 FROM passkey_test_answers WHERE tournament_id=? AND model_id=? AND status='answered'",
                                           (tournament_id, player_id)).fetchone() is not None
             questions = passkey_test.questions_for_tournament([row[0] for row in known_rows], random_done)
-            if not questions or tournament_stop_event.is_set():
-                continue
-            set_live('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'], execution_phase='model_test')
-            assets = _prepare_single_model(player, on_status=set_live)
+            if not questions:
+                tested_players.add(player_id)
+                return True
+            if tournament_stop_event.is_set():
+                return False
+            def publish_test(stage, message, **fields):
+                fields.update(tournament_id=tournament_id, pairing_id=pairing['id'],
+                              white=runtime_context['white'], black=runtime_context['black'],
+                              execution_phase='model_test')
+                fields.setdefault('model', player['name'])
+                set_live(stage, message, **fields)
+            publish_test('passkey_prepare',f'Przygotowanie testu Passkey: {player["name"]}', model=player['name'], execution_phase='model_test')
+            assets = _prepare_single_model(player, on_status=publish_test)
             player.update(assets)
             try:
                 for question_no, question in questions:
                     label=f'kontrola losowa' if question_no == 0 else f'pytanie {question_no}/3'
-                    set_live('passkey_question',f'Test Passkey: {label}', model=player['name'], question_no=question_no)
+                    publish_test('passkey_question',f'Test Passkey: {label}', model=player['name'], question_no=question_no)
                     if tournament_stop_event.is_set():
                         break
-                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900, on_status=lambda: set_live('passkey_generating', 'Oczekiwanie na odpowiedź testową modelu', model=player['name'], question_no=question_no, execution_phase='model_test'))
+                    answer = passkey_test.ask_passkey_question(tournament_runtime, player['path'], question, tournament_stop_event, draft_model_path=player.get('draft_path'), enable_thinking=player.get('thinking', False), temperature=player.get('inference', {}).get('temperature', 0.0), max_tokens=1800 if player.get('thinking') else 900, on_status=lambda: publish_test('passkey_generating', 'Oczekiwanie na odpowiedź testową modelu', model=player['name'], question_no=question_no, execution_phase='model_test'))
                     # A response that completed after stop was requested is not recorded;
                     # the unanswered question is reconstructed from durable answer rows.
                     if tournament_stop_event.is_set() or answer.get('status') == 'stopped':
@@ -949,7 +966,9 @@ def tournament_loop(tournament_id):
             finally:
                 tournament_runtime.stop()
             if tournament_stop_event.is_set():
-                break
+                return False
+            tested_players.add(player_id)
+            return True
 
         runtime_context['execution_phase'] = 'game'
         game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
@@ -963,6 +982,15 @@ def tournament_loop(tournament_id):
             white, black = _resolve_pairing_players(players, pairing)
             runtime_context['white'] = white['name']
             runtime_context['black'] = black['name']
+            # Test only entrants needed by the selected pairing. An existing
+            # checkpoint remains authoritative until the pair is ready.
+            runtime_context['execution_phase'] = 'model_test'
+            runtime_context['pairing_id'] = pairing['id']
+            if not ensure_player_test(white, pairing) or not ensure_player_test(black, pairing):
+                break
+            if tournament_stop_event.is_set():
+                break
+            runtime_context['execution_phase'] = 'game'
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []
