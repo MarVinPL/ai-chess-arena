@@ -5,7 +5,7 @@ explicitly verified free-use license. Only files inside MANAGED_DIR are arena
 owned; shared model directories are never cleanup targets.
 """
 from __future__ import annotations
-import hashlib, os, re, shutil, sqlite3, stat, threading, urllib.request
+import hashlib, os, re, shutil, sqlite3, stat, threading, time, urllib.request
 from pathlib import Path
 import league
 from model_exclusions import is_excluded_model_identity
@@ -24,8 +24,24 @@ def _safe_filename(name: str) -> str:
     return name
 
 
+def _progress_reporter(callback, total):
+    # Reporting is best effort and rate limited; it must not affect integrity checks.
+    last = None
+    def report(received, force=False):
+        nonlocal last
+        now = time.monotonic()
+        if callback is None or (not force and last is not None and now - last < 1):
+            return
+        last = now
+        try:
+            callback(received, total)
+        except Exception:
+            pass
+    return report
+
+
 def _download_version_locked(version_id: int, url: str, filename: str, expected_sha256: str,
-                              expected_size: int, license_verified: bool = False) -> dict:
+                              expected_size: int, license_verified: bool = False, *, on_progress=None) -> dict:
     """Download a catalogued model only after explicit provenance/license checks."""
     filename = _safe_filename(filename)
     if not license_verified:
@@ -62,6 +78,8 @@ def _download_version_locked(version_id: int, url: str, filename: str, expected_
         raise OSError('Za mało wolnego miejsca z marginesem bezpieczeństwa 512 MiB')
     digest = hashlib.sha256()
     received = 0
+    report = _progress_reporter(on_progress, expected_size)
+    report(0, force=True)
     req = urllib.request.Request(url, headers={'User-Agent': 'LocalAIChessArena/0.1'})
     try:
         with urllib.request.urlopen(req, timeout=30) as response, part.open('xb') as out:
@@ -76,12 +94,14 @@ def _download_version_locked(version_id: int, url: str, filename: str, expected_
                 if received > expected_size:
                     raise ValueError('Pobrany plik przekracza zadeklarowany rozmiar')
                 digest.update(block); out.write(block)
+                report(received)
             out.flush(); os.fsync(out.fileno())
         if received != expected_size:
             raise ValueError(f'Rozmiar niezgodny: {received} != {expected_size}')
         actual = digest.hexdigest()
         if actual.lower() != expected_sha256.lower():
             raise ValueError('SHA-256 nie zgadza się; plik nie został aktywowany')
+        report(received, force=True)
         os.chmod(part, 0o600)
         os.replace(part, target)
         with league.connect() as c:
@@ -96,14 +116,14 @@ def _download_version_locked(version_id: int, url: str, filename: str, expected_
 
 
 def download_version(version_id: int, url: str, filename: str, expected_sha256: str,
-                    expected_size: int, license_verified: bool = False) -> dict:
+                    expected_size: int, license_verified: bool = False, *, on_progress=None) -> dict:
     with MODEL_LIFECYCLE_LOCK:
         return _download_version_locked(version_id, url, filename, expected_sha256,
-                                        expected_size, license_verified)
+                                        expected_size, license_verified, on_progress=on_progress)
 
 
 def download_draft_version(version_id: int, url: str, filename: str, expected_sha256: str,
-                           expected_size: int, license_verified: bool = False) -> dict:
+                           expected_size: int, license_verified: bool = False, *, on_progress=None) -> dict:
     """Download and pin the companion draft GGUF under the same model version."""
     filename = _safe_filename(filename)
     if not license_verified or not url.startswith('https://'):
@@ -128,6 +148,8 @@ def download_draft_version(version_id: int, url: str, filename: str, expected_sh
         if shutil.disk_usage(MANAGED_DIR).free < expected_size + MIN_FREE_MARGIN:
             raise OSError('Za mało wolnego miejsca na plik draft z marginesem bezpieczeństwa')
         digest = hashlib.sha256(); received = 0
+        report = _progress_reporter(on_progress, expected_size)
+        report(0, force=True)
         req = urllib.request.Request(url, headers={'User-Agent': 'LocalAIChessArena/0.1'})
         try:
             with urllib.request.urlopen(req, timeout=30) as response, part.open('xb') as out:
@@ -139,10 +161,12 @@ def download_draft_version(version_id: int, url: str, filename: str, expected_sh
                     received += len(block)
                     if received > expected_size: raise ValueError('Draft przekracza zadeklarowany rozmiar')
                     digest.update(block); out.write(block)
+                    report(received)
                 out.flush(); os.fsync(out.fileno())
             actual = digest.hexdigest()
             if received != expected_size or actual.lower() != expected_sha256.lower():
                 raise ValueError('Rozmiar lub SHA-256 pliku draft nie zgadza się z manifestem')
+            report(received, force=True)
             os.chmod(part, 0o600); os.replace(part, target)
             c.execute("UPDATE model_versions SET draft_filename=?,draft_sha256=?,draft_size_bytes=?,draft_status='downloaded',draft_managed_copy=1 WHERE id=?",
                       (filename, actual, received, version_id))

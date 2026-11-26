@@ -1,0 +1,41 @@
+/* Issue #299: five accessible sections, no duplicate panels. */
+.arena-navigation{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 18px;padding:7px;border:1px solid #355767;border-radius:12px;background:#122731}
+.arena-navigation a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:10px 16px;border-radius:8px;color:#c8e5e3;text-decoration:none;font-weight:700;font-size:14px;white-space:nowrap}
+.arena-navigation a[aria-current="page"]{background:#266a68;color:#fff;box-shadow:inset 0 -2px 0 #76e9d8}
+.arena-navigation a:hover{background:#24424e}
+.arena-navigation a:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+.arena-view[hidden],#arena-view-root[hidden]{display:none!important}
+.arena-view{min-width:0}
+.arena-view>section,.arena-view>.layout{margin-bottom:16px}
+.arena-view-section h2{margin:0 0 12px;font-size:18px}
+.arena-view-section>.league-grid{margin-top:10px}
+.arena-rankings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.arena-rankings>*{min-width:0}
+#view-tournaments>.panel>div,#view-models>.panel>div{min-width:0}
+#view-tournaments .moves,#view-models .moves{overflow-wrap:anywhere}
+@media(orientation:portrait),(max-width:760px){
+ .arena-navigation{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:5px}
+ .arena-navigation a{padding:10px 5px;font-size:12px;min-width:0;white-space:normal;text-align:center}
+ .arena-rankings{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:380px){.arena-navigation{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.model-tabs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:0 0 16px}
+.model-tabs button{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.model-tabs button[aria-selected="true"]{background:#245d54;color:#fff;border:1px solid #8ce0c4}
+.model-tabs button:focus-visible,.model-pane:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+.model-pane[hidden]{display:none!important}
+.model-pane{min-width:0;overflow-wrap:anywhere}
+@media(orientation:portrait),(max-width:760px){.model-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.registry-card{border:1px solid #34445c;border-radius:10px;padding:12px;margin:8px 0;min-width:0;overflow-wrap:anywhere}
+.registry-card[hidden]{display:none!important}
+.registry-card h4{margin:0 0 8px}
+.registry-status-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:6px 12px;margin:8px 0}
+.registry-status-grid dt{color:#aebbd0}.registry-status-grid dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.registry-card summary{cursor:pointer;padding:8px 0;color:#bcd7ff}
+.registry-card summary:focus-visible{outline:3px solid #f1d99d;outline-offset:3px}
+
+/* #348: local decorative SVG, preserve labels and existing layout. */
+.arena-icon{display:inline-block;vertical-align:-0.18em;width:1.1em;height:1.1em;flex:none;pointer-events:none;margin-inline-end:.4em}
+.arena-navigation a .arena-icon{margin-inline-end:.35em}

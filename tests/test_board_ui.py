@@ -7,13 +7,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/arena.css").read_text(encoding="utf-8") + '\n' + (ROOT / "web/js/arena.js").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/board-redesign.css").read_text(encoding="utf-8")
 
 
 class ChessBoardUiTests(unittest.TestCase):
-    def test_board_has_arena_pro_player_strip_and_accessible_label(self):
+    def test_board_has_arena_pro_player_cards_and_accessible_label(self):
         self.assertIn('class="board-topline"', HTML)
-        self.assertIn('class="player-strip"', HTML)
+        self.assertIn('class="player-summary player-summary--black"', HTML)
+        self.assertIn('class="player-summary player-summary--white"', HTML)
         self.assertIn('id="white" class="player-badge player-badge--white"', HTML)
         self.assertIn('id="black" class="player-badge player-badge--black"', HTML)
         self.assertIn('id="board" class="board" role="img"', HTML)
@@ -35,11 +36,12 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('--arena-accent:#35d2c0', HTML)
         self.assertIn('background:var(--arena-light)', HTML)
         self.assertIn('background:var(--arena-dark)', HTML)
-        self.assertRegex(HTML, r'@media\(max-width:760px\)')
+        self.assertRegex(HTML, r'@media\(orientation:portrait\),\(max-width:760px\)')
         self.assertIn('overflow-x:hidden', HTML)
 
     def test_piece_inventory_is_above_board_and_updates_for_both_views(self):
-        self.assertIn('class="piece-count-strip"', HTML)
+        self.assertIn('class="piece-count piece-count--black"', HTML)
+        self.assertIn('id="last-move-note"', HTML)
         self.assertIn('id="white-piece-types"', HTML)
         self.assertIn('id="black-piece-types"', HTML)
         self.assertIn('id="white-piece-summary"', HTML)
@@ -51,7 +53,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn("renderPieceInventory(s.fen||START_FEN)", HTML)
         self.assertIn("renderPieceInventory(s.fen||START_FEN);const material=materialAdvantage", HTML)
         self.assertIn('aria-live="polite"', HTML)
-        self.assertIn(".piece-count-strip{grid-template-columns:minmax(0,1fr)}", HTML)
+        self.assertIn(".player-summary{grid-template-columns:minmax(0,1fr)}", HTML)
 
     def test_material_and_registry_name_rendering_are_unchanged(self):
         self.assertIn('function materialAdvantage(fen)', HTML)
@@ -62,7 +64,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('formatMaterialScore(material.black)', HTML)
 
     def test_piece_inventory_is_derived_from_fen_and_counts_material(self):
-        self.assertIn('aria-label=\"Pozostałe bierki i materiał\"', HTML)
+        self.assertIn('aria-label=\"Zawodnik czarnymi\"', HTML)
         self.assertIn('id=\"white-piece-types\"', HTML)
         self.assertIn('id=\"black-piece-types\"', HTML)
         self.assertIn('renderPieceInventory(s.fen||START_FEN)', HTML)
@@ -71,7 +73,7 @@ class ChessBoardUiTests(unittest.TestCase):
         if not shutil.which('node'):
             self.skipTest('Node.js is not installed')
         start = HTML.index('function pieceInventory(fen,color)')
-        end = HTML.index('function formatMaterialScore(score)', start)
+        end = HTML.index('const PIECE_STYLE_KEY', start)
         functions = HTML[start:end]
         script = functions + "\n" + "const initial=pieceInventory('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1','white');" + "\n" + "const promoted=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const black=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "const capturedFen='4k3/8/8/8/8/8/4Q3/4K3 b - - 0 1';" + "\n" + "const capturedWhite=pieceInventory(capturedFen,'white');" + "\n" + "const capturedBlack=pieceInventory(capturedFen,'black');" + "\n" + "const restoredWhite=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const restoredBlack=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "console.log(JSON.stringify({initial,promoted,black,capturedWhite,capturedBlack,restoredWhite,restoredBlack}));"
         result = subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
