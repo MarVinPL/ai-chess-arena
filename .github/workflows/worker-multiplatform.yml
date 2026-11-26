@@ -4,8 +4,7 @@ name: Worker selective builds (Linux, Windows, Android)
 # A push/PR must modify the actual Worker application sources.
 on:
   push:
-    # Temporary unsigned build-only validation for stacked #296. Remove before merge.
-    branches: [main, feat/issue-295-native-model-cache]
+    branches: [main]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'
@@ -21,8 +20,7 @@ on:
       - 'remote_worker_gui/src-tauri/android/**'
       - 'remote_worker_gui/android/**'
   pull_request:
-    # Temporary stacked integration targets for #197/#294/#296; remove before main.
-    branches: [main, feat/issue-194-worker-defaults, feat/issue-293-android-model-diagnostics]
+    branches: [main]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'

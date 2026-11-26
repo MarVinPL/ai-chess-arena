@@ -58,9 +58,11 @@ HTTP request -> server.Handler  (composition root; existing port and paths)
   confirmation requirements and status codes are unchanged.
   Further extraction must keep auth and CSRF checks in front of every panel
   action, and requires its own tests within Issue #314 before closing it.
-- Unfinished Draft PR #197, #292 and #296 contain overlapping Worker
-  changes. Reconcile their changes deliberately; do not overwrite them with
-  this branch or infer runtime readiness from this refactor alone.
+- Draft PR #197, #292, #294 and #296 contain overlapping Worker changes.
+  Their verified heads are now ancestors of the combined #316 integration
+  branch (see the dated integration evidence below). Independent PR/Issue
+  ownership and merge ordering remain unresolved; ancestry is not release
+  readiness.
 
 ## Verification / rollback
 

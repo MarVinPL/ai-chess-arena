@@ -174,11 +174,20 @@ def test_android_http3_bridge_is_packaged_with_tauri_and_requires_approved_gguf(
     assert 'downloadApproved(' not in LIB  # no untrusted Tauri IPC
 
 
-def test_stacked_android_quic_build_runs_without_exposing_signing_secrets():
+def test_main_android_quic_build_runs_without_exposing_signing_secrets():
     workflow = (BASE / ".github/workflows/worker-multiplatform.yml").read_text()
     apk = (BASE / ".github/workflows/android-worker-apk.yml").read_text()
-    assert "branches: [main, feat/issue-295-native-model-cache]" in workflow
-    assert "feat/issue-293-android-model-diagnostics" in workflow
+    # Keep the suite dependency-free: check the top-level trigger block.
+    triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+    push, pull = triggers.split("  pull_request:\n", 1)
+    assert push.splitlines()[:2] == ["  push:", "    branches: [main]"]
+    assert pull.splitlines()[0] == "    branches: [main]"
+    assert "feat/issue-" not in triggers
+    python_ci = (BASE / ".github/workflows/python-tests.yml").read_text()
+    python_triggers = python_ci.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+    assert "  pull_request:\n    branches: [main]\n" in python_triggers
+    assert '  push:\n    branches:\n      - "feat/**"\n      - "fix/**"\n' in python_triggers
+    assert "feat/issue-" not in python_triggers
     assert workflow.count("'remote_worker_gui/android/**'") == 3
     guard = workflow.split("  android:", 1)[1].split("  android_signed:", 1)[0]
     assert "github.event_name == 'pull_request'" in guard

@@ -66,3 +66,39 @@ Finalize the integration after upstream Worker PRs are merged in their own
 order, review the resulting final diff, run GitHub CI on the actual resulting
 commit, then isolated staging E2E. No main, VPS service or production data
 was changed by this dry run.
+
+## Integration checkpoint — 2026-11-26
+
+This supersedes the earlier pending-CI and source-synchronization status,
+not the unresolved staging or dependency-ownership requirements.
+
+- Main: `af23d648fbe10ed40815e95c76ae6361235796a9`.
+- Combined #316: `064a43fa0d2edeeba514465f533f6953466675cb`; main is an
+  ancestor, and the worktree was clean before the CI trigger cleanup.
+- Verified ancestor heads: #197 `e21f825`, #292 `40e75fe`, #294 `1756eb5`,
+  #296 `32996ac`. All four PRs remain open drafts; #197 still has a
+  conflict against its own stacked base.
+- Local strict Python regression: 1174 passed, 141 subtests, 54.12 s.
+- Exact-head GitHub Actions passed: Python 45812635604, Worker selective
+  builds 45812636106 (ARM64 unsigned/debug APK), and shared Gradle cache
+  45812635500 (warmup and restore). Signed APK, Linux and Windows skipped.
+- Pre-merge CI cleanup removes temporary stacked branch triggers from
+  `worker-multiplatform.yml` and `python-tests.yml`; normal main PR checks
+  and Python feat/**/fix/** push checks remain. No signing conditions,
+  build commands, cache configuration or job permissions changed.
+  Targeted regression: 42 passed. Full regression and exact-head CI must
+  be repeated after this cleanup is committed.
+- #308 checkpoint staging is a separate branch at `62b34a4`, not part
+  of #316. Its local Python/Rust/ARM64 checks do not prove physical-device
+  transport, actual coordinator authorization or engine restoration.
+
+### Decision
+
+NO-GO pending final review and isolated staging evidence, a decision on
+independent upstream PR ownership/merge order, and CI for the final
+reviewed commit. #308–#311 work must not be silently treated as completed.
+The full combined diff at 064a43f was 230 files, +30534/-648; the broad
+stacked scope is not an independent Issue #314-only change. The historical
+loopback test is not a physical Android install/rollback test. No production
+deployment, APK installation, Issue closure or merge authorization follows
+from this report.
