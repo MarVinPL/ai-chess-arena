@@ -1,0 +1,153 @@
+"""Integration of a flag-gated Android gateway with the ordinary Arena Handler.
+
+Every test uses loopback with a dynamic port, a temporary SQLite file, and
+temporary Worker credentials; none uses the live Arena or its secret token.
+"""
+import json
+import os
+import sqlite3
+import threading
+from http.server import ThreadingHTTPServer
+from urllib import request, error
+
+import chess
+import pytest
+import server
+from remote_worker_inference_delivery import WorkerInferenceDelivery
+from remote_worker_tokens import WorkerTokenStore
+
+WORKER = "android_test_12345678"
+NONCE = "0123456789abcdef0123456789abcdef"
+SHA = "a" * 64
+
+
+@pytest.fixture
+def gateway(tmp_path, monkeypatch):
+    path = tmp_path / "arena.sqlite3"
+    monkeypatch.setattr(server, "DB", path)
+    monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
+    monkeypatch.delenv("ARENA_PHONE_WORKER_API_ENABLED", raising=False)
+    token = WorkerTokenStore(path).issue(WORKER, ttl_seconds=600)
+    http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+
+    def post(route, data, *, content_type="application/json"):
+        req = request.Request(
+            f"http://127.0.0.1:{http.server_port}/api/remote-workers/{route}",
+            json.dumps(data).encode(),
+            {"Content-Type": content_type}, method="POST"
+        )
+        try:
+            with request.urlopen(req, timeout=4) as resp:
+                return resp.status, json.load(resp)
+        except error.HTTPError as exc:
+            return exc.code, json.load(exc)
+    try:
+        yield path, token, post
+    finally:
+        http.shutdown()
+        http.server_close()
+        thread.join(timeout=4)
+
+
+def credentials(token):
+    return {"worker_id": WORKER, "token": token, "nonce": NONCE}
+
+
+def test_disabled_by_default_never_uses_web_login(gateway):
+    _, token, post = gateway
+    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll"):
+        code, body = post(route, credentials(token))
+        assert code == 503
+        assert "login_url" not in body
+    assert os.environ.get("ARENA_PHONE_INFERENCE_ENABLED") == "0"
+
+
+def test_bad_machine_auth_and_nonce_never_leak_state(gateway, monkeypatch):
+    _, token, post = gateway
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll"):
+        body = credentials("definitely-wrong-token-000000000000000000000000")
+        if route == "ready":
+            body["model_sha256"] = SHA
+        elif route == "job-result":
+            body["result"] = {"version": 1, "job_id": "game_test_12345678", "uci": "e2e4"}
+        code, body = post(route, body)
+        assert code == 401
+        assert "worker_id" not in body and "nonce" not in body
+    for request_body in (
+        {**credentials(token), "nonce": "invalid"},
+        {**credentials(token), "nonce": "A"*32},
+        {**credentials(token), "unexpected": 1},
+    ):
+        code, body = post("job-poll", request_body)
+        assert code == 400 and "nonce" not in body
+    assert post("job-poll", credentials(token), content_type="text/plain")[0] == 400
+
+
+def test_v2_job_ready_result_http_roundtrip_without_lease_completion(gateway, monkeypatch):
+    path, token, post = gateway
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    auth = credentials(token)
+    code, data = post("job-poll", auth)
+    assert code == 200 and data["state"] == "none"
+    assert data["source"] == "coordinator" and data["nonce"] == NONCE
+    code, data = post("ready", {**auth, "model_sha256": SHA})
+    assert code == 200 and data["state"] == "ready"
+    code, data = post("update-pause-poll", auth)
+    assert code == 200 and data["instruction"] == {"action": "none"}
+    assert data["install_allowed"] is False
+    code, data = post("board-view", auth)
+    assert code == 200 and data["active"] is False
+
+    # Trusted in-process coordinator method, never an HTTP Worker endpoint.
+    delivery = WorkerInferenceDelivery(path)
+    job = {
+        "version": 2, "job_id": "game_test_12345678",
+        "fen": chess.STARTING_FEN, "model_sha256": SHA,
+        "legal_moves": sorted(move.uci() for move in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 90,
+    }
+    delivery.assign_from_arena(WORKER, job)
+    code, data = post("job-poll", auth)
+    assert code == 200 and data["state"] == "assigned" and data["job"] == job
+    for move in ("e2e5", "e9e4"):
+        code, data = post("job-result", {
+            **auth, "result": {"version": 1, "job_id": job["job_id"], "uci": move}
+        })
+        assert code == 409 and "nonce" not in data
+    code, data = post("job-result", {
+        **auth, "result": {"version": 1, "job_id": job["job_id"], "uci": "e2e4"}
+    })
+    assert code == 200 and data["state"] == "received_not_applied"
+    code, data = post("job-poll", auth)
+    assert code == 200 and data["state"] == "awaiting_arena" and "job" not in data
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?", (WORKER,)
+        ).fetchone() == ("running", job["job_id"])
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name='tournament_checkpoints'"
+        ).fetchone() is None
+
+
+def test_hold_blocks_ready_and_poll(gateway, monkeypatch):
+    path, token, post = gateway
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    auth = credentials(token)
+    assert post("ready", {**auth, "model_sha256": SHA})[1]["state"] == "ready"
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO worker_update_holds VALUES (?,?,?,?)",
+                   (WORKER, "b" * 64, 1000.0, 1300.0))
+    assert post("job-poll", auth)[1]["state"] == "blocked"
+    # Active update hold fails closed; readiness cannot override it.
+    assert post("ready", {**auth, "model_sha256": SHA})[0] == 400
+    assert post("update-pause-poll", auth)[1]["instruction"] == {"action": "none"}
+
+
+def test_gateway_never_exposes_assignment_completion_or_installer():
+    from remote_worker_phone_api import ROUTES
+    assert not any(route.endswith(s) for route in ROUTES for s in (
+        "/assign", "/complete", "/update-release", "/ack", "/update-reserve"
+    ))

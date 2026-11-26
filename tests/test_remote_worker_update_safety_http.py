@@ -24,6 +24,7 @@ NONCE = "00112233445566778899aabbccddeeff"
 
 @pytest.fixture()
 def endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
     db = tmp_path / "worker-safety.sqlite3"
     monkeypatch.setattr(server, "DB", db)
     token = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID, ttl_seconds=3600)
@@ -325,11 +326,12 @@ def test_worker_poll_stop_instruction_is_authenticated_idempotent_and_read_only(
     assert registry.state(WORKER_ID) == "running"
     assert pause.pending(WORKER_ID)["phase"] == "requested"
     # A forged client claim is never accepted as checkpoint evidence.
-    _, received = post({
+    status, received = post({
         **request_data(machine_token), "worker_stopped": True,
         "checkpoint_verified": True, "resume_accepted_verified": True,
     }, route="update-pause-poll")
-    assert received["instruction"]["action"] == "stop_checkpoint"
+    assert status == 400
+    assert "instruction" not in received
     assert pause.pending(WORKER_ID)["phase"] == "requested"
     with pytest.raises(ValueError, match="pause"):
         registry.reserve_update(WORKER_ID)
