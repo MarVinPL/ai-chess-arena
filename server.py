@@ -26,7 +26,8 @@ import model_permissions
 import remote_worker_metrics
 import remote_worker_job_registry
 import remote_worker_job_delivery
-from remote_worker_http_ingest import RateLimiter
+from remote_worker_http_validation import read_worker_json, WorkerRequestError
+from remote_worker_rate_policy import WorkerRatePolicy
 import remote_worker_jobs
 
 def _route_path(request_target):
@@ -37,7 +38,7 @@ def _route_path(request_target):
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
 DB = ROOT / 'arena.sqlite3'
-_remote_worker_job_limiter = RateLimiter(limit=12, window=60)
+_worker_rate_policy = WorkerRatePolicy()
 LOG_DIR = ROOT / 'logs'
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
@@ -1854,71 +1855,75 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/':
             self.send_html_file('index.html')
         else: self.send_error(404)
+    def _read_worker_request(self, path):
+        if not _worker_rate_policy.admit_peer(path.rsplit('/', 1)[-1], self.client_address[0]):
+            raise WorkerRequestError(429)
+        return read_worker_json(self, path)
+
+    def _admit_worker_identity(self, path, worker_id):
+        if not _worker_rate_policy.admit_authenticated(path.rsplit('/', 1)[-1], worker_id):
+            raise WorkerRequestError(429)
+
+    def _reject_worker_request(self, exc):
+        self.close_connection = True
+        self.send_json({'error': 'Limit żądań' if exc.status == 429 else 'Nieprawidłowe żądanie Workera'}, exc.status)
+
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if path == '/api/remote-workers/authenticate':
-            # Token-only authentication; token issuance is admin-only and offline.
+            # Token-only authentication; issuance is admin-only and offline.
             try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id, token = payload.get('worker_id'), payload.get('token')
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(400)
+                worker_id, token = payload['worker_id'], payload['token']
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'authenticated': False}, 401)
                     return
+                self._admit_worker_identity(path, worker_id)
                 self.send_json({'authenticated': True, 'worker_id': worker_id})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
         if path == '/api/remote-workers/job':
-            # HTTPS reverse proxy -> coordinator. Read-only: no worker can
-            # assign a job, change a game, or choose its model via this route.
-            # Missing model manifest means no executable job is visible.
-            if self.path != path or self.headers.get('Transfer-Encoding'):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                return
-            if self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json':
-                self.send_json({'error': 'Wymagany JSON'}, 415)
-                return
-            raw_length = self.headers.get('Content-Length', '')
-            if not raw_length.isascii() or not raw_length.isdecimal() or not 0 < int(raw_length) <= 2048:
-                self.send_json({'error': 'Nieprawidłowy rozmiar żądania'}, 400)
-                return
+            # Read-only: only a previously assigned, pinned manifest is visible.
             try:
-                payload = json.loads(self.rfile.read(int(raw_length)).decode('utf-8'))
-                if not isinstance(payload, dict) or set(payload) != {'worker_id', 'token'}:
-                    raise ValueError('Invalid payload')
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(401)
                 worker_id, token = payload['worker_id'], payload['token']
-                remote_worker_tokens.WorkerTokenStore._worker(worker_id)
-                if not _remote_worker_job_limiter.allow((self.client_address[0], worker_id)):
-                    self.send_json({'error': 'Limit żądań'}, 429)
-                    return
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    raise WorkerRequestError(401)
+                self._admit_worker_identity(path, worker_id)
                 job = remote_worker_job_delivery.AuthenticatedJobDelivery(DB).retrieve(
                     worker_id, token, require_inference_manifest=True)
                 self.send_json({'job': job})
-            except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except (ValueError, TypeError):
                 self.send_json({'error': 'Nieprawidłowe poświadczenia lub żądanie'}, 401)
             except Exception:
                 self.send_json({'error': 'Zadania są chwilowo niedostępne'}, 503)
             return
-        # Opt-in Android Worker API, independent from phone tournament dispatch.
-        # No browser/admin session is accepted here: authenticate each machine
-        # request using the existing SQLite WorkerTokenStore.
+        # Opt-in Android Worker API; never accept browser/admin sessions.
         from remote_worker_phone_api import ROUTES, handle_phone_request
         if path in ROUTES:
             if os.environ.get('ARENA_PHONE_WORKER_API_ENABLED') != '1':
+                self.close_connection = True
                 self.send_json({'error': 'Android Worker API nie jest jeszcze włączone'}, 503)
+                return
+            try:
+                payload = self._read_worker_request(path)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
                 return
             with live_lock:
                 worker_live_snapshot = dict(live_status)
-            handle_phone_request(self, path, DB, worker_live_snapshot)
+            handle_phone_request(self, path, DB, worker_live_snapshot, payload=payload,
+                                 admit_identity=self._admit_worker_identity)
             return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
@@ -1955,26 +1960,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(exc)}, 400)
             return
         if path == '/api/remote-workers/update-safety':
-            # Fail closed: durable job state is advisory, not install permission.
-            # No worker-facing API can initialize idle or mark jobs terminal.
+            # Advisory state only; no install permission or state transition.
             try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id = payload.get('worker_id')
-                token = payload.get('token')
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(400)
+                worker_id, token = payload['worker_id'], payload['token']
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'error': 'Brak autoryzacji'}, 401)
                     return
+                self._admit_worker_identity(path, worker_id)
                 state = remote_worker_job_registry.WorkerJobRegistry(DB).state(worker_id)
                 self.send_json({'state': state, 'install_allowed': False,
                                 'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu i wersji'})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
