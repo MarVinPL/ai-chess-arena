@@ -241,7 +241,7 @@ def test_phone_mode_skips_vps_download_but_preserves_local_mode(monkeypatch):
     local_called = []
     monkeypatch.setattr(
         server, "_prepare_game_models",
-        lambda white, black: local_called.append((white, black))
+        lambda white, black, *, on_status=None: local_called.append((white, black, on_status))
         or ({"path": "/vps/white.gguf", "draft_path": None},
             {"path": "/vps/black.gguf", "draft_path": None}),
     )
@@ -252,9 +252,10 @@ def test_phone_mode_skips_vps_download_but_preserves_local_mode(monkeypatch):
         {"path": None, "draft_path": None},
     )
     assert not local_called
-    local = server._prepare_game_execution_assets(a, b, phone_inference_enabled=False)
+    callback = lambda *args, **kwargs: None
+    local = server._prepare_game_execution_assets(a, b, phone_inference_enabled=False, on_status=callback)
     assert local[0]["path"] == "/vps/white.gguf"
-    assert len(local_called) == 1
+    assert local_called == [(a, b, callback)]
     with pytest.raises(ValueError):
         server._prepare_game_execution_assets(
             {"model_sha256": "bad"}, b, phone_inference_enabled=True,
@@ -330,6 +331,8 @@ def test_mismatched_or_skipped_arena_checkpoint_never_releases_phone(tmp_path):
         {**good, "moves": []},
         {**good, "pairing": {"id": 99}},
         {**good, "move_times": []},
+        {**good, "side_to_move": "white"},
+        {**good, "phase": "unexpected"},
         {**good, "moves": [{**good["moves"][0], "uci": "d2d4"}]},
     ):
         with pytest.raises(ValueError):

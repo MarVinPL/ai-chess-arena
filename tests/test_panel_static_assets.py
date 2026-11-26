@@ -68,7 +68,7 @@ class PanelAssetTests(unittest.TestCase):
         start = source.index("    def do_GET(self):")
         segment = source[start:source.index("        if path == '/api/model-permissions':", start)]
         self.assertLess(segment.index("if not user:"), segment.index("self.send_panel_asset(path)"))
-        self.assertIn("if path in ('/assets/arena.css', '/assets/arena.js'):", segment)
+        self.assertIn("if path.startswith('/assets/'):", segment)
 
 
 if __name__ == "__main__":

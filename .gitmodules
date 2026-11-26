@@ -1,0 +1,7 @@
+[submodule "setup-java"]
+	path = .github/actions/setup-java
+	url = https://github.com/actions/setup-java.git
+
+[submodule "setup-node"]
+	path = .github/actions/setup-node
+	url = https://github.com/actions/setup-node.git

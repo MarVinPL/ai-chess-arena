@@ -10,7 +10,7 @@ WORKFLOW = (
 def test_version_is_read_from_compiled_android_apk():
     assert '"$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk"' in WORKFLOW
     assert "versionName=" in WORKFLOW
-    assert '[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]' in WORKFLOW
+    assert r'[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]' in WORKFLOW
 
 
 def test_filename_is_versioned_and_marked_pre_not_test():

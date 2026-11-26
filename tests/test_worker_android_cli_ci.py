@@ -17,5 +17,5 @@ def test_android_worker_uses_verified_android_cli_without_sdkmanager():
     assert 'test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"' in workflow
     assert 'rustup toolchain install stable --profile minimal --target aarch64-linux-android' in workflow
     assert 'npx tauri android init --ci --skip-targets-install' in workflow
-    assert 'npx tauri android build --apk --target aarch64 --ci --debug' in workflow
+    assert 'python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug' in workflow
     assert 'WORKER_ANDROID_DEBUG_KEYSTORE_B64' in workflow

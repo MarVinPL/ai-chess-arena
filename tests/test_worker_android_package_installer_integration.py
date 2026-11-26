@@ -21,7 +21,7 @@ def test_real_android_commit_and_explicit_receiver_are_built():
     assert 'receiver.set(A + "exported", "false")' in INJECTOR
     assert '"android.permission.REQUEST_INSTALL_PACKAGES"' in INJECTOR
     assert "python3 android/inject_package_installer.py" in WORKFLOW
-    assert WORKFLOW.index("python3 android/inject_package_installer.py") < WORKFLOW.index("npx tauri android build")
+    assert WORKFLOW.index("python3 android/inject_package_installer.py") < WORKFLOW.index("python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk --target aarch64 --ci --debug")
 
 
 def test_native_rust_coordinates_install_with_journal_and_os_version():

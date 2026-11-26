@@ -31,7 +31,7 @@ def test_main_build_restores_keystore_only_after_android_init():
     workflow = CALLED.read_text(encoding="utf-8")
     assert workflow.index("npx tauri android init --ci") < workflow.index(
         "Restore original Android test signing key"
-    ) < workflow.index("npx tauri android build --apk")
+    ) < workflow.index("python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk")
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert 'printf \'%s\' "$WORKER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"' in workflow
     assert 'chmod 600 "$HOME/.android/debug.keystore"' in workflow
