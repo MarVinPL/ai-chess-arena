@@ -65,7 +65,7 @@ def play_simulated_phone_move(db, before, *, inject_failure=False, monkeypatch=N
         payload = {
             **before,
             "fen": record["fen"],
-            "side_to_move": "black",
+            "side_to_move": "white" if chess.Board(record["fen"]).turn else "black",
             "moves": before["moves"] + [record],
             "move_times": before["move_times"] + [record["seconds"]],
         }
@@ -97,6 +97,7 @@ def test_one_actual_engine_runner_move_has_single_atomic_arena_checkpoint(tmp_pa
     assert events[0][0] == WORKER
     checkpoint = tournament_checkpoint.load(db, TOURNAMENT)
     assert checkpoint["fen"] == result["fen"]
+    assert checkpoint["side_to_move"] == "black"
     assert checkpoint["moves"][0]["uci"] == "e2e4"
     assert len(checkpoint["move_times"]) == 1
     with sqlite3.connect(db) as conn:
