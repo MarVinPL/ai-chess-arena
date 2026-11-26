@@ -47,6 +47,8 @@ def test_admin_cookie_does_not_authorize_any_worker_post(
         payload["hold_token"] = "c" * 64
     elif route.endswith("/native-stop-report"):
         payload.update(job_id="game_12345678", request_id="d" * 32, lease_token="e" * 64)
+    elif route.endswith("/resume-checkpoint"):
+        payload.update(job_id="game_12345678", request_id="d" * 32, checkpoint_sha256="e" * 64)
     elif route.endswith("/authenticate"):
         del payload["nonce"]
     handler = Reply(payload)

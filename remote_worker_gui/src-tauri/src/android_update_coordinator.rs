@@ -122,8 +122,8 @@ pub(crate) fn verify_release_reply(
 /// Frontend callers must never receive or persist the reservation capability.
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
-fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report") {
+pub(crate) fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report" | "resume-checkpoint") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -144,7 +144,7 @@ fn valid_worker_id(worker_id: &str) -> bool {
 }
 
 #[allow(dead_code)]
-fn update_http_client() -> Result<reqwest::Client, String> {
+pub(crate) fn update_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(12))

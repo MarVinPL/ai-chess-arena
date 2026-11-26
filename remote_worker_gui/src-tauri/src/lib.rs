@@ -13,6 +13,8 @@ mod android_update_package_manager;
 #[cfg(target_os = "android")]
 mod android_update_package_installer;
 mod android_update_coordinator;
+#[allow(dead_code)]
+mod android_resume_checkpoint;
 mod android_update_recovery;
 mod android_update_install_journal;
 mod android_local_llama;
@@ -960,6 +962,23 @@ async fn inspect_worker_resume_readiness(
     android_update_coordinator::fetch_resume_status(&server, &worker_id, &token).await
 }
 
+/// Stage only a coordinator-authorized checkpoint; never acknowledge or execute it.
+#[tauri::command]
+async fn stage_worker_resume_checkpoint(server: String, worker_id: String) -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    { let _ = (server, worker_id); Err("Checkpoint wymaga Androida".into()) }
+    #[cfg(target_os = "android")]
+    {
+        let _gate = android_model_runtime_guard::begin_exclusive_update()?;
+        if android_update_recovery::load_pending()?.is_some() || android_update_install_journal::load()?.is_some() || android_local_llama::generation_active() {
+            return Err("Niezakończona aktualizacja lub inferencja".into());
+        }
+        let token = token_entry()?.get_password().map_err(|_| "Brak tokenu Workera")?;
+        let root = android_model_quic::android_gguf_cache_root()?.parent().ok_or("Brak katalogu prywatnego")?.join("worker-resume-checkpoints");
+        android_resume_checkpoint::receive_authorized(&server, &worker_id, &token, &root).await
+    }
+}
+
 /// Read OS install callback only for the journaled session. This does not
 /// release the coordinator hold or claim an installed update.
 #[tauri::command]
@@ -1136,7 +1155,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_phone_quic_protocol, inspect_phone_local_model, inspect_embedded_llama_engine, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_phone_quic_protocol, inspect_phone_local_model, inspect_embedded_llama_engine, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, stage_worker_resume_checkpoint, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

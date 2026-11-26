@@ -32,6 +32,11 @@ def handle_update_resume_status(handler, database):
             handler.send_json({"error": "Brak autoryzacji"}, 401)
             return
         snapshot = WorkerUpdatePause(database).resume_status(worker_id)
+        if snapshot["state"] == "awaiting_local_engine":
+            from remote_worker_resume_transport import ResumeTransport
+            offer = ResumeTransport(database).discover(worker_id)
+            if offer is not None:
+                snapshot["delivery_offer"] = offer
         handler.send_json({
             "authenticated": True, "source": "coordinator",
             "worker_id": worker_id, "nonce": nonce,

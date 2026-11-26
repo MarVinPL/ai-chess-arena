@@ -485,19 +485,38 @@ void reconcileInstalledApkAtStartup();
 // update, NOT a replay of an interrupted game from a pending checkpoint.
 // A real pending checkpoint stays blocked until Arena dispatch/ACK exists.
 let resumeReadinessState=null;
+let resumeReadinessGeneration=0;
+function resumeIdentity(){
+ return {server:document.getElementById('server').value.trim(),workerId:document.getElementById('workerId').value.trim()};
+}
+function invalidateResumeReadiness(){
+ ++resumeReadinessGeneration;
+ resumeReadinessState=null;
+ document.getElementById('resumeWorkerGame').disabled=true;
+ document.getElementById('resumeWorkerStatus').textContent='Dane połączenia zmienione. Sprawdź ponownie gotowość Workera.';
+}
+for(const id of ['server','workerId'])document.getElementById(id).addEventListener('input',invalidateResumeReadiness);
 async function refreshWorkerResumeReadiness(){
  const button=document.getElementById('resumeWorkerGame');
  const label=document.getElementById('resumeWorkerStatus');
  const invoke=window.__TAURI__?.core?.invoke;
+ const identity=resumeIdentity();
+ const generation=++resumeReadinessGeneration;
+ const current=()=>{const now=resumeIdentity();return generation===resumeReadinessGeneration&&now.server===identity.server&&now.workerId===identity.workerId;};
  button.disabled=true;resumeReadinessState=null;
  if(!invoke){label.textContent='Wznowienie wymaga aplikacji Android.';return;}
  try{
-  const state=await invoke('inspect_worker_resume_readiness',{
-   server:document.getElementById('server').value.trim(),
-   workerId:document.getElementById('workerId').value.trim()
-  });
-  resumeReadinessState=state;
+  const state=await invoke('inspect_worker_resume_readiness',identity);
+  if(!current())return;
+  if(state==='awaiting_local_engine'){
+   const staged=await invoke('stage_worker_resume_checkpoint',identity);
+   if(!current())return;
+   resumeReadinessState=state;
+   if(staged==='checkpoint_stored'){label.textContent='Checkpoint zapisany i zweryfikowany. Oczekiwanie na potwierdzenie silnika przez Arenę.';return;}
+  }
   const supported=await invoke('phone_inference_supported');
+  if(!current())return;
+  resumeReadinessState=state;
   button.disabled=!(state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled);
   label.textContent=state==='no_checkpoint'
    ?'Nie ma przerwanego checkpointu. Możesz bezpiecznie wznowić odbieranie zadań Areny.'
@@ -507,6 +526,7 @@ async function refreshWorkerResumeReadiness(){
    ?'Checkpoint przerwanego zadania jest zachowany w Arenie. Wznowienie tego zadania wymaga potwierdzonego nowego przydziału.'
    :'Wznowienie jest zablokowane do czasu uzgodnienia stanu Workera.';
  }catch(_){
+  if(!current())return;
   resumeReadinessState=null;
   label.textContent='Nie udało się uwierzytelnić stanu wznowienia w Arenie.';
  }

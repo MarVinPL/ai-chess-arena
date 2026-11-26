@@ -18,6 +18,7 @@ EXPECTED_WORKER_POST_ROUTES = frozenset({
     "/api/remote-workers/update-pause-poll",
     "/api/remote-workers/board-view",
     "/api/remote-workers/native-stop-report",
+    "/api/remote-workers/resume-checkpoint",
     "/api/remote-workers/update-resume-status",
     "/api/remote-workers/update-safety",
     "/api/remote-workers/model-source",
@@ -30,7 +31,7 @@ EXPECTED_WORKER_POST_ROUTES = frozenset({
 def test_consolidated_worker_route_inventory_is_exact_and_machine_only():
     assert worker_backend.WORKER_POST_ROUTES == EXPECTED_WORKER_POST_ROUTES
     assert worker_backend.AUTH_ROUTE in EXPECTED_WORKER_POST_ROUTES
-    assert len(PHONE_ROUTES) == 6
+    assert len(PHONE_ROUTES) == 7
     assert len(HOLD_ROUTES) == 3
     assert all(path.startswith(worker_backend.WORKER_ROUTE_PREFIX)
                for path in EXPECTED_WORKER_POST_ROUTES)

@@ -20,6 +20,7 @@ keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1"
+base64 = "=0.22.1"
 # Already in Cargo.lock transitively; pin the verified 0.10 API for streaming APK SHA-256.
 sha2 = "=0.10.9"
 # Cryptographically random challenge for anti-replay coordinator idle checks.
