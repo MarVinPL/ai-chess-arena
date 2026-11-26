@@ -6,6 +6,7 @@ from the coordinator in the worker protocol.
 from __future__ import annotations
 
 import re
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,9 +37,11 @@ def validate_job(message: Any) -> dict:
     version = message['version']
     required = {'version', 'job_id', 'fen', 'model_sha256',
                 'max_tokens', 'timeout_seconds'}
-    if version == 2:
+    if version in (2, 3):
         required.add('legal_moves')
-    elif version != 1:
+    if version == 3:
+        required.add('lease_token')
+    elif version not in (1, 2):
         raise ProtocolError('Unsupported protocol version')
     data = _mapping(message, required)
     if not isinstance(data['job_id'], str) or not _ID.fullmatch(data['job_id']):
@@ -57,7 +60,10 @@ def validate_job(message: Any) -> dict:
             raise ProtocolError('Invalid board state')
     except ValueError as exc:
         raise ProtocolError('Invalid FEN') from exc
-    if version == 2:
+    if version == 3 and (not isinstance(data['lease_token'], str)
+                         or not _SHA.fullmatch(data['lease_token'])):
+        raise ProtocolError('Invalid lease fencing token')
+    if version in (2, 3):
         moves = data['legal_moves']
         expected = sorted(move.uci() for move in board.legal_moves)
         if (not isinstance(moves, list) or not 1 <= len(moves) <= 256
@@ -68,9 +74,21 @@ def validate_job(message: Any) -> dict:
 
 def validate_result(message: Any, job: dict, board: chess.Board) -> chess.Move:
     """Verify correlation and legal UCI at the authoritative VPS coordinator."""
-    data = _mapping(message, {'version', 'job_id', 'uci'})
-    if type(data['version']) is not int or data['version'] != 1:
-        raise ProtocolError('Unsupported protocol version')
+    # Version 3 tasks require a fresh per-assignment 256-bit capability on
+    # EVERY result. Legacy version-1 results cannot downgrade a fenced task.
+    # This is independent of the machine authentication token.
+    if job.get('version') == 3:
+        data = _mapping(message, {'version', 'job_id', 'uci', 'lease_token'})
+        if type(data['version']) is not int or data['version'] != 2:
+            raise ProtocolError('Fenced result requires protocol version 2')
+        if (not isinstance(data['lease_token'], str)
+                or not _SHA.fullmatch(data['lease_token'])
+                or not secrets.compare_digest(data['lease_token'], job['lease_token'])):
+            raise ProtocolError('Stale or mismatched lease fencing token')
+    else:
+        data = _mapping(message, {'version', 'job_id', 'uci'})
+        if type(data['version']) is not int or data['version'] != 1:
+            raise ProtocolError('Unsupported protocol version')
     if data['job_id'] != job['job_id']:
         raise ProtocolError('Unexpected job ID')
     if not isinstance(data['uci'], str) or not _UCI.fullmatch(data['uci']):

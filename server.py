@@ -21,8 +21,33 @@ import adjudication
 import passkey_test
 import tournament_checkpoint
 import remote_worker_tokens
+import worker_backend
+import web_panel_backend
+import web_panel_auth
+import web_panel_model_api
+import web_panel_download_api
+import web_panel_tournament_api
+import web_panel_hf_review_api
+import web_panel_model_review_api
+import web_panel_model_storage_api
+import web_panel_model_license_api
+import web_panel_download_status_api
+import web_panel_hf_status_api
+import web_panel_games_api
+import web_panel_inventory_api
+import web_panel_tournament_read_api
+import web_panel_hf_catalog_api
+import web_panel_storage_api
+import web_panel_passkey_tests_api
+import web_panel_export_api
+import web_panel_live_state_api
+import web_panel_game_control_api
 import arena_auth
 import model_permissions
+import remote_worker_metrics
+import remote_worker_tokens
+import remote_worker_job_registry
+import remote_worker_jobs
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -133,6 +158,11 @@ def set_live(stage, message, **fields):
             fields.setdefault('generation_started_at', live_status['stage_started_at'])
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
+        # Worker attribution is per event. Never inherit identifiers from
+        # a previous live event when the tournament changes jobs or players.
+        for identity_key in ('worker_id', 'job_id'):
+            if identity_key not in fields:
+                live_status.pop(identity_key, None)
         if stage not in ('model_downloading', 'model_verifying', 'model_asset_ready'):
             fields.pop('asset_kind', None)
         if stage != 'model_downloading':
@@ -599,6 +629,23 @@ def _prepare_game_models(white, black, on_status=None):
     return prepared
 
 
+def _prepare_game_execution_assets(white, black, *, phone_inference_enabled=False, on_status=None):
+    """Avoid downloading large GGUF files onto the VPS in phone-only mode.
+
+    Arena still validates registry SHA, model eligibility and checkpoint.
+    The on-phone model runtime is solely responsible for actual inference.
+    When phone mode is off, retain the original local model lifecycle.
+    """
+    if phone_inference_enabled:
+        for player in (white, black):
+            digest = player.get('model_sha256')
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                raise ValueError('Phone inference requires pinned GGUF SHA-256')
+        return ({'path': None, 'draft_path': None},
+                {'path': None, 'draft_path': None})
+    return _prepare_game_models(white, black, on_status=on_status) if on_status is not None else _prepare_game_models(white, black)
+
+
 def live_moves_snapshot(move):
     with live_lock:
         previous = list(live_status.get('moves') or [])
@@ -651,12 +698,30 @@ def tournament_preflight(tournament_id):
         tournament = connection.execute('SELECT format FROM tournaments WHERE id=?',
                                          (tournament_id,)).fetchone()
     tournament_format = tournament['format'] if tournament else ''
-    # The runner starts Llamafile only after this preflight succeeds.
-    # Requiring /health here would deadlock the lazy-start lifecycle.
-    runtime_available = llm_runtime_available()
+    # The VPS needs Llamafile only for local model execution. Explicitly
+    # selected phone mode requires a freshly ready on-device model for every
+    # entrant instead. No silent fallback to the VPS runner.
+    phone_mode = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+    if phone_mode:
+        from remote_worker_inference_delivery import WorkerInferenceDelivery
+        phone_delivery = WorkerInferenceDelivery(DB)
+        runtime_available = True
+    else:
+        # The local runner starts Llamafile only after preflight succeeds.
+        # Requiring /health here would deadlock the lazy-start lifecycle.
+        runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
+        if phone_mode:
+            try:
+                model = _version_record(entry['version_id'])
+                sha = model.get('sha256')
+                if phone_delivery.find_ready_worker(sha) is None:
+                    raise ValueError('no ready matching phone')
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error):
+                reasons.append('brak gotowego telefonu z wymaganym lokalnym modelem')
+                runtime_available = False
         if allowlist_error is not None:
             reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
         else:
@@ -666,7 +731,7 @@ def tournament_preflight(tournament_id):
                 license_name=entry.get('license'),
                 license_verified=entry.get('license_verified') is True,
                 tournament_format=tournament_format))
-        if not runtime_available:
+        if not phone_mode and not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
         entry['download_on_demand'] = bool(
@@ -840,6 +905,27 @@ def _select_tournament_pairing(tournament_id, draft_enabled):
     return None, None
 
 
+def _exclusive_tournament_coordinator(run):
+    """Keep one coordinator owner throughout tournament checkpoint writes."""
+    from functools import wraps
+    from remote_worker_coordinator_lock import CoordinatorLock
+
+    @wraps(run)
+    def locked_run(*args, **kwargs):
+        # The main server already holds the same flock for its lifetime.
+        # flock on a second descriptor would conflict even in this process.
+        process_lock = globals().get('_coordinator_lock')
+        if process_lock is not None:
+            if process_lock._fd is None:
+                raise RuntimeError('Process coordinator lock was released')
+            return run(*args, **kwargs)
+        # Direct invocation (tests/CLI) still requires exclusive ownership.
+        with CoordinatorLock(DB):
+            return run(*args, **kwargs)
+    return locked_run
+
+
+@_exclusive_tournament_coordinator
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -973,7 +1059,35 @@ def tournament_loop(tournament_id):
             return True
 
         runtime_context['execution_phase'] = 'game'
-        game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
+        # Optional phone-only inference uses the SAME Arena-owned sequential
+        # runner and checkpoint writer. No remote fallback after assignment,
+        # and no code path enables this without operator opt-in.
+        from remote_worker_runner_selection import select_game_runner
+        phone_inference_enabled = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+        phone_move_provider = None
+        if phone_inference_enabled:
+            from remote_worker_phone_move_provider import ArenaPhonePoolProvider
+
+            def report_phone_assignment(worker_id, job_id, fen, player):
+                # Arena controls the FEN and worker association: this event
+                # powers the Android read-only board, NOT local phone state.
+                set_live(
+                    'generating', 'Model oblicza ruch na telefonie',
+                    worker_id=worker_id, job_id=job_id, fen=fen,
+                    model=player.get('name'), white=runtime_context.get('white'),
+                    black=runtime_context.get('black'),
+                    pairing_id=pairing['id'],
+                )
+
+            phone_move_provider = ArenaPhonePoolProvider(
+                DB, on_assignment=report_phone_assignment,
+            )
+        game_runner = select_game_runner(
+            'local',
+            local_factory=lambda: engine_runner.SequentialChessRunner(
+                tournament_runtime, move_provider=phone_move_provider,
+            ) if phone_move_provider is not None else engine_runner.SequentialChessRunner(tournament_runtime),
+        )
         while True:
             if tournament_stop_event.is_set():
                 break
@@ -1017,7 +1131,9 @@ def tournament_loop(tournament_id):
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen))
             set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
-            white_assets, black_assets = _prepare_game_models(white, black, on_status=set_live)
+            white_assets, black_assets = _prepare_game_execution_assets(
+                white, black, phone_inference_enabled=phone_inference_enabled, on_status=set_live,
+            )
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             set_live('game_resumed' if checkpoint else 'game_running','Wznowiono partię' if checkpoint else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
@@ -1027,9 +1143,17 @@ def tournament_loop(tournament_id):
                 checkpoint_moves.append(dict(move))
                 checkpoint_times.append(float(move.get('seconds') or 0))
                 saved_fen = move.get('fen')
-                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                next_checkpoint = _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen))
+                    checkpoint_moves, checkpoint_times, saved_fen)
+                if phone_move_provider is None:
+                    tournament_checkpoint.save(DB, tournament_id, next_checkpoint)
+                else:
+                    # Same SQLite IMMEDIATE transaction commits the ONLY Arena
+                    # checkpoint and releases the phone result/lease. A crash
+                    # can never leave an idle phone with an uncommitted move.
+                    phone_move_provider.commit_checkpoint_for_record(
+                        tournament_id, next_checkpoint, move)
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
@@ -1446,6 +1570,47 @@ def fetch_hf_license_evidence(source):
     }
     return evidence
 
+def _panel_state_snapshot():
+    # Retain the original serialized access to the single live board.
+    with lock:
+        return state()
+
+
+def _panel_game_control_action(handler, path):
+    """Mutate the single live game under its original lock, preserving HTTP semantics."""
+    global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
+    if path == '/api/step':
+        try:
+            with lock:
+                do_step()
+                handler.send_json(state())
+        except Exception as e:
+            with lock:
+                handler.send_json({'error': str(e), **state()}, 422)
+    elif path == '/api/run':
+        with lock:
+            running = True
+            threading.Thread(target=autoplay_loop, daemon=True).start()
+            handler.send_json(state())
+    elif path == '/api/stop':
+        with lock:
+            running = False
+            handler.send_json(state())
+    elif path == '/api/reset':
+        with lock:
+            running = False
+            board = chess.Board()
+            moves = []
+            timings = []
+            illegal_moves = 0
+            started_at = time.time()
+            last_error = ''
+            last_move = None
+            handler.send_json(state())
+    else:
+        raise ValueError('Unknown game control route')
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -1470,33 +1635,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def send_panel_asset(self, url_path):
-        # Exact URL allowlist: never interpolate user input into a filesystem path.
-        assets = {
-            '/assets/arena.css': ('web/css/arena.css', 'text/css; charset=utf-8'),
-            '/assets/arena.js': ('web/js/arena.js', 'text/javascript; charset=utf-8'),
-            '/assets/panel-icons.js': ('web/js/panel-icons.js', 'text/javascript; charset=utf-8'),
-            '/assets/navigation.js': ('web/js/navigation.js', 'text/javascript; charset=utf-8'),
-            '/assets/navigation.css': ('web/css/navigation.css', 'text/css; charset=utf-8'),
-            '/assets/board-redesign.css': ('web/css/board-redesign.css', 'text/css; charset=utf-8'),
-        }
-        for style in ('cburnett', 'merida', 'shapes', 'chessnut'):
-            for color in 'wb':
-                for piece in 'KQRBNP':
-                    name = color + piece + '.svg'
-                    assets[f'/assets/pieces/{style}/{name}'] = (f'web/pieces/{style}/{name}', 'image/svg+xml')
-        entry = assets.get(url_path)
-        if entry is None:
-            self.send_error(404)
-            return
-        filename, content_type = entry
-        body = (ROOT / filename).read_bytes()
-        self.send_response(200)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.end_headers()
-        self.wfile.write(body)
+        # Panel authentication is checked by do_GET first.
+        web_panel_backend.serve_panel_asset(self, url_path, ROOT)
     def authenticated_user(self):
         return arena_auth.session_user(self.headers.get('Cookie'))
     def do_GET(self):
@@ -1518,16 +1658,44 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
             return
+        if path == '/api/remote-workers/metrics':
+            try:
+                self.send_json({'period': 'all', 'workers': remote_worker_metrics.WorkerMetrics(DB).summary()})
+            except Exception:
+                self.send_json({'error': 'Nie udało się odczytać statystyk agentów'}, 500)
+            return
+        if path == '/remote-workers':
+            self.send_html_file('remote_workers.html')
+            return
         if path.startswith('/assets/'):
             self.send_panel_asset(path)
             return
-        if path == '/api/model-permissions':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_permissions.list_permissions(c))
-            except Exception as exc:
-                self.send_json({'error': str(exc)}, 500)
-        elif path == '/api/models/random':
+        if web_panel_model_api.dispatch_panel_model_get(self, path):
+            return
+        if web_panel_download_status_api.dispatch_panel_download_get(self, path, raw_path):
+            return
+        if web_panel_hf_status_api.dispatch_panel_hf_status_get(self, path, raw_path):
+            return
+        if web_panel_games_api.dispatch_panel_games_get(self, path, DB):
+            return
+        if web_panel_inventory_api.dispatch_panel_inventory_get(self, path):
+            return
+        if web_panel_tournament_read_api.dispatch_panel_tournament_get(
+                self, path, get_live=get_live, tournament_preflight=tournament_preflight):
+            return
+        if web_panel_hf_catalog_api.dispatch_panel_hf_catalog_get(self, path, raw_path):
+            return
+        if web_panel_storage_api.dispatch_panel_storage_get(self, path):
+            return
+        if web_panel_passkey_tests_api.dispatch_panel_passkey_tests_get(
+                self, path, raw_path, DB):
+            return
+        if web_panel_export_api.dispatch_panel_export_get(self, path, DB):
+            return
+        if web_panel_live_state_api.dispatch_panel_live_state_get(
+                self, path, state_snapshot=_panel_state_snapshot, live_snapshot=get_live):
+            return
+        if path == '/api/models/random':
             try:
                 self.send_json(random_hf_model())
             except Exception as e: self.send_json({'error':str(e)},422)
@@ -1538,353 +1706,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(search_hf_models(query))
             except Exception as e:
                 self.send_json({'error':str(e)}, 422)
-        elif path == '/api/model-review-submissions':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_review_submissions.list_submissions(c))
-            except Exception as e:
-                self.send_json({'error': str(e)}, 500)
-        elif path == '/api/state':
-            with lock: self.send_json(state())
-        elif path == '/api/live':
-            self.send_json(get_live())
-        elif path == '/api/games':
-            with sqlite3.connect(DB) as c:
-                c.row_factory = sqlite3.Row
-                rows = c.execute('''SELECT id,started_at,white_model,black_model,result,move_count,
-                    avg_move_seconds,adjudication_status,adjudication_json,inference_metadata_json,failure_reason,
-                    failure_fen,failure_color,failure_side_to_move,failure_model_id
-                    FROM games ORDER BY id DESC LIMIT 30''').fetchall()
-            games = []
-            for row in rows:
-                item = dict(row, white=row['white_model'], black=row['black_model'],
-                            moves=row['move_count'], avg_seconds=round(row['avg_move_seconds'],3))
-                try:
-                    move_metadata = json.loads(item.get('inference_metadata_json') or '[]')
-                except (TypeError, json.JSONDecodeError):
-                    move_metadata = []
-                item['arbiter_interventions'] = sum(
-                    1 for move in move_metadata
-                    if isinstance(move, dict) and move.get('arbiter_intervention')
-                ) if isinstance(move_metadata, list) else 0
-                item.pop('inference_metadata_json', None)
-                games.append(item)
-            self.send_json(games)
-        elif path.startswith('/api/games/') and path.endswith('/pgn'):
-            try:
-                game_id = int(path.split('/')[3])
-                with sqlite3.connect(DB) as c:
-                    row = c.execute('SELECT pgn FROM games WHERE id=?', (game_id,)).fetchone()
-                if row is None:
-                    self.send_error(404, 'Nie znaleziono zapisanej partii')
-                else:
-                    body = row[0].encode('utf-8')
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
-                    self.send_header('Content-Disposition', f'inline; filename="game-{game_id}.pgn"')
-                    self.send_header('Content-Length', str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-            except ValueError:
-                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
-        elif path.startswith('/api/games/'):
-            try:
-                game_id = int(path.rsplit('/', 1)[1])
-                with sqlite3.connect(DB) as c:
-                    c.row_factory = sqlite3.Row
-                    row = c.execute('''SELECT id,started_at,ended_at,white_model,black_model,result,pgn,
-                        move_count,tournament_id,pairing_id,adjudication_status,adjudication_json,
-                        inference_metadata_json,failure_reason,failure_fen,failure_color,failure_side_to_move,failure_model_id
-                        FROM games WHERE id=?''', (game_id,)).fetchone()
-                if row is None:
-                    self.send_json({'error': 'Nie znaleziono zapisanej partii'}, 404)
-                else:
-                    payload = dict(row)
-                    try:
-                        move_metadata = json.loads(payload.get('inference_metadata_json') or '[]')
-                    except (TypeError, json.JSONDecodeError):
-                        move_metadata = []
-                    payload['arbiter_events'] = [
-                        {'ply': item.get('ply'), 'color': item.get('color'),
-                         'model': item.get('model'), 'signal': item.get('arbiter_signal'),
-                         'response': item.get('arbiter_response'), 'response_seconds': item.get('seconds'),
-                         'selected_move': item.get('uci')}
-                        for item in move_metadata if item.get('arbiter_intervention')
-                    ] if isinstance(move_metadata, list) else []
-                    self.send_json(payload)
-            except ValueError:
-                self.send_json({'error': 'Nieprawidłowy identyfikator partii'}, 422)
-        elif path == '/api/models':
-            with league.connect() as c:
-                rows = c.execute('''SELECT m.id,m.name,m.format,m.active,v.id AS version_id,v.filename,v.sha256,v.size_bytes,v.status,v.license,v.license_verified,v.source,v.managed_copy,v.draft_filename,v.draft_sha256,v.draft_size_bytes,v.draft_status,v.draft_managed_copy,v.metadata_json
-                  FROM league_models m LEFT JOIN model_versions v ON v.id=(SELECT MAX(id) FROM model_versions WHERE model_id=m.id)
-                  ORDER BY m.name''').fetchall()
-            models = []
-            for row in rows:
-                item = dict(row)
-                try:
-                    metadata = json.loads(item.pop('metadata_json') or '{}')
-                    item['license_evidence'] = metadata.get('license_evidence')
-                    item['inference'] = league.normalize_inference_config(metadata)
-                    item['token_budget'] = league.token_budget_info(
-                        item.get('sha256'), item.get('draft_sha256'), metadata)
-                except (TypeError, json.JSONDecodeError, ValueError):
-                    item['license_evidence'] = None
-                    item['inference'] = {'thinking': False}
-                    item.pop('metadata_json', None)
-                models.append(item)
-            self.send_json(models)
-        elif path == '/api/hf-candidates/review':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                params = parse_qs(urlparse(raw_path).query)
-                catalog_id = params.get('catalog_id', [''])[0]
-                revision = params.get('revision', [''])[0]
-                with league.connect() as c:
-                    review = hf_candidate_reviews.get(c, catalog_id, revision)
-                self.send_json(review if review is not None else {'review': None, 'workflow_status': 'not_started'})
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/review-queue':
-            try:
-                with league.connect() as c:
-                    self.send_json(hf_candidate_reviews.list_proposals(c))
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/audit-queue':
-            try: self.send_json(hf_candidate_queue.snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/hardware':
-            try: self.send_json(hf_candidate_queue.hardware_snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/runtime-preflight':
-            try: self.send_json(hf_candidate_runtime.snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/hf-candidates/download-plan':
-            try: self.send_json(hf_candidate_downloads.plan_snapshot())
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-history':
-            try: self.send_json({'jobs': hf_candidate_downloads.history()})
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-events':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
-                self.send_json({'events': hf_candidate_downloads.events(job_id)} if job_id else {'error': 'Brak job_id'}, 200 if job_id else 422)
-            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-files':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                catalog_id = parse_qs(urlparse(raw_path).query).get('catalog_id', [''])[0]
-                self.send_json(hf_candidate_downloads.list_files(catalog_id))
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/download-jobs':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                job_id = parse_qs(urlparse(raw_path).query).get('job_id', [''])[0]
-                job = hf_candidate_downloads.get(job_id) if job_id else hf_candidate_downloads.current()
-                self.send_json(job if job else {'error': 'Nie znaleziono zadania.'}, 200 if job else 404)
-            except (OSError, ValueError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates/audit':
-            try:
-                from urllib.parse import urlparse, parse_qs
-                params = parse_qs(urlparse(raw_path).query)
-                catalog_id = params.get('catalog_id', [''])[0]
-                revision = params.get('revision', [''])[0]
-                with league.connect() as c:
-                    report = hf_candidate_audit.get_report(c, catalog_id, revision)
-                if report is None:
-                    self.send_json({'error': 'Brak zapisanego audytu dla tej rewizji.'}, 404)
-                else:
-                    self.send_json(report)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 422)
-        elif path == '/api/hf-candidates':
-            try:
-                items = hf_candidate_audit.load_catalog()
-                with league.connect() as c:
-                    reports = hf_candidate_audit.list_reports(c)
-                    reviews = hf_candidate_reviews.list_reviews(c)
-                report_map = {(x['catalog_id'], x['revision']): x for x in reports}
-                review_map = {(x['catalog_id'], x['revision']): x for x in reviews}
-                result = []
-                for item in items:
-                    row = {key: item.get(key) for key in ('catalog_id','arena_model_id','display_name','repo_id','revision','audited_revision','declared_license_tag','gated','source_status','metadata_status','license_review_status','technical_readiness','admission_status')}
-                    key = (item.get('catalog_id'), item.get('revision') or item.get('audited_revision'))
-                    row['last_audit'] = report_map.get(key)
-                    row['last_review'] = review_map.get(key)
-                    result.append(row)
-                self.send_json(result)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/model-admission':
-            try:
-                with league.connect() as c:
-                    self.send_json(model_admission.list_decisions(c))
-            except (model_allowlist.AllowlistError, OSError, ValueError) as exc:
-                self.send_json({'error': str(exc)}, 503)
-        elif path == '/api/league':
-            self.send_json(league.elo_ratings('PURE_AI'))
-        elif path == '/api/league/engine':
-            self.send_json(league.elo_ratings('AI_ENGINE'))
-        elif path == '/api/storage':
-            status = league.storage_status()
-            managed = model_store.MANAGED_DIR
-            managed.mkdir(mode=0o700, parents=True, exist_ok=True)
-            status['managed_directory'] = str(managed)
-            status['managed_models'] = [
-                {'filename': p.name, 'size_bytes': p.stat().st_size}
-                for p in sorted(managed.glob('*.gguf')) if p.is_file()
-            ]
-            status['managed_free_bytes'] = __import__('shutil').disk_usage(managed).free
-            self.send_json(status)
-        elif path.startswith('/api/tournaments/') and path.endswith('/view'):
-            try:
-                tournament_id = int(path.split('/')[3])
-                self.send_json(league.tournament_view(tournament_id, get_live()))
-            except KeyError as exc:
-                self.send_json({'error': str(exc)}, 404)
-            except (ValueError, IndexError):
-                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif path.startswith('/api/tournaments/') and path.endswith('/preflight'):
-            try:
-                tournament_id = int(path.split('/')[3])
-                with league.connect() as c:
-                    exists = c.execute('SELECT 1 FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
-                if not exists:
-                    self.send_json({'error': 'Nie znaleziono turnieju'}, 404)
-                else:
-                    self.send_json(tournament_preflight(tournament_id))
-            except (ValueError, IndexError):
-                self.send_json({'error': 'Nieprawidłowy identyfikator turnieju'}, 422)
-        elif path == '/api/tournaments':
-            with league.connect() as c:
-                rows = c.execute('''SELECT t.id,t.name,t.format,t.status,t.created_at,
-                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='league') AS games_planned,
-                    (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id AND p.stage='draft') AS draft_games_played_or_planned,
-                    (SELECT COUNT(DISTINCT p.id)
-                     FROM tournament_pairings p
-                     JOIN games g ON g.id=p.game_id
-                       AND g.tournament_id=p.tournament_id
-                       AND g.pairing_id=p.id
-                     WHERE p.tournament_id=t.id
-                       AND p.status='completed'
-                       AND g.result IN ('1-0','0-1','1/2-1/2')) AS completed_games,
-                    (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) AS players,
-                    t.qualification_percent,t.resume_blocked,t.initial_entrant_count,t.late_admission_limit,
-                    t.late_admission_used,t.parent_tournament_id,t.admission_batch_id,
-                    EXISTS(SELECT 1 FROM tournament_checkpoints cp WHERE cp.tournament_id=t.id) AS has_checkpoint,
-                    CASE WHEN t.rules_version='2' THEN
-                      (SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id) *
-                      ((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)-1) +
-                      MAX(1,COALESCE((SELECT COUNT(*) FROM tournament_seeds q WHERE q.tournament_id=t.id),CAST(((SELECT COUNT(*) FROM tournament_entries e WHERE e.tournament_id=t.id)*t.qualification_percent+99)/100 AS INTEGER)))-1
-                    ELSE (SELECT COUNT(*) FROM tournament_pairings p WHERE p.tournament_id=t.id) END AS total_games_planned
-                    FROM tournaments t ORDER BY t.id DESC''').fetchall()
-            self.send_json([dict(x) for x in rows])
-        elif path.startswith('/api/passkey-tests'):
-            from urllib.parse import urlparse, parse_qs
-            tid = parse_qs(urlparse(raw_path).query).get('tournament_id', [None])[0]
-            with sqlite3.connect(DB) as c:
-                c.row_factory = sqlite3.Row
-                rows = c.execute('SELECT tournament_id,model_id,model_name,question_no,question,status,answer,elapsed_seconds,created_at FROM passkey_test_answers' + (' WHERE tournament_id=?' if tid else '') + ' ORDER BY tournament_id,model_name,question_no', ((int(tid),) if tid else ())).fetchall()
-            self.send_json([dict(x) for x in rows])
-        elif path == '/api/export/pgn':
-            with sqlite3.connect(DB) as c:
-                rows = c.execute('SELECT pgn FROM games ORDER BY id').fetchall()
-            body = ('\n\n'.join(row[0].strip() for row in rows if row[0].strip()) + ('\n' if rows else '')).encode('utf-8')
-            self.send_response(200); self.send_header('Content-Type', 'application/x-chess-pgn; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.pgn"')
-            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
-        elif path == '/api/export/csv':
-            output = io.StringIO(newline='')
-            writer = csv.writer(output)
-            writer.writerow(['id','started_at','ended_at','white_model','black_model','result','move_count','illegal_attempts','avg_move_seconds','pgn'])
-            with sqlite3.connect(DB) as c:
-                for row in c.execute('SELECT id,started_at,ended_at,white_model,black_model,result,move_count,illegal_attempts,avg_move_seconds,pgn FROM games ORDER BY id'):
-                    writer.writerow(row)
-            body = output.getvalue().encode('utf-8-sig')
-            self.send_response(200); self.send_header('Content-Type', 'text/csv; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="ai-chess-arena.csv"')
-            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
         elif path == '/':
             self.send_html_file('index.html')
         else: self.send_error(404)
     def do_POST(self):
         path = _route_path(self.path)
-        global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
-        if path == '/api/remote-workers/authenticate':
-            # Token-only authentication; token issuance is admin-only and offline.
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id, token = payload.get('worker_id'), payload.get('token')
-                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
-                    self.send_json({'authenticated': False}, 401)
-                    return
-                self.send_json({'authenticated': True, 'worker_id': worker_id})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-            except Exception:
-                self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
+        # Machine-authenticated Worker API is isolated from panel sessions.
+        with live_lock:
+            worker_live_snapshot = dict(live_status)
+        if worker_backend.dispatch_worker_post(self, path, DB, worker_live_snapshot):
             return
-        # Opt-in Android Worker API, independent from phone tournament dispatch.
-        # No browser/admin session is accepted here: authenticate each machine
-        # request using the existing SQLite WorkerTokenStore.
-        from remote_worker_phone_api import ROUTES, handle_phone_request
-        if path in ROUTES:
-            if os.environ.get('ARENA_PHONE_WORKER_API_ENABLED') != '1':
-                self.send_json({'error': 'Android Worker API nie jest jeszcze włączone'}, 503)
-                return
-            with live_lock:
-                worker_live_snapshot = dict(live_status)
-            handle_phone_request(self, path, DB, worker_live_snapshot)
-            return
-        if path == '/api/auth/login':
-            if not arena_auth.is_configured():
-                self.send_json({'error': 'Logowanie nie zostało skonfigurowane na serwerze.'}, 503)
-                return
-            if not arena_auth.origin_allowed(self.headers.get('Origin')):
-                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
-                return
-            try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if length < 1 or length > 4096:
-                    raise ValueError('Nieprawidłowy rozmiar żądania logowania')
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Nieprawidłowe dane logowania')
-                username = payload.get('username', '')
-                password = payload.get('password', '')
-                if not isinstance(username, str) or not isinstance(password, str):
-                    raise ValueError('Nieprawidłowe dane logowania')
-                if len(username) > 128 or len(password) > 1024:
-                    raise ValueError('Dane logowania przekraczają dozwoloną długość')
-                remote_key = arena_auth.client_key(
-                    self.headers.get('X-Forwarded-For'), self.client_address[0])
-                ok, reason = arena_auth.check_login(username, password, remote_key)
-                if not ok:
-                    if reason == 'rate_limited':
-                        self.send_json({'error': 'Zbyt wiele prób logowania. Spróbuj ponownie za 10 minut.'}, 429)
-                    else:
-                        self.send_json({'error': 'Nieprawidłowy login lub hasło.'}, 401)
-                    return
-                token = arena_auth.create_session_token(username)
-                self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.session_cookie(token))])
-            except (ValueError, json.JSONDecodeError) as exc:
-                self.send_json({'error': str(exc)}, 400)
-            return
-        if path == '/api/auth/logout':
-            if not arena_auth.origin_allowed(self.headers.get('Origin')):
-                self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
-                return
-            self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.expired_cookie())])
+        if web_panel_auth.dispatch_panel_auth_post(self, path):
             return
         if not self.authenticated_user():
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
@@ -1896,186 +1728,43 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
-                if path == '/api/model-permissions/request':
-                    with league.connect() as c:
-                        result = model_permissions.request_permission(
-                            c, model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
-                            revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
-                            scope=payload.get('scope'), confirm=payload.get('confirm') is True,
-                            reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
-                            actor=self.authenticated_user())
-                elif path == '/api/model-permissions/decision':
-                    request_id = payload.get('request_id')
-                    if isinstance(request_id, bool) or not isinstance(request_id, int):
-                        raise ValueError('Nieprawidłowy identyfikator żądania.')
-                    with league.connect() as c:
-                        result = model_permissions.decide_permission(
-                            c, request_id=request_id, action=payload.get('action'),
-                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
-                            actor=self.authenticated_user())
-                elif path == '/api/hf-candidates/download-cancel':
-                    result = hf_candidate_downloads.cancel(payload.get('job_id'))
-                elif path == '/api/hf-candidates/download-resume':
-                    if payload.get('confirm_resume') is not True:
-                        raise ValueError('Wymagane jawne zatwierdzenie wznowienia pobierania.')
-                    result = hf_candidate_downloads.resume(payload.get('job_id'))
-                elif path == '/api/hf-candidates/download-plan/refresh':
-                    result = hf_candidate_downloads.refresh_plan()
-                elif path == '/api/hf-candidates/download-start':
-                    if payload.get('confirm_download') is not True:
-                        raise ValueError('Wymagane jawne zatwierdzenie pobrania partii.')
-                    result = hf_candidate_downloads.start(payload.get('candidates'), source='manual')
-                elif path == '/api/hf-candidates/review':
-                    with league.connect() as c:
-                        result = hf_candidate_reviews.save(c, payload, actor=self.authenticated_user() or 'arena')
-                elif path == '/api/hf-candidates/review-action':
-                    with league.connect() as c:
-                        result = hf_candidate_reviews.apply_proposal_action(
-                            c, proposal_id=payload.get('proposal_id'), action=payload.get('action'),
-                            reason=payload.get('reason', ''), actor=self.authenticated_user() or 'arena',
-                            catalog=hf_candidate_audit.load_catalog())
-                elif path == '/api/hf-candidates/audit':
-                    if not hf_candidate_audit.AUDIT_LOCK.acquire(blocking=False):
-                        raise ValueError('Inny audyt Hugging Face już trwa; spróbuj ponownie za chwilę.')
-                    try:
-                        report = hf_candidate_audit.audit_candidate(payload.get('catalog_id'))
-                        with league.connect() as c:
-                            hf_candidate_audit.save_report(c, report)
-                        result = report
-                    finally:
-                        hf_candidate_audit.AUDIT_LOCK.release()
-                elif path == '/api/model-review-submissions/action':
-                    with league.connect() as c:
-                        allowed_ids = {
-                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
-                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
-                        }
-                        result = model_review_submissions.apply_action(
-                            c, submission_id=payload.get('submission_id'), action=payload.get('action'),
-                            actor='arena', reason=payload.get('reason', ''), payload=payload.get('proposal'),
-                            allowed_model_ids=allowed_ids)
-                elif path == '/api/model-review-submissions':
-                    with league.connect() as c:
-                        allowed_ids = {
-                            item['model_id'] for item in model_allowlist.load_allowlist(c)['models']
-                            if item.get('status') in {'eligible', 'restricted'} and item['model_id'] != 6
-                        }
-                        result = model_review_submissions.submit(c, payload, allowed_model_ids=allowed_ids)
-                elif path in ('/api/model-admission/admit','/api/model-admission/revoke'):
-                    with league.connect() as c:
-                        result = model_admission.apply_decision(
-                            c, model_id=int(payload.get('model_id', 0)),
-                            action='admit' if path.endswith('/admit') else 'revoke',
-                            confirm=payload.get('confirm') is True, reason=payload.get('reason', ''),
-                        )
-                elif path == '/api/models/license-evidence':
-                    version_id = int(payload.get('version_id', 0))
-                    if version_id < 1:
-                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
-                    with league.connect() as c:
-                        row = c.execute('''SELECT v.id,v.source,v.metadata_json,m.name
-                            FROM model_versions v JOIN league_models m ON m.id=v.model_id
-                            WHERE v.id=?''', (version_id,)).fetchone()
-                    if row is None:
-                        raise ValueError('Nieznana wersja modelu')
-                    if is_excluded_model_identity(name=row['name'], source=row['source'], metadata=row['metadata_json']):
-                        raise ValueError('Model jest wyłączony z AI Chess Arena (Issue #71); nie można przetwarzać go jako kandydata do zatwierdzenia')
-                    evidence = fetch_hf_license_evidence(row['source'])
-                    with league.connect() as c:
-                        current = c.execute('SELECT metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
-                        if current is None:
-                            raise ValueError('Wersja modelu została usunięta podczas pobierania dowodów')
-                        metadata = json.loads(current['metadata_json'] or '{}')
-                        metadata['license_evidence'] = evidence
-                        c.execute('UPDATE model_versions SET metadata_json=? WHERE id=?', (json.dumps(metadata, ensure_ascii=False), version_id))
-                    result = {'version_id': version_id, 'evidence': evidence, 'license_verified': False}
-                elif path == '/api/models/verify-license':
-                    if payload.get('confirm_review') is not True:
-                        raise ValueError('Wymagane jawne potwierdzenie samodzielnego sprawdzenia licencji')
-                    version_id = int(payload.get('version_id', 0))
-                    if version_id < 1:
-                        raise ValueError('Nieprawidłowy identyfikator wersji modelu')
-                    with league.connect() as c:
-                        row = c.execute('SELECT id,source,license,metadata_json FROM model_versions WHERE id=?', (version_id,)).fetchone()
-                        if row is None:
-                            raise ValueError('Nieznana wersja modelu')
-                        source = (row['source'] or '').strip()
-                        license_name = (payload.get('license') or row['license'] or '').strip()
-                        metadata = json.loads(row['metadata_json'] or '{}')
-                        model_name = c.execute('SELECT name FROM league_models WHERE id=(SELECT model_id FROM model_versions WHERE id=?)', (version_id,)).fetchone()['name']
-                        if is_excluded_model_identity(name=model_name, source=source, metadata=metadata):
-                            raise ValueError('Model jest trwale wyłączony z AI Chess Arena (Issue #71); nie można zatwierdzić licencji')
-                        evidence = metadata.get('license_evidence') or {}
-                        has_license_document = bool(evidence.get('license_files') or evidence.get('license'))
-                        if not source or not source.startswith('https://') or not license_name or license_name.lower() in ('nieustalona','unknown','n/a','unverified','unspecified','none'):
-                            raise ValueError('Wersja wymaga źródła HTTPS i konkretnego identyfikatora licencji')
-                        if not row['license'] and not has_license_document:
-                            raise ValueError('Najpierw pobierz dowody z repozytorium; nie znaleziono deklaracji ani pliku licencji')
-                        c.execute('UPDATE model_versions SET license=?,license_verified=1 WHERE id=?', (license_name, version_id))
-                    result = {'version_id': version_id, 'license_verified': True}
-                elif path == '/api/models/register':
-                    result = league.register_model(payload.get('name',''),payload.get('filename'),payload.get('source',''),payload.get('license',''),payload.get('metadata'),payload.get('format','PURE_AI'),bool(payload.get('license_verified',False)))
-                elif path == '/api/tournaments/start':
-                    result = start_tournament(int(payload.get('tournament_id', 0)))
-                elif path == '/api/tournaments/admissions':
-                    if tournament_thread and tournament_thread.is_alive():
-                        raise RuntimeError('Najpierw bezpiecznie zatrzymaj aktywny turniej')
-                    result = league.create_late_admission_batch(
-                        int(payload.get('parent_tournament_id', 0)), payload.get('model_ids'))
-                elif path == '/api/tournaments/entries':
-                    if tournament_thread and tournament_thread.is_alive():
-                        raise RuntimeError('Nie można zmieniać składu podczas aktywnego turnieju')
-                    result = league.add_prestart_tournament_entries(
-                        int(payload.get('tournament_id', 0)), payload.get('model_ids'))
-                elif path == '/api/tournaments/stop':
-                    active = bool(tournament_thread and tournament_thread.is_alive())
-                    if active:
-                        tournament_stop_event.set()
-                        result = {'status': 'stop_requested', 'checkpoint_required': True}
-                    else:
-                        result = {'status': 'not_running'}
-                elif path == '/api/models/download':
-                    if payload.get('confirm_download') is not True:
-                        raise ValueError('Wymagane jawne potwierdzenie pobrania')
-                    result = model_store.download_version(
-                        int(payload.get('version_id',0)), payload.get('url',''), payload.get('filename',''),
-                        payload.get('sha256',''), int(payload.get('size_bytes',0)),
-                        bool(payload.get('license_verified',False)))
-                elif path == '/api/models/cleanup':
-                    if payload.get('confirm_delete') is not True:
-                        raise ValueError('Wymagane jawne potwierdzenie usunięcia kopii areny')
-                    if not model_store.MODEL_LIFECYCLE_LOCK.acquire(blocking=False):
-                        raise RuntimeError('Nie można usuwać modeli podczas aktywnego turnieju lub pobierania; spróbuj później')
-                    try:
-                        result = model_store.cleanup_version(int(payload.get('version_id',0)))
-                    finally:
-                        model_store.MODEL_LIFECYCLE_LOCK.release()
+                if path in web_panel_model_api.PERMISSION_POST_ROUTES:
+                    result = web_panel_model_api.handle_permission_post(
+                        path, payload, self.authenticated_user())
+                elif path in web_panel_download_api.ADMIN_DOWNLOAD_POST_ROUTES:
+                    result = web_panel_download_api.handle_download_admin_post(path, payload)
+                elif path in web_panel_hf_review_api.HF_REVIEW_POST_ROUTES:
+                    result = web_panel_hf_review_api.handle_hf_review_admin_post(
+                        path, payload, actor=self.authenticated_user())
+                elif path in web_panel_model_review_api.MODEL_REVIEW_POST_ROUTES:
+                    result = web_panel_model_review_api.handle_model_review_admin_post(
+                        path, payload)
+                elif path in web_panel_model_license_api.MODEL_LICENSE_POST_ROUTES:
+                    result = web_panel_model_license_api.handle_model_license_post(
+                        path, payload, fetch_evidence=fetch_hf_license_evidence)
+                elif path in web_panel_tournament_api.TOURNAMENT_POST_ROUTES:
+                    result = web_panel_tournament_api.handle_tournament_admin_post(
+                        path, payload, start_tournament=start_tournament,
+                        active_thread=tournament_thread, stop_event=tournament_stop_event)
+                elif path in web_panel_model_storage_api.MODEL_STORAGE_POST_ROUTES:
+                    result = web_panel_model_storage_api.handle_model_storage_post(path, payload)
                 else:
-                    result = league.create_round_robin(payload.get('name','Tournament'),payload.get('format','PURE_AI'),payload.get('qualification_percent',80))
+                    raise ValueError('Nieznana operacja administracyjna')
                 self.send_json(result, 200 if path in ('/api/model-permissions/decision','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/audit','/api/models/verify-license','/api/models/license-evidence','/api/model-admission/admit','/api/model-admission/revoke') else 201)
             except Exception as e:
                 self.send_json({'error':str(e)},422)
-        elif path == '/api/step':
-            try:
-                with lock: do_step(); self.send_json(state())
-            except Exception as e:
-                with lock: self.send_json({'error':str(e), **state()}, 422)
-        elif path == '/api/run':
-            with lock:
-                running = True
-                threading.Thread(target=autoplay_loop, daemon=True).start()
-                self.send_json(state())
-        elif path == '/api/stop':
-            with lock: running = False; self.send_json(state())
-        elif path == '/api/reset':
-            with lock:
-                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
-                started_at = time.time(); last_error = ''; last_move = None
-                self.send_json(state())
+        elif web_panel_game_control_api.dispatch_panel_game_control_post(
+                self, path, control_action=_panel_game_control_action):
+            return
         else: self.send_error(404)
 
 if __name__ == '__main__':
     db_init()
+    # Exclusive local coordinator ownership is required before state recovery.
+    from remote_worker_coordinator_lock import CoordinatorLock
+    _coordinator_lock = CoordinatorLock(DB).acquire()
+    # Invalidate stale worker state before any background worker or HTTP listener starts.
+    remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()

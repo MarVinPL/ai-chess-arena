@@ -8,6 +8,7 @@ import chess
 
 @pytest.fixture
 def arena(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARENA_PHONE_INFERENCE_ENABLED", raising=False)
     db=tmp_path/'arena.sqlite3'
     for module in (server, league):
         monkeypatch.setattr(module,'DB',db)
@@ -43,7 +44,8 @@ def test_first_game_precedes_third_model_test_and_resume_preserves_answers(arena
         return {'status':'answered','answer':'fixture','seconds':0.1}
     monkeypatch.setattr(passkey_test,'ask_passkey_question',answer)
     class Runner:
-        def __init__(self,runtime): pass
+        def __init__(self,runtime,*,move_provider=None):
+            assert move_provider is None, "JIT local runner must not use remote inference"
         def play_game(self,white,black,event,**kw):
             calls.append(('game',white['name'],black['name']))
             event.set()
@@ -73,7 +75,8 @@ def test_incomplete_control_answer_never_starts_game(arena,monkeypatch,result_st
         return {'status':result_status,'answer':'','seconds':None}
     monkeypatch.setattr(passkey_test,'ask_passkey_question',answer)
     class Runner:
-        def __init__(self,runtime): pass
+        def __init__(self,runtime,*,move_provider=None):
+            assert move_provider is None, "JIT local runner must not use remote inference"
         def play_game(self,*a,**kw):
             calls.append('game')
             raise AssertionError('Incomplete control test must not start game')

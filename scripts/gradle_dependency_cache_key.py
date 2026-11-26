@@ -42,7 +42,16 @@ paths = sorted(
 h = hashlib.sha256(b"gradle-modules-v2\0java21\0android36\0ndk27.2.12479018\0")
 h.update(json.dumps([npm_inputs, rust_inputs], sort_keys=True, separators=(",", ":")).encode() + b"\0")
 for p in paths:
-    h.update(p.relative_to(root).as_posix().encode() + b"\0" + hashlib.sha256(p.read_bytes()).digest())
+    content = p.read_bytes()
+    # The exact deterministic native-library extraction override changes APK
+    # packaging only, not dependency resolution. Preserve the existing v2 key
+    # for the identical unpatched project; hash all other edits verbatim.
+    if p == android / "app/build.gradle.kts":
+        original = b"android {\n"
+        packaging = original + b"    packaging {\n        jniLibs.useLegacyPackaging = true\n    }\n"
+        if content.count(original) == 1 and content.count(packaging) == 1:
+            content = content.replace(packaging, original, 1)
+    h.update(p.relative_to(root).as_posix().encode() + b"\0" + hashlib.sha256(content).digest())
 key = f"arena-gradle-modules-v2-{os.environ['RUNNER_OS']}-{os.environ['RUNNER_ARCH']}-{h.hexdigest()}"
 print(key)
 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:

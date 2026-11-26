@@ -66,7 +66,7 @@ class PanelAssetTests(unittest.TestCase):
     def test_routes_require_authentication_before_asset_dispatch(self):
         source = (ROOT / "server.py").read_text(encoding="utf-8")
         start = source.index("    def do_GET(self):")
-        segment = source[start:source.index("        if path == '/api/model-permissions':", start)]
+        segment = source[start:source.index("        if web_panel_model_api.dispatch_panel_model_get(self, path):", start)]
         self.assertLess(segment.index("if not user:"), segment.index("self.send_panel_asset(path)"))
         self.assertIn("if path.startswith('/assets/'):", segment)
 

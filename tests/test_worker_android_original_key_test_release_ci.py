@@ -57,6 +57,8 @@ def test_pinned_provenance_and_verify_before_upload():
     assert "trap 'rm -f \"$ks\"' EXIT" in text
     assert text.index('test "$certificate" = ' + CERT) < text.index('actions/upload-artifact@v4')
     assert "worker-v0.1.0-test.1" in text
+    assert "ai-chess-arena-worker-v0.1.0-pre1-arm64.apk" in text
+    assert "ai-chess-arena-worker-v0.1.0-test1-arm64.apk" not in text
     assert "--target " + COMMIT in text
     assert "--prerelease --latest=false" in text
 

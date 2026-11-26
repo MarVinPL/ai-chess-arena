@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import unittest
+import web_panel_backend
 from html.parser import HTMLParser
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -41,7 +42,8 @@ class PanelIconTests(unittest.TestCase):
             self.assertEqual(set(names) - shapes.keys(), set())
 
     def test_asset_and_load_order(self):
-        self.assertIn("'/assets/panel-icons.js':", SERVER)
+        self.assertEqual(web_panel_backend.ASSETS["/assets/panel-icons.js"], ("web/js/panel-icons.js", "text/javascript; charset=utf-8"))
+        self.assertIn("web_panel_backend.serve_panel_asset(self, url_path, ROOT)", SERVER)
         self.assertLess(HTML.index("/assets/panel-icons.js"), HTML.index("/assets/navigation.js"))
         self.assertLess(HTML.index("/assets/panel-icons.js"), HTML.index("/assets/arena.js"))
 

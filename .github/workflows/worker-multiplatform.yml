@@ -18,6 +18,7 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
   pull_request:
     branches: [main]
     paths:
@@ -33,6 +34,7 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
 
 permissions:
   contents: read
@@ -51,7 +53,7 @@ jobs:
       android: ${{ steps.select.outputs.android }}
       worker_source: ${{ steps.source.outputs.present }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check whether Worker source exists in checkout
         id: source
         shell: bash
@@ -63,7 +65,7 @@ jobs:
             echo 'Worker source not yet on main; defer APK build until integrated.'
           fi
       - id: filter
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             shared:
@@ -86,6 +88,7 @@ jobs:
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
+              - 'remote_worker_gui/android/**'
       - name: Select only changed platforms
         id: select
         shell: bash
@@ -110,7 +113,7 @@ jobs:
       run:
         working-directory: remote_worker_gui
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Read and validate setup-node gitlink
         id: node-pin
         working-directory: .
@@ -151,8 +154,11 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: remote_worker_gui/src-tauri
           key: linux
@@ -168,7 +174,7 @@ jobs:
           test -s src-tauri/target/release/ai-chess-arena-worker
           cp src-tauri/target/release/ai-chess-arena-worker dist/ai-chess-arena-worker-linux
           (cd dist && sha256sum ai-chess-arena-worker-linux > SHA256SUMS)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: worker-linux-unsigned
@@ -187,7 +193,7 @@ jobs:
       run:
         working-directory: remote_worker_gui
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Read and validate setup-node gitlink
         id: node-pin
         working-directory: .
@@ -228,8 +234,11 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: remote_worker_gui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: remote_worker_gui/src-tauri
           key: windows
@@ -246,7 +255,7 @@ jobs:
           Copy-Item $source dist/ai-chess-arena-worker-windows.exe
           $hash = (Get-FileHash dist/ai-chess-arena-worker-windows.exe -Algorithm SHA256).Hash
           "$hash  ai-chess-arena-worker-windows.exe" | Set-Content dist/SHA256SUMS
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: worker-windows-unsigned
@@ -283,7 +292,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Keep only the newest successful main artifact per built platform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
