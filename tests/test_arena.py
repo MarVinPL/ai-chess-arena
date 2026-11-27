@@ -84,6 +84,73 @@ class ArenaSmokeTests(unittest.TestCase):
         finally:
             server.engine_runner.LLAMAFILE = original_binary
 
+    def test_server_model_request_uses_elimination_rules_and_uci_grammar(self):
+        import json
+        from unittest.mock import patch
+        board = server.EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"e2e8"}}]}'
+
+        captured = {}
+        def fake_urlopen(request, timeout=None):
+            captured['payload'] = json.loads(request.data.decode())
+            return Response()
+
+        with patch('server.urllib.request.urlopen', side_effect=fake_urlopen):
+            move = server.ask_model('/tmp/model.gguf', board)
+
+        payload = captured['payload']
+        self.assertEqual(move.uci(), 'e2e8')
+        self.assertEqual(payload['messages'][0]['role'], 'system')
+        self.assertIn('Elimination Chess', payload['messages'][0]['content'])
+        self.assertIn('do not restrict moves', payload['messages'][0]['content'])
+        self.assertNotIn('MUST do so', payload['messages'][0]['content'])
+        self.assertNotIn('NATYCHMIASTOWA WYGRANA', payload['messages'][1]['content'])
+        self.assertIn('e2e8', payload['messages'][1]['content'])
+        self.assertIn('grammar', payload)
+        self.assertIn('"e2e8"', payload['grammar'])
+
+    def test_legacy_ask_model_preserves_legal_nonwinning_move(self):
+        import json
+        from unittest.mock import patch
+        import server
+        from elimination_chess import EliminationBoard
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({'choices': [{'message': {'content': 'e2e7'}}]}).encode()
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        with patch('urllib.request.urlopen', return_value=Response()):
+            move = server.ask_model({'name': 'Alpha'}, board)
+        self.assertEqual(move.uci(), 'e2e7')
+
+    def test_failure_pgn_replays_king_capture_with_elimination_variant(self):
+        pgn = server._failure_pgn(
+            'Alpha', 'Beta', [{'uci': 'e2e8'}], '1-0', 'Adjudication',
+            initial_fen='4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        self.assertIn('[Variant "Elimination Chess"]', pgn)
+        self.assertIn('[Result "1-0"]', pgn)
+        self.assertIn('Rxe8', pgn)
+
+    def test_server_model_request_rejects_explanatory_text_even_with_uci(self):
+        from unittest.mock import patch
+        board = server.EliminationBoard()
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"I choose e2e4"}}]}'
+        with patch('server.urllib.request.urlopen', return_value=Response()):
+            with self.assertRaisesRegex(ValueError, 'nie zwrócił ruchu UCI'):
+                server.ask_model('/tmp/model.gguf', board)
+
     def test_python_chess_legal_start_position(self):
         board = chess.Board()
         self.assertEqual(board.legal_moves.count(), 20)
@@ -508,6 +575,38 @@ class ArenaSmokeTests(unittest.TestCase):
             self.assertEqual(by_id[tournament_id]['total_games_planned'], 2)
         self.assertEqual(by_id[empty_tournament_id]['completed_games'], 0)
         self.assertEqual(by_id[empty_tournament_id]['total_games_planned'], 0)
+
+    def test_all_panel_assets_are_served_with_correct_mime(self):
+        for path, mime in (
+            ('arena.css', 'text/css'),
+            ('navigation.css', 'text/css'),
+            ('board-redesign.css', 'text/css'),
+            ('arena.js', 'text/javascript'),
+            ('navigation.js', 'text/javascript'),
+        ):
+            with self.subTest(path=path):
+                with urllib.request.urlopen(self.base + '/assets/' + path) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn(mime, response.headers['Content-Type'])
+                    self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                    self.assertTrue(response.read())
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(self.base + '/assets/not-allowlisted.css')
+        self.assertEqual(error.exception.code, 404)
+
+    def test_piece_svg_allowlist(self):
+        for style in ('cburnett', 'merida', 'shapes', 'chessnut'):
+            for color in 'wb':
+                for piece in 'KQRBNP':
+                    with self.subTest(style=style, color=color, piece=piece):
+                        with urllib.request.urlopen(self.base + f'/assets/pieces/{style}/{color}{piece}.svg') as response:
+                            self.assertEqual(response.headers['Content-Type'], 'image/svg+xml')
+                            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                            self.assertIn(b'<svg', response.read())
+        for path in ('pieces/unknown/wK.svg', 'pieces/cburnett/wX.svg', 'pieces/README.md'):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(self.base + '/assets/' + path)
+            self.assertEqual(error.exception.code, 404)
 
     def test_tournament_view_api_and_saved_pgn_preview_are_read_only(self):
         with sqlite3.connect(server.DB) as db:

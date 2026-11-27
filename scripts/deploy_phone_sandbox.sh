@@ -76,7 +76,6 @@ runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin arena-phone-test
 chown -R arena-phone-test:arena-phone-test "$stage_root"
-
 installed_unit=0
 installed_caddy=0
 acl_granted=0
@@ -107,12 +106,14 @@ trap rollback EXIT
 # /home/debian has a restrictive ACL with group::---; SupplementaryGroups
 # alone does NOT allow CHDIR. Give ONLY the dedicated staging UID traverse
 # (no read/list/write) and revoke it on rollback/cleanup.
-if ! getfacl -cp /home/debian | grep -Fxq 'user:arena-phone-test:--x'; then
-  setfacl -m u:arena-phone-test:--x /home/debian
-  acl_granted=1
-fi
-runuser -u arena-phone-test -- sh -c   'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
-runuser -u arena-phone-test --   /home/debian/ai-chess-arena/.venv/bin/python -c 'import chess'
+# Freshly created dedicated UID; install rollback before granting traversal.
+# No group-wide access and no read/list/write permission on the home.
+acl_granted=1
+setfacl -m u:arena-phone-test:--x /home/debian
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  "$python" -c 'import chess'
 
 install -m 0644 -o root -g root "$work/systemd/ai-chess-arena-phone-e2e.service" "$unit_file"
 installed_unit=1

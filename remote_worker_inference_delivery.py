@@ -9,6 +9,7 @@ import sqlite3
 import time
 
 import chess
+from elimination_chess import board_for_variant
 
 from remote_worker_jobs import DurableWorkerJobs
 from remote_worker_protocol import validate_job, validate_result
@@ -268,7 +269,7 @@ class WorkerInferenceDelivery:
         if result is None:
             return None
         job = validate_job(json.loads(row[0]))
-        move = validate_result(json.loads(result[0]), job, chess.Board(job["fen"]))
+        move = validate_result(json.loads(result[0]), job, board_for_variant(job["fen"], job.get("variant", "standard")))
         return move.uci()
 
     def finalize_arena_result(self, worker_id, job_id, uci, *,
@@ -318,7 +319,7 @@ class WorkerInferenceDelivery:
             ):
                 raise ValueError("No live remote result to finalize")
             job = validate_job(json.loads(row[0]))
-            before_board = chess.Board(job["fen"])
+            before_board = board_for_variant(job["fen"], job.get("variant", "standard"))
             move = validate_result(json.loads(received[0]), job, before_board)
             if move.uci() != uci:
                 raise ValueError("Arena attempted to finalize a different UCI")
@@ -354,7 +355,8 @@ class WorkerInferenceDelivery:
             next_moves = checkpoint.get("moves")
             previous_times = predecessor.get("move_times")
             next_times = checkpoint.get("move_times")
-            if (predecessor.get("fen") != job["fen"]
+            if (predecessor.get("variant", "standard") != job.get("variant", "standard")
+                or predecessor.get("fen") != job["fen"]
                 or predecessor.get("pairing") != checkpoint.get("pairing")
                 or predecessor.get("white") != checkpoint.get("white")
                 or predecessor.get("black") != checkpoint.get("black")
@@ -428,7 +430,7 @@ class WorkerInferenceDelivery:
             job = validate_job(json.loads(row[1]))
             if job["job_id"] != row[0]:
                 raise ValueError("Inference job was changed")
-            move = validate_result(result, job, chess.Board(job["fen"]))
+            move = validate_result(result, job, board_for_variant(job["fen"], job.get("variant", "standard")))
             canonical = json.dumps(
                 {"version": 1, "job_id": job["job_id"], "uci": move.uci()},
                 sort_keys=True, separators=(",", ":"), allow_nan=False,

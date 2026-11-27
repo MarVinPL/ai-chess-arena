@@ -1,0 +1,66 @@
+{
+  "date": "2026-11-18",
+  "candidate": {
+    "repository": "360ZhiNao/Light-R1-14B-DS-GGUF",
+    "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+    "filename": "Light-R1-14B-Q4_0.gguf",
+    "size_bytes": 8517725312,
+    "upstream_lfs_sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa"
+  },
+  "evidence": {
+    "publisher_project": {
+      "repository": "Qihoo360/Light-R1",
+      "commit": "40b5965eb554469e9f311f8d74942141a3d6a1d4",
+      "license_file_blob": "b09cd7856d58590578ee1a4f3ad45d1310a97f87",
+      "license": "Apache-2.0"
+    },
+    "official_light_r1_model": {
+      "repository": "qihoo360/Light-R1-14B-DS",
+      "revision": "a69e32b88daa855ae068ca8601f3ec4085e96086",
+      "license_metadata": "apache-2.0",
+      "base_model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+    },
+    "official_gguf": {
+      "repository": "qihoo360/Light-R1-14B-DS-GGUF",
+      "revision": "803c4846d22abb993af547feadc1c184cf5bd945",
+      "license_metadata": "apache-2.0",
+      "base_model": "qihoo360/Light-R1-14B-DS",
+      "q4_0_size_bytes": 8517725312,
+      "q4_0_upstream_lfs_sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa"
+    },
+    "deepseek_base": {
+      "repository": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+      "revision": "1df8507178afcc1bef68cd8c393f61a886323761",
+      "license": "MIT",
+      "license_file_present": true,
+      "original_base": "Qwen/Qwen2.5-14B-Instruct"
+    },
+    "qwen_base": {
+      "repository": "Qwen/Qwen2.5-14B-Instruct",
+      "revision": "cf98f3b3bbb457ad9e2bb7baf9a0125b6b88caa8",
+      "license": "Apache-2.0",
+      "license_file_present": true
+    },
+    "candidate_matches_official_gguf_upstream_metadata": true,
+    "candidate_gguf_license_file_present": false,
+    "training_data_rights_inventory": "not_verified"
+  },
+  "review": {
+    "result": "OWNER_ACCEPTED_PERMISSIVE_WEIGHT_LICENSE_EVIDENCE_WITH_TRAINING_DATA_CAVEAT",
+    "license_status": "owner_accepted_with_dataset_caveat",
+    "verified_permissive": false,
+    "technical_readiness": "not_assessed_by_this_review",
+    "owner_acceptance_required": false,
+    "license_subgate": "PASS_WITH_RECORDED_LIMITATION",
+    "owner_acceptance_date": "2026-11-18",
+    "owner_acceptance_scope": "acceptance of the documented Apache-2.0/MIT model-weight license evidence and explicit acknowledgement that the complete dataset-by-dataset training-data rights inventory is not verified"
+  },
+  "safety": {
+    "weights_downloaded": false,
+    "quarantine_artifact_present": false,
+    "local_hash_recomputed": false,
+    "runtime_test_only_grant_active": false,
+    "inference_authorized": false,
+    "tournament_admission": false
+  }
+}

@@ -91,6 +91,9 @@ if not cp or json.loads(cp[0]).get("moves")!=[]:
 print("RESUME_PREFLIGHT=PASS (one worker; isolated empty checkpoint; idle production)")
 PY
 
+[[ -z $(runuser -u debian -- git -C "$release" status --porcelain) ]] || {
+  echo 'Staging tree contains local changes' >&2; exit 2;
+}
 if [[ $action == --preflight ]]; then
   exit 0
 fi
@@ -120,16 +123,22 @@ rollback() {
 }
 trap rollback EXIT
 
-if ! getfacl -cp /home/debian | grep -Fxq 'user:arena-phone-test:--x'; then
-  setfacl -m u:arena-phone-test:--x /home/debian
+runuser -u debian -- git -C "$release" reset --hard "$sha"
+acl_entries=$(getfacl -cp /home/debian)
+existing=$(printf '%s\n' "$acl_entries" | awk -F: '$1=="user" && $2=="arena-phone-test" {print $0}')
+if [[ -z "$existing" ]]; then
   acl_added=1
+  setfacl -m u:arena-phone-test:--x /home/debian
+elif [[ "$existing" != 'user:arena-phone-test:--x' ]]; then
+  echo 'Unexpected existing staging ACL; refusing to overwrite' >&2
+  exit 2
 fi
-runuser -u arena-phone-test -- sh -c \
+runuser -u arena-phone-test -g arena-phone-test -G debian -- sh -c \
   'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
-runuser -u arena-phone-test -- "$python" -c 'import chess'
+runuser -u arena-phone-test -g arena-phone-test -G debian -- "$python" -c 'import chess'
 
 # Shorten only the isolated copy's lifetime, not the production token.
-runuser -u arena-phone-test -- "$python" - "$db" <<'PY'
+runuser -u arena-phone-test -g arena-phone-test -G debian -- "$python" - "$db" <<'PY'
 import sqlite3,sys,time
 with sqlite3.connect(sys.argv[1]) as db:
  db.execute("UPDATE worker_tokens SET expires_at=MIN(expires_at,?)",

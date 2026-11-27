@@ -40,3 +40,13 @@ def test_staging_credential_verifier_lives_at_most_one_hour():
     assert 'expiry = min(record["expires_at"], int(time.time()) + 3600)' in SANDBOX
     assert "expires_at=MIN(expires_at,?)" in RESUME
     assert "source_db" in RESUME
+
+
+def test_fresh_deploy_grants_acl_once_after_rollback_is_installed():
+    grant = "setfacl -m u:arena-phone-test:--x /home/debian"
+    assert DEPLOY.count(grant) == 1
+    assert DEPLOY.index("trap rollback EXIT") < DEPLOY.index(grant)
+    assert DEPLOY.index("acl_granted=1") < DEPLOY.index(grant)
+    assert 'git -C "$release" reset --hard "$sha"' in RESUME
+    assert RESUME.index('status --porcelain') < RESUME.index('reset --hard "$sha"')
+    assert "Unexpected existing staging ACL" in RESUME

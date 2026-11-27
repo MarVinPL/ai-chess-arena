@@ -7,7 +7,18 @@ Arena API. It is intentionally separate from sentinelx-cloud-core.service.
 
 - Runs as debian:debian from /home/debian/ai-chess-arena.
 - Starts the repository virtualenv Python and server.py.
+- Provisions the API-owned `/run/ai-chess-arena-api` runtime directory with
+  mode `0750`; the runtime lease broker socket is created there with mode
+  `0660` and ownership `debian:debian`. The privileged supervisor runs as
+  `root:debian`, so it can connect through the group permission; the broker
+  independently authenticates its peer UID as exactly `0`. This directory
+  is lifecycle-managed by systemd and is not created by repository code.
 - The current application binds the API to 127.0.0.1:8090.
+- Runtime supervisor integration requires this unit's
+  `RuntimeDirectory=ai-chess-arena-api` and `RuntimeDirectoryMode=0750`;
+  do not create the broker socket directory manually or assume an older
+  installed unit has this setting. Verify the effective unit before enabling
+  runtime integration.
 - ProtectHome=read-only keeps /home read-only by default. BindPaths exposes
   only /home/debian/ai-chess-arena as a writable bind mount, allowing SQLite,
   logs, and Arena-owned model files to be updated.
@@ -89,3 +100,73 @@ weaken
 `ProtectHome=read-only`, `ProtectSystem=full`, or the model-directory isolation
 to work around this. Installing a drop-in, reloading systemd, and restarting
 the service remain separate, explicitly approved operational steps.
+
+## Privileged runtime supervisor (Issue #157 — design only)
+
+`ai-chess-arena-runtime-supervisor.service` is the proposed, separately
+managed root-owned supervisor unit. It is **not installed or enabled** by this
+repository change. It runs only the immutable zipapp at
+`/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz` using
+`/usr/bin/python3 -I -S`; its required root-owned environment file is
+`/etc/ai-chess-arena/runtime-supervisor.env` (mode `0600`, owner `root:root`).
+That file must contain the exact production acknowledgement, canonical paths,
+API/runtime identities, artifact allowlist, and independently reviewed SHA-256
+pins. Never commit it or copy pins from an untrusted host process.
+
+The supervisor uses `Type=notify`. The daemon sends `READY=1` only after its
+AF_UNIX listener has bound, applied socket ownership/mode, and entered its
+serving state. This is essential: `After=` with `Type=simple` or `Type=exec`
+would not prove the socket is ready, and the API's one-shot recovery request
+could race the listener. The watchdog may initially retry the API-owned lease
+broker while the API is still starting; it fails closed and retries. The API
+starts its broker before it sends the recovery request.
+
+The supervisor unit declares `Before=ai-chess-arena.service`. The example API
+drop-in `ai-chess-arena.service.d/20-runtime-supervisor.conf.example` adds
+`Requires=` and `After=` so systemd starts the supervisor first and waits for
+its readiness notification before launching the API. **Do not install this
+drop-in in disabled or staging mode.** It is a production-only dependency
+because the supervisor intentionally refuses to run without the explicit
+production profile and its provisioned environment file. Without the drop-in,
+the existing API service remains independent and unchanged.
+
+The unit applies a restrictive filesystem view (`ProtectSystem=strict`,
+`ProtectHome=read-only`), exposes only the handoff and runtime-output roots as
+writable, limits address families to AF_UNIX, and bounds capabilities to the
+file ownership/read-search operations required by the handoff implementation.
+The root process retains access to the system manager through the local Unix
+system bus; it does not need IP networking. The API broker socket remains
+API-owned mode `0600`; root can connect to it. The supervisor socket lives in
+the systemd-managed `/run/ai-chess-arena-runtime` directory, owned
+`root:debian` mode `0750`, and is created `root:debian` mode `0660` for the API
+peer UID.
+
+### Required provisioning inputs and checks
+
+- `/etc/ai-chess-arena/runtime-supervisor.env`: root:root `0600`; never in Git.
+- `/usr/local/lib/ai-chess-arena-runtime/runtime_supervisor.pyz` and
+  `runtime_worker`: root:root, no group/world write; hashes independently
+  approved and matched to the env pins.
+- `/var/lib/arena-handoff`: root:debian `0711`.
+- `/run/arena-runtime`: root:debian `0755`, provisioned at boot by a separately
+  reviewed tmpfiles or service dependency (not created by this unit).
+- API quarantine root: pre-existing canonical API-owned directory with the
+  exact identity/mode expected by `runtime_supervisor_service.py`.
+- The DB path in the env file must be the canonical resolved database path;
+  the supervisor receives read-only access through `ProtectHome=read-only`
+  when the DB is under `/home`. A DB outside `/home` requires a reviewed,
+  narrowly scoped read-only path policy; never grant supervisor write access
+  to the DB or its SQLite sidecars.
+- `RuntimeDirectoryGroup=debian` and the API unit's `User=debian`, `Group=debian`
+  are an explicit current deployment assumption. If API identity changes,
+  both service definitions and socket/group checks must be reviewed together.
+
+Before installation, validate the unit against the target VPS's systemd
+version, the exact effective mount namespace, socket readiness, the SQLite
+rollback/WAL matrix, and the complete disposable-VM checklist in
+`docs/runtime-supervisor-security-review.md`. `systemd-analyze verify` on a
+workstation is syntax evidence only, not host compatibility or sandbox proof.
+
+No service unit, drop-in, account, group, directory, socket, permission,
+capability, systemd manager state, or production setting is installed or
+changed by this design-only artifact.
