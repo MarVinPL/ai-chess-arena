@@ -75,7 +75,7 @@ class EliminationTournamentEndToEndTests(unittest.TestCase):
                     # tournament -> checkpoint -> runner -> persistence lifecycle.
                     db.execute("UPDATE tournaments SET rules_version='1' WHERE id=?", (tournament_id,))
                     db.execute(
-                        'DELETE FROM tournament_pairings WHERE tournament_id=? AND id=(' 
+                        'DELETE FROM tournament_pairings WHERE tournament_id=? AND id=('
                         'SELECT MAX(id) FROM tournament_pairings WHERE tournament_id=?)',
                         (tournament_id, tournament_id),
                     )

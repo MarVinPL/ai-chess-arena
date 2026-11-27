@@ -90,21 +90,8 @@ class DatabaseAllowlistTests(unittest.TestCase):
         self.assertEqual(tournament_admission_blockers(entry, **kwargs), [])
         self.assertTrue(tournament_admission_blockers(entry, **{**kwargs, 'revision': 'f'*40}))
         self.assertTrue(tournament_admission_blockers(entry, **{**kwargs, 'license_verified':False}))
-        self.assertFalse(is_runtime_ready(entry,
+        self.assertFalse(is_runtime_ready(entry, license_verified=True,
                                            local_file_verified=True,runtime_healthy=True))
-
-    def test_runtime_readiness_does_not_override_database_admission(self):
-        self.snapshot['technical_readiness'] = 'ready'
-        self.snapshot['technical_blockers'] = []
-        self.db.execute("UPDATE model_admission_decisions SET snapshot_json=?,status='revoked'",
-                        (json.dumps(self.snapshot),))
-        entry = self.entries()[0]
-        self.assertTrue(is_runtime_ready(entry, local_file_verified=True, runtime_healthy=True))
-        self.assertFalse(is_runtime_ready(entry, local_file_verified=False, runtime_healthy=True))
-        self.assertFalse(is_runtime_ready(entry, local_file_verified=True, runtime_healthy=False))
-        self.assertTrue(tournament_admission_blockers(
-            entry, model_id=1, repo_id=self.repo, revision=self.revision,
-            license_name='apache-2.0', license_verified=True, tournament_format='PURE_AI'))
 
     def test_restricted_terms_stay_in_snapshot(self):
         self.snapshot['status']='restricted'

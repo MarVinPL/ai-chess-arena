@@ -45,7 +45,7 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('[White "Alpha"]', result['pgn'])
         self.assertIn('[Black "Beta"]', result['pgn'])
 
-    def test_runner_overrides_nonwinning_model_move_when_king_capture_is_available(self):
+    def test_runner_preserves_nonwinning_model_move_when_king_capture_is_available(self):
         from unittest.mock import patch
         from elimination_chess import EliminationBoard
 
@@ -54,17 +54,18 @@ class EngineRunnerTests(unittest.TestCase):
             def generate(self, path, current_board, stop_event=None, **kwargs):
                 return chess.Move.from_uci('e2e7'), {'seconds': 0.5, 'response': 'e2e7'}
 
+        stop = threading.Event()
         with patch('engine_runner.EliminationBoard', return_value=board):
             result = SequentialChessRunner(OverlookingRuntime()).play_game(
                 {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
-                {'name': 'Beta', 'path': '/tmp/beta.gguf'})
+                {'name': 'Beta', 'path': '/tmp/beta.gguf'},
+                stop_event=stop, progress=lambda record: stop.set())
 
-        self.assertEqual(result['status'], 'finished')
-        self.assertEqual(result['result'], '1-0')
-        self.assertEqual(result['moves'][0]['uci'], 'e2e8')
-        self.assertEqual(result['moves'][0]['model_proposed_uci'], 'e2e7')
-        self.assertEqual(result['moves'][0]['move_override'], 'forced_king_capture')
-        self.assertIn('Rxe8', result['pgn'])
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['moves'][0]['uci'], 'e2e7')
+        self.assertIsNone(result['moves'][0]['move_override'])
+        self.assertIsNotNone(board.king(chess.BLACK))
+        self.assertFalse(board.is_game_over())
 
     def test_runner_finishes_only_after_a_king_capture_and_exports_variant_pgn(self):
         from unittest.mock import patch
@@ -375,8 +376,8 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('grammar', requests[0])
         self.assertIn('grammar', requests[1])
         self.assertEqual(requests[0]['messages'][0]['role'], 'system')
-        self.assertIn('Elimination Chess', requests[0]['messages'][0]['content'])
-        self.assertIn('do not restrict moves', requests[0]['messages'][0]['content'])
+        self.assertIn('standard chess', requests[0]['messages'][0]['content'])
+        self.assertNotIn('do not restrict moves', requests[0]['messages'][0]['content'])
         self.assertFalse(requests[0]['chat_template_kwargs']['enable_thinking'])
         self.assertFalse(requests[1]['chat_template_kwargs']['enable_thinking'])
         grammar = requests[0]['grammar']
@@ -385,17 +386,18 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertNotIn('"e2e5"', grammar)
         self.assertEqual(grammar.count('"'), 40)
 
-    def test_king_capture_priority_is_explicit_in_system_and_move_prompt(self):
+    def test_king_capture_is_not_suggested_in_initial_or_retry_prompt(self):
         import json
         from unittest.mock import patch
         from elimination_chess import EliminationBoard
         from engine_runner import LlamafileRuntime
 
+        outputs = iter(["invalid", "e2e7"])
         class Response:
             def __enter__(self): return self
             def __exit__(self, *args): return False
             def read(self):
-                return json.dumps({'choices': [{'message': {'content': 'e2e8'}}]}).encode()
+                return json.dumps({'choices': [{'message': {'content': next(outputs)}}]}).encode()
 
         requests = []
         def fake_urlopen(request, timeout=None):
@@ -411,12 +413,17 @@ class EngineRunnerTests(unittest.TestCase):
         finally:
             runtime.shutdown()
 
-        self.assertEqual(move.uci(), 'e2e8')
+        self.assertEqual(move.uci(), 'e2e7')
+        self.assertEqual(len(requests), 2)
         system_prompt = requests[0]['messages'][0]['content']
         move_prompt = requests[0]['messages'][1]['content']
-        self.assertIn('MUSISZ to zrobić', system_prompt)
-        self.assertIn('MUST do so', system_prompt)
-        self.assertIn('KING-CAPTURE WIN MOVES', move_prompt)
+        self.assertNotIn('MUSISZ to zrobić', system_prompt)
+        self.assertNotIn('MUST do so', system_prompt)
+        self.assertNotIn('KING-CAPTURE WIN MOVES', move_prompt)
+        self.assertNotIn('KING-CAPTURE WIN MOVES', requests[1]['messages'][1]['content'])
+        for request in requests:
+            self.assertIn('\"e2e7\"', request['grammar'])
+            self.assertIn('\"e2e8\"', request['grammar'])
         self.assertIn('e2e8', move_prompt)
 
     def test_generate_retries_illegal_move_and_never_accepts_it(self):

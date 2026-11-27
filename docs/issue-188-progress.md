@@ -217,3 +217,11 @@ Dodano test sprawdzający, czy wiadomość systemowa jest przekazywana do API pr
 **Status testu A/B na modelach: NOT_RUN.** Odczyt środowiska wykazał, że na porcie 8088 nie działa runtime llamafile i nie ma uruchomionego procesu inferencji. Próba wejścia do maszyny `arena-test` przez `machinectl shell` zakończyła się komunikatem `Interactive authentication required`, a katalog maszyny jest niedostępny do odczytu bez uprawnień roota. Nie uruchamiałem modelu ani nie startowałem nowej usługi w tej sesji. Trzy istniejące modele pozostają jedynymi kandydatami do kolejnego testu; należy porównać odpowiedzi na tych samych trzech pytaniach przed i po zmianie promptu, sekwencyjnie, z zapisem pełnych odpowiedzi, czasu i oceny według wspólnej rubryki (poprawność techniczna, kompletność, zrozumiałość, brak zmyśleń). Nie zmieniać pytań w trakcie porównania.
 
 Zmiana nie wpływa na prompty ruchów szachowych, zasady wariantu, roster, admission ani produkcję. Nie pobrano modeli i nie zmieniano limitów zasobów.
+
+## Aktualizacja zasad i integracji — 2026-11-27
+
+- Decyzja właściciela: model sam wybiera ruch; brak wymuszania bicia króla i podpowiedzi konkretnych zwycięskich ruchów. Historyczne wyniki z wymuszaniem pozostają dowodami poprzedniej implementacji, nie nowej polityki.
+- Nowe checkpointy zawierają `variant: elimination`; brak pola w istniejącym checkpointcie oznacza `standard`. Protokół zadania v3 zawiera jawny wariant i pełną posortowaną listę legalnych ruchów; v1/v2 zachowują zasady klasyczne. Nieznany wariant jest odrzucany.
+- Koordynator waliduje ruch i pozycję zgodnie z wariantem; test offline obejmuje kontynuację po macie, restart i rzeczywiste bicie króla w symulowanej partii. Rust GUI waliduje strukturę v3. Nie jest to dowód wykonania inferencji na Androidzie ani kompilacji APK.
+- Zachowano politykę admission z main; historyczna zmiana model_allowlist nie wchodzi do tego PR. Kryterium rzeczywistej walidacji pięciu modeli nadal wymaga osobnego uzgodnienia i wykonania.
+- Bez wdrożenia produkcyjnego i bez uruchamiania rzeczywistych modeli w tej rundzie.

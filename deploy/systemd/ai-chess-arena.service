@@ -10,15 +10,18 @@ Type=simple
 User=debian
 Group=debian
 WorkingDirectory=/home/debian/ai-chess-arena
+RuntimeDirectory=ai-chess-arena-api
+RuntimeDirectoryMode=0750
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/ai-chess-arena/auth.env
+EnvironmentFile=-/etc/ai-chess-arena/runtime-process.env
 ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/server.py
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM
 KillMode=control-group
-TimeoutStopSec=30s
+TimeoutStopSec=1960s
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

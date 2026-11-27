@@ -108,3 +108,24 @@ class EliminationBoard(chess.Board):
 # Register the custom board so python-chess PGN readers can reconstruct games.
 if EliminationBoard not in chess.variant.VARIANTS:
     chess.variant.VARIANTS.append(EliminationBoard)
+
+
+def board_for_variant(fen, variant='standard', *, active=True):
+    """Reconstruct a position using its explicit, immutable ruleset."""
+    if variant == 'standard':
+        board = chess.Board(fen)
+        valid = board.is_valid()
+    elif variant == 'elimination':
+        board = EliminationBoard(fen)
+        # Opposite-side check and multiple checkers are allowed in this variant.
+        allowed = chess.STATUS_OPPOSITE_CHECK | chess.STATUS_TOO_MANY_CHECKERS | chess.STATUS_IMPOSSIBLE_CHECK
+        valid = not (board.status() & ~allowed)
+    else:
+        raise ValueError('Unknown chess variant')
+    if not valid or (active and board.is_variant_end()):
+        raise ValueError('Invalid board state')
+    return board
+
+
+def checkpoint_board(checkpoint):
+    return board_for_variant(checkpoint['fen'], checkpoint.get('variant', 'standard'))

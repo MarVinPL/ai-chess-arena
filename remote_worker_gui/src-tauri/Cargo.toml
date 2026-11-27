@@ -1,0 +1,22 @@
+[package]
+name = "ai-chess-arena-worker"
+version = "0.1.0"
+description = "AI Chess Arena voluntary remote worker GUI (prototype)"
+authors = ["AI Chess Arena contributors"]
+edition = "2021"
+
+[lib]
+name = "arena_worker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"

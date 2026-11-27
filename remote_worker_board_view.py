@@ -8,7 +8,7 @@ import re
 import sqlite3
 import time
 
-import chess
+from elimination_chess import board_for_variant
 
 _WORKER_ID = re.compile(r"[A-Za-z0-9_-]{8,96}\Z")
 _ACTIVE_STAGES = frozenset({
@@ -57,9 +57,7 @@ def worker_board_snapshot(db_path, worker_id, live, *, now=None):
     if not isinstance(fen, str) or len(fen) > 120:
         return {"active": False, "state": "invalid_board"}
     try:
-        board = chess.Board(fen)
-        if not board.is_valid():
-            return {"active": False, "state": "invalid_board"}
+        board = board_for_variant(fen, live.get("variant", "standard"))
     except ValueError:
         return {"active": False, "state": "invalid_board"}
     last = live.get("last_move")

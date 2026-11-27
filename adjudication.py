@@ -25,7 +25,7 @@ def _unresolved(reason: str, **extra) -> dict:
 def adjudicate_failure(fen: str, move_records: list[dict], failed_color: str,
                        uci_attempts: list[dict] | None = None,
                        engine_path: str | None = None,
-                       engine_factory=None) -> dict:
+                       engine_factory=None, *, variant='elimination') -> dict:
     """Return an auditable decision. Any uncertainty leaves the game unresolved."""
     attempts = uci_attempts or []
     if any(item.get("classification") in ("illegal_uci", "blocked_reversal")
@@ -37,7 +37,10 @@ def adjudicate_failure(fen: str, move_records: list[dict], failed_color: str,
         return _unresolved("insufficient_game_length", plies=len(move_records or []),
                            min_plies=MIN_PLIES)
     try:
-        board = EliminationBoard()
+        if variant not in ('standard', 'elimination'):
+            return _unresolved('unknown_variant')
+        board_type = EliminationBoard if variant == 'elimination' else chess.Board
+        board = board_type()
         for record in move_records:
             if not isinstance(record, dict):
                 return _unresolved("invalid_move_record")
@@ -45,7 +48,7 @@ def adjudicate_failure(fen: str, move_records: list[dict], failed_color: str,
             if move not in board.legal_moves:
                 return _unresolved("illegal_or_inconsistent_move_history")
             board.push(move)
-        supplied = EliminationBoard(fen)
+        supplied = board_type(fen)
         if supplied.fen() != board.fen():
             return _unresolved("fen_history_mismatch")
     except (ValueError, TypeError, AttributeError):

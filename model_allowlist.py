@@ -154,10 +154,10 @@ def tournament_admission_blockers(entry: dict | None, *, model_id: int,
     return reasons
 
 
-def is_runtime_ready(entry: dict, *, local_file_verified: bool,
-                     runtime_healthy: bool) -> bool:
-    """Technical readiness only; use tournament_admission_blockers separately."""
-    return bool(isinstance(entry, dict)
+def is_runtime_ready(entry: dict, *, license_verified: bool,
+                     local_file_verified: bool, runtime_healthy: bool) -> bool:
+    """Actual ability to run remains separate from admission."""
+    return bool(isinstance(entry, dict) and entry.get('status') in {'eligible', 'restricted'}
                 and entry.get('technical_readiness') == 'ready'
                 and not entry.get('technical_blockers')
-                and local_file_verified is True and runtime_healthy is True)
+                and license_verified and local_file_verified and runtime_healthy)
