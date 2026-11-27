@@ -1,0 +1,313 @@
+name: Worker Android 0.1.3 PR197 trusted original-key prerelease
+
+# One-shot, manual signing workflow. NEVER run this via pull_request_target.
+# First merge this reviewed workflow into main. PR197 itself stays unmerged.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: worker-android-013-pr197-original-key-test5
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - name: Check exact PR197 source before building without signing secrets
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_sha="$(gh api repos/MarVinPL/ai-chess-arena/pulls/197 --jq '.head.sha')"
+          pr_repo="$(gh api repos/MarVinPL/ai-chess-arena/pulls/197 --jq '.head.repo.full_name')"
+          test "$pr_repo" = 'MarVinPL/ai-chess-arena'
+          test "$pr_sha" = '86cf9df7eeb0088438cf1e0d5314c5474d9a24e5'
+          for run in 46067294390 46067299732 46067299797; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" | jq -e --arg sha "$pr_sha" '.head_sha == $sha and .status == "completed" and .conclusion == "success"' >/dev/null
+          done
+          if gh release view worker-v0.1.3-test.5 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo '::error::Prerelease already exists; refuse duplicate'; exit 1
+          fi
+      - uses: actions/checkout@v6
+        with:
+          ref: 86cf9df7eeb0088438cf1e0d5314c5474d9a24e5
+          persist-credentials: false
+      - name: Confirm exact code and application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '86cf9df7eeb0088438cf1e0d5314c5474d9a24e5'
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          tauri = json.loads(Path('src-tauri/tauri.conf.json').read_text())
+          package = json.loads(Path('package.json').read_text())
+          assert tauri['identifier'] == 'pl.marvin.aichessarena.worker'
+          assert tauri['version'] == package['version'] == '0.1.3'
+          PY
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Android CLI without deprecated sdkmanager
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+      - name: Install Android 16 API36 and pinned NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          test -x "$android"
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: remote_worker_gui/src-tauri
+          key: android-arm64-pr197-test5
+      - name: Compile PR197 Android Worker in an untrusted job WITHOUT secrets
+        run: |
+          set -euo pipefail
+          npm ci
+          npx tauri android init --ci --skip-targets-install
+          python3 android/inject_package_installer.py
+          npx tauri android build --apk --target aarch64 --ci --debug
+      - name: Verify unsigned-by-original APK identity and make content-addressed artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          test -s "$apk" && test ! -L "$apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1003' versionName='0.1.3'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          mkdir -p dist-original-key
+          cp "$apk" dist-original-key/worker-pr197-untrusted-debug.apk
+          (cd dist-original-key && sha256sum worker-pr197-untrusted-debug.apk > SHA256SUMS)
+          (cd dist-original-key && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-pr197-013-untrusted-build
+          path: remote_worker_gui/dist-original-key/
+          retention-days: 7
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      # This is a NEW trusted runner: never checkout/run PR197 code here.
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-pr197-013-untrusted-build
+          path: input
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Android CLI and signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install build-tools/36.0.0
+          set -o pipefail
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/zipalign"
+      - name: Reject invalid or swapped APK before loading the original keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f input/worker-pr197-untrusted-debug.apk
+          test ! -L input/worker-pr197-untrusted-debug.apk
+          test -f input/SHA256SUMS && test ! -L input/SHA256SUMS
+          test "$(wc -l < input/SHA256SUMS)" -eq 1
+          test "$(awk '{print $2}' input/SHA256SUMS)" = worker-pr197-untrusted-debug.apk
+          (cd input && sha256sum --check SHA256SUMS)
+          apk=input/worker-pr197-untrusted-debug.apk
+          test "$(stat -c %s "$apk")" -gt 1024
+          test "$(stat -c %s "$apk")" -lt 209715200
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1003' versionName='0.1.3'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+      - name: Re-sign APK using original debug cert in isolated trusted job
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          ks="$RUNNER_TEMP/worker-original-013.keystore"
+          trap 'rm -f "$ks"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$ks"
+          chmod 600 "$ks"
+          cert="$("$JAVA_HOME/bin/keytool" -list -v -keystore "$ks" \
+            -alias androiddebugkey -storepass:env STORE_PASSWORD |
+            sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          mkdir -p dist
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$ks" --ks-key-alias androiddebugkey \
+            --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --v4-signing-enabled false \
+            --out dist/ai-chess-arena-worker-v0.1.3-test5-arm64.apk \
+            input/worker-pr197-untrusted-debug.apk
+      - name: Independently verify original signature, version and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=dist/ai-chess-arena-worker-v0.1.3-test5-arm64.apk
+          test -s "$apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          cert="$("$tools/apksigner" verify --print-certs "$apk" |
+            sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1003' versionName='0.1.3'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          (cd dist && sha256sum ai-chess-arena-worker-v0.1.3-test5-arm64.apk > SHA256SUMS)
+          cat > dist/PROVENANCE.txt <<'EOF'
+          AI Chess Arena Worker Android 0.1.3 — test.5 (NOT production).
+          Exact source: PR #197, 86cf9df7eeb0088438cf1e0d5314c5474d9a24e5.
+          Source was compiled on a clean runner WITHOUT access to signing secrets.
+          Original debug key was loaded only in a separate clean signing runner.
+          Certificate SHA-256: 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          Package: pl.marvin.aichessarena.worker
+          Version: 0.1.3 (Android versionCode 1003); architecture: arm64-v8a.
+          Install only as an UPDATE over the existing app, without uninstalling.
+          Existing token previously lost in 0.1.1 may require re-entry.
+          Verified on-device ID/token persistence still requires a real Android test.
+          Private key is NOT included in this artifact.
+          Foreground Termux llama.cpp is still required; not production-ready.
+          This test prerelease is NOT offered by the stable in-app updater.
+          EOF
+          (cd dist && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-pr197-013-original-key-verified
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: sign
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-pr197-013-original-key-verified
+          path: dist
+      - name: Publish immutable test-only prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -f dist/PROVENANCE.txt
+          test -f dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+          tag=worker-v0.1.3-test.5
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo '::error::Refusing overwrite of an existing test release'
+            exit 1
+          fi
+          cat > release-notes.md <<'EOF'
+          **Android Worker 0.1.3 test.5 — ARM64, signed with the original debug certificate.**
+          This is a TEST prerelease, not a production Worker or stable auto-update.
+
+          - Exact PR #197 source: 86cf9df7eeb0088438cf1e0d5314c5474d9a24e5 (not merged into main).
+          - Package: pl.marvin.aichessarena.worker; versionName 0.1.3; versionCode 1003.
+          - Certificate SHA-256: 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12.
+          - Upgrade the installed 0.1.2 (versionCode 1002) without uninstalling or clearing app data.
+          - This version integrates protocol v3, bounded HTTPS responses, GUI race fixes and Worker ID persistence checks.
+          - IMPORTANT: a token already lost by 0.1.1 cannot be recovered automatically. Re-enter the SAME token if available, or ask the admin to rotate it explicitly.
+          - After installation, verify the existing Worker ID and token without replacing them; check HTTPS, restart and verify again.
+          - Neither successful compilation nor signing confirms Keystore persistence until tested on Android 16.
+          - Includes experimental on-device inference via localhost llama.cpp; no self-contained GGUF runtime.
+          - Do not enable production phone-inference mode yet.
+          - Open the attached APK in Android's package installer. Check that the original token and settings remain.
+          - Signed artifact hash and independent build provenance are supplied as attachments.
+          - The private signing key is never attached or exposed to the PR build.
+          EOF
+          gh release create "$tag" \
+            dist/ai-chess-arena-worker-v0.1.3-test5-arm64.apk \
+            dist/SHA256SUMS dist/PROVENANCE.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 86cf9df7eeb0088438cf1e0d5314c5474d9a24e5 \
+            --prerelease --latest=false \
+            --title "AI Chess Arena Worker Android 0.1.3 test.5 (original key)" \
+            --notes-file release-notes.md
