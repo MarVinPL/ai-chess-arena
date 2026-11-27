@@ -385,8 +385,13 @@ class LlamafileRuntime:
 class SequentialChessRunner:
     """Play a complete game; model switching happens before each side's turn."""
 
-    def __init__(self, runtime: LlamafileRuntime):
+    def __init__(self, runtime: LlamafileRuntime, *, move_provider: Callable | None = None):
         self.runtime = runtime
+        # Optional coordinator-owned inference seam. Default remains local.
+        # Provider(board_copy, player, stop_event, kwargs) -> (legal Move, meta).
+        # It must persist/validate remote jobs before returning; this runner
+        # does not itself authorize or dispatch remote workers.
+        self.move_provider = move_provider
 
     def play_game(self, white: dict, black: dict,
                   stop_event: threading.Event | None = None,
@@ -452,7 +457,14 @@ class SequentialChessRunner:
                 kwargs['max_tokens'] = int(inference['max_tokens'])
             try:
                 try:
-                    move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+                    if self.move_provider is None:
+                        move, meta = self.runtime.generate(player['path'], board, stop_event, **kwargs)
+                    else:
+                        move, meta = self.move_provider(board.copy(stack=True), player, stop_event, dict(kwargs))
+                        if not isinstance(move, chess.Move) or move not in board.legal_moves:
+                            raise RunnerError('Provider returned illegal chess move')
+                        if not isinstance(meta, dict) or not isinstance(meta.get('seconds'), (int, float)) or isinstance(meta.get('seconds'), bool) or not 0 <= meta['seconds'] <= 3600:
+                            raise RunnerError('Provider returned invalid move metadata')
                     if stop_event and stop_event.is_set():
                         raise RunnerError('Turniej zatrzymany przez operatora')
                 except RunnerError:

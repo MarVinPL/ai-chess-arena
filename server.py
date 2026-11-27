@@ -23,6 +23,12 @@ import tournament_checkpoint
 import remote_worker_tokens
 import arena_auth
 import model_permissions
+import remote_worker_metrics
+import remote_worker_job_registry
+import remote_worker_job_delivery
+from remote_worker_http_validation import read_worker_json, WorkerRequestError
+from remote_worker_rate_policy import WorkerRatePolicy
+import remote_worker_jobs
 
 def _route_path(request_target):
     """Return the URL path without its query string for HTTP route matching."""
@@ -32,6 +38,7 @@ def _route_path(request_target):
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
 DB = ROOT / 'arena.sqlite3'
+_worker_rate_policy = WorkerRatePolicy()
 LOG_DIR = ROOT / 'logs'
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
@@ -840,6 +847,27 @@ def _select_tournament_pairing(tournament_id, draft_enabled):
     return None, None
 
 
+def _exclusive_tournament_coordinator(run):
+    """Keep one coordinator owner throughout tournament checkpoint writes."""
+    from functools import wraps
+    from remote_worker_coordinator_lock import CoordinatorLock
+
+    @wraps(run)
+    def locked_run(*args, **kwargs):
+        # The main server already holds the same flock for its lifetime.
+        # flock on a second descriptor would conflict even in this process.
+        process_lock = globals().get('_coordinator_lock')
+        if process_lock is not None:
+            if process_lock._fd is None:
+                raise RuntimeError('Process coordinator lock was released')
+            return run(*args, **kwargs)
+        # Direct invocation (tests/CLI) still requires exclusive ownership.
+        with CoordinatorLock(DB):
+            return run(*args, **kwargs)
+    return locked_run
+
+
+@_exclusive_tournament_coordinator
 def tournament_loop(tournament_id):
     global tournament_runtime, tournament_error
     # Hold the storage lifecycle lock for the full tournament: otherwise the
@@ -973,7 +1001,14 @@ def tournament_loop(tournament_id):
             return True
 
         runtime_context['execution_phase'] = 'game'
-        game_runner = engine_runner.SequentialChessRunner(tournament_runtime)
+        # Remote execution is not enabled in the production scheduler yet.
+        # Explicit selection prevents accidental activation and never constructs
+        # a second checkpoint writer alongside the local tournament runner.
+        from remote_worker_runner_selection import select_game_runner
+        game_runner = select_game_runner(
+            'local',
+            local_factory=lambda: engine_runner.SequentialChessRunner(tournament_runtime),
+        )
         while True:
             if tournament_stop_event.is_set():
                 break
@@ -1518,6 +1553,15 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self.send_json({'error': 'Wymagane logowanie', 'login_url': '/login'}, 401)
             return
+        if path == '/api/remote-workers/metrics':
+            try:
+                self.send_json({'period': 'all', 'workers': remote_worker_metrics.WorkerMetrics(DB).summary()})
+            except Exception:
+                self.send_json({'error': 'Nie udało się odczytać statystyk agentów'}, 500)
+            return
+        if path == '/remote-workers':
+            self.send_html_file('remote_workers.html')
+            return
         if path.startswith('/assets/'):
             self.send_panel_asset(path)
             return
@@ -1811,40 +1855,75 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/':
             self.send_html_file('index.html')
         else: self.send_error(404)
+    def _read_worker_request(self, path):
+        if not _worker_rate_policy.admit_peer(path.rsplit('/', 1)[-1], self.client_address[0]):
+            raise WorkerRequestError(429)
+        return read_worker_json(self, path)
+
+    def _admit_worker_identity(self, path, worker_id):
+        if not _worker_rate_policy.admit_authenticated(path.rsplit('/', 1)[-1], worker_id):
+            raise WorkerRequestError(429)
+
+    def _reject_worker_request(self, exc):
+        self.close_connection = True
+        self.send_json({'error': 'Limit żądań' if exc.status == 429 else 'Nieprawidłowe żądanie Workera'}, exc.status)
+
     def do_POST(self):
         path = _route_path(self.path)
         global board, moves, timings, illegal_moves, running, started_at, last_error, last_move
         if path == '/api/remote-workers/authenticate':
-            # Token-only authentication; token issuance is admin-only and offline.
+            # Token-only authentication; issuance is admin-only and offline.
             try:
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 2048:
-                    self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
-                    return
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid payload')
-                worker_id, token = payload.get('worker_id'), payload.get('token')
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(400)
+                worker_id, token = payload['worker_id'], payload['token']
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'authenticated': False}, 401)
                     return
+                self._admit_worker_identity(path, worker_id)
                 self.send_json({'authenticated': True, 'worker_id': worker_id})
-            except (ValueError, UnicodeError, json.JSONDecodeError):
-                self.send_json({'error': 'Nieprawidłowe żądanie'}, 400)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
             except Exception:
                 self.send_json({'error': 'Błąd uwierzytelniania'}, 500)
             return
-        # Opt-in Android Worker API, independent from phone tournament dispatch.
-        # No browser/admin session is accepted here: authenticate each machine
-        # request using the existing SQLite WorkerTokenStore.
+        if path == '/api/remote-workers/job':
+            # Read-only: only a previously assigned, pinned manifest is visible.
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(401)
+                worker_id, token = payload['worker_id'], payload['token']
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    raise WorkerRequestError(401)
+                self._admit_worker_identity(path, worker_id)
+                job = remote_worker_job_delivery.AuthenticatedJobDelivery(DB).retrieve(
+                    worker_id, token, require_inference_manifest=True)
+                self.send_json({'job': job})
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except (ValueError, TypeError):
+                self.send_json({'error': 'Nieprawidłowe poświadczenia lub żądanie'}, 401)
+            except Exception:
+                self.send_json({'error': 'Zadania są chwilowo niedostępne'}, 503)
+            return
+        # Opt-in Android Worker API; never accept browser/admin sessions.
         from remote_worker_phone_api import ROUTES, handle_phone_request
         if path in ROUTES:
             if os.environ.get('ARENA_PHONE_WORKER_API_ENABLED') != '1':
+                self.close_connection = True
                 self.send_json({'error': 'Android Worker API nie jest jeszcze włączone'}, 503)
+                return
+            try:
+                payload = self._read_worker_request(path)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
                 return
             with live_lock:
                 worker_live_snapshot = dict(live_status)
-            handle_phone_request(self, path, DB, worker_live_snapshot)
+            handle_phone_request(self, path, DB, worker_live_snapshot, payload=payload,
+                                 admit_identity=self._admit_worker_identity)
             return
         if path == '/api/auth/login':
             if not arena_auth.is_configured():
@@ -1879,6 +1958,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True}, 200, [('Set-Cookie', arena_auth.session_cookie(token))])
             except (ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 400)
+            return
+        if path == '/api/remote-workers/update-safety':
+            # Advisory state only; no install permission or state transition.
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token'}:
+                    raise WorkerRequestError(400)
+                worker_id, token = payload['worker_id'], payload['token']
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                self._admit_worker_identity(path, worker_id)
+                state = remote_worker_job_registry.WorkerJobRegistry(DB).state(worker_id)
+                self.send_json({'state': state, 'install_allowed': False,
+                                'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu i wersji'})
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
             return
         if path == '/api/auth/logout':
             if not arena_auth.origin_allowed(self.headers.get('Origin')):
@@ -2076,6 +2174,11 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     db_init()
+    # Exclusive local coordinator ownership is required before state recovery.
+    from remote_worker_coordinator_lock import CoordinatorLock
+    _coordinator_lock = CoordinatorLock(DB).acquire()
+    # Invalidate stale worker state before any background worker or HTTP listener starts.
+    remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
     threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
     hf_candidate_queue.start_background_workers()
     hf_candidate_runtime.start_background_planner()
