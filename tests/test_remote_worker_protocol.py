@@ -14,6 +14,20 @@ class RemoteWorkerProtocolTests(unittest.TestCase):
         self.assertEqual(validate_result({'version': 1, 'job_id': job['job_id'], 'uci': 'e2e4'},
                                          job, self.board), chess.Move.from_uci('e2e4'))
 
+    def test_v3_elimination_keeps_legal_king_capture_and_other_moves(self):
+        from elimination_chess import EliminationBoard
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        job = {**self.job, 'version': 3, 'variant': 'elimination', 'fen': board.fen(),
+               'legal_moves': sorted(m.uci() for m in board.legal_moves)}
+        self.assertEqual(validate_job(job), job)
+        for uci in ('e2e8', 'e2e7'):
+            self.assertEqual(validate_result({'version': 1, 'job_id': job['job_id'], 'uci': uci},
+                                             job, board).uci(), uci)
+        for altered in ({**job, 'variant': 'unknown'}, {**job, 'variant': 'standard'},
+                        {**job, 'legal_moves': ['e2e8']}, {**job, 'version': 2}):
+            with self.assertRaises(ProtocolError):
+                validate_job(altered)
+
     def test_rejects_unexpected_command_and_paths(self):
         for extra in ({'command': 'rm -rf /'}, {'model_path': '/home/user/private'}):
             with self.subTest(extra=extra), self.assertRaises(ProtocolError):

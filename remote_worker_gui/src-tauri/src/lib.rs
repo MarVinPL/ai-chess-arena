@@ -114,6 +114,10 @@ struct PendingWorkerJob {
     model_sha256: String,
     max_tokens: u16,
     timeout_seconds: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legal_moves: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -124,7 +128,7 @@ struct PendingJobResponse {
 
 fn validate_pending_worker_job(job: &PendingWorkerJob) -> bool {
     let id = job.job_id.as_bytes();
-    if job.version != 1 || id.len() < 8 || id.len() > 96 ||
+    if !matches!(job.version, 1..=3) || id.len() < 8 || id.len() > 96 ||
         !id.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-') {
         return false;
     }
@@ -134,6 +138,19 @@ fn validate_pending_worker_job(job: &PendingWorkerJob) -> bool {
     }
     if !(1..=1024).contains(&job.max_tokens) || !(1..=600).contains(&job.timeout_seconds) {
         return false;
+    }
+    match (job.version, job.variant.as_deref(), job.legal_moves.as_ref()) {
+        (1, None, None) => {},
+        (2, None, Some(moves)) | (3, Some("standard" | "elimination"), Some(moves)) => {
+            if moves.is_empty() || moves.len() > 256 || !moves.windows(2).all(|w| w[0] < w[1]) ||
+                !moves.iter().all(|m| {
+                    let b = m.as_bytes();
+                    matches!(b.len(), 4 | 5) && matches!(b[0], b'a'..=b'h') && matches!(b[1], b'1'..=b'8') &&
+                    matches!(b[2], b'a'..=b'h') && matches!(b[3], b'1'..=b'8') &&
+                    (b.len() == 4 || b"qrbn".contains(&b[4])) && b[..2] != b[2..4]
+                }) { return false; }
+        },
+        _ => return false,
     }
     // A structural FEN check is defense in depth. The VPS validates a full
     // chess.Board and is the sole legal-move/checkpoint authority.
@@ -429,6 +446,30 @@ mod version_tests {
         assert_eq!(selected.1, "worker-v1.10.0");
         assert_eq!(selected.0, [1,10,0]);
     }
+    #[test]
+    fn variant_jobs_require_known_rules_and_sorted_uci() {
+        let job = serde_json::json!({
+            "version": 3, "variant": "elimination", "job_id": "job_12345678",
+            "fen": "4k3/8/8/8/8/8/4R3/4K3 w - - 0 1",
+            "model_sha256": "a".repeat(64), "max_tokens": 32,
+            "timeout_seconds": 300, "legal_moves": ["e2e7", "e2e8"]
+        });
+        let valid = |v| validate_pending_worker_job(&serde_json::from_value::<PendingWorkerJob>(v).unwrap());
+        assert!(valid(job.clone()));
+        for (field, value) in [("variant", serde_json::json!("unknown")),
+                               ("version", serde_json::json!(2)),
+                               ("legal_moves", serde_json::json!(["e2e8", "e2e7"])),
+                               ("legal_moves", serde_json::json!(["e2e7", "e2e7"])),
+                               ("legal_moves", serde_json::json!(["e2e2"]))] {
+            let mut bad = job.clone();
+            bad[field] = value;
+            assert!(!valid(bad));
+        }
+        let mut missing = job;
+        missing.as_object_mut().unwrap().remove("variant");
+        assert!(!valid(missing));
+    }
+
     #[test]
     fn only_complete_typed_worker_jobs_are_displayable() {
         let ok: PendingWorkerJob = serde_json::from_value(serde_json::json!({

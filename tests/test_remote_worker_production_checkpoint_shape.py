@@ -46,7 +46,7 @@ def test_remote_bridge_preserves_live_checkpoint_metadata(tmp_path):
         stop.stopped = True
     result = SequentialChessRunner(NoLocalInference(), move_provider=bridge.provide).play_game(
         {'name': 'White', 'model_id': 11}, {'name': 'Black', 'model_id': 22},
-        stop_event=stop, progress=publish)
+        stop_event=stop, progress=publish, variant="standard")
     assert result['status'] == 'stopped'
     final = tournament_checkpoint.load(path, 1)
     assert len(final['moves']) == 1

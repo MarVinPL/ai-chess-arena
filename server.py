@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 import chess, chess.pgn
+from elimination_chess import EliminationBoard
 import league
 import model_store
 import model_allowlist
@@ -71,7 +72,7 @@ LIVE_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
 lock = threading.RLock()
-board = chess.Board()
+board = EliminationBoard()
 moves, timings = [], []
 illegal_moves = 0
 running = False
@@ -314,8 +315,9 @@ def _hf_download_planner_loop():
             print(f"HF download planner refresh failed: {exc}", flush=True)
         time.sleep(900)
 
-def _failure_pgn(white_name, black_name, move_records, result, termination):
-    game = chess.pgn.Game()
+def _failure_pgn(white_name, black_name, move_records, result, termination, initial_fen=None, *, variant='elimination'):
+    start_board = (EliminationBoard(initial_fen) if initial_fen else EliminationBoard()) if variant == 'elimination' else chess.Board(initial_fen or chess.STARTING_FEN)
+    game = chess.pgn.Game.from_board(start_board)
     game.headers['Event'] = 'Local AI Chess Arena'
     game.headers['White'] = white_name
     game.headers['Black'] = black_name
@@ -341,14 +343,15 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
     times = list(getattr(exc, 'move_times', []) or [])
     pgn_result = result if adjudicated else '*'
     pgn = _failure_pgn(white['name'], black['name'], moves, pgn_result,
-                       'Adjudication' if adjudicated else 'Unresolved failure')
+                       'Adjudication' if adjudicated else 'Unresolved failure',
+                       variant=getattr(exc, 'variant', 'elimination'))
     ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     average = round(sum(times) / len(times), 4) if times else 0.0
     attempts = list(getattr(exc, 'uci_attempts', []) or [])
     illegal_attempts = sum(1 for item in attempts
                            if item.get('classification') == 'illegal_uci')
     try:
-        side_to_move = 'white' if chess.Board(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
+        side_to_move = 'white' if EliminationBoard(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
     except (ValueError, TypeError):
         side_to_move = None
     with sqlite3.connect(DB, timeout=10) as db:
@@ -405,24 +408,31 @@ def llm_runtime_available():
 
 def ask_model(model, b):
     legal = [m.uci() for m in b.legal_moves]
+    system_prompt = (
+        'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
+        'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+        'Wybierz dokładnie jeden ruch z listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
+        'Zwróć wyłącznie jeden ruch UCI, bez wyjaśnienia. Return exactly one UCI move and no explanation.'
+    )
     prompt = (
-        'You are playing chess. Select exactly one move from the LEGAL MOVES list. '
-        'Return only the UCI move, with no explanation.\n'
+        'Wybierz jeden ruch z listy. Select one move from the list.' + '\n'
         f'FEN: {b.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:'
     )
     payload = json.dumps({
-        'messages': [{'role': 'user', 'content': prompt}],
-        'temperature': 0, 'max_tokens': 24, 'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False}
+        'messages': [{'role': 'system', 'content': system_prompt},
+                     {'role': 'user', 'content': prompt}],
+        'temperature': 0, 'max_tokens': 16, 'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False},
+        'grammar': engine_runner.LlamafileRuntime._uci_grammar(legal),
     }).encode()
     req = urllib.request.Request(LLM, data=payload, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=90) as r:
+    with urllib.request.urlopen(req, timeout=None) as r:
         data = json.loads(r.read().decode())
     content = data['choices'][0]['message'].get('content', '')
-    match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-    if not match:
+    candidate = content.strip().lower()
+    if not re.fullmatch(r'[a-h][1-8][a-h][1-8][qrbn]?', candidate):
         raise ValueError('Model nie zwrócił ruchu UCI: ' + repr(content[:120]))
-    move = chess.Move.from_uci(match.group(1))
+    move = chess.Move.from_uci(candidate)
     if move not in b.legal_moves:
         raise ValueError('Model zwrócił nielegalny ruch: ' + move.uci())
     return move
@@ -723,7 +733,7 @@ def _preflight_error_message(preflight):
 
 
 def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_started,
-                                   moves, move_times, fen, phase='game'):
+                                   moves, move_times, fen, phase='game', *, variant='elimination'):
     with league.connect() as c:
         tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
         if tournament is None:
@@ -732,6 +742,7 @@ def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_st
         schedule = c.execute('''SELECT id,white_model_id,black_model_id,leg,stage,round_no,match_no,status,game_id,winner_model_id FROM tournament_pairings WHERE tournament_id=? ORDER BY id''', (tournament_id,)).fetchall()
     return {
         'schema_version': tournament_checkpoint.SCHEMA_VERSION,
+        'variant': variant,
         'tournament_id': int(tournament_id),
         'phase': phase,
         'tournament': dict(tournament),
@@ -764,6 +775,8 @@ def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_st
 def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black):
     if checkpoint.get('phase') != 'game':
         raise ValueError('Checkpoint nie wskazuje aktywnej partii; wznowienie zablokowane')
+    if checkpoint.get('variant', 'standard') not in ('standard', 'elimination'):
+        raise ValueError('Unknown chess variant')
     saved = checkpoint.get('pairing') or {}
     expected = (int(pairing['id']), pairing.get('stage', 'league'),
                 int(pairing['white_model_id']), int(pairing['black_model_id']))
@@ -1052,6 +1065,7 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
             runtime_context['execution_phase'] = 'game'
+            variant = checkpoint.get('variant', 'standard') if checkpoint else 'elimination'
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []
@@ -1059,10 +1073,10 @@ def tournament_loop(tournament_id):
                 resume_fen = checkpoint.get('fen')
                 game_started = checkpoint.get('game_started') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             else:
-                resume_moves, resume_times, resume_fen = [], [], chess.Board().fen()
+                resume_moves, resume_times, resume_fen = [], [], EliminationBoard().fen()
                 game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                 tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
-                    tournament_id, pairing, white, black, game_started, [], [], resume_fen))
+                    tournament_id, pairing, white, black, game_started, [], [], resume_fen, variant=variant))
             with league.connect() as c:
                 c.execute("UPDATE tournament_pairings SET status='running' WHERE id=? AND status='pending'", (pairing['id'],))
                 active = c.execute(
@@ -1074,8 +1088,8 @@ def tournament_loop(tournament_id):
             # This closes the crash window before model preparation / first move.
             tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                 tournament_id, pairing, white, black, game_started,
-                resume_moves, resume_times, resume_fen))
-            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
+                resume_moves, resume_times, resume_fen, variant=variant))
+            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', variant=variant, moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_models(white, black, on_status=set_live)
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
@@ -1088,7 +1102,7 @@ def tournament_loop(tournament_id):
                 saved_fen = move.get('fen')
                 tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen))
+                    checkpoint_moves, checkpoint_times, saved_fen, variant=variant))
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
@@ -1108,7 +1122,7 @@ def tournament_loop(tournament_id):
                     result = game_runner.play_game(
                         game_white, game_black, tournament_stop_event,
                         progress=publish_move, resume_moves=resume_moves,
-                        resume_fen=resume_fen, resume_move_times=resume_times)
+                        resume_fen=resume_fen, resume_move_times=resume_times, variant=variant)
                 except engine_runner.RunnerError as exc:
                     if tournament_stop_event.is_set() or 'Turniej zatrzymany przez operatora' in str(exc):
                         result = {'status': 'stopped', 'fen': exc.fen,
@@ -1122,7 +1136,7 @@ def tournament_loop(tournament_id):
                                 exc.budget_observations)
                         try:
                             decision = adjudication.adjudicate_failure(
-                                exc.fen, exc.move_records, exc.color, exc.uci_attempts)
+                                exc.fen, exc.move_records, exc.color, exc.uci_attempts, variant=variant)
                         except Exception as analysis_error:
                             decision = {'status': 'unresolved', 'reason': 'adjudication_exception',
                                         'error': f'{type(analysis_error).__name__}: {analysis_error}'[:500]}
@@ -2202,7 +2216,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock: running = False; self.send_json(state())
         elif path == '/api/reset':
             with lock:
-                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
+                running = False; board = EliminationBoard(); moves = []; timings = []; illegal_moves = 0
                 started_at = time.time(); last_error = ''; last_move = None
                 self.send_json(state())
         else: self.send_error(404)

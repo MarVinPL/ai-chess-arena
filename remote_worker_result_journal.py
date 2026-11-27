@@ -97,9 +97,10 @@ class WorkerResultJournal(DurableWorkerJobs):
             new_moves = checkpoint.get('moves')
             if not isinstance(old_moves, list) or not isinstance(new_moves, list) or len(new_moves) != len(old_moves) + 1 or new_moves[:-1] != old_moves:
                 raise ValueError('Checkpoint must append exactly one move')
-            board = chess.Board(previous['fen'])
-            if not board.is_valid():
-                raise ValueError('Invalid source board')
+            from elimination_chess import checkpoint_board
+            board = checkpoint_board(previous)
+            if checkpoint.get('variant', 'standard') != previous.get('variant', 'standard'):
+                raise ValueError('Checkpoint variant changed')
             move = validate_result(result, {'job_id': job_id}, board)
             if new_moves[-1].get('uci') != move.uci():
                 raise ValueError('Move does not match validated result')

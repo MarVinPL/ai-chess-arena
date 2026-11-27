@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-import chess
+from elimination_chess import checkpoint_board
 from remote_worker_job_binding import BoundWorkerResults
 from remote_worker_protocol import validate_result
 from remote_worker_tokens import WorkerTokenStore
@@ -42,9 +42,7 @@ class AuthenticatedResultIngest:
             saved = json.loads(checkpoint[0])
             if saved.get('phase') != 'game' or saved.get('pairing', {}).get('id') != binding[2] or saved.get('fen') != binding[4]:
                 raise ValueError('Assigned game changed')
-            board = chess.Board(binding[4])
-            if not board.is_valid():
-                raise ValueError('Invalid assigned position')
+            board = checkpoint_board(saved)
             move = validate_result(result, {'job_id': job_id}, board)
             # Token revocation or rotation must also invalidate an in-flight
             # intake. Verify credentials inside the write transaction.
