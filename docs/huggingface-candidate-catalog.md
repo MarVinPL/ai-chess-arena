@@ -5,7 +5,7 @@
 Automatic discovery of new Hugging Face repositories is disabled and must not be reintroduced without an explicit owner request.
 
 - There is no scheduled or manually dispatchable GitHub Actions workflow that searches the public Hugging Face listing for new candidates.
-- The former workflow `.github/workflows/huggingface-candidate-catalog-sync.yml` has been retired.
+- The former workflow `.github/workflows/huggingface-candidate-catalog-sync.yml`, its discovery script and implementation have been retired. The panel retains explicit text search and manual model registration; there is no random model suggestion.
 - The existing candidate manifest is a record of previously collected entries; its presence does not authorize adding, reviewing, downloading, running, or admitting those models.
 - A new repository may be added only after the owner explicitly names or requests that model/repository.
 - Metadata refresh automation is limited to the exact repositories already pinned as model IDs 1–8, through `.github/workflows/huggingface-model-catalog-sync.yml` and `existing_model_metadata_check.py`.
