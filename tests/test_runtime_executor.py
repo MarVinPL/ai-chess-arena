@@ -94,6 +94,7 @@ class RuntimeExecutorTests(unittest.TestCase):
         runner_calls = []
         worker = RuntimeApiWorker(
             deployment=ProductionProfile(),
+            execute=lambda job_id, **kwargs: executor.execute_job(job_id, lock_path=self.root / "executor.lock", **kwargs),
             runner=lambda payload, timeout, cancelled: runner_calls.append(
                 (payload['id'], timeout, callable(cancelled))
             ) or {'ok': True, 'runtime': 'fake-test-runner'},

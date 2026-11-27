@@ -1,5 +1,7 @@
 """Execute the actual server startup block against an isolated SQLite file."""
 import ast
+import signal
+from threading import Event
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +41,7 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
             assert WorkerJobRegistry(path).state('worker_12345678') == 'unknown'
             assert WorkerJobRegistry(path).state('worker_87654321') == 'unknown'
             assert DurableWorkerJobs(path).state('worker_99999999') == 'unknown'
+            self.server_address = address
             started.append('listener')
         def serve_forever(self):
             started.append('serve')
@@ -47,7 +50,15 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
         'DB': path, 'db_init': lambda: started.append('db_init'),
         'remote_worker_job_registry': SimpleNamespace(WorkerJobRegistry=WorkerJobRegistry),
         'remote_worker_jobs': SimpleNamespace(DurableWorkerJobs=DurableWorkerJobs),
-        'threading': SimpleNamespace(Thread=FakeThread),
+        'threading': SimpleNamespace(Thread=FakeThread, Event=Event),
+        'signal': signal,
+        'resolve_runtime_deployment': lambda: SimpleNamespace(supervisor_requested=False, production_requested=False, supervisor_socket=None),
+        'recover_runtime_on_startup': lambda **kw: {'executor': {'count': 0}},
+        'runtime_executor': SimpleNamespace(recover_orphaned_jobs=lambda: None),
+        'RuntimeSupervisorClientRunner': lambda **kw: None,
+        'background_jobs_enabled': lambda: True,
+        'LOG_DIR': tmp_path / 'logs',
+        '_serve_http_until_shutdown': lambda http, event: http.serve_forever(),
         '_hf_download_planner_loop': lambda: None,
         'hf_candidate_queue': SimpleNamespace(start_background_workers=lambda: started.append('queue')),
         'hf_candidate_runtime': SimpleNamespace(start_background_planner=lambda: started.append('planner')),
@@ -57,7 +68,11 @@ def test_server_startup_invalidates_jobs_before_listener(tmp_path):
         'HOST': '127.0.0.1', 'PORT': 0, 'Handler': object,
         'ThreadingHTTPServer': FakeServer,
     }
-    exec(boot, ns)
+    try:
+        exec(boot, ns)
+    finally:
+        if '_coordinator_lock' in ns:
+            ns['_coordinator_lock'].close()
     assert started == ['db_init', 'thread', 'queue', 'planner', 'listener', 'serve']
 
 
@@ -80,6 +95,10 @@ def test_server_boot_fails_closed_when_recovery_fails(tmp_path):
           'remote_worker_jobs': SimpleNamespace(DurableWorkerJobs=DurableWorkerJobs),
           'threading': SimpleNamespace(Thread=lambda **kwargs: started.append('thread'))}
     import pytest
-    with pytest.raises(OSError, match='SQLite unavailable'):
-        exec(boot, ns)
+    try:
+        with pytest.raises(OSError, match='SQLite unavailable'):
+            exec(boot, ns)
+    finally:
+        if '_coordinator_lock' in ns:
+            ns['_coordinator_lock'].close()
     assert started == ['db_init']
