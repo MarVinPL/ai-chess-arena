@@ -1,45 +1,7 @@
 {
   "inference_run": false,
-  "last_catalog_change_at": "2026-11-14T12:27:55Z",
+  "last_catalog_change_at": "2026-11-18T22:10:00Z",
   "models": [
-    {
-      "admission_status": "not_admitted",
-      "arena_model_id": null,
-      "audited_revision": null,
-      "catalog_id": "hf:360ZhiNao/Light-R1-14B-DS-GGUF",
-      "declared_license_tag": "apache-2.0",
-      "discovered_at": "2026-11-14T12:25:58Z",
-      "display_name": "Light-R1-14B-DS-GGUF",
-      "gated": false,
-      "history": [
-        {
-          "at": "2026-11-14T12:25:58Z",
-          "event": "discovered",
-          "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb"
-        }
-      ],
-      "last_modified": "2026-11-14T07:25:54.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
-      "license_review_status": "review_required",
-      "license_verified": false,
-      "metadata_status": "review_required",
-      "pipeline_tag": "text-generation",
-      "repo_id": "360ZhiNao/Light-R1-14B-DS-GGUF",
-      "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
-      "source_status": "active",
-      "tags": [
-        "base_model:qihoo360/Light-R1-14B-DS",
-        "base_model:quantized:qihoo360/Light-R1-14B-DS",
-        "conversational",
-        "endpoints_compatible",
-        "gguf",
-        "license:apache-2.0",
-        "quantization",
-        "region:us",
-        "text-generation"
-      ],
-      "technical_readiness": "not_evaluated"
-    },
     {
       "admission_status": "not_admitted",
       "arena_model_id": null,
@@ -83,47 +45,6 @@
         "region:us",
         "text-generation",
         "zh"
-      ],
-      "technical_readiness": "not_evaluated"
-    },
-    {
-      "admission_status": "not_admitted",
-      "arena_model_id": null,
-      "audited_revision": null,
-      "catalog_id": "hf:abenzerps/Spark-X2.5-4B-GGUF",
-      "declared_license_tag": "apache-2.0",
-      "discovered_at": "2026-11-14T12:25:58Z",
-      "display_name": "Spark-X2.5-4B-GGUF",
-      "gated": false,
-      "history": [
-        {
-          "at": "2026-11-14T12:25:58Z",
-          "event": "discovered",
-          "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a"
-        }
-      ],
-      "last_modified": "2026-10-11T12:04:06.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
-      "license_review_status": "review_required",
-      "license_verified": false,
-      "metadata_status": "review_required",
-      "pipeline_tag": "text-generation",
-      "repo_id": "abenzerps/Spark-X2.5-4B-GGUF",
-      "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a",
-      "source_status": "active",
-      "tags": [
-        "1m-context",
-        "base_model:XHToken/Spark-X2.5-4B",
-        "base_model:quantized:XHToken/Spark-X2.5-4B",
-        "conversational",
-        "endpoints_compatible",
-        "gguf",
-        "license:apache-2.0",
-        "llama.cpp",
-        "long-context",
-        "region:us",
-        "spark-x2.5",
-        "text-generation"
       ],
       "technical_readiness": "not_evaluated"
     },
@@ -6200,51 +6121,6 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
-      "catalog_id": "hf:peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF",
-      "declared_license_tag": "apache-2.0",
-      "discovered_at": "2026-11-14T12:25:58Z",
-      "display_name": "Sharp-Spark-X2.5-4B-GGUF",
-      "gated": false,
-      "history": [
-        {
-          "at": "2026-11-14T12:25:58Z",
-          "event": "discovered",
-          "revision": "7ffdc99a8aeb8575362b7f5e4fc6c4637d4f1661"
-        }
-      ],
-      "last_modified": "2026-11-04T23:34:01.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
-      "license_review_status": "review_required",
-      "license_verified": false,
-      "metadata_status": "review_required",
-      "pipeline_tag": "text-generation",
-      "repo_id": "peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF",
-      "revision": "7ffdc99a8aeb8575362b7f5e4fc6c4637d4f1661",
-      "source_status": "active",
-      "tags": [
-        "base_model:XHToken/Spark-X2.5-4B",
-        "base_model:quantized:XHToken/Spark-X2.5-4B",
-        "coding",
-        "conversational",
-        "efficient-thinking",
-        "endpoints_compatible",
-        "gguf",
-        "imatrix",
-        "license:apache-2.0",
-        "llama.cpp",
-        "long-context",
-        "region:us",
-        "sharp-template",
-        "spark2_5",
-        "text-generation",
-        "token-efficient"
-      ],
-      "technical_readiness": "not_evaluated"
-    },
-    {
-      "admission_status": "not_admitted",
-      "arena_model_id": null,
-      "audited_revision": null,
       "catalog_id": "hf:prism-ml/Ternary-Bonsai-2-27B-gguf",
       "declared_license_tag": "apache-2.0",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -10514,51 +10390,6 @@
       "admission_status": "not_admitted",
       "arena_model_id": null,
       "audited_revision": null,
-      "catalog_id": "hf:XHToken/Spark-X2.5-4B-GGUF",
-      "declared_license_tag": "apache-2.0",
-      "discovered_at": "2026-11-14T12:25:58Z",
-      "display_name": "Spark-X2.5-4B-GGUF",
-      "gated": false,
-      "history": [
-        {
-          "at": "2026-11-14T12:25:58Z",
-          "event": "discovered",
-          "revision": "9826e0be84e6e6e8b9668abc91421109a1df1e2d"
-        }
-      ],
-      "last_modified": "2026-09-20T08:08:37.000Z",
-      "last_verified_at": "2026-11-14T12:25:58Z",
-      "license_review_status": "review_required",
-      "license_verified": false,
-      "metadata_status": "review_required",
-      "pipeline_tag": "text-generation",
-      "repo_id": "XHToken/Spark-X2.5-4B-GGUF",
-      "revision": "9826e0be84e6e6e8b9668abc91421109a1df1e2d",
-      "source_status": "active",
-      "tags": [
-        "base_model:XHToken/Spark-X2.5-4B",
-        "base_model:quantized:XHToken/Spark-X2.5-4B",
-        "conversational",
-        "en",
-        "endpoints_compatible",
-        "gguf",
-        "license:apache-2.0",
-        "llama.cpp",
-        "lm-studio",
-        "ollama",
-        "pocketpal-ai",
-        "region:us",
-        "sparkx2_5",
-        "text-generation",
-        "unsloth",
-        "zh"
-      ],
-      "technical_readiness": "not_evaluated"
-    },
-    {
-      "admission_status": "not_admitted",
-      "arena_model_id": null,
-      "audited_revision": null,
       "catalog_id": "hf:XHToken/Spark-X2.6-4B-GGUF",
       "declared_license_tag": "apache-2.0",
       "discovered_at": "2026-11-14T12:25:58Z",
@@ -10961,5 +10792,35 @@
   },
   "schema_version": 1,
   "scope": "Informacyjny katalog publicznych repozytoriów GGUF text-generation/conversational; wpis nie oznacza dopuszczenia do turnieju.",
-  "weights_downloaded": false
+  "weights_downloaded": false,
+  "excluded_candidates": [
+    {
+      "catalog_id": "hf:360ZhiNao/Light-R1-14B-DS-GGUF",
+      "repo_id": "360ZhiNao/Light-R1-14B-DS-GGUF",
+      "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+      "excluded_at": "2026-11-18T22:10:00Z",
+      "reason": "Owner-requested removal; unsuitable for current VPS RAM budget or explicitly deselected."
+    },
+    {
+      "catalog_id": "hf:abenzerps/Spark-X2.5-4B-GGUF",
+      "repo_id": "abenzerps/Spark-X2.5-4B-GGUF",
+      "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a",
+      "excluded_at": "2026-11-18T22:10:00Z",
+      "reason": "Owner-requested removal; unsuitable for current VPS RAM budget or explicitly deselected."
+    },
+    {
+      "catalog_id": "hf:peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF",
+      "repo_id": "peculiar-ragdoll/Sharp-Spark-X2.5-4B-GGUF",
+      "revision": "7ffdc99a8aeb8575362b7f5e4fc6c4637d4f1661",
+      "excluded_at": "2026-11-18T22:10:00Z",
+      "reason": "Owner-requested removal; unsuitable for current VPS RAM budget or explicitly deselected."
+    },
+    {
+      "catalog_id": "hf:XHToken/Spark-X2.5-4B-GGUF",
+      "repo_id": "XHToken/Spark-X2.5-4B-GGUF",
+      "revision": "9826e0be84e6e6e8b9668abc91421109a1df1e2d",
+      "excluded_at": "2026-11-18T22:10:00Z",
+      "reason": "Owner-requested removal; unsuitable for current VPS RAM budget or explicitly deselected."
+    }
+  ]
 }

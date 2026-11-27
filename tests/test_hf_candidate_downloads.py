@@ -91,6 +91,9 @@ class CandidateDownloadTests(unittest.TestCase):
         self.assertTrue(snapshot['active'])
         self.assertEqual(downloads.get('new')['current_file_total_bytes'],10)
 
+    def test_removed_spark_x2_5_4b_is_not_in_download_allowlist(self):
+        self.assertFalse(any('Spark-X2.5-4B' in item[0] or 'Spark-X2.5-4B' in item[2] for item in downloads.APPROVED_ARTIFACTS))
+
     def test_manual_start_rejects_artifacts_outside_explicit_allowlist(self):
         explicit={
             ('hf:abenzerps/Apodex-1.1-mini-GGUF','e44e0cbd3151d08a9f5a4cbf19cd44560685de04','Apodex-1.1-mini-IQ1_M.gguf'),
@@ -147,8 +150,8 @@ class CandidateDownloadTests(unittest.TestCase):
                 'files':[{'name':name,'size_bytes':4,'sha256':SHA,'revision':rev}]})
         with patch.object(downloads.audit,'load_catalog',return_value=catalog), patch.object(downloads,'list_files',side_effect=inventories), patch.object(downloads,'_find_existing_verified',return_value=None):
             plan=downloads.refresh_plan()
-        self.assertEqual(plan['summary']['approved_artifacts'],2)
-        self.assertEqual(plan['summary']['planned'],2)
+        self.assertEqual(plan['summary']['approved_artifacts'],1)
+        self.assertEqual(plan['summary']['planned'],1)
         self.assertFalse(plan['settings']['auto_download_enabled'])
         self.assertTrue(plan['settings']['manual_confirmation_required'])
         self.assertEqual(downloads._jobs, {})

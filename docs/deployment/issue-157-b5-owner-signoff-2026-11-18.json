@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-18",
+  "issue": 157,
+  "pull_request": 173,
+  "gate": "B5",
+  "decision": "APPROVED",
+  "decision_source": "explicit release-owner approval in ChatGPT conversation",
+  "approved_scope": [
+    "internal technical audit findings",
+    "documented recovery/crash matrix",
+    "real supervised worker SIGKILL and durable-lease recovery drill"
+  ],
+  "technical_result": "PASS",
+  "limitations": [
+    "B3 model artifact/license admission remains open",
+    "B4 protected-main attestations and VPS verification remain open",
+    "no model weights were downloaded",
+    "no model inference was executed",
+    "no production runtime installation or deployment is authorized by this sign-off"
+  ],
+  "release_authorization": false,
+  "production_deployment_authorization": false,
+  "model_execution_authorization": false
+}
