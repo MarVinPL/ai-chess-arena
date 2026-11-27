@@ -1,5 +1,6 @@
 """Regression tests for Issue #299's five views without a browser dependency."""
 import pathlib
+import re
 import shutil
 import subprocess
 import unittest
@@ -18,7 +19,7 @@ class NavigationTests(unittest.TestCase):
             ("settings", "Ustawienia"),
         ):
             self.assertIn('id="view-' + route + '"', HTML)
-            self.assertIn('href="#view-' + route + '" data-view-link="' + route + '">' + label, HTML)
+            self.assertRegex(HTML, r'href="#view-' + route + r'" data-view-link="' + route + r'"[^>]*>' + re.escape(label))
             self.assertIn('data-arena-view="' + route + '"', HTML)
         self.assertIn('aria-label="Główna nawigacja"', HTML)
         self.assertLess(HTML.index('/assets/navigation.js'), HTML.index('/assets/arena.js'))

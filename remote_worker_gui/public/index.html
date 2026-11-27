@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Chess Arena — Worker</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#0d1422;color:#f1f5f9}*{box-sizing:border-box}body{margin:0;padding:24px}.shell{max-width:920px;margin:auto}.eyebrow{color:#a5b4fc;letter-spacing:.12em;font-size:12px;font-weight:700}.top{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap}h1{font-size:29px;margin:8px 0}p{color:#aab7ca}.pill{background:#273346;border:1px solid #40506b;border-radius:99px;padding:8px 14px;font-size:13px}.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-top:20px}.panel{background:#182335;border:1px solid #324259;border-radius:18px;padding:22px}h2{font-size:17px;margin:0 0 18px}.muted{color:#aab7ca;font-size:13px}label{display:block;margin:14px 0 6px;font-size:13px}input[type=text]{width:100%;background:#0d1422;border:1px solid #53627b;border-radius:9px;color:#fff;padding:12px;font:inherit}input[type=range]{width:100%;accent-color:#8b9aff}select{width:100%;padding:12px;border:1px solid #53627b;border-radius:9px;background:#0d1422;color:#fff;font:inherit}a{color:#a5b4fc}button{border:0;border-radius:10px;padding:12px 17px;background:#7c8cff;color:#0b1020;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#33435a;color:#fff}.buttons{display:flex;gap:9px;flex-wrap:wrap;margin-top:20px}.metric{display:flex;justify-content:space-between;border-bottom:1px solid #324259;padding:12px 0}.metric:last-child{border:0}.notice{margin-top:18px;border-left:3px solid #8b9aff;padding:12px 16px;background:#182335;color:#d6deeb;font-size:13px}.status{font-weight:700;color:#fbbf24}.release-action{display:inline-block;margin:6px 0 10px;padding:12px 17px;border-radius:10px;background:#7c8cff;color:#0b1020;font-weight:700;text-decoration:none}.release-action[hidden]{display:none}@media(max-width:680px){.grid{grid-template-columns:1fr}body{padding:14px}}
+</style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">AI CHESS ARENA · REMOTE WORKER</div><h1>Udostępnij moc komputera</h1><p>Ty decydujesz, kiedy i ile zasobów udostępniasz.</p></div><span class="pill" id="version">Wersja: sprawdzanie…</span><span class="pill" id="status">● Niepołączony</span></header><div class="grid"><section class="panel"><h2>Połącz z Areną</h2><label for="server">Adres serwera HTTPS</label><input id="server" type="text" value="https://arena.148-113-182-137.sslip.io" placeholder="https://arena.148-113-182-137.sslip.io" autocomplete="off"><label for="workerId">Identyfikator komputera</label><input id="workerId" type="text" placeholder="np. komputer_domowy_01" autocomplete="off"><label for="code">Token dostępu</label><input id="code" type="password" placeholder="Token wygenerowany w panelu Areny" autocomplete="off"><label><input id="rememberToken" type="checkbox" checked> Zapamiętaj token bezpiecznie na tym komputerze</label><div class="buttons"><button id="saveToken" type="button">Zapisz token</button><button id="pair" type="button">Sprawdź połączenie HTTPS</button><button id="previewJob" type="button" class="secondary" disabled>Sprawdź przydzielone zadanie</button><button class="secondary" id="forgetToken" type="button">Usuń zapisany token</button><button class="secondary" id="disconnect" disabled>Odłącz</button></div><p class="muted" id="jobFeedback" role="status" aria-live="polite">Podgląd zadania wymaga zaakceptowanego tokenu. Nie uruchamia obliczeń.</p><p class="muted">Token musi zostać wcześniej wygenerowany przez administratora Areny.</p></section><section class="panel"><h2>Limity zasobów</h2><label for="cpu">CPU: <strong id="cpuValue">50%</strong></label><input id="cpu" type="range" min="10" max="90" step="10" value="50"><label for="ram">RAM: <strong id="ramValue">2048 MB</strong></label><input id="ram" type="range" min="512" max="8192" step="512" value="2048"><label for="gpu">GPU: <strong id="gpuValue">Wyłączone</strong></label><input id="gpu" type="checkbox"><div class="buttons"><button id="start" disabled>Start</button><button id="pause" class="secondary" disabled>Pauza</button><button id="stop" class="secondary" disabled>Stop</button></div></section><section class="panel"><h2>Aktualne zadanie</h2><div class="metric"><span class="muted">Model (SHA-256)</span><strong id="jobModel" style="word-break:break-all">Brak</strong></div><div class="metric"><span class="muted">Pozycja FEN</span><strong id="jobPosition" style="word-break:break-all">—</strong></div><div class="metric"><span class="muted">Zadanie</span><strong id="jobMove">—</strong></div></section><section class="panel"><h2>Stan urządzenia</h2><div class="metric"><span class="muted">Połączenie</span><span class="status" id="connectionStatus">Nieaktywne</span></div><div class="metric"><span class="muted">Wykonywanie obliczeń</span><strong>Wyłączone</strong></div><div class="metric"><span class="muted">Wykorzystanie zasobów</span><strong>0%</strong></div></section></div><section class="panel" style="margin-top:16px" aria-labelledby="updateTitle"><h2 id="updateTitle">Aktualizacje aplikacji</h2><label for="updateChannel">Kanał aktualizacji</label><select id="updateChannel" aria-describedby="updateChannelHelp"><option value="latest">Latest — stabilne</option><option value="pre-release">Pre-release — testowe</option></select><p class="muted" id="updateChannelHelp">Wybór kanału zmienia tylko sprawdzanie wydań na GitHub; nie pobiera ani nie instaluje APK.</p><p class="muted" id="updateStatus" role="status" aria-live="polite">Sprawdź, czy dostępna jest nowa wersja. Instalacja aktualizacji nie jest jeszcze obsługiwana.</p><a id="workerReleaseLink" href="#" rel="noopener noreferrer" target="_blank" hidden>Otwórz wydanie na GitHub</a><a id="updateNow" class="release-action" rel="noopener noreferrer" target="_blank" aria-describedby="updateManualHelp" hidden>Aktualizuj</a><p class="muted" id="updateManualHelp">Przycisk Aktualizuj otwiera oficjalną stronę wydania na GitHub do ręcznej aktualizacji. Nie pobiera ani nie instaluje APK.</p><label for="autoUpdateCheck"><input id="autoUpdateCheck" type="checkbox" checked> Automatycznie sprawdzaj dostępność nowych wersji (maksymalnie raz na 24 godziny przy uruchomieniu aplikacji)</label>
+<button id="checkUpdate" type="button" class="secondary">Sprawdź aktualizacje</button><button id="checkUpdateSafety" type="button" class="secondary">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p></section>
+<aside class="notice" role="status"><span id="backendStatus">Sprawdzanie lokalnego backendu…</span> Token można zapisać i usunąć lokalnie. Weryfikacja tokenu przez VPS jest dostępna po kliknięciu „Sprawdź połączenie HTTPS”. Obliczenia nie są jeszcze podłączone, a przyciski sterowania pozostają nieaktywne.</aside></main><script>
+'use strict';
+// Non-hardware identity: generated once and persisted per app installation.
+const workerIdentityKey='arena-worker-installation-id-v1';
+const workerIdField=document.getElementById('workerId');
+try {
+  let id=localStorage.getItem(workerIdentityKey);
+  if(!id || !/^android_[0-9a-f]{32}$/.test(id)){
+    const bytes=new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    id='android_'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+    localStorage.setItem(workerIdentityKey,id);
+  }
+  workerIdField.value=id;
+}catch(_error){
+  document.getElementById('backendStatus').textContent='Nie udało się zapisać identyfikatora urządzenia. Wpisz go ręcznie.';
+}
+const cpu=document.getElementById('cpu'),ram=document.getElementById('ram'),gpu=document.getElementById('gpu');
+function update(){document.getElementById('cpuValue').textContent=cpu.value+'%';document.getElementById('ramValue').textContent=ram.value+' MB';document.getElementById('gpuValue').textContent=gpu.checked?'Włączone':'Wyłączone'}
+for(const el of [cpu,ram,gpu])el.addEventListener('input',update);
+update();
+async function checkLocalBackend(){
+  const message=document.getElementById('backendStatus');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(typeof invoke!=='function'){
+    message.textContent='Podgląd w przeglądarce — backend Tauri niedostępny.';
+    return;
+  }
+  try {
+    const result=await invoke('worker_status');
+    if(typeof result?.connected!=='boolean'||typeof result?.running!=='boolean') throw Error('Nieprawidłowy status');
+    document.getElementById('status').textContent=result.connected?'● Połączony':'● Niepołączony';
+    document.getElementById('connectionStatus').textContent=result.connected?'Połączony':'Nieaktywne';
+    message.textContent=String(result.message||'Lokalny backend działa.');
+  }catch(_error){
+    message.textContent='Nie udało się odczytać stanu lokalnego backendu.';
+  }
+}
+checkLocalBackend();
+(async()=>{
+  const label=document.getElementById('version');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){label.textContent='Wersja: podgląd';return;}
+  try{
+    const version=await invoke('worker_version');
+    label.textContent=/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(version)?'Wersja: '+version:'Wersja: nieznana';
+  }catch(_){label.textContent='Wersja: niedostępna';}
+})();
+const updateToggle=document.getElementById('autoUpdateCheck');
+const releaseChannel=document.getElementById('updateChannel');
+const workerReleaseLink=document.getElementById('workerReleaseLink');
+const updateNow=document.getElementById('updateNow');
+const updatePrefKey='arena-worker-auto-update-check-v1';
+const updateChannelKey='arena-worker-release-channel-v1';
+const updateLastKey='arena-worker-last-update-check-v2';
+const updateInterval=24*60*60*1000;
+function readUpdateChannel(){
+ try{
+  const value=localStorage.getItem(updateChannelKey);
+  return value==='pre-release'?'pre-release':'latest';
+ }catch(_){return 'latest';}
+}
+function saveUpdateChannel(channel){
+ if(channel!=='latest'&&channel!=='pre-release')return false;
+ try{localStorage.setItem(updateChannelKey,channel);return true;}catch(_){return false;}
+}
+function hideReleaseLink(){
+ workerReleaseLink.hidden=true;
+ workerReleaseLink.removeAttribute('href');
+ updateNow.hidden=true;
+ updateNow.removeAttribute('href');
+}
+let storedChannel=readUpdateChannel();
+releaseChannel.value=storedChannel;
+function readUpdatePref(){try{return localStorage.getItem(updatePrefKey)!=='off';}catch(_){return false;}}
+function saveUpdatePref(enabled){try{localStorage.setItem(updatePrefKey,enabled?'on':'off');return true;}catch(_){return false;}}
+updateToggle.checked=readUpdatePref();
+updateToggle.addEventListener('change',()=>{
+ if(!saveUpdatePref(updateToggle.checked)){
+  updateToggle.checked=false;
+  document.getElementById('updateStatus').textContent='Nie można zapisać ustawienia automatycznego sprawdzania.';
+ }
+});
+let checkingUpdate=false, channelChangedDuringCheck=false;
+async function checkForWorkerUpdate(){
+ if(checkingUpdate){channelChangedDuringCheck=true;return;}
+ const channel=releaseChannel.value;
+ const status=document.getElementById('updateStatus');
+ const button=document.getElementById('checkUpdate');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){status.textContent='Sprawdzanie wydań wymaga aplikacji Tauri.';return;}
+ checkingUpdate=true;
+ button.disabled=true;
+ hideReleaseLink();
+ status.textContent='Sprawdzanie wydań GitHub — '+(channel==='latest'?'Latest':'Pre-release')+'…';
+ try{
+  const info=await invoke('check_worker_release',{channel});
+  if(channel!==releaseChannel.value)return; // Never show results from the old channel.
+  const tag=info?.latest_version;
+  if(!tag){
+   status.textContent='Brak opublikowanych wydań Workera w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Zainstalowana: '+info.current_version+'.';
+  }else if(info.update_available){
+   status.textContent='W kanale '+(channel==='latest'?'Latest':'Pre-release')+' dostępne wydanie '+tag+' (zainstalowana: '+info.current_version+'). Instalacja tylko ręczna.';
+  }else if(channel==='pre-release'){
+   status.textContent='Najnowsze wydanie testowe: '+tag+' (zainstalowana wersja: '+info.current_version+'). Ten sam numer wersji podstawowej nie oznacza nowszego APK. Instalacja tylko ręczna.';
+  }else{
+   status.textContent='Zainstalowana: '+info.current_version+'. Najnowsze stabilne wydanie: '+tag+'. Brak nowszej wersji.';
+  }
+  const url=info?.release_notes_url;
+  if(typeof url==='string'&&/^https:\/\/github\.com\/MarVinPL\/ai-chess-arena\/releases\/tag\/worker-v[0-9A-Za-z.-]+$/.test(url) &&
+     url==='https://github.com/MarVinPL/ai-chess-arena/releases/tag/'+tag){
+   workerReleaseLink.href=url;
+   workerReleaseLink.hidden=false;
+   // Metadata-only update action: never download or install an unverified APK.
+   if(info.update_available===true){
+    updateNow.href=url;
+    updateNow.hidden=false;
+   }
+  }
+  try{localStorage.setItem(updateLastKey+'-'+channel,String(Date.now()));}catch(_){}
+ }catch(_){
+  if(channel===releaseChannel.value)status.textContent='Nie udało się sprawdzić wydań w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Spróbuj później.';
+ }finally{
+  checkingUpdate=false;
+  button.disabled=false;
+  if(channelChangedDuringCheck){
+   channelChangedDuringCheck=false;
+   void checkForWorkerUpdate();
+  }
+ }
+}
+releaseChannel.addEventListener('change',()=>{
+ const channel=releaseChannel.value;
+ if(!saveUpdateChannel(channel)){
+  releaseChannel.value=storedChannel;
+  document.getElementById('updateStatus').textContent='Nie można zapisać kanału aktualizacji.';
+  return;
+ }
+ storedChannel=channel;
+ hideReleaseLink();
+ document.getElementById('updateStatus').textContent='Wybrano kanał '+(channel==='latest'?'Latest':'Pre-release')+'.';
+ void checkForWorkerUpdate(); // An explicit channel change is a manual check.
+});
+document.getElementById('checkUpdate').addEventListener('click',checkForWorkerUpdate);
+document.getElementById('checkUpdateSafety').addEventListener('click',async()=>{
+ const button=document.getElementById('checkUpdateSafety');
+ const label=document.getElementById('updateSafetyStatus');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){label.textContent='Wymagana aplikacja Tauri.';return;}
+ button.disabled=true;label.textContent='Sprawdzanie stanu zadań…';
+ try{
+  const state=await invoke('check_update_safety',{
+   server:document.getElementById('server').value.trim(),
+   workerId:document.getElementById('workerId').value.trim()
+  });
+  label.textContent=state==='idle_confirmed'?'Koordynator potwierdza brak aktywnych zadań. Instalacja nadal wyłączona.':
+   state==='running'?'Worker wykonuje zadanie — aktualizacja wstrzymana.':
+   'Stan zadań niepotwierdzony — aktualizacja wstrzymana.';
+ }catch(_){label.textContent='Nie udało się potwierdzić stanu zadań — aktualizacja wstrzymana.';}
+ finally{button.disabled=false;}
+});
+// Startup-only check; no polling while inference is running. No network
+// request occurs when the user has disabled the preference.
+if(updateToggle.checked && window.__TAURI__?.core?.invoke){
+ try{
+  const now=Date.now(), lastKey=updateLastKey+'-'+releaseChannel.value;
+  const last=Number(localStorage.getItem(lastKey)||0);
+  if(!Number.isFinite(last)||last<=0||now-last>=updateInterval||last>now){
+   localStorage.setItem(lastKey,String(now));
+   void checkForWorkerUpdate();
+  }
+ }catch(_){updateToggle.checked=false;}
+}
+const tokenMessage=document.getElementById('backendStatus');
+let verifiedJobPreviewConnection=null;
+let connectionRevision=0;
+let checkingConnection=false;
+function invalidateJobPreview(){
+ connectionRevision++;
+ verifiedJobPreviewConnection=null;
+ document.getElementById('previewJob').disabled=true;
+}
+for(const field of ['server','workerId']){
+ document.getElementById(field).addEventListener('input',invalidateJobPreview);
+}
+async function refreshTokenState(){
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke)return;
+  try {
+    const saved=await invoke('has_saved_worker_token');
+    tokenMessage.textContent=saved?'Token zapisany w systemowym magazynie poświadczeń.':'Brak zapisanego tokenu.';
+  }catch(_error){tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
+}
+document.getElementById('saveToken').addEventListener('click',async()=>{
+  const field=document.getElementById('code');
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
+  if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
+  invalidateJobPreview(); // Invalidate any pending HTTPS verification before changing the secret.
+  try {
+    await invoke('store_worker_token',{token:field.value});
+    field.value='';
+    invalidateJobPreview();
+    await refreshTokenState();
+  }catch(_error){tokenMessage.textContent='Nie udało się zapisać tokenu. Sprawdź format i systemowy magazyn poświadczeń.';}
+});
+document.getElementById('forgetToken').addEventListener('click',async()=>{
+  const invoke=window.__TAURI__?.core?.invoke;
+  if(!invoke){tokenMessage.textContent='Usuwanie tokenu wymaga aplikacji desktopowej.';return;}
+  invalidateJobPreview(); // Pending HTTPS checks must never restore an authenticated preview.
+  try{
+    await invoke('forget_worker_token');
+    document.getElementById('code').value='';
+    invalidateJobPreview();
+    document.getElementById('jobModel').textContent='Brak';
+    document.getElementById('jobPosition').textContent='—';
+    document.getElementById('jobMove').textContent='—';
+    await refreshTokenState();
+  }
+  catch(_error){tokenMessage.textContent='Nie udało się usunąć tokenu.';}
+});
+refreshTokenState();
+document.getElementById('pair').addEventListener('click',async()=>{
+ if(checkingConnection)return;
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke){tokenMessage.textContent='Połączenie wymaga aplikacji desktopowej.';return;}
+ const button=document.getElementById('pair');
+ const server=document.getElementById('server').value.trim();
+ const workerId=document.getElementById('workerId').value.trim();
+ invalidateJobPreview();
+ const revision=connectionRevision;
+ checkingConnection=true;
+ button.disabled=true;
+ tokenMessage.textContent='Sprawdzanie połączenia HTTPS…';
+ try{
+  const ok=await invoke('verify_worker_connection',{server,workerId});
+  // Reject delayed responses after the address, ID, or stored token changes.
+  if(revision!==connectionRevision ||
+     server!==document.getElementById('server').value.trim() ||
+     workerId!==document.getElementById('workerId').value.trim())return;
+  verifiedJobPreviewConnection=ok?{server,workerId}:null;
+  document.getElementById('previewJob').disabled=!ok;
+  tokenMessage.textContent=ok?'Token zaakceptowany przez VPS (test połączenia, bez uruchamiania obliczeń).':'VPS odrzucił token.';
+ }catch(_){
+  if(revision===connectionRevision){
+   invalidateJobPreview();
+   tokenMessage.textContent='Błąd połączenia lub konfiguracji HTTPS. Sprawdź adres i token.';
+  }
+ }finally{
+  checkingConnection=false;
+  button.disabled=false;
+ }
+});
+document.getElementById('previewJob').addEventListener('click',async()=>{
+ const button=document.getElementById('previewJob');
+ const status=document.getElementById('jobFeedback');
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(typeof invoke!=='function'){status.textContent='Wymagana aplikacja natywna.';return;}
+ const connection=verifiedJobPreviewConnection;
+ if(!connection){status.textContent='Najpierw sprawdź połączenie HTTPS.';return;}
+ button.disabled=true;
+ status.textContent='Odczyt przydzielonego zadania przez HTTPS…';
+ try{
+  const job=await invoke('preview_worker_job',connection);
+  if(verifiedJobPreviewConnection!==connection){
+   status.textContent='Połączenie zmienione. Sprawdź ponownie token.';
+   return;
+  }
+  document.getElementById('jobModel').textContent=job?.model_sha256||'Brak';
+  document.getElementById('jobPosition').textContent=job?.fen||'—';
+  document.getElementById('jobMove').textContent=job?.job_id||'—';
+  status.textContent=job
+    ? 'Zadanie odebrane do podglądu. Silnik GGUF nie jest jeszcze podłączony; zadanie nie zostało uruchomione.'
+    : 'Brak gotowego zadania inferencji. Obliczenia pozostają wyłączone.';
+ }catch(error){
+  status.textContent='Nie udało się odczytać zadania: '+String(error||'nieznany błąd');
+ }finally{button.disabled=verifiedJobPreviewConnection===null;}
+});
+</script></body></html>
