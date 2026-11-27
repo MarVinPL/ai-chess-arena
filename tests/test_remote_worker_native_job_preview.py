@@ -118,10 +118,13 @@ def test_public_route_is_read_only_with_bounded_json_and_server_token_checks():
     server = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
     assert "if path == '/api/remote-workers/job':" in server
     assert "require_inference_manifest=True" in server
-    assert "'Transfer-Encoding'" in server
-    assert "_remote_worker_job_limiter.allow" in server
+    validator = (Path(__file__).resolve().parents[1] / 'remote_worker_http_validation.py').read_text()
+    assert "'Transfer-Encoding'" in validator
+    assert "_worker_rate_policy.admit_peer" in server
+    assert "_worker_rate_policy.admit_authenticated" in server
     assert "set(payload) != {'worker_id', 'token'}" in server
-    assert "'Content-Length'" in server
+    assert "'Content-Length'" in validator
+
 
 
 def test_native_tauri_preview_is_explicit_and_cannot_execute_commands():

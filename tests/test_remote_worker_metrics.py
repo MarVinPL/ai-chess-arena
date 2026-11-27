@@ -49,7 +49,10 @@ def test_machine_auth_endpoint_has_bounded_body_and_no_echo():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
     endpoint = source.split("if path == '/api/remote-workers/authenticate':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
-    assert "length <= 2048" in endpoint
+    assert "self._read_worker_request(path)" in endpoint
+    from remote_worker_http_validation import MAX_BODY
+    assert MAX_BODY == 2048
+    assert "return read_worker_json(self, path)" in source
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
     assert "'authenticated': True" in endpoint
     assert "'token': token" not in endpoint
@@ -60,7 +63,10 @@ def test_update_safety_endpoint_fails_closed_without_durable_job_registry():
     source = (Path(__file__).resolve().parents[1] / 'server.py').read_text()
     endpoint = source.split("if path == '/api/remote-workers/update-safety':", 1)[1].split("if path == '/api/auth/logout':", 1)[0]
     assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in endpoint
-    assert "length <= 2048" in endpoint
+    assert "self._read_worker_request(path)" in endpoint
+    from remote_worker_http_validation import MAX_BODY
+    assert MAX_BODY == 2048
+    assert "return read_worker_json(self, path)" in source
     assert 'WorkerJobRegistry(DB).state(worker_id)' in endpoint
     assert "'install_allowed': False" in endpoint
     assert "'token': token" not in endpoint
