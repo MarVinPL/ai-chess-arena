@@ -36,7 +36,7 @@ class ChessBoardUiTests(unittest.TestCase):
         self.assertIn('--arena-accent:#35d2c0', HTML)
         self.assertIn('background:var(--arena-light)', HTML)
         self.assertIn('background:var(--arena-dark)', HTML)
-        self.assertRegex(HTML, r'@media\(max-width:760px\)')
+        self.assertRegex(HTML, r'@media\(orientation:portrait\),\(max-width:760px\)')
         self.assertIn('overflow-x:hidden', HTML)
 
     def test_piece_inventory_is_above_board_and_updates_for_both_views(self):
@@ -73,7 +73,7 @@ class ChessBoardUiTests(unittest.TestCase):
         if not shutil.which('node'):
             self.skipTest('Node.js is not installed')
         start = HTML.index('function pieceInventory(fen,color)')
-        end = HTML.index('function formatMaterialScore(score)', start)
+        end = HTML.index('const PIECE_STYLE_KEY', start)
         functions = HTML[start:end]
         script = functions + "\n" + "const initial=pieceInventory('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1','white');" + "\n" + "const promoted=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const black=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "const capturedFen='4k3/8/8/8/8/8/4Q3/4K3 b - - 0 1';" + "\n" + "const capturedWhite=pieceInventory(capturedFen,'white');" + "\n" + "const capturedBlack=pieceInventory(capturedFen,'black');" + "\n" + "const restoredWhite=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','white');" + "\n" + "const restoredBlack=pieceInventory('r3k3/8/8/8/8/8/4Q3/4K3 w - - 0 1','black');" + "\n" + "console.log(JSON.stringify({initial,promoted,black,capturedWhite,capturedBlack,restoredWhite,restoredBlack}));"
         result = subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)

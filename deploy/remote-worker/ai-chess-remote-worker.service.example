@@ -1,0 +1,31 @@
+# TEMPLATE ONLY — do not install/enable without operator review.
+# Adjust paths, user, database permissions and limits for the VPS.
+[Unit]
+Description=AI Chess Arena Remote Worker Gateway (loopback-only)
+After=network.target
+
+[Service]
+Type=simple
+User=debian
+Group=debian
+WorkingDirectory=/home/debian/ai-chess-arena
+ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena/remote_worker_service.py --db /home/debian/ai-chess-arena/arena.sqlite --port 19444
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=1024
+# SQLite needs write access to the DB directory for journal/WAL files.
+ReadWritePaths=/home/debian/ai-chess-arena
+
+[Install]
+WantedBy=multi-user.target

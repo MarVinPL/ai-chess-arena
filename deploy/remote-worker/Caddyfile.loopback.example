@@ -1,0 +1,24 @@
+# Offline HTTPS smoke-test only. Do NOT import into production Caddyfile.
+# Both Caddy and the intake listener must remain bound to loopback.
+# Local CA certificate is NOT trusted by external workers automatically.
+https://127.0.0.1:19443 {
+	bind 127.0.0.1
+	tls internal
+	@result {
+		method POST
+		path /internal/remote-worker/result
+	}
+	handle @result {
+		request_body {
+			max_size 2048
+		}
+		reverse_proxy 127.0.0.1:19444 {
+			header_up -Cookie
+			header_up -Authorization
+			header_up -X-Forwarded-For
+		}
+	}
+	handle {
+		respond 404
+	}
+}

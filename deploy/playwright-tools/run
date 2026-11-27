@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+root=${PLAYWRIGHT_TOOLS_HOME:-"$HOME/.local/share/playwright-tools"}
+export NODE_PATH="$root/node_modules${NODE_PATH:+:$NODE_PATH}"
+export PLAYWRIGHT_CHROMIUM_EXECUTABLE=${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-/usr/bin/chromium}
+test -r "$root/node_modules/playwright/package.json"
+test -x "$PLAYWRIGHT_CHROMIUM_EXECUTABLE"
+exec node "$@"
