@@ -40,13 +40,10 @@ systemctl is-active --quiet ai-chess-arena.service || { echo 'Production service
 getent passwd arena-phone-test >/dev/null &&
   { echo 'Dedicated staging account already exists' >&2; exit 2; } || true
 
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - "$source_db"
 "$python" - "$source_db" <<'PY'
 import sqlite3,sys,time
 c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True)
-status=c.execute("SELECT status,count(*) FROM tournaments GROUP BY status").fetchall()
-print("Production tournament summary:",status)
-if any(name not in ("planned","completed") for name,n in status if n):
-    raise SystemExit("Active tournament: not safe for this rollout window")
 row=c.execute(
     "SELECT expires_at,revoked_at FROM worker_tokens WHERE worker_id=?",
     ("android_marvin_01",)
@@ -68,6 +65,7 @@ work=/home/debian/ai-chess-arena-phone-e2e-$short
 runuser -u debian -- git -C "$repo" worktree add --detach "$work" "$sha"
 ln -s "$work" "$current_link"
 install -d -m 0700 -o debian -g debian "$stage_root"
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - "$source_db"
 runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
   bootstrap --db "$stage_db" --source-db "$source_db" --worker-id "$worker"
 # The long-lived sandbox process has a distinct UID from production.

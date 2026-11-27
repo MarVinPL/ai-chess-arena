@@ -59,6 +59,7 @@ old_sha=$(runuser -u debian -- git -C "$release" rev-parse HEAD)
 runuser -u debian -- git -C "$repo" merge-base --is-ancestor "$old_sha" "$sha" ||
   { echo 'Staging binary not in reviewed main history' >&2; exit 2; }
 
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - "$source_db"
 "$python" - "$db" "$source_db" <<'PY'
 import hmac,json,sqlite3,sys,time
 stage=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True)
@@ -74,9 +75,6 @@ if not hmac.compare_digest(row[0][1],reference[1]):
  raise SystemExit("Staging token verifier does not match production")
 if reference[3] is not None or reference[2]<=time.time() or row[0][2]<=time.time():
  raise SystemExit("Original or staged token has expired")
-statuses=live.execute("SELECT status,count(*) FROM tournaments GROUP BY status").fetchall()
-if any(s not in ("planned","completed") for s,n in statuses if n):
- raise SystemExit("Production tournament is not idle")
 for name in ("worker_inference_assignments","worker_inference_results","worker_update_holds"):
  if stage.execute("SELECT COUNT(*) FROM "+name).fetchone()[0]:
   raise SystemExit("Partial sandbox contains unfinished work: "+name)
