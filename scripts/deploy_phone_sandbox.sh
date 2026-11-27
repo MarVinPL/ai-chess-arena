@@ -40,13 +40,10 @@ systemctl is-active --quiet ai-chess-arena.service || { echo 'Production service
 getent passwd arena-phone-test >/dev/null &&
   { echo 'Dedicated staging account already exists' >&2; exit 2; } || true
 
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - "$source_db"
 "$python" - "$source_db" <<'PY'
 import sqlite3,sys,time
 c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True)
-status=c.execute("SELECT status,count(*) FROM tournaments GROUP BY status").fetchall()
-print("Production tournament summary:",status)
-if any(name not in ("planned","completed") for name,n in status if n):
-    raise SystemExit("Active tournament: not safe for this rollout window")
 row=c.execute(
     "SELECT expires_at,revoked_at FROM worker_tokens WHERE worker_id=?",
     ("android_marvin_01",)
@@ -68,6 +65,7 @@ work=/home/debian/ai-chess-arena-phone-e2e-$short
 runuser -u debian -- git -C "$repo" worktree add --detach "$work" "$sha"
 ln -s "$work" "$current_link"
 install -d -m 0700 -o debian -g debian "$stage_root"
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - "$source_db"
 runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
   bootstrap --db "$stage_db" --source-db "$source_db" --worker-id "$worker"
 # The long-lived sandbox process has a distinct UID from production.
@@ -76,14 +74,9 @@ runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin arena-phone-test
 chown -R arena-phone-test:arena-phone-test "$stage_root"
-# The home directory has an ACL overriding the group traversal bit.
-# Grant only this service UID the ability to TRAVERSE, not list /home/debian.
-setfacl -m u:arena-phone-test:--x /home/debian
-runuser -u arena-phone-test -g arena-phone-test -G debian -- \
-  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
-
 installed_unit=0
 installed_caddy=0
+acl_granted=0
 rollback() {
   rc=$?
   if [[ $rc != 0 ]]; then
@@ -98,11 +91,27 @@ rollback() {
       rm -f "$unit_file"
       systemctl daemon-reload || true
     fi
+    # An ACL is granted only for the staging UID, never to group debian.
+    if [[ $acl_granted == 1 ]]; then
+      setfacl -x u:arena-phone-test /home/debian || true
+    fi
     # Keep the private database for forensic review; never expose the digest.
   fi
   exit "$rc"
 }
 trap rollback EXIT
+
+# /home/debian has a restrictive ACL with group::---; SupplementaryGroups
+# alone does NOT allow CHDIR. Give ONLY the dedicated staging UID traverse
+# (no read/list/write) and revoke it on rollback/cleanup.
+# Freshly created dedicated UID; install rollback before granting traversal.
+# No group-wide access and no read/list/write permission on the home.
+acl_granted=1
+setfacl -m u:arena-phone-test:--x /home/debian
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  "$python" -c 'import chess'
 
 install -m 0644 -o root -g root "$work/systemd/ai-chess-arena-phone-e2e.service" "$unit_file"
 installed_unit=1

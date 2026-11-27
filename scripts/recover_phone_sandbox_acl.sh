@@ -41,6 +41,8 @@ systemctl is-active --quiet ai-chess-arena.service ||
 [[ $(ss -ltn '( sport = :8191 )' | wc -l) -eq 1 ]] ||
   { echo 'Staging port occupied' >&2; exit 2; }
 
+runuser -u debian -- git -C "$repo" show "$sha:scripts/phone_sandbox_preflight.py" | "$python" - /var/lib/ai-chess-arena/arena.sqlite3
+
 # Dedicated staging UID can only traverse home; its token-hash DB remains
 # unreadable to anyone except the test UID and root.
 setfacl -m u:arena-phone-test:--x /home/debian
