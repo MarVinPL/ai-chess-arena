@@ -27,6 +27,8 @@ def endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
     db = tmp_path / "worker-safety.sqlite3"
     monkeypatch.setattr(server, "DB", db)
+    from remote_worker_rate_policy import WorkerRatePolicy
+    monkeypatch.setattr(server, "_worker_rate_policy", WorkerRatePolicy())
     token = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID, ttl_seconds=3600)
     remote_worker_job_registry.WorkerJobRegistry(db)
     http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -376,3 +378,14 @@ def test_worker_poll_rejects_bad_auth_nonce_and_stale_job(endpoint):
             "SELECT phase FROM worker_update_pause_requests WHERE worker_id=?",
             (WORKER_ID,)
         ).fetchone()[0] == "requested"
+
+
+def test_update_safety_rejects_extra_fields_and_limits_authenticated_requests(endpoint):
+    _, token, post = endpoint
+    status, response = post({**request_data(token), "install_allowed": True})
+    assert status == 400 and "nonce" not in response
+    for _ in range(12):
+        status, response = post(request_data(token))
+        assert status == 200 and response["install_allowed"] is False
+    status, response = post(request_data(token))
+    assert status == 429 and "nonce" not in response

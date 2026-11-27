@@ -101,6 +101,11 @@ pub(crate) fn parse_exact_uci_answer(content: &str) -> Result<String, String> {
 }
 
 pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
+    let validated: crate::PendingWorkerJob = serde_json::from_value(job.clone())
+        .map_err(|_| "Nieprawidłowa struktura zadania")?;
+    if !crate::validate_pending_worker_job(&validated) {
+        return Err("Nieprawidłowy wariant lub lista ruchów".into());
+    }
     let expected = job.get("model_sha256").and_then(Value::as_str)
         .ok_or("Brak SHA-256 wymaganego modelu")?;
     let fen = job.get("fen").and_then(Value::as_str)
@@ -142,33 +147,18 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
     // Arena supplies an exact canonical list of legal moves in protocol v2.
     // Restrict the LOCAL language model with llama.cpp GBNF, then recheck the
     // answer here. Arena independently verifies legality once again.
-    let version = job.get("version").and_then(Value::as_u64)
-        .ok_or("Brak wersji zadania")?;
-    let legal_moves: Vec<&str> = if version == 2 {
-        let list = job.get("legal_moves").and_then(Value::as_array)
-            .ok_or("Arena nie podała legalnych ruchów")?;
-        if list.is_empty() || list.len() > 256 {
-            return Err("Nieprawidłowa liczba legalnych ruchów".into());
-        }
-        let moves = list.iter().map(|item| item.as_str()
-            .ok_or("Nieprawidłowy ruch z Areny".to_owned()))
-            .collect::<Result<Vec<_>, _>>()?;
-        if moves.iter().any(|uci| parse_exact_uci_answer(uci).is_err()) {
-            return Err("Arena przesłała nieprawidłowy format UCI".into());
-        }
-        moves
-    } else if version == 1 {
-        Vec::new()
-    } else {
-        return Err("Nieobsługiwana wersja zadania".into());
-    };
+    let rules = if validated.variant.as_deref() == Some("elimination") {
+        "You are playing Elimination Chess. Capturing the opposing king ends the game; check and checkmate do not restrict moves."
+    } else { "You are playing standard chess." };
+    let legal_moves: Vec<&str> = validated.legal_moves.as_ref()
+        .map(|moves| moves.iter().map(String::as_str).collect()).unwrap_or_default();
     let prompt = if legal_moves.is_empty() {
         format!(
-            "You are playing chess. Output exactly one UCI move with no explanation.\nFEN: {fen}\nUCI:"
+            "{rules} Output exactly one UCI move with no explanation.\nFEN: {fen}\nUCI:"
         )
     } else {
         format!(
-            "You are playing chess. Choose exactly ONE move from this legal list and output only its UCI.\nFEN: {fen}\nLegal UCI moves: {}\nUCI:",
+            "{rules} Choose exactly ONE move from this legal list and output only its UCI.\nFEN: {fen}\nLegal UCI moves: {}\nUCI:",
             legal_moves.join(", "),
         )
     };

@@ -21,7 +21,7 @@ mod android_worker_token_store;
 #[allow(dead_code)]
 mod android_update_install_state;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
@@ -230,14 +230,179 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
         .build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/authenticate")
         .map_err(|_| "Nieprawidłowy adres endpointu")?;
-    let response = client.post(endpoint).json(&serde_json::json!({
+    let mut response = client.post(endpoint).json(&serde_json::json!({
         "worker_id": worker_id, "token": token
     })).send().await.map_err(|_| "Nie udało się połączyć przez HTTPS")?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Ok(false); }
     if !response.status().is_success() { return Err("Serwer odrzucił żądanie".into()); }
-    let result: serde_json::Value = response.json().await
+    // A remote endpoint can lie about Content-Length or use chunked encoding.
+    // Bound actual response bytes before parsing, including on low-memory Android.
+    const MAX_AUTH_RESPONSE_BYTES: usize = 4096;
+    if response.content_length().map(|n| n > MAX_AUTH_RESPONSE_BYTES as u64).unwrap_or(false) {
+        return Err("Zbyt duża odpowiedź serwera".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > MAX_AUTH_RESPONSE_BYTES - bytes.len() {
+            return Err("Zbyt duża odpowiedź serwera".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let result: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
     Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
+}
+
+// Read-only, explicit job inspection. This never starts inferencing, downloads
+// models, executes a command, or acknowledges a chess move.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingWorkerJob {
+    version: u8,
+    job_id: String,
+    fen: String,
+    model_sha256: String,
+    max_tokens: u16,
+    timeout_seconds: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legal_moves: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingJobResponse {
+    job: Option<PendingWorkerJob>,
+}
+
+fn validate_pending_worker_job(job: &PendingWorkerJob) -> bool {
+    let id = job.job_id.as_bytes();
+    if !matches!(job.version, 1..=3) || id.len() < 8 || id.len() > 96 ||
+        !id.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-') {
+        return false;
+    }
+    if job.model_sha256.len() != 64 ||
+        !job.model_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+        return false;
+    }
+    if !(1..=1024).contains(&job.max_tokens) || !(1..=600).contains(&job.timeout_seconds) {
+        return false;
+    }
+    match (job.version, job.variant.as_deref(), job.legal_moves.as_ref()) {
+        (1, None, None) => {},
+        (2, None, Some(moves)) | (3, Some("standard" | "elimination"), Some(moves)) => {
+            if moves.is_empty() || moves.len() > 256 || !moves.windows(2).all(|w| w[0] < w[1]) ||
+                !moves.iter().all(|m| {
+                    let b = m.as_bytes();
+                    matches!(b.len(), 4 | 5) && matches!(b[0], b'a'..=b'h') && matches!(b[1], b'1'..=b'8') &&
+                    matches!(b[2], b'a'..=b'h') && matches!(b[3], b'1'..=b'8') &&
+                    (b.len() == 4 || b"qrbn".contains(&b[4])) && b[..2] != b[2..4]
+                }) { return false; }
+        },
+        _ => return false,
+    }
+    // A structural FEN check is defense in depth. The VPS validates a full
+    // chess.Board and is the sole legal-move/checkpoint authority.
+    if job.fen.len() > 120 || !job.fen.is_ascii() { return false; }
+    let parts: Vec<&str> = job.fen.split(' ').collect();
+    if parts.len() != 6 || !["w", "b"].contains(&parts[1]) ||
+        !parts[4].bytes().all(|c| c.is_ascii_digit()) ||
+        !parts[5].bytes().all(|c| c.is_ascii_digit()) ||
+        parts[4].is_empty() || parts[5].is_empty() {
+        return false;
+    }
+    if parts[3] != "-" && !(parts[3].len() == 2
+        && matches!(parts[3].as_bytes()[0], b'a'..=b'h')
+        && matches!(parts[3].as_bytes()[1], b'3' | b'6')) {
+        return false;
+    }
+    if parts[2] != "-" && (parts[2].is_empty() ||
+        parts[2].len() > 4 || !parts[2].bytes().all(|c| b"KQkq".contains(&c))) {
+        return false;
+    }
+    let ranks: Vec<&str> = parts[0].split('/').collect();
+    ranks.len() == 8 && ranks.iter().all(|rank| {
+        let mut n = 0usize;
+        for b in rank.bytes() {
+            if (b'1'..=b'8').contains(&b) { n += (b - b'0') as usize; }
+            else if b"prnbqkPRNBQK".contains(&b) { n += 1; }
+            else { return false; }
+        }
+        n == 8
+    })
+}
+
+#[tauri::command]
+async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<PendingWorkerJob>, String> {
+    if worker_id.len() < 8 || worker_id.len() > 96 ||
+        !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Nieprawidłowy identyfikator Workera".into());
+    }
+    let url = reqwest::Url::parse(&server).map_err(|_| "Nieprawidłowy adres VPS")?;
+    if url.scheme() != "https" || url.host_str().is_none() ||
+        !url.username().is_empty() || url.password().is_some() ||
+        url.path() != "/" || url.query().is_some() ||
+        url.fragment().is_some() || url.port().is_some() {
+        return Err("Adres Workera musi być HTTPS bez portu, ścieżki i danych".into());
+    }
+    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(12)).build()
+        .map_err(|_| "Błąd klienta HTTPS")?;
+    let endpoint = url.join("api/remote-workers/job")
+        .map_err(|_| "Błąd adresu endpointu")?;
+    let mut response = client.post(endpoint)
+        .json(&serde_json::json!({"worker_id": worker_id, "token": token}))
+        .send().await.map_err(|_| "Błąd sieci HTTPS")?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Serwer odrzucił zapisany token".into());
+    }
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err("Przekroczono limit sprawdzania zadań".into());
+    }
+    if !response.status().is_success() {
+        return Err("Serwer nie udostępnia jeszcze odbioru zadań".into());
+    }
+    if response.content_length().map(|n| n > 4096).unwrap_or(false) {
+        return Err("Nieprawidłowy rozmiar odpowiedzi".into());
+    }
+    // Limit actual bytes too: chunked/malformed servers must not cause
+    // an unbounded allocation on a battery-powered volunteer device.
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > 4096 - bytes.len() {
+            return Err("Zbyt duża odpowiedź serwera".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let reply: PendingJobResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| "Nieprawidłowa struktura zadania")?;
+    if let Some(ref job) = reply.job {
+        if !validate_pending_worker_job(job) {
+            return Err("Nieprawidłowe lub niekompletne zlecenie inferencji".into());
+        }
+    }
+    Ok(reply.job)
+}
+
+// Read untrusted HTTPS JSON with a strict memory budget, including chunked
+// responses and inaccurate Content-Length values. Never allow a remote host
+// to allocate unlimited memory on an Android device.
+async fn bounded_json_response(mut response: reqwest::Response, limit: usize)
+    -> Result<serde_json::Value, String> {
+    if response.content_length().map(|n| n > limit as u64).unwrap_or(false) {
+        return Err("Zbyt duża odpowiedź HTTPS".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
+        if chunk.len() > limit - bytes.len() {
+            return Err("Zbyt duża odpowiedź HTTPS".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Nieprawidłowy JSON HTTPS".into())
 }
 
 // Advisory only: the server currently returns unknown until its durable
@@ -264,7 +429,7 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         "worker_id": worker_id, "token": token, "nonce": nonce
     })).send().await.map_err(|_| "Nie udało się sprawdzić stanu zadań")?;
     if !response.status().is_success() { return Err("Nie udało się potwierdzić stanu zadań".into()); }
-    let data: serde_json::Value = response.json().await.map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
+    let data: serde_json::Value = bounded_json_response(response, 4096).await?;
     let state = data.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
     // Server response must explicitly prove fresh coordinator-derived idle:
     // previously cached or unauthenticated "idle_confirmed" is NOT enough.
@@ -298,17 +463,51 @@ fn numeric_version(version: &str) -> Option<[u64; 3]> {
     Some([parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?])
 }
 
-// Select only stable releases belonging to the Worker, not Arena server.
-fn newest_worker_release(releases: &[serde_json::Value]) -> Option<([u64; 3], &str, &serde_json::Value)> {
+// Explicit, read-only release channels. Neither channel permits installation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerReleaseChannel { Latest, PreRelease }
+
+impl WorkerReleaseChannel {
+    fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "latest" => Ok(Self::Latest),
+            "pre-release" => Ok(Self::PreRelease),
+            _ => Err("Nieznany kanał aktualizacji".into()),
+        }
+    }
+    fn is_prerelease(self) -> bool { self == Self::PreRelease }
+}
+
+fn worker_release_version(tag: &str, channel: WorkerReleaseChannel) -> Option<[u64; 3]> {
+    let version = tag.strip_prefix("worker-v")?;
+    if channel == WorkerReleaseChannel::Latest { return numeric_version(version); }
+    let (base, suffix) = version.split_once('-')?;
+    if suffix.is_empty() || suffix.len() > 64 || suffix.starts_with('.')
+        || suffix.ends_with('.') || suffix.contains("..")
+        || suffix.split('.').any(|part| part.is_empty() ||
+            !part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')) {
+        return None;
+    }
+    numeric_version(base)
+}
+
+fn release_published_at(release: &serde_json::Value) -> &str {
+    release.get("published_at").and_then(|v| v.as_str()).unwrap_or("")
+}
+
+// Filter out server releases, drafts, and mismatched prerelease flags.
+fn newest_worker_release(releases: &[serde_json::Value], channel: WorkerReleaseChannel)
+    -> Option<([u64; 3], &str, &serde_json::Value)> {
     releases.iter()
-        .filter(|release| release.get("draft").and_then(|v| v.as_bool()) == Some(false)
-            && release.get("prerelease").and_then(|v| v.as_bool()) == Some(false))
-        .filter_map(|release| {
-            let tag = release.get("tag_name")?.as_str()?;
-            let version = numeric_version(tag.strip_prefix("worker-v")?)?;
-            Some((version, tag, release))
+        .filter(|r| r.get("draft").and_then(|v| v.as_bool()) == Some(false)
+            && r.get("prerelease").and_then(|v| v.as_bool()) == Some(channel.is_prerelease()))
+        .filter_map(|r| {
+            let tag = r.get("tag_name")?.as_str()?;
+            Some((worker_release_version(tag, channel)?, tag, r))
         })
-        .max_by_key(|(version, _, _)| *version)
+        .max_by(|a, b| a.0.cmp(&b.0)
+            .then_with(|| release_published_at(a.2).cmp(release_published_at(b.2)))
+            .then_with(|| a.1.cmp(b.1)))
 }
 
 // The same bounded GitHub fetch is used for display and download decisions.
@@ -318,47 +517,39 @@ async fn fetch_worker_releases() -> Result<Vec<serde_json::Value>, String> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(8))
         .build().map_err(|_| "Błąd klienta HTTPS")?;
-    // The repository also publishes non-Worker releases. Inspect a bounded
-    // list rather than GitHub's /latest, which may belong to the server.
+    // This repository publishes server and adapter releases too.
     let response = client.get("https://api.github.com/repos/MarVinPL/ai-chess-arena/releases?per_page=100")
         .header(reqwest::header::USER_AGENT, "ai-chess-arena-worker-update-check")
         .send().await.map_err(|_| "Nie udało się sprawdzić wydań")?;
-    if !response.status().is_success() { return Err("GitHub nie udostępnił informacji o wydaniach".into()); }
-    // Read bounded GitHub metadata; reject oversized bodies before parsing.
-    let mut response = response;
-    const MAX_RELEASE_JSON: usize = 1024 * 1024;
-    if response.content_length().map(|length| length > MAX_RELEASE_JSON as u64).unwrap_or(false) {
-        return Err("Zbyt duże metadane wydań".into());
+    if !response.status().is_success() {
+        return Err("GitHub nie udostępnił informacji o wydaniach".into());
     }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu wydań")? {
-        if chunk.len() > MAX_RELEASE_JSON - body.len() {
-            return Err("Zbyt duże metadane wydań".into());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let data: serde_json::Value = serde_json::from_slice(&body)
+    let data: serde_json::Value = bounded_json_response(response, 1024 * 1024).await
         .map_err(|_| "Nieprawidłowe metadane wydań")?;
     let releases = data.as_array().ok_or("Nieprawidłowa lista wydań")?;
     Ok(releases.clone())
 }
 
 #[tauri::command]
-async fn check_worker_release() -> Result<ReleaseInfo, String> {
+async fn check_worker_release(channel: String) -> Result<ReleaseInfo, String> {
+    let channel = WorkerReleaseChannel::parse(&channel)?;
     let current = env!("CARGO_PKG_VERSION").to_string();
     let releases = fetch_worker_releases().await?;
     let installed = numeric_version(&current).ok_or("Nieprawidłowa wersja aplikacji")?;
-    let candidate = newest_worker_release(&releases);
+    let candidate = newest_worker_release(&releases, channel);
     let Some((latest, tag, data)) = candidate else {
         return Ok(ReleaseInfo { current_version: current, latest_version: None, update_available: false, release_notes_url: None, apk_asset_available: false });
     };
+    let expected_path = format!("/MarVinPL/ai-chess-arena/releases/tag/{tag}");
     let notes = data.get("html_url").and_then(|v| v.as_str())
         .and_then(|raw| reqwest::Url::parse(raw).ok())
         .filter(|url| url.scheme() == "https" && url.host_str() == Some("github.com")
-            && url.path().starts_with("/MarVinPL/ai-chess-arena/releases/tag/worker-v")
-            && url.query().is_none() && url.fragment().is_none()
+            && url.path() == expected_path
+            && url.port().is_none() && url.query().is_none()
+            && url.fragment().is_none()
             && url.username().is_empty() && url.password().is_none())
         .map(|url| url.to_string());
+    // A prerelease with the same base version is never a newer installable APK.
     // The update candidate selector is now used in the native release-check
     // path. This is metadata only, never a download/install authorization.
     let apk_asset_available = latest > installed
@@ -380,7 +571,7 @@ async fn download_worker_apk(app: tauri::AppHandle) -> Result<(), String> {
         let current = numeric_version(env!("CARGO_PKG_VERSION"))
             .ok_or("Nieprawidłowa wersja Workera")?;
         let releases = fetch_worker_releases().await?;
-        let (latest, tag, release) = newest_worker_release(&releases)
+        let (latest, tag, release) = newest_worker_release(&releases, WorkerReleaseChannel::Latest)
             .ok_or("Brak stabilnego wydania Workera")?;
         if latest <= current { return Err("Brak nowszej wersji".into()); }
         let candidate = android_update_asset::select_apk_candidate(release, tag)
@@ -412,7 +603,7 @@ async fn verify_downloaded_worker_apk(app: tauri::AppHandle) -> Result<WorkerApk
         let installed = numeric_version(env!("CARGO_PKG_VERSION"))
             .ok_or("Nieprawidłowa wersja aplikacji")?;
         let releases = fetch_worker_releases().await?;
-        let (latest, tag, release) = newest_worker_release(&releases)
+        let (latest, tag, release) = newest_worker_release(&releases, WorkerReleaseChannel::Latest)
             .ok_or("Brak stabilnego wydania Workera")?;
         if latest <= installed { return Err("Brak nowszej aktualizacji".into()); }
         let candidate = android_update_asset::select_apk_candidate(release, tag)
@@ -482,7 +673,7 @@ async fn install_downloaded_worker_apk(
             return Err("Najpierw bezpiecznie przerwij zadanie Workera; brak potwierdzenia STOP".into());
         }
         let releases = fetch_worker_releases().await?;
-        let (_, tag, release) = newest_worker_release(&releases)
+        let (_, tag, release) = newest_worker_release(&releases, WorkerReleaseChannel::Latest)
             .ok_or("Brak aktualizacji Workera")?;
         let candidate = android_update_asset::select_apk_candidate(release, tag)
             .ok_or("Nie ma jednoznacznego, podpisanego APK ARM64")?;
@@ -839,7 +1030,7 @@ fn update_installation_readiness() -> UpdateReadiness {
 
 #[cfg(test)]
 mod version_tests {
-    use super::{numeric_version, newest_worker_release, may_install_update, update_installation_readiness, VerifiedTaskState};
+    use super::{numeric_version, newest_worker_release, worker_release_version, WorkerReleaseChannel, may_install_update, update_installation_readiness, VerifiedTaskState, PendingWorkerJob, validate_pending_worker_job};
     use serde_json::json;
     #[test]
     fn selects_newest_stable_worker_only() {
@@ -851,14 +1042,88 @@ mod version_tests {
             json!({"tag_name":"worker-v1.9.9","draft":false,"prerelease":false}),
             json!({"tag_name":"worker-v1.11.0-rc1","draft":false,"prerelease":false}),
         ];
-        let selected = newest_worker_release(&releases).unwrap();
+        let selected = newest_worker_release(&releases, WorkerReleaseChannel::Latest).unwrap();
         assert_eq!(selected.1, "worker-v1.10.0");
         assert_eq!(selected.0, [1,10,0]);
     }
     #[test]
+    fn only_complete_typed_worker_jobs_are_displayable() {
+        let ok: PendingWorkerJob = serde_json::from_value(serde_json::json!({
+            "version": 1, "job_id": "job_12345678",
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "model_sha256": "a".repeat(64),
+            "max_tokens": 512, "timeout_seconds": 300
+        })).unwrap();
+        assert!(validate_pending_worker_job(&ok));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["fen"] = serde_json::json!("not a chess position");
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["model_sha256"] = serde_json::json!("../unexpected-file.gguf");
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["timeout_seconds"] = serde_json::json!(601);
+        assert!(!validate_pending_worker_job(
+            &serde_json::from_value::<PendingWorkerJob>(illegal).unwrap()
+        ));
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal["command"] = serde_json::json!("exec");
+        assert!(serde_json::from_value::<PendingWorkerJob>(illegal).is_err());
+        let mut illegal = serde_json::to_value(&ok).unwrap();
+        illegal.as_object_mut().unwrap().remove("max_tokens");
+        assert!(serde_json::from_value::<PendingWorkerJob>(illegal).is_err());
+    }
+
+    #[test]
+    fn test_channel_finds_real_signed_worker_prerelease_only() {
+        let releases = vec![
+            json!({"tag_name":"issue-190-lora-v1","draft":false,"prerelease":true}),
+            json!({"tag_name":"worker-v0.1.0-test.1","draft":false,"prerelease":true,
+                   "published_at":"2026-11-21T15:00:00Z"}),
+            json!({"tag_name":"worker-v0.1.0-test.2","draft":false,"prerelease":true,
+                   "published_at":"2026-11-22T15:00:00Z"}),
+            json!({"tag_name":"worker-v0.1.0-test.3","draft":true,"prerelease":true}),
+            json!({"tag_name":"worker-v0.1.0","draft":false,"prerelease":false}),
+            json!({"tag_name":"worker-v99.0.0","draft":false,"prerelease":true}),
+        ];
+        let selected = newest_worker_release(&releases, WorkerReleaseChannel::PreRelease).unwrap();
+        assert_eq!(selected.1, "worker-v0.1.0-test.2");
+        assert_eq!(selected.0, [0, 1, 0]);
+    }
+    #[test]
+    fn channel_names_and_release_tag_flags_are_strict() {
+        assert_eq!(WorkerReleaseChannel::parse("latest").unwrap(), WorkerReleaseChannel::Latest);
+        assert_eq!(WorkerReleaseChannel::parse("pre-release").unwrap(), WorkerReleaseChannel::PreRelease);
+        assert!(WorkerReleaseChannel::parse("anything-else").is_err());
+        for tag in ["worker-v1.2.3", "worker-v1.2.3-",
+                    "worker-v1.2.3-../bad", "worker-v1.2.3-foo/evil",
+                    "worker-v1.2.3-test..1", "worker-v1.2.3-test.1+build"] {
+            assert!(worker_release_version(tag, WorkerReleaseChannel::PreRelease).is_none());
+        }
+        assert!(worker_release_version("worker-v1.2.3-test.1", WorkerReleaseChannel::Latest).is_none());
+        assert_eq!(worker_release_version("worker-v0.1.0-test.1", WorkerReleaseChannel::PreRelease), Some([0,1,0]));
+        let invalid = vec![
+            json!({"tag_name":"worker-v1.2.3","draft":false,"prerelease":true}),
+            json!({"tag_name":"worker-v1.2.3-test.1","draft":false,"prerelease":false}),
+        ];
+        assert!(newest_worker_release(&invalid, WorkerReleaseChannel::Latest).is_none());
+        assert!(newest_worker_release(&invalid, WorkerReleaseChannel::PreRelease).is_none());
+    }
+    #[test]
+    fn same_version_prerelease_does_not_authorize_install() {
+        let base = worker_release_version("worker-v0.1.0-test.1", WorkerReleaseChannel::PreRelease).unwrap();
+        assert_eq!(base, numeric_version("0.1.0").unwrap());
+        assert!(!(base > numeric_version("0.1.0").unwrap()));
+        assert!(!update_installation_readiness().can_install);
+    }
+    #[test]
     fn no_eligible_release_means_no_update() {
         let releases = vec![json!({"tag_name":"worker-v2.0.0","draft":true,"prerelease":false}), json!({"tag_name":"server-v9.0.0","draft":false,"prerelease":false})];
-        assert!(newest_worker_release(&releases).is_none());
+        assert!(newest_worker_release(&releases, WorkerReleaseChannel::Latest).is_none());
     }
     #[test]
     fn gui_never_offers_installation_before_integrations() {
@@ -897,7 +1162,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

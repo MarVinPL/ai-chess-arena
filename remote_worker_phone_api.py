@@ -8,6 +8,7 @@ import json
 import re
 
 from remote_worker_tokens import WorkerTokenStore
+from remote_worker_http_validation import WorkerRequestError
 
 NONCE = re.compile(r"[0-9a-f]{32}\Z")
 ROUTES = frozenset({
@@ -17,24 +18,14 @@ ROUTES = frozenset({
     "/api/remote-workers/update-pause-poll",
     "/api/remote-workers/board-view",
 })
-MAX_REQUEST_BYTES = 2048
 
 
-def handle_phone_request(handler, path, db, live):
+def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
     """Handle a recognized phone route; caller must check separate enable flag."""
     if path not in ROUTES:
         return False
 
     try:
-        content_type = handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if content_type != "application/json":
-            raise ValueError("Content-Type must be application/json")
-        length = int(handler.headers.get("Content-Length", "0"))
-        if not 0 < length <= MAX_REQUEST_BYTES:
-            raise ValueError("Invalid body length")
-        payload = json.loads(handler.rfile.read(length))
-        if not isinstance(payload, dict):
-            raise ValueError("Invalid payload")
         if set(payload) != (
             {"worker_id", "token", "nonce", "model_sha256"}
             if path.endswith("/ready") else
@@ -55,6 +46,13 @@ def handle_phone_request(handler, path, db, live):
     if not WorkerTokenStore(db).authenticate(worker_id, token):
         # Never return or echo worker identity/nonce in an unauthorized response.
         handler.send_json({"error": "Brak autoryzacji Workera"}, 401)
+        return True
+
+    try:
+        admit_identity(path, worker_id)
+    except WorkerRequestError as exc:
+        handler.close_connection = True
+        handler.send_json({'error': 'Limit żądań'}, exc.status)
         return True
 
     response = {
