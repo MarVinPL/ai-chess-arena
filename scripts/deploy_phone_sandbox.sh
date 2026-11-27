@@ -76,14 +76,9 @@ runuser -u debian -- "$python" "$current_link/remote_worker_phone_sandbox.py" \
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin arena-phone-test
 chown -R arena-phone-test:arena-phone-test "$stage_root"
-# The home directory has an ACL overriding the group traversal bit.
-# Grant only this service UID the ability to TRAVERSE, not list /home/debian.
-setfacl -m u:arena-phone-test:--x /home/debian
-runuser -u arena-phone-test -g arena-phone-test -G debian -- \
-  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
-
 installed_unit=0
 installed_caddy=0
+acl_granted=0
 rollback() {
   rc=$?
   if [[ $rc != 0 ]]; then
@@ -98,11 +93,27 @@ rollback() {
       rm -f "$unit_file"
       systemctl daemon-reload || true
     fi
+    # An ACL is granted only for the staging UID, never to group debian.
+    if [[ $acl_granted == 1 ]]; then
+      setfacl -x u:arena-phone-test /home/debian || true
+    fi
     # Keep the private database for forensic review; never expose the digest.
   fi
   exit "$rc"
 }
 trap rollback EXIT
+
+# /home/debian has a restrictive ACL with group::---; SupplementaryGroups
+# alone does NOT allow CHDIR. Give ONLY the dedicated staging UID traverse
+# (no read/list/write) and revoke it on rollback/cleanup.
+# Freshly created dedicated UID; install rollback before granting traversal.
+# No group-wide access and no read/list/write permission on the home.
+acl_granted=1
+setfacl -m u:arena-phone-test:--x /home/debian
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  sh -c 'cd /home/debian/ai-chess-arena-phone-e2e-current && test -r remote_worker_phone_sandbox.py'
+runuser -u arena-phone-test -g arena-phone-test -G debian -- \
+  "$python" -c 'import chess'
 
 install -m 0644 -o root -g root "$work/systemd/ai-chess-arena-phone-e2e.service" "$unit_file"
 installed_unit=1

@@ -55,7 +55,9 @@ case "$release" in
 esac
 rm -f "$db"
 rmdir "$dir"
-# Remove only the staging user's explicit traverse ACL, preserving all others.
-setfacl -x u:arena-phone-test /home/debian
+# Remove only the staging user's explicit traversal ACL before deleting its UID.
+if getfacl -cp /home/debian | grep -Fxq 'user:arena-phone-test:--x'; then
+  setfacl -x u:arena-phone-test /home/debian
+fi
 userdel arena-phone-test
 echo "SANDBOX_DATA_PURGED, PRODUCTION_UNCHANGED"
