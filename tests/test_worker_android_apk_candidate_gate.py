@@ -70,7 +70,7 @@ def test_native_release_checker_actually_uses_candidate_gate_and_displays_result
     """Integration wiring guard: selector must be invoked by a Tauri command, not dead code."""
     lib = LIB.read_text(encoding="utf-8")
     ui = (ROOT / "remote_worker_gui/public/index.html").read_text(encoding="utf-8")
-    start = lib.index("async fn check_worker_release()")
+    start = lib.index("async fn check_worker_release(channel: String)")
     end = lib.index("// Fail closed: a missing coordinator confirmation", start)
     release_command = lib[start:end]
     assert "android_update_asset::select_apk_candidate(data, tag).is_some()" in release_command
@@ -78,18 +78,21 @@ def test_native_release_checker_actually_uses_candidate_gate_and_displays_result
     assert "let apk_asset_available = latest > installed" in release_command
     assert "apk_asset_available: false" in release_command
     fetch_start = lib.index("async fn fetch_worker_releases()")
-    fetch_end = lib.index("async fn check_worker_release()", fetch_start)
+    fetch_end = lib.index("async fn check_worker_release(channel: String)", fetch_start)
     fetch = lib[fetch_start:fetch_end]
-    assert "bounded GitHub metadata" in fetch
-    assert "MAX_RELEASE_JSON: usize = 1024 * 1024" in fetch
-    assert "if chunk.len() > MAX_RELEASE_JSON - body.len()" in fetch
-    assert "serde_json::from_slice(&body)" in fetch
+    assert "bounded_json_response(response, 1024 * 1024).await" in fetch
+    reader = lib.split("async fn bounded_json_response", 1)[1].split("\n}", 1)[0]
+    assert "response.content_length()" in reader
+    assert "if chunk.len() > limit - bytes.len()" in reader
+    assert reader.index("if chunk.len() > limit - bytes.len()") < reader.index("bytes.extend_from_slice(&chunk)")
+    assert "serde_json::from_slice(&bytes)" in reader
+    assert "fetch_worker_releases().await?" in release_command
     assert "info.apk_asset_available===true" in ui
     assert "Brak kwalifikującego się pliku APK ARM64" in ui
     assert "Instalacja pozostaje wyłączona." in ui
     assert "invoke('download_worker_apk')" in ui
     assert "invoke('install_update')" not in ui
-    assert "invoke('check_worker_release')" in ui
+    assert "invoke('check_worker_release',{channel})" in ui
     assert "invoke('download_update')" not in ui
 
 

@@ -33,6 +33,8 @@ def sandbox(tmp_path, monkeypatch):
     with sqlite3.connect(destination) as con:
         assert con.execute("SELECT COUNT(*) FROM worker_tokens").fetchone()[0] == 1
     monkeypatch.setattr(server, "DB", destination)
+    from remote_worker_rate_policy import WorkerRatePolicy
+    monkeypatch.setattr(server, "_worker_rate_policy", WorkerRatePolicy())
     monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
     monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
     api = ThreadingHTTPServer(("127.0.0.1", 0), SandboxHandler)

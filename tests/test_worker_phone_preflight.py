@@ -5,7 +5,8 @@ import server
 import remote_worker_inference_delivery
 
 
-def preflight_stubs(monkeypatch, ready_sha):
+def preflight_stubs(monkeypatch, ready_sha, *, checkpoint=None, version=3):
+    monkeypatch.setattr(server.tournament_checkpoint, "load", lambda *_: checkpoint)
     entries = [
         {
             "model_id": 1, "name": "White Phone Model", "version_id": 11,
@@ -56,8 +57,8 @@ def preflight_stubs(monkeypatch, ready_sha):
         def __init__(self, path):
             pass
 
-        def find_ready_worker(self, sha):
-            return "android_1234567890abcdef" if sha in ready_sha else None
+        def find_ready_worker(self, sha, protocol_version=2):
+            return "android_1234567890abcdef" if sha in ready_sha and version >= protocol_version else None
 
     monkeypatch.setattr(remote_worker_inference_delivery, "WorkerInferenceDelivery", FakeDelivery)
 
@@ -98,3 +99,20 @@ def test_default_local_preflight_still_requires_vps_runtime(monkeypatch):
         "lokalny runtime Llamafile jest niedostępny" in row["reasons"]
         for row in result["blocked"]
     )
+
+
+@pytest.mark.parametrize("checkpoint,version,ready", [
+    (None, 2, False), (None, 3, True),
+    ({"variant": "elimination"}, 2, False),
+    ({"variant": "elimination"}, 3, True),
+    ({}, 2, True), ({"variant": "standard"}, 2, True),
+    ({"variant": "invalid"}, 3, False),
+])
+def test_phone_preflight_requires_protocol_for_current_variant(monkeypatch, checkpoint, version, ready):
+    preflight_stubs(monkeypatch, {"a" * 64, "b" * 64}, checkpoint=checkpoint, version=version)
+    monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "1")
+    result = server.tournament_preflight(99)
+    assert result["ready"] is ready
+    if not ready:
+        assert len(result["blocked"]) == 2
+        assert all("protokołem v3" in row["reasons"][0] or "wariantu partii" in row["reasons"][0] for row in result["blocked"])

@@ -16,13 +16,14 @@ def test_manual_release_link_is_explicit_and_opens_outside_webview():
 
 
 def test_manual_link_only_on_validated_new_worker_apk():
-    assert "info.update_available===true && info.apk_asset_available===true" in GUI
+    assert "channel==='latest' && info.update_available===true && info.apk_asset_available===true" in GUI
+    assert "url==='https://github.com/MarVinPL/ai-chess-arena/releases/tag/'+tag" in GUI
     assert "info.release_notes_url" in GUI
     assert "manual.href=info.release_notes_url" in GUI
     assert "manual.hidden=false;manual.style.display='inline-block'" in GUI
     assert "github\\.com\\/MarVinPL\\/ai-chess-arena\\/releases\\/tag\\/worker-v" in GUI
     assert 'url.host_str() == Some("github.com")' in RUST
-    assert 'url.path().starts_with("/MarVinPL/ai-chess-arena/releases/tag/worker-v")' in RUST
+    assert 'url.path() == expected_path' in RUST
 
 
 def test_fallback_does_not_misrepresent_native_install():

@@ -9,7 +9,7 @@ class NoLocalRuntime:
 
 
 def test_runner_can_play_full_game_with_injected_coordinator_provider():
-    moves = iter(['f2f3', 'e7e5', 'g2g4', 'd8h4'])
+    moves = iter(['f2f3', 'e7e5', 'g2g4', 'd8h4', 'a2a3', 'h4e1'])
     seen = []
 
     def provider(board, player, stop, kwargs):
@@ -21,8 +21,8 @@ def test_runner_can_play_full_game_with_injected_coordinator_provider():
     result = runner.play_game({'name': 'White'}, {'name': 'Black'})
     assert result['status'] == 'finished'
     assert result['result'] == '0-1'
-    assert [m['uci'] for m in result['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4']
-    assert len(seen) == 4
+    assert [m['uci'] for m in result['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4', 'a2a3', 'h4e1']
+    assert len(seen) == 6
 
 
 def test_runner_rejects_illegal_injected_move():

@@ -24,7 +24,7 @@ class NoVpsInference:
         raise AssertionError("Phone-mode game must not compute on VPS")
 
 
-def initial_state(db):
+def initial_state(db, variant="standard"):
     tournament_checkpoint.ensure_schema(db)
     state = {
         "schema_version": 1,
@@ -37,13 +37,17 @@ def initial_state(db):
         "white": {"model_sha256": MODEL},
         "black": {"model_sha256": MODEL},
     }
+    if variant != "standard":
+        state["variant"] = variant
     tournament_checkpoint.save(db, TOURNAMENT, state)
     return state
 
 
 def play_simulated_phone_move(db, before, *, inject_failure=False, monkeypatch=None):
     worker = WorkerInferenceDelivery(db, clock=lambda: 1000.0)
-    assert worker.register_local_ready(WORKER, MODEL) == "ready"
+    variant = before.get("variant", "standard")
+    version = 3 if variant == "elimination" else 2
+    assert worker.register_local_ready(WORKER, MODEL, version) == "ready"
     events = []
     stop = threading.Event()
 
@@ -53,6 +57,10 @@ def play_simulated_phone_move(db, before, *, inject_failure=False, monkeypatch=N
             return
         events.append((worker_id, job_id, fen))
         assert fen == before["fen"]
+        job = worker.poll_assigned_job(worker_id)["job"]
+        assert job["version"] == version
+        assert job.get("variant", "standard") == variant
+        assert "e2e4" in job["legal_moves"]
         worker.submit_inference_result(
             worker_id, {"version": 1, "job_id": job_id, "uci": "e2e4"},
         )
@@ -82,13 +90,14 @@ def play_simulated_phone_move(db, before, *, inject_failure=False, monkeypatch=N
     }
     result = engine_runner.SequentialChessRunner(
         NoVpsInference(), move_provider=provider,
-    ).play_game(white, black, stop, progress=checkpoint_from_arena)
+    ).play_game(white, black, stop, progress=checkpoint_from_arena, variant=variant)
     return result, events
 
 
-def test_one_actual_engine_runner_move_has_single_atomic_arena_checkpoint(tmp_path):
+@pytest.mark.parametrize("variant", ["standard", "elimination"])
+def test_one_actual_engine_runner_move_has_single_atomic_arena_checkpoint(tmp_path, variant):
     db = tmp_path / "arena.sqlite"
-    original = initial_state(db)
+    original = initial_state(db, variant)
     result, events = play_simulated_phone_move(db, original)
     assert result["status"] == "stopped"
     assert len(result["moves"]) == 1
@@ -96,6 +105,7 @@ def test_one_actual_engine_runner_move_has_single_atomic_arena_checkpoint(tmp_pa
     assert len(events) == 1
     assert events[0][0] == WORKER
     checkpoint = tournament_checkpoint.load(db, TOURNAMENT)
+    assert checkpoint.get("variant", "standard") == variant
     assert checkpoint["fen"] == result["fen"]
     assert checkpoint["side_to_move"] == "black"
     assert checkpoint["moves"][0]["uci"] == "e2e4"
@@ -110,11 +120,12 @@ def test_one_actual_engine_runner_move_has_single_atomic_arena_checkpoint(tmp_pa
         ).fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("variant", ["standard", "elimination"])
 def test_engine_runner_failure_to_write_arena_checkpoint_keeps_phone_fenced(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, variant,
 ):
     db = tmp_path / "arena.sqlite"
-    original = initial_state(db)
+    original = initial_state(db, variant)
     with monkeypatch.context() as patch:
         def fail_checkpoint(*args, **kwargs):
             raise OSError("simulated Arena storage failure")

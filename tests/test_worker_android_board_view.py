@@ -91,13 +91,13 @@ def test_live_events_never_inherit_previous_worker_identity():
 
 
 def test_endpoint_requires_machine_token_and_matching_nonce():
-    section = SERVER.split("if path == '/api/remote-workers/board-view':", 1)[1].split(
-        "if path == '/api/remote-workers/update-resume-status':", 1
-    )[0]
-    assert "WorkerTokenStore(DB).authenticate(worker_id, token)" in section
-    assert "worker_board_snapshot(DB, worker_id, get_live())" in section
-    assert "'nonce': nonce" in section
-    assert "self.send_json({'error': 'Brak autoryzacji'}, 401)" in section
+    gateway = (Path(__file__).resolve().parents[1] / 'remote_worker_phone_api.py').read_text()
+    assert 'if path in ROUTES:' in SERVER
+    assert 'WorkerTokenStore(db).authenticate(worker_id, token)' in gateway
+    assert 'worker_board_snapshot(db, worker_id, live)' in gateway
+    assert '"nonce": nonce' in gateway
+    assert '401)' in gateway
+    assert gateway.index('WorkerTokenStore(db).authenticate') < gateway.index('worker_board_snapshot(db, worker_id, live)')
     assert '"board-view"' in BRIDGE
     assert 'get("nonce").and_then(Value::as_str) != Some(nonce.as_str())' in BRIDGE
     assert 'get("worker_id").and_then(Value::as_str) != Some(worker_id)' in BRIDGE

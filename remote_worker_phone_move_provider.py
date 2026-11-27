@@ -13,6 +13,7 @@ import time
 from typing import Callable
 
 import chess
+from elimination_chess import EliminationBoard, board_for_variant
 
 from remote_worker_inference_delivery import WorkerInferenceDelivery
 
@@ -47,8 +48,13 @@ class ArenaPhoneMoveProvider:
     def __call__(self, board: chess.Board, player: dict, stop_event, kwargs: dict):
         if self.pending_result is not None:
             raise PhoneMoveUnavailable("Previous phone move has no committed Arena checkpoint")
-        if not isinstance(board, chess.Board) or not board.is_valid():
-            raise PhoneMoveUnavailable("Invalid Arena board for phone inference")
+        variant = 'elimination' if isinstance(board, EliminationBoard) else 'standard'
+        try:
+            if type(board) not in (chess.Board, EliminationBoard):
+                raise ValueError('Unsupported board')
+            board_for_variant(board.fen(), variant)
+        except ValueError as exc:
+            raise PhoneMoveUnavailable("Invalid Arena board for phone inference") from exc
         if not isinstance(player, dict) or not isinstance(kwargs, dict):
             raise PhoneMoveUnavailable("Missing trusted player configuration")
         digest = player.get("model_sha256")
@@ -65,6 +71,8 @@ class ArenaPhoneMoveProvider:
             "max_tokens": tokens,
             "timeout_seconds": self.timeout_seconds,
         }
+        if variant == "elimination":
+            job.update(version=3, variant=variant)
         # No remote dispatch until the selected phone has a FRESH verified
         # ready marker matching this model and no update/pause/resume barriers.
         try:
@@ -155,7 +163,7 @@ class ArenaPhonePoolProvider:
             raise PhoneMoveUnavailable("Invalid player for phone selection")
         sha256 = player.get("model_sha256")
         try:
-            worker_id = self.delivery.find_ready_worker(sha256)
+            worker_id = self.delivery.find_ready_worker(sha256, 3 if isinstance(board, EliminationBoard) else 2)
         except ValueError as exc:
             raise PhoneMoveUnavailable("Player model has no verified SHA-256") from exc
         if worker_id is None:

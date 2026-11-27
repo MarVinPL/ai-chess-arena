@@ -21,6 +21,7 @@ function persistWorkerIdentity(){
  if(!validWorkerIdentity(id))return false;
  try {
   localStorage.setItem(workerIdentityKey,id);
+  if(localStorage.getItem(workerIdentityKey)!==id)throw Error('storage verification');
   return true;
  }catch(_error){
   document.getElementById('backendStatus').textContent='Nie udało się zapamiętać identyfikatora Workera na urządzeniu.';
@@ -34,6 +35,7 @@ try {
   crypto.getRandomValues(bytes);
   id='android_'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
   localStorage.setItem(workerIdentityKey,id);
+  if(localStorage.getItem(workerIdentityKey)!==id)throw Error('storage verification');
  }
  workerIdField.value=id;
 }catch(_error){
@@ -49,6 +51,13 @@ update();
 // Experimental Android inference loop. Computation goes ONLY to the user's
 // localhost llama.cpp. Arena keeps chess state/checkpoints. Foreground only;
 // Pause/Stop prevent new jobs but cannot abort an already running model call.
+let connectionRevision=0;
+function connectionSnapshot(){
+ return {revision:connectionRevision,server:document.getElementById('server').value.trim(),workerId:document.getElementById('workerId').value.trim()};
+}
+function connectionIsCurrent(snapshot){
+ return snapshot.revision===connectionRevision && snapshot.server===document.getElementById('server').value.trim() && snapshot.workerId===document.getElementById('workerId').value.trim();
+}
 let phoneWorkerEnabled=false;
 let phoneWorkerRunning=false;
 let phonePaired=false;
@@ -68,11 +77,13 @@ async function processOnePhoneMove(){
  const invoke=window.__TAURI__?.core?.invoke;
  if(!phonePaired||!phoneWorkerEnabled||phoneWorkerRunning||document.hidden||typeof invoke!=='function')return;
  phoneWorkerRunning=true;
+ const snapshot=connectionSnapshot();
  try{
   const result=await invoke('execute_phone_inference_once',{
-   server:document.getElementById('server').value.trim(),
-   workerId:document.getElementById('workerId').value.trim()
+   server:snapshot.server,
+   workerId:snapshot.workerId
   });
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   if(result?.state==='received_not_applied'||result?.state==='already_received'){
    phoneInferenceStatus.textContent='Telefon wykonał obliczenie. Ruch przekazany Arenie; zatwierdzenie partii należy do Areny.';
   }else if(result?.state==='awaiting_arena'){
@@ -87,6 +98,7 @@ async function processOnePhoneMove(){
    phoneInferenceStatus.textContent='Stan lokalnego wykonawcy nie został potwierdzony.';
   }
  }catch(error){
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   phoneWorkerEnabled=false;
   phoneInferenceStatus.textContent='Lokalna inferencja zatrzymana: '+String(error||'nieznany błąd')+
     '. Sprawdź, czy llama.cpp na tym telefonie działa i reklamuje SHA-256 modelu jako alias.';
@@ -121,14 +133,16 @@ async function refreshMyInferenceAssignment(){
  const invoke=window.__TAURI__?.core?.invoke;
  if(!phonePaired||workerJobPollInFlight||document.hidden||typeof invoke!=='function')return;
  workerJobPollInFlight=true;
+ const snapshot=connectionSnapshot();
  const model=document.getElementById('myAssignedModel');
  const game=document.getElementById('myAssignedGame');
  const status=document.getElementById('myAssignedStatus');
  try{
   const assigned=await invoke('poll_my_inference_job',{
-   server:document.getElementById('server').value.trim(),
-   workerId:document.getElementById('workerId').value.trim()
+   server:snapshot.server,
+   workerId:snapshot.workerId
   });
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   if(assigned?.state==='assigned' && assigned.job){
    model.textContent=String(assigned.job.model_sha256||'').slice(0,12)+'…';
    game.textContent=String(assigned.job.job_id||'').slice(0,96);
@@ -144,6 +158,7 @@ async function refreshMyInferenceAssignment(){
     :'Brak przydziału';
   }
  }catch(_){
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   model.textContent='Brak';game.textContent='—';
   status.textContent='Brak potwierdzonego przydziału';
  }finally{workerJobPollInFlight=false;}
@@ -209,13 +224,16 @@ async function refreshMyWorkerBoard(){
  const invoke=window.__TAURI__?.core?.invoke;
  if(!phonePaired||workerBoardPollInFlight||document.hidden||typeof invoke!=='function')return;
  workerBoardPollInFlight=true;
+ const snapshot=connectionSnapshot();
  try{
   const view=await invoke('get_my_worker_board',{
-   server:document.getElementById('server').value.trim(),
-   workerId:document.getElementById('workerId').value.trim()
+   server:snapshot.server,
+   workerId:snapshot.workerId
   });
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   renderWorkerArenaBoard(view);
  }catch(_){
+  if(!connectionIsCurrent(snapshot)||!phonePaired)return;
   renderWorkerArenaBoard(null);
   document.getElementById('myWorkerBoardEmpty').textContent=
    'Podgląd niedostępny — nie można potwierdzić partii tego Workera.';
@@ -272,6 +290,8 @@ function saveUpdateChannel(channel){
  try{localStorage.setItem(updateChannelKey,channel);return true;}catch(_){return false;}
 }
 function hideReleaseLink(){
+ const manual=document.getElementById('manualWorkerUpdate');
+ manual.hidden=true;manual.style.display='none';manual.removeAttribute('href');
  const download=document.getElementById('downloadWorkerApk');
  download.hidden=true;download.disabled=true;
  const install=document.getElementById('installWorkerApk');
@@ -314,15 +334,20 @@ async function checkForWorkerUpdate(){
   if(!tag){
    status.textContent='Brak opublikowanych wydań Workera w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Zainstalowana: '+info.current_version+'.';
   }else if(info.update_available){
-   status.textContent='W kanale '+(channel==='latest'?'Latest':'Pre-release')+' dostępne wydanie '+tag+' (zainstalowana: '+info.current_version+'). Instalacja tylko ręczna lub zweryfikowany instalator dla Latest.';
+   status.textContent='W kanale '+(channel==='latest'?'Latest':'Pre-release')+' dostępne wydanie '+tag+' (zainstalowana: '+info.current_version+'). '+(channel==='latest'?(info.apk_asset_available===true?'Dostępny APK ARM64 do zweryfikowania.':'Brak kwalifikującego się pliku APK ARM64')+'. Instalacja pozostaje wyłączona.':'Instalacja tylko ręczna.');
   }else if(channel==='pre-release'){
    status.textContent='Najnowsze wydanie testowe: '+tag+' (zainstalowana wersja: '+info.current_version+'). Ten sam numer wersji podstawowej nie oznacza nowszego APK. Instalacja tylko ręczna.';
   }else{
    status.textContent='Zainstalowana: '+info.current_version+'. Najnowsze stabilne wydanie: '+tag+'. Brak nowszej wersji.';
   }
-  const url=info?.release_notes_url;
+  const url=info.release_notes_url;
   if(typeof url==='string'&&/^https:\/\/github\.com\/MarVinPL\/ai-chess-arena\/releases\/tag\/worker-v[0-9A-Za-z.-]+$/.test(url) &&
      url==='https://github.com/MarVinPL/ai-chess-arena/releases/tag/'+tag){
+   const manual=document.getElementById('manualWorkerUpdate');
+   if(channel==='latest' && info.update_available===true && info.apk_asset_available===true){
+    manual.href=info.release_notes_url;
+    manual.hidden=false;manual.style.display='inline-block';
+   }
    workerReleaseLink.href=url;
    workerReleaseLink.hidden=false;
    // Metadata-only update action: never download or install an unverified APK.
@@ -448,13 +473,16 @@ async function refreshWorkerResumeReadiness(){
  const invoke=window.__TAURI__?.core?.invoke;
  button.disabled=true;resumeReadinessState=null;
  if(!invoke){label.textContent='Wznowienie wymaga aplikacji Android.';return;}
+ const snapshot=connectionSnapshot();
  try{
   const state=await invoke('inspect_worker_resume_readiness',{
-   server:document.getElementById('server').value.trim(),
-   workerId:document.getElementById('workerId').value.trim()
+   server:snapshot.server,
+   workerId:snapshot.workerId
   });
-  resumeReadinessState=state;
+  if(!connectionIsCurrent(snapshot))return;
   const supported=await invoke('phone_inference_supported');
+  if(!connectionIsCurrent(snapshot))return;
+  resumeReadinessState=state;
   button.disabled=!(state==='no_checkpoint'&&supported===true&&!phoneWorkerEnabled);
   label.textContent=state==='no_checkpoint'
    ?'Nie ma przerwanego checkpointu. Możesz bezpiecznie wznowić odbieranie zadań Areny.'
@@ -464,6 +492,7 @@ async function refreshWorkerResumeReadiness(){
    ?'Checkpoint przerwanego zadania jest zachowany w Arenie. Wznowienie tego zadania wymaga potwierdzonego nowego przydziału.'
    :'Wznowienie jest zablokowane do czasu uzgodnienia stanu Workera.';
  }catch(_){
+  if(!connectionIsCurrent(snapshot))return;
   resumeReadinessState=null;
   label.textContent='Nie udało się uwierzytelnić stanu wznowienia w Arenie.';
  }
@@ -474,13 +503,16 @@ document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
  const invoke=window.__TAURI__?.core?.invoke;
  if(!invoke||resumeReadinessState!=='no_checkpoint')return;
  button.disabled=true;
- const server=document.getElementById('server').value.trim();
- const workerId=document.getElementById('workerId').value.trim();
+ const snapshot=connectionSnapshot();
+ const {server,workerId}=snapshot;
  try{
   // Recheck the coordinator after the APK installer has reconciled its hold.
   const state=await invoke('inspect_worker_resume_readiness',{server,workerId});
+  if(!connectionIsCurrent(snapshot))return;
   const authenticated=await invoke('verify_worker_connection',{server,workerId});
+  if(!connectionIsCurrent(snapshot))return;
   const supported=authenticated&&await invoke('phone_inference_supported');
+  if(!connectionIsCurrent(snapshot))return;
   if(state!=='no_checkpoint'||!supported){
    throw Error('Checkpoint lub autoryzacja Workera blokuje wznowienie');
   }
@@ -488,10 +520,12 @@ document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
   // hold-release receipt plus freshly probed on-device model may restore it.
   // This native command never runs inference or touches Arena's checkpoint.
   const reconciled=await invoke('reconcile_idle_phone_after_update',{server,workerId});
+  if(!connectionIsCurrent(snapshot))return;
   if(reconciled!=='ready'){
    throw Error('Arena nie potwierdziła bezczynności po aktualizacji');
   }
   const safety=await invoke('check_update_safety',{server,workerId});
+  if(!connectionIsCurrent(snapshot))return;
   if(safety!=='idle_confirmed'){
    throw Error('Nadal brak potwierdzonej bezczynności Workera');
   }
@@ -499,10 +533,11 @@ document.getElementById('resumeWorkerGame').addEventListener('click',async()=>{
   if(!activatePhoneJobPolling())throw Error('Nie udało się włączyć odbioru zadań');
   label.textContent='Odbieranie zadań wznowione na telefonie. Arena nadal prowadzi partię i checkpointy.';
  }catch(error){
+  if(!connectionIsCurrent(snapshot))return;
   phoneWorkerEnabled=false;refreshPhoneButtons();
   label.textContent='Nie można jeszcze wznowić odbierania zadań: '+String(error);
  }finally{
-  if(!phoneWorkerEnabled)button.disabled=resumeReadinessState!=='no_checkpoint';
+  if(connectionIsCurrent(snapshot)&&!phoneWorkerEnabled)button.disabled=resumeReadinessState!=='no_checkpoint';
  }
 });
 
@@ -632,10 +667,19 @@ document.getElementById('inspectAndroidSessions').addEventListener('click',async
 void refreshUpdateRecoveryStatus();
 const tokenMessage=document.getElementById('backendStatus');
 let verifiedJobPreviewConnection=null;
-let connectionRevision=0;
 let checkingConnection=false;
 function invalidateJobPreview(){
  connectionRevision++;
+ resumeReadinessState=null;
+ document.getElementById('myAssignedModel').textContent='Brak';
+ document.getElementById('myAssignedGame').textContent='—';
+ document.getElementById('myAssignedStatus').textContent='Brak potwierdzonego przydziału';
+ document.getElementById('jobModel').textContent='Brak';
+ document.getElementById('jobPosition').textContent='—';
+ document.getElementById('jobMove').textContent='—';
+ renderWorkerArenaBoard(null);
+ document.getElementById('resumeWorkerStatus').textContent='Sprawdź ponownie stan wznowienia.';
+ phoneInferenceStatus.textContent='Połączenie zmienione — nowe zadania wstrzymane.';
  phonePaired=false;phoneWorkerEnabled=false;refreshPhoneButtons();
  verifiedJobPreviewConnection=null;
  document.getElementById('previewJob').disabled=true;

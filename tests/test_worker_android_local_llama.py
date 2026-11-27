@@ -44,7 +44,7 @@ def test_phone_start_pause_stop_are_honest_and_foreground_only():
     assert "invoke('execute_phone_inference_once'" in UI
     assert "invoke('phone_inference_supported')" in UI
     assert 'let phoneWorkerEnabled=false' in UI
-    assert 'if(!phoneWorkerEnabled||phoneWorkerRunning||document.hidden' in UI
+    assert 'if(!phonePaired||!phoneWorkerEnabled||phoneWorkerRunning||document.hidden' in UI
     assert "phoneWorkerEnabled=false" in UI
     assert "Nowe zadania wstrzymane." in UI or "Nowe zadania na telefonie zostały wstrzymane." in UI
     assert "Lokalna inferencja zatrzymana:" in UI
@@ -68,11 +68,13 @@ def test_results_once_submitted_are_not_recomputed():
 
 
 def test_phone_model_is_restricted_to_arenas_canonical_legal_moves():
-    assert 'job.get("legal_moves").and_then(Value::as_array)' in LOCAL
+    assert "validated.legal_moves.as_ref()" in LOCAL
+    assert "crate::validate_pending_worker_job(&validated)" in LOCAL
+    assert "moves.windows(2).all" in LIB
     assert 'Legal UCI moves:' in LOCAL
     assert 'request["grammar"] = json!(grammar)' in LOCAL
     assert 'legal_moves.contains(&proposed.as_str())' in LOCAL
-    assert 'matches!((version, job.len()), (1, 6) | (2, 7))' in COORD
+    assert 'matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8))' in COORD
     assert 'let legal = job.get("legal_moves").and_then(Value::as_array)' in COORD
 
 

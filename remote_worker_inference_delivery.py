@@ -9,6 +9,7 @@ import sqlite3
 import time
 
 import chess
+from elimination_chess import board_for_variant
 
 from remote_worker_jobs import DurableWorkerJobs
 from remote_worker_protocol import validate_job, validate_result
@@ -40,7 +41,12 @@ class WorkerInferenceDelivery:
                 checked_at REAL NOT NULL
             )""")
 
-    def register_local_ready(self, worker_id, model_sha256):
+            # Serialize schema upgrade with other coordinator connections.
+            db.execute("BEGIN IMMEDIATE")
+            if 'protocol_version' not in {row[1] for row in db.execute('PRAGMA table_info(worker_inference_capabilities)')}:
+                db.execute('ALTER TABLE worker_inference_capabilities ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 2')
+
+    def register_local_ready(self, worker_id, model_sha256, protocol_version=2):
         """Machine-token authenticated, fail-closed readiness from a phone.
 
         Only an idle client without existing assignments, holds or checkpoints
@@ -52,6 +58,8 @@ class WorkerInferenceDelivery:
             c in "0123456789abcdef" for c in model_sha256
         ):
             raise ValueError("Invalid model digest")
+        if type(protocol_version) is not int or protocol_version not in (2, 3):
+            raise ValueError("Unsupported Worker protocol")
         now = self.clock()
         with self.jobs._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -108,14 +116,14 @@ class WorkerInferenceDelivery:
                     (now, worker_id),
                 )
             db.execute(
-                """INSERT INTO worker_inference_capabilities VALUES (?,?,?)
+                """INSERT INTO worker_inference_capabilities (worker_id,model_sha256,checked_at,protocol_version) VALUES (?,?,?,?)
                 ON CONFLICT(worker_id) DO UPDATE SET
-                model_sha256=excluded.model_sha256, checked_at=excluded.checked_at""",
-                (worker_id, model_sha256, now),
+                model_sha256=excluded.model_sha256, checked_at=excluded.checked_at, protocol_version=excluded.protocol_version""",
+                (worker_id, model_sha256, now, protocol_version),
             )
         return "ready"
 
-    def find_ready_worker(self, model_sha256):
+    def find_ready_worker(self, model_sha256, protocol_version=2):
         """Select an idle phone for an exact, recent model alias.
 
         Read-only hint; assign_from_arena must recheck the same evidence
@@ -130,7 +138,7 @@ class WorkerInferenceDelivery:
             row = db.execute(
                 """SELECT c.worker_id FROM worker_inference_capabilities c
                 JOIN worker_job_safety s ON s.worker_id=c.worker_id
-                WHERE c.model_sha256=? AND c.checked_at BETWEEN ? AND ?
+                WHERE c.model_sha256=? AND c.checked_at BETWEEN ? AND ? AND c.protocol_version>=?
                 AND s.state='idle_confirmed' AND s.job_id IS NULL
                 AND NOT EXISTS (SELECT 1 FROM worker_inference_assignments a
                                 WHERE a.worker_id=c.worker_id)
@@ -141,7 +149,7 @@ class WorkerInferenceDelivery:
                 AND NOT EXISTS (SELECT 1 FROM worker_update_resume r
                                 WHERE r.worker_id=c.worker_id)
                 ORDER BY c.checked_at DESC, c.worker_id ASC LIMIT 1""",
-                (model_sha256, now - 30, now),
+                (model_sha256, now - 30, now, protocol_version),
             ).fetchone()
         return row[0] if row else None
 
@@ -169,7 +177,7 @@ class WorkerInferenceDelivery:
                 (worker_id,),
             ).fetchone()
             capability = db.execute(
-                "SELECT model_sha256,checked_at FROM worker_inference_capabilities WHERE worker_id=?",
+                "SELECT model_sha256,checked_at,protocol_version FROM worker_inference_capabilities WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
             if not existing or existing != ("idle_confirmed", None):
@@ -178,6 +186,8 @@ class WorkerInferenceDelivery:
                 0 <= now - capability[1] <= 30
             ):
                 raise ValueError("Worker did not recently confirm the requested local model")
+            if capability[2] < validated["version"]:
+                raise ValueError("Worker protocol is incompatible with job")
             if db.execute(
                 "SELECT 1 FROM worker_inference_assignments WHERE worker_id=?",
                 (worker_id,),
@@ -268,7 +278,7 @@ class WorkerInferenceDelivery:
         if result is None:
             return None
         job = validate_job(json.loads(row[0]))
-        move = validate_result(json.loads(result[0]), job, chess.Board(job["fen"]))
+        move = validate_result(json.loads(result[0]), job, board_for_variant(job["fen"], job.get("variant", "standard")))
         return move.uci()
 
     def finalize_arena_result(self, worker_id, job_id, uci, *,
@@ -318,7 +328,7 @@ class WorkerInferenceDelivery:
             ):
                 raise ValueError("No live remote result to finalize")
             job = validate_job(json.loads(row[0]))
-            before_board = chess.Board(job["fen"])
+            before_board = board_for_variant(job["fen"], job.get("variant", "standard"))
             move = validate_result(json.loads(received[0]), job, before_board)
             if move.uci() != uci:
                 raise ValueError("Arena attempted to finalize a different UCI")
@@ -354,7 +364,8 @@ class WorkerInferenceDelivery:
             next_moves = checkpoint.get("moves")
             previous_times = predecessor.get("move_times")
             next_times = checkpoint.get("move_times")
-            if (predecessor.get("fen") != job["fen"]
+            if (predecessor.get("variant", "standard") != job.get("variant", "standard")
+                or predecessor.get("fen") != job["fen"]
                 or predecessor.get("pairing") != checkpoint.get("pairing")
                 or predecessor.get("white") != checkpoint.get("white")
                 or predecessor.get("black") != checkpoint.get("black")
@@ -428,7 +439,7 @@ class WorkerInferenceDelivery:
             job = validate_job(json.loads(row[1]))
             if job["job_id"] != row[0]:
                 raise ValueError("Inference job was changed")
-            move = validate_result(result, job, chess.Board(job["fen"]))
+            move = validate_result(result, job, board_for_variant(job["fen"], job.get("variant", "standard")))
             canonical = json.dumps(
                 {"version": 1, "job_id": job["job_id"], "uci": move.uci()},
                 sort_keys=True, separators=(",", ":"), allow_nan=False,

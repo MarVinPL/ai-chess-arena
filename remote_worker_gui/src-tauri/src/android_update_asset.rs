@@ -55,7 +55,7 @@ pub(crate) fn select_apk_candidate(release: &Value, expected_tag: &str)
     let version = expected_tag.strip_prefix("worker-v")?;
     crate::numeric_version(version)?;
     if release.get("tag_name")?.as_str()? != expected_tag
-        || release.get("draft")?.as_bool()? 
+        || release.get("draft")?.as_bool()?
         || release.get("prerelease")?.as_bool()?
         || release.get("assets")?.as_array()?.len() > 100 {
         return None;

@@ -1,0 +1,142 @@
+{
+  "status": "stopped",
+  "white": "Qwen2-0.5B-Instruct",
+  "black": "SmolLM2-360M-Instruct",
+  "moves": [
+    {
+      "ply": 1,
+      "color": "white",
+      "model": "Qwen2-0.5B-Instruct",
+      "model_id": 3,
+      "thinking": false,
+      "inference": {
+        "thinking": false,
+        "temperature": 0.0,
+        "max_tokens": 16
+      },
+      "budget_observations": [
+        {
+          "max_tokens": 16,
+          "completion_tokens": 5,
+          "finish_reason": "stop",
+          "truncated": false,
+          "valid_move": true,
+          "attempt": 1
+        }
+      ],
+      "uci": "b1c3",
+      "san": "Nc3",
+      "piece": "N",
+      "seconds": 7.3662,
+      "fen": "rnbqkbnr/pppppppp/8/8/8/2N5/PPPPPPPP/R1BQKBNR b KQkq - 1 1",
+      "model_proposed_uci": null,
+      "move_override": null,
+      "move_override_reason": null,
+      "arbiter_intervention": false,
+      "arbiter_signal": null,
+      "arbiter_response": null
+    },
+    {
+      "ply": 2,
+      "color": "black",
+      "model": "SmolLM2-360M-Instruct",
+      "model_id": 2,
+      "thinking": false,
+      "inference": {
+        "thinking": false,
+        "temperature": 0.0,
+        "max_tokens": 16
+      },
+      "budget_observations": [
+        {
+          "max_tokens": 16,
+          "completion_tokens": 5,
+          "finish_reason": "stop",
+          "truncated": false,
+          "valid_move": true,
+          "attempt": 1
+        }
+      ],
+      "uci": "b8c6",
+      "san": "Nc6",
+      "piece": "n",
+      "seconds": 54.2423,
+      "fen": "r1bqkbnr/pppppppp/2n5/8/8/2N5/PPPPPPPP/R1BQKBNR w KQkq - 2 2",
+      "model_proposed_uci": null,
+      "move_override": null,
+      "move_override_reason": null,
+      "arbiter_intervention": false,
+      "arbiter_signal": null,
+      "arbiter_response": null
+    },
+    {
+      "ply": 3,
+      "color": "white",
+      "model": "Qwen2-0.5B-Instruct",
+      "model_id": 3,
+      "thinking": false,
+      "inference": {
+        "thinking": false,
+        "temperature": 0.0,
+        "max_tokens": 16
+      },
+      "budget_observations": [
+        {
+          "max_tokens": 16,
+          "completion_tokens": 5,
+          "finish_reason": "stop",
+          "truncated": false,
+          "valid_move": true,
+          "attempt": 1
+        }
+      ],
+      "uci": "c3d5",
+      "san": "Nd5",
+      "piece": "N",
+      "seconds": 8.8132,
+      "fen": "r1bqkbnr/pppppppp/2n5/3N4/8/8/PPPPPPPP/R1BQKBNR b KQkq - 3 2",
+      "model_proposed_uci": null,
+      "move_override": null,
+      "move_override_reason": null,
+      "arbiter_intervention": false,
+      "arbiter_signal": null,
+      "arbiter_response": null
+    },
+    {
+      "ply": 4,
+      "color": "black",
+      "model": "SmolLM2-360M-Instruct",
+      "model_id": 2,
+      "thinking": false,
+      "inference": {
+        "thinking": false,
+        "temperature": 0.0,
+        "max_tokens": 16
+      },
+      "budget_observations": [
+        {
+          "max_tokens": 16,
+          "completion_tokens": 5,
+          "finish_reason": "stop",
+          "truncated": false,
+          "valid_move": true,
+          "attempt": 1
+        }
+      ],
+      "uci": "c6e5",
+      "san": "Ne5",
+      "piece": "n",
+      "seconds": 57.8303,
+      "fen": "r1bqkbnr/pppppppp/8/3Nn3/8/8/PPPPPPPP/R1BQKBNR w KQkq - 4 3",
+      "model_proposed_uci": null,
+      "move_override": null,
+      "move_override_reason": null,
+      "arbiter_intervention": false,
+      "arbiter_signal": null,
+      "arbiter_response": null
+    }
+  ],
+  "fen": "r1bqkbnr/pppppppp/8/3Nn3/8/8/PPPPPPPP/R1BQKBNR w KQkq - 4 3",
+  "test_only": true,
+  "full_game_completed": false
+}

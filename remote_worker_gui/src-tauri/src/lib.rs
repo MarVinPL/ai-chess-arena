@@ -1047,6 +1047,30 @@ mod version_tests {
         assert_eq!(selected.0, [1,10,0]);
     }
     #[test]
+    fn variant_jobs_require_known_rules_and_sorted_uci() {
+        let job = serde_json::json!({
+            "version": 3, "variant": "elimination", "job_id": "job_12345678",
+            "fen": "4k3/8/8/8/8/8/4R3/4K3 w - - 0 1",
+            "model_sha256": "a".repeat(64), "max_tokens": 32,
+            "timeout_seconds": 300, "legal_moves": ["e2e7", "e2e8"]
+        });
+        let valid = |v| validate_pending_worker_job(&serde_json::from_value::<PendingWorkerJob>(v).unwrap());
+        assert!(valid(job.clone()));
+        for (field, value) in [("variant", serde_json::json!("unknown")),
+                               ("version", serde_json::json!(2)),
+                               ("legal_moves", serde_json::json!(["e2e8", "e2e7"])),
+                               ("legal_moves", serde_json::json!(["e2e7", "e2e7"])),
+                               ("legal_moves", serde_json::json!(["e2e2"]))] {
+            let mut bad = job.clone();
+            bad[field] = value;
+            assert!(!valid(bad));
+        }
+        let mut missing = job;
+        missing.as_object_mut().unwrap().remove("variant");
+        assert!(!valid(missing));
+    }
+
+    #[test]
     fn only_complete_typed_worker_jobs_are_displayable() {
         let ok: PendingWorkerJob = serde_json::from_value(serde_json::json!({
             "version": 1, "job_id": "job_12345678",

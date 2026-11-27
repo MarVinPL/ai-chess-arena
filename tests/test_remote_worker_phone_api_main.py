@@ -25,6 +25,8 @@ SHA = "a" * 64
 def gateway(tmp_path, monkeypatch):
     path = tmp_path / "arena.sqlite3"
     monkeypatch.setattr(server, "DB", path)
+    from remote_worker_rate_policy import WorkerRatePolicy
+    monkeypatch.setattr(server, "_worker_rate_policy", WorkerRatePolicy())
     monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
     monkeypatch.delenv("ARENA_PHONE_WORKER_API_ENABLED", raising=False)
     token = WorkerTokenStore(path).issue(WORKER, ttl_seconds=600)
@@ -151,3 +153,29 @@ def test_gateway_never_exposes_assignment_completion_or_installer():
     assert not any(route.endswith(s) for route in ROUTES for s in (
         "/assign", "/complete", "/update-release", "/ack", "/update-reserve"
     ))
+
+
+def test_elimination_assignment_requires_explicit_v3_readiness(gateway, monkeypatch):
+    from elimination_chess import EliminationBoard
+    monkeypatch.setenv('ARENA_PHONE_WORKER_API_ENABLED', '1')
+    path, token, post = gateway
+    auth = credentials(token)
+    board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+    job = dict(version=3, variant='elimination', job_id='game_variant_12345678',
+               fen=board.fen(), model_sha256=SHA, max_tokens=32, timeout_seconds=90,
+               legal_moves=sorted(m.uci() for m in board.legal_moves))
+    delivery = WorkerInferenceDelivery(path)
+    assert post('ready', {**auth, 'model_sha256': SHA})[0] == 200
+    assert delivery.find_ready_worker(SHA, 3) is None
+    with pytest.raises(ValueError, match='protocol'):
+        delivery.assign_from_arena(WORKER, job)
+    for invalid in (True, 4, '3', None):
+        assert post('ready', {**auth, 'model_sha256': SHA, 'protocol_version': invalid})[0] == 400
+    assert post('ready', {**auth, 'model_sha256': SHA, 'protocol_version': 3})[0] == 200
+    assert delivery.find_ready_worker(SHA, 3) == WORKER
+    delivery.assign_from_arena(WORKER, job)
+    code, body = post('job-poll', auth)
+    assert code == 200 and body['job'] == job
+    assert {'e2e7', 'e2e8'} <= set(body['job']['legal_moves'])
+    code, body = post('job-result', {**auth, 'result': {'version': 1, 'job_id': job['job_id'], 'uci': 'e2e7'}})
+    assert code == 200 and body['state'] == 'received_not_applied'

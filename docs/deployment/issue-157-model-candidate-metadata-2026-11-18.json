@@ -1,0 +1,28 @@
+{
+  "retrieved_at": "2026-11-18",
+  "source": "https://huggingface.co/api/models/360ZhiNao/Light-R1-14B-DS-GGUF/revision/0d4531e58894e0019d4a9a6aa775eb32098213cb?blobs=true",
+  "repository_id": "360ZhiNao/Light-R1-14B-DS-GGUF",
+  "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+  "file": {
+    "filename": "Light-R1-14B-Q4_0.gguf",
+    "size_bytes": 8517725312,
+    "upstream_lfs_sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa",
+    "upstream_blob_id": "f0c50ee739797b7f50e11f3fb484aef73f941aa8"
+  },
+  "license_metadata": {
+    "repository_tag": "license:apache-2.0",
+    "model_card_license": "apache-2.0",
+    "license_file_found": false,
+    "status": "pending_manual_review",
+    "verified_permissive": false
+  },
+  "safety_and_admission": {
+    "weights_downloaded": false,
+    "file_hash_recomputed_from_weights": false,
+    "quarantine_artifact_present": false,
+    "runtime_test_only_grant_active": false,
+    "inference_authorized": false,
+    "roster_or_tournament_admission_changed": false
+  },
+  "result": "METADATA_PINNED_ONLY_NOT_ADMITTED"
+}

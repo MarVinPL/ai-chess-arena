@@ -1,26 +1,27 @@
-# Hugging Face metadata check for existing models
+# Hugging Face metadata synchronization policy
 
-The free GitHub Actions workflow `.github/workflows/huggingface-model-catalog-sync.yml` runs every Monday at 04:17 UTC and can also be started manually. It uses only the public Hugging Face model metadata API and the standard GitHub Actions token. No paid service is required.
+As of 2026-11-19, automatic discovery of new Hugging Face candidates is disabled by owner decision (Issue #63).
 
-## Strict scope
+## Permitted automation
 
-- The check is limited to the eight repository IDs already present as model IDs 1–8 in `manifests/huggingface-models.json`.
-- It queries each of those eight exact repository endpoints. It does not query the public model listing, search for new models, or add any new repository.
-- Model IDs 9–10 are not included; they are managed separately under Issue #71.
-- Results are stored separately in `manifests/huggingface-existing-models-metadata.json`. The existing candidate catalog is not overwritten or mixed with this check's schema.
+The workflow `.github/workflows/huggingface-model-catalog-sync.yml` may run weekly or manually, but it is strictly limited to checking metadata for the eight exact repository IDs already pinned as model IDs 1–8 in `manifests/huggingface-models.json`.
 
-## Change handling
+- It queries only those eight exact repository endpoints.
+- It does not query public model listings, search for new repositories, or add candidates.
+- It writes metadata to `manifests/huggingface-existing-models-metadata.json`, separate from the candidate catalog and admission allowlist.
+- Changed revisions, moved sources, or unavailable repositories require human review.
+- It cannot approve licenses, technical readiness, or tournament admission.
+- It does not download model weights or run inference/training.
 
-- A matching source revision preserves the existing license-audit state.
-- A changed revision, missing repository, moved repository, or private/disabled/gated source is retained with a history event and marked `review_required`.
-- A changed revision invalidates the previous license-review status. The workflow cannot approve licenses, technical readiness, or tournament admission.
-- An unchanged weekly check does not rewrite the metadata manifest and therefore does not create a PR.
-- An API error, rate limit, empty/malformed response, or invalid manifest aborts the update. The previous manifest is preserved and the error report is uploaded as an Actions artifact.
-- A draft PR is opened only when tracked metadata changes. It is never merged automatically and requires human review.
+## Prohibited automation
 
-## Safety boundaries
+- No scheduled or manual GitHub Actions workflow may discover new public Hugging Face repositories.
+- The retired `.github/workflows/huggingface-candidate-catalog-sync.yml` must not be restored without explicit owner approval.
+- New candidate entries require an explicit owner request identifying the repository/model.
+- No metadata sync may modify the pinned model manifest, tournament allowlist, roster, production database, or active tournament.
 
-- Metadata only: no weights, tokenizer files, datasets, or model binaries are downloaded; no inference is run.
-- No public model discovery is performed.
-- No production database, active tournament, roster, model file, pinned manifest, or admission allowlist is changed.
-- The informational existing-model metadata manifest is not an admission decision.
+## Safety and failure handling
+
+- API errors, rate limits, empty/malformed responses, or invalid manifests abort the metadata check; the last valid metadata remains intact.
+- A draft PR may be created only for metadata changes to the already-pinned repositories. It is never merged automatically and requires human review.
+- Excluded model identities remain excluded and must not be restored by any sync.

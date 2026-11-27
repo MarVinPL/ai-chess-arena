@@ -181,7 +181,7 @@ pub(crate) async fn reserve_update(
     if !response.status().is_success() {
         return Err("Koordynator odmówił rezerwacji aktualizacji".into());
     }
-    let body: Value = response.json().await.map_err(|_|
+    let body: Value = crate::bounded_json_response(response, 4096).await.map_err(|_|
         "Nieprawidłowa odpowiedź koordynatora")?;
     let verified = verify_reservation_reply(&body, worker_id, &nonce, system_unix_ms()?)?;
     if verified.token != pending.hold_token {
@@ -214,7 +214,7 @@ pub(crate) async fn inspect_pending_update(machine_token: &str) -> Result<&'stat
     if !response.status().is_success() {
         return Err("Koordynator nie potwierdził stanu rezerwacji".into());
     }
-    let body: Value = response.json().await
+    let body: Value = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowa odpowiedź koordynatora".to_string())?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -257,7 +257,7 @@ pub(crate) async fn release_update(
     if !response.status().is_success() {
         return Err("Koordynator odmówił zwolnienia rezerwacji".into());
     }
-    let body: Value = response.json().await.map_err(|_|
+    let body: Value = crate::bounded_json_response(response, 4096).await.map_err(|_|
         "Nieprawidłowa odpowiedź o zwolnieniu rezerwacji")?;
     if verify_release_reply(&body, worker_id, &nonce) {
         crate::android_update_recovery::clear_pending(&pending)
@@ -332,13 +332,13 @@ pub(crate) async fn announce_phone_ready(
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({
             "worker_id": worker_id, "token": machine_token, "nonce": nonce,
-            "model_sha256": model_sha256,
+            "model_sha256": model_sha256, "protocol_version": 3,
         }))
         .send().await.map_err(|_| "Arena jest niedostępna podczas zgłoszenia gotowości")?;
     if !response.status().is_success() {
         return Err("Arena odmówiła przyjęcia gotowości lokalnego Workera".into());
     }
-    let value: Value = response.json().await
+    let value: Value = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowe potwierdzenie gotowości".to_owned())?;
     if value.get("authenticated").and_then(Value::as_bool) != Some(true)
         || value.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -382,7 +382,7 @@ pub(crate) async fn submit_my_inference_move(
     if !response.status().is_success() {
         return Err("Arena odrzuciła nielegalny lub nieaktualny ruch".into());
     }
-    let body: Value = response.json().await
+    let body: Value = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowe potwierdzenie wyniku".to_owned())?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -418,7 +418,7 @@ pub(crate) async fn fetch_my_inference_job(
     if !response.status().is_success() {
         return Err("Arena odmówiła odczytu zadania".into());
     }
-    let body: Value = response.json().await
+    let body: Value = crate::bounded_json_response(response, 32 * 1024).await
         .map_err(|_| "Nieprawidłowa odpowiedź zadania".to_owned())?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -440,7 +440,7 @@ pub(crate) async fn fetch_my_inference_job(
                 .ok_or("Brak zatwierdzonego zadania".to_owned())?;
             let version = job.get("version").and_then(Value::as_u64)
                 .ok_or("Brak wersji protokołu".to_owned())?;
-            if !matches!((version, job.len()), (1, 6) | (2, 7)) {
+            if !matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8)) {
                 return Err("Niezgodny format zadania".into());
             }
             let job_id = job.get("job_id").and_then(Value::as_str)
@@ -463,7 +463,10 @@ pub(crate) async fn fetch_my_inference_job(
                 || !(1..=600).contains(&timeout) {
                 return Err("Arena przysłała nieprawidłowe zadanie".into());
             }
-            if version == 2 {
+            if version == 3 && !matches!(job.get("variant").and_then(Value::as_str), Some("standard" | "elimination")) {
+                return Err("Nieznany wariant szachów".into());
+            }
+            if version >= 2 {
                 let legal = job.get("legal_moves").and_then(Value::as_array)
                     .ok_or("Arena nie podała legalnych ruchów")?;
                 if legal.is_empty() || legal.len() > 256 {
@@ -515,7 +518,7 @@ pub(crate) async fn fetch_worker_board_view(
     if !response.status().is_success() {
         return Err("Arena odmówiła podglądu partii".into());
     }
-    let body: Value = response.json().await
+    let body: Value = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowy podgląd partii".to_owned())?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -581,7 +584,7 @@ pub(crate) async fn fetch_resume_status(
     if !response.status().is_success() {
         return Err("Koordynator odmówił sprawdzenia wznowienia".into());
     }
-    let value: Value = response.json().await
+    let value: Value = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowa odpowiedź wznowienia".to_owned())?;
     if value.get("authenticated").and_then(Value::as_bool) != Some(true)
         || value.get("source").and_then(Value::as_str) != Some("coordinator")
@@ -619,7 +622,7 @@ pub(crate) async fn poll_pause_instruction(
     if !reply.status().is_success() {
         return Err("Koordynator nie potwierdził polecenia pauzy".into());
     }
-    let body: Value = reply.json().await
+    let body: Value = crate::bounded_json_response(reply, 4096).await
         .map_err(|_| "Nieprawidłowa odpowiedź koordynatora".to_string())?;
     verify_pause_poll_reply(&body, worker_id, &nonce)
 }

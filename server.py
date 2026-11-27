@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-import calendar, csv, hashlib, io, json, os, re, shutil, sqlite3, threading, time, urllib.request, urllib.error
+import calendar, csv, hashlib, io, json, os, re, shutil, signal, sqlite3, threading, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 import chess, chess.pgn
+from elimination_chess import EliminationBoard
 import league
 import model_store
 import model_allowlist
@@ -23,6 +24,17 @@ import tournament_checkpoint
 import remote_worker_tokens
 import arena_auth
 import model_permissions
+import runtime_executor
+from runtime_deployment import resolve_runtime_deployment
+from runtime_startup import recover_runtime_on_startup
+from runtime_supervisor_ipc import supervisor_request
+from runtime_supervisor import SQLiteRuntimeUnitStore
+from runtime_supervisor_client import RuntimeSupervisorClientRunner
+from runtime_api_worker import RuntimeApiWorker
+from runtime_lease_broker import RuntimeLeaseBrokerServer
+from runtime_process_config import (
+    background_jobs_enabled, resolve_log_directory, resolve_process_settings,
+)
 import remote_worker_metrics
 import remote_worker_job_registry
 import remote_worker_job_delivery
@@ -35,20 +47,32 @@ def _route_path(request_target):
     return urlsplit(request_target).path
 
 
+def _serve_http_until_shutdown(http_server, shutdown_requested):
+    """Serve threaded HTTP requests with a signal-safe, bounded poll interval."""
+    http_server.timeout = 0.5
+    try:
+        while not shutdown_requested.is_set():
+            http_server.handle_request()
+    finally:
+        http_server.server_close()
+
+
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = model_store.MANAGED_DIR
-DB = ROOT / 'arena.sqlite3'
+DB, HOST, PORT = resolve_process_settings(root=ROOT)
+# Every API-owned SQLite subsystem must use the same explicitly selected DB.
+league.DB = DB
+hf_candidate_downloads.DB_PATH = DB
+LOG_DIR = resolve_log_directory(root=ROOT)
 _worker_rate_policy = WorkerRatePolicy()
-LOG_DIR = ROOT / 'logs'
 MODEL_RESPONSES_LOG = LOG_DIR / 'model-responses.jsonl'
 LIVE_EVENTS_LOG = LOG_DIR / 'recent-events.jsonl'
 MODEL_RESPONSE_RETENTION_SECONDS = 3 * 24 * 60 * 60
 LIVE_EVENT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 LOG_MAX_BYTES = 1024 * 1024
 LLM = 'http://127.0.0.1:8088/v1/chat/completions'
-HOST, PORT = '127.0.0.1', 8090
 lock = threading.RLock()
-board = chess.Board()
+board = EliminationBoard()
 moves, timings = [], []
 illegal_moves = 0
 running = False
@@ -245,6 +269,7 @@ def active_model():
 
 
 def db_init():
+    DB.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     league.init()
     tournament_checkpoint.ensure_schema(DB)
     with sqlite3.connect(DB) as c:
@@ -295,8 +320,9 @@ def _hf_download_planner_loop():
             print(f"HF download planner refresh failed: {exc}", flush=True)
         time.sleep(900)
 
-def _failure_pgn(white_name, black_name, move_records, result, termination):
-    game = chess.pgn.Game()
+def _failure_pgn(white_name, black_name, move_records, result, termination, initial_fen=None, *, variant='elimination'):
+    start_board = (EliminationBoard(initial_fen) if initial_fen else EliminationBoard()) if variant == 'elimination' else chess.Board(initial_fen or chess.STARTING_FEN)
+    game = chess.pgn.Game.from_board(start_board)
     game.headers['Event'] = 'Local AI Chess Arena'
     game.headers['White'] = white_name
     game.headers['Black'] = black_name
@@ -322,14 +348,15 @@ def _persist_failed_game(tournament_id, pairing, white, black, game_started, exc
     times = list(getattr(exc, 'move_times', []) or [])
     pgn_result = result if adjudicated else '*'
     pgn = _failure_pgn(white['name'], black['name'], moves, pgn_result,
-                       'Adjudication' if adjudicated else 'Unresolved failure')
+                       'Adjudication' if adjudicated else 'Unresolved failure',
+                       variant=getattr(exc, 'variant', 'elimination'))
     ended = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     average = round(sum(times) / len(times), 4) if times else 0.0
     attempts = list(getattr(exc, 'uci_attempts', []) or [])
     illegal_attempts = sum(1 for item in attempts
                            if item.get('classification') == 'illegal_uci')
     try:
-        side_to_move = 'white' if chess.Board(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
+        side_to_move = 'white' if EliminationBoard(getattr(exc, 'fen', None)).turn == chess.WHITE else 'black'
     except (ValueError, TypeError):
         side_to_move = None
     with sqlite3.connect(DB, timeout=10) as db:
@@ -386,24 +413,31 @@ def llm_runtime_available():
 
 def ask_model(model, b):
     legal = [m.uci() for m in b.legal_moves]
+    system_prompt = (
+        'Jesteś zawodnikiem w Szachach Eliminacyjnych (King-Capture Chess). '
+        'You are playing Elimination Chess. Capture the opposing king to win; check/checkmate do not restrict moves or end the game. '
+        'Wybierz dokładnie jeden ruch z listy LEGAL MOVES. Choose exactly one move from LEGAL MOVES. '
+        'Zwróć wyłącznie jeden ruch UCI, bez wyjaśnienia. Return exactly one UCI move and no explanation.'
+    )
     prompt = (
-        'You are playing chess. Select exactly one move from the LEGAL MOVES list. '
-        'Return only the UCI move, with no explanation.\n'
+        'Wybierz jeden ruch z listy. Select one move from the list.' + '\n'
         f'FEN: {b.fen()}\nLEGAL MOVES: {", ".join(legal)}\nMOVE:'
     )
     payload = json.dumps({
-        'messages': [{'role': 'user', 'content': prompt}],
-        'temperature': 0, 'max_tokens': 24, 'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False}
+        'messages': [{'role': 'system', 'content': system_prompt},
+                     {'role': 'user', 'content': prompt}],
+        'temperature': 0, 'max_tokens': 16, 'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False},
+        'grammar': engine_runner.LlamafileRuntime._uci_grammar(legal),
     }).encode()
     req = urllib.request.Request(LLM, data=payload, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=90) as r:
+    with urllib.request.urlopen(req, timeout=None) as r:
         data = json.loads(r.read().decode())
     content = data['choices'][0]['message'].get('content', '')
-    match = re.search(r'(?<![a-h1-8])([a-h][1-8][a-h][1-8][qrbn]?)(?![a-h1-8])', content.lower())
-    if not match:
+    candidate = content.strip().lower()
+    if not re.fullmatch(r'[a-h][1-8][a-h][1-8][qrbn]?', candidate):
         raise ValueError('Model nie zwrócił ruchu UCI: ' + repr(content[:120]))
-    move = chess.Move.from_uci(match.group(1))
+    move = chess.Move.from_uci(candidate)
     if move not in b.legal_moves:
         raise ValueError('Model zwrócił nielegalny ruch: ' + move.uci())
     return move
@@ -687,7 +721,17 @@ def tournament_preflight(tournament_id):
     if phone_mode:
         from remote_worker_inference_delivery import WorkerInferenceDelivery
         phone_delivery = WorkerInferenceDelivery(DB)
-        runtime_available = True
+        protocol_error = None
+        required_protocol = None
+        try:
+            checkpoint = tournament_checkpoint.load(DB, tournament_id)
+            variant = checkpoint.get('variant', 'standard') if checkpoint is not None else 'elimination'
+            if variant not in ('standard', 'elimination'):
+                raise ValueError('Nieznany wariant checkpointu')
+            required_protocol = 3 if variant == 'elimination' else 2
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            protocol_error = 'Nie można ustalić wariantu partii: ' + str(exc)
+        runtime_available = protocol_error is None
     else:
         # The local runner starts Llamafile only after preflight succeeds.
         # Requiring /health here would deadlock the lazy-start lifecycle.
@@ -699,10 +743,12 @@ def tournament_preflight(tournament_id):
             try:
                 model = _version_record(entry['version_id'])
                 sha = model.get('sha256')
-                if phone_delivery.find_ready_worker(sha) is None:
+                if protocol_error is not None:
+                    raise ValueError(protocol_error)
+                if phone_delivery.find_ready_worker(sha, required_protocol) is None:
                     raise ValueError('no ready matching phone')
             except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error):
-                reasons.append('brak gotowego telefonu z wymaganym lokalnym modelem')
+                reasons.append(protocol_error or f'brak gotowego telefonu z wymaganym lokalnym modelem i protokołem v{required_protocol}')
                 runtime_available = False
         if allowlist_error is not None:
             reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
@@ -739,7 +785,7 @@ def _preflight_error_message(preflight):
 
 
 def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_started,
-                                   moves, move_times, fen, phase='game'):
+                                   moves, move_times, fen, phase='game', *, variant='elimination'):
     with league.connect() as c:
         tournament = c.execute('SELECT * FROM tournaments WHERE id=?', (tournament_id,)).fetchone()
         if tournament is None:
@@ -748,6 +794,7 @@ def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_st
         schedule = c.execute('''SELECT id,white_model_id,black_model_id,leg,stage,round_no,match_no,status,game_id,winner_model_id FROM tournament_pairings WHERE tournament_id=? ORDER BY id''', (tournament_id,)).fetchall()
     return {
         'schema_version': tournament_checkpoint.SCHEMA_VERSION,
+        'variant': variant,
         'tournament_id': int(tournament_id),
         'phase': phase,
         'tournament': dict(tournament),
@@ -780,6 +827,8 @@ def _tournament_checkpoint_payload(tournament_id, pairing, white, black, game_st
 def _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black):
     if checkpoint.get('phase') != 'game':
         raise ValueError('Checkpoint nie wskazuje aktywnej partii; wznowienie zablokowane')
+    if checkpoint.get('variant', 'standard') not in ('standard', 'elimination'):
+        raise ValueError('Unknown chess variant')
     saved = checkpoint.get('pairing') or {}
     expected = (int(pairing['id']), pairing.get('stage', 'league'),
                 int(pairing['white_model_id']), int(pairing['black_model_id']))
@@ -1088,6 +1137,7 @@ def tournament_loop(tournament_id):
             if tournament_stop_event.is_set():
                 break
             runtime_context['execution_phase'] = 'game'
+            variant = checkpoint.get('variant', 'standard') if checkpoint else 'elimination'
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []
@@ -1095,10 +1145,10 @@ def tournament_loop(tournament_id):
                 resume_fen = checkpoint.get('fen')
                 game_started = checkpoint.get('game_started') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             else:
-                resume_moves, resume_times, resume_fen = [], [], chess.Board().fen()
+                resume_moves, resume_times, resume_fen = [], [], EliminationBoard().fen()
                 game_started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                 tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
-                    tournament_id, pairing, white, black, game_started, [], [], resume_fen))
+                    tournament_id, pairing, white, black, game_started, [], [], resume_fen, variant=variant))
             with league.connect() as c:
                 c.execute("UPDATE tournament_pairings SET status='running' WHERE id=? AND status='pending'", (pairing['id'],))
                 active = c.execute(
@@ -1110,8 +1160,8 @@ def tournament_loop(tournament_id):
             # This closes the crash window before model preparation / first move.
             tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
                 tournament_id, pairing, white, black, game_started,
-                resume_moves, resume_times, resume_fen))
-            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
+                resume_moves, resume_times, resume_fen, variant=variant))
+            set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', variant=variant, moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
             white_assets, black_assets = _prepare_game_execution_assets(
                 white, black, phone_inference_enabled=phone_inference_enabled, on_status=set_live,
             )
@@ -1126,7 +1176,7 @@ def tournament_loop(tournament_id):
                 saved_fen = move.get('fen')
                 next_checkpoint = _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen)
+                    checkpoint_moves, checkpoint_times, saved_fen, variant=variant)
                 if phone_move_provider is None:
                     tournament_checkpoint.save(DB, tournament_id, next_checkpoint)
                 else:
@@ -1154,7 +1204,7 @@ def tournament_loop(tournament_id):
                     result = game_runner.play_game(
                         game_white, game_black, tournament_stop_event,
                         progress=publish_move, resume_moves=resume_moves,
-                        resume_fen=resume_fen, resume_move_times=resume_times)
+                        resume_fen=resume_fen, resume_move_times=resume_times, variant=variant)
                 except engine_runner.RunnerError as exc:
                     if tournament_stop_event.is_set() or 'Turniej zatrzymany przez operatora' in str(exc):
                         result = {'status': 'stopped', 'fen': exc.fen,
@@ -1168,7 +1218,7 @@ def tournament_loop(tournament_id):
                                 exc.budget_observations)
                         try:
                             decision = adjudication.adjudicate_failure(
-                                exc.fen, exc.move_records, exc.color, exc.uci_attempts)
+                                exc.fen, exc.move_records, exc.color, exc.uci_attempts, variant=variant)
                         except Exception as analysis_error:
                             decision = {'status': 'unresolved', 'reason': 'adjudication_exception',
                                         'error': f'{type(analysis_error).__name__}: {analysis_error}'[:500]}
@@ -1419,20 +1469,6 @@ def autoplay_loop():
         time.sleep(0.15)
 
 
-def random_hf_model():
-    """Return one randomly selected GGUF candidate from varied public model families."""
-    import random
-    queries = ['Qwen GGUF', 'Llama GGUF', 'Gemma GGUF', 'Phi GGUF',
-               'Mistral GGUF', 'SmolLM GGUF', 'DeepSeek GGUF', 'GLM GGUF']
-    randomizer = random.SystemRandom()
-    randomizer.shuffle(queries)
-    for query in queries:
-        candidates = search_hf_models(query)
-        if candidates:
-            return [randomizer.choice(candidates)]
-    return []
-
-
 def search_hf_models(query):
     import urllib.parse, urllib.request
     query = (query or '').strip()[:100]
@@ -1641,10 +1677,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(model_permissions.list_permissions(c))
             except Exception as exc:
                 self.send_json({'error': str(exc)}, 500)
-        elif path == '/api/models/random':
-            try:
-                self.send_json(random_hf_model())
-            except Exception as e: self.send_json({'error':str(e)},422)
         elif path.startswith('/api/models/search'):
             try:
                 from urllib.parse import urlparse, parse_qs
@@ -1773,6 +1805,9 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/runtime-preflight':
             try: self.send_json(hf_candidate_runtime.snapshot())
+            except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
+        elif path == '/api/hf-candidates/runtime-jobs':
+            try: self.send_json(runtime_executor.snapshot())
             except (OSError, ValueError) as exc: self.send_json({'error': str(exc)}, 503)
         elif path == '/api/hf-candidates/download-plan':
             try: self.send_json(hf_candidate_downloads.plan_snapshot())
@@ -2159,7 +2194,7 @@ class Handler(BaseHTTPRequestHandler):
         if not arena_auth.origin_allowed(self.headers.get('Origin')):
             self.send_json({'error': 'Odrzucono żądanie spoza dozwolonej domeny.'}, 403)
             return
-        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision'):
+        if path in ('/api/models/register','/api/models/license-evidence','/api/models/verify-license','/api/tournaments','/api/models/download','/api/models/cleanup','/api/tournaments/start','/api/tournaments/stop','/api/tournaments/admissions','/api/tournaments/entries','/api/model-admission/admit','/api/model-admission/revoke','/api/model-review-submissions','/api/model-review-submissions/action','/api/hf-candidates/audit','/api/hf-candidates/review','/api/hf-candidates/review-action','/api/hf-candidates/download-start','/api/hf-candidates/download-cancel','/api/hf-candidates/download-resume','/api/hf-candidates/download-plan/refresh','/api/model-permissions/request','/api/model-permissions/decision','/api/hf-candidates/runtime-enqueue','/api/hf-candidates/runtime-cancel','/api/hf-candidates/runtime-enable','/api/hf-candidates/runtime-batch-create','/api/hf-candidates/runtime-batch-approve','/api/hf-candidates/runtime-batch-revoke'):
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 payload = json.loads(self.rfile.read(length) or b'{}')
@@ -2171,6 +2206,32 @@ class Handler(BaseHTTPRequestHandler):
                             scope=payload.get('scope'), confirm=payload.get('confirm') is True,
                             reason=payload.get('reason', ''), snapshot=payload.get('snapshot'),
                             actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-enqueue':
+                    result = runtime_executor.enqueue(
+                        model_id=payload.get('model_id'), repo_id=payload.get('repo_id'),
+                        revision=payload.get('revision'), artifact_sha256=payload.get('artifact_sha256'),
+                        artifact_key=payload.get('artifact_key'),
+                        permission_request_id=payload.get('permission_request_id'),
+                        timeout_seconds=payload.get('timeout_seconds', runtime_executor.DEFAULT_TIMEOUT_SECONDS),
+                        actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-cancel':
+                    result = runtime_executor.cancel(payload.get('job_id'))
+                elif path == '/api/hf-candidates/runtime-enable':
+                    result = runtime_executor.set_execution_enabled(
+                        enabled=payload.get('enabled'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''))
+                elif path == '/api/hf-candidates/runtime-batch-create':
+                    result = runtime_executor.create_batch(
+                        job_ids=payload.get('job_ids'), actor=self.authenticated_user())
+                elif path == '/api/hf-candidates/runtime-batch-approve':
+                    result = runtime_executor.approve_batch(
+                        batch_id=payload.get('batch_id'), confirm=payload.get('confirm') is True,
+                        actor=self.authenticated_user(), reason=payload.get('reason', ''),
+                        approval_seconds=payload.get('approval_seconds', 600))
+                elif path == '/api/hf-candidates/runtime-batch-revoke':
+                    result = runtime_executor.revoke_batch(
+                        batch_id=payload.get('batch_id'), actor=self.authenticated_user(),
+                        reason=payload.get('reason', ''))
                 elif path == '/api/model-permissions/decision':
                     request_id = payload.get('request_id')
                     if isinstance(request_id, bool) or not isinstance(request_id, int):
@@ -2336,22 +2397,108 @@ class Handler(BaseHTTPRequestHandler):
             with lock: running = False; self.send_json(state())
         elif path == '/api/reset':
             with lock:
-                running = False; board = chess.Board(); moves = []; timings = []; illegal_moves = 0
+                running = False; board = EliminationBoard(); moves = []; timings = []; illegal_moves = 0
                 started_at = time.time(); last_error = ''; last_move = None
                 self.send_json(state())
         else: self.send_error(404)
 
 if __name__ == '__main__':
-    db_init()
-    # Exclusive local coordinator ownership is required before state recovery.
     from remote_worker_coordinator_lock import CoordinatorLock
+    DB.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Hold exclusive ownership before any database recovery or writes.
     _coordinator_lock = CoordinatorLock(DB).acquire()
-    # Invalidate stale worker state before any background worker or HTTP listener starts.
+    db_init()
     remote_worker_job_registry.WorkerJobRegistry(DB).recover_after_restart()
-    threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
-    hf_candidate_queue.start_background_workers()
-    hf_candidate_runtime.start_background_planner()
-    _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
-    _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
-    print(f'Local AI Chess Arena: http://{HOST}:{PORT}', flush=True)
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    deployment = resolve_runtime_deployment()
+    lease_broker = None
+    lease_broker_thread = None
+    runtime_api_worker = None
+    shutdown_requested = threading.Event()
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: shutdown_requested.set())
+    previous_sigint = signal.signal(signal.SIGINT, lambda *_: shutdown_requested.set())
+    try:
+        if deployment.supervisor_requested:
+            # The API process owns SQLite schema and writes. The root supervisor
+            # can reach only this fixed, peer-credential-gated lease protocol.
+            lease_store = SQLiteRuntimeUnitStore(DB, initialize_schema=True, unit_namespace=deployment.unit_namespace)
+            lease_broker = RuntimeLeaseBrokerServer(
+                deployment.lease_broker_socket, store=lease_store,
+                allowed_uid=0, socket_mode=0o660, unit_namespace=deployment.unit_namespace,
+            )
+            lease_broker_thread = threading.Thread(
+                target=lease_broker.serve_forever,
+                daemon=True,
+                name='runtime-lease-broker',
+            )
+            lease_broker_thread.start()
+            if not lease_broker.ready.wait(timeout=5):
+                raise RuntimeError('Runtime lease broker did not become ready.')
+        recovery = recover_runtime_on_startup(
+            deployment=deployment,
+            # The privileged supervisor owns exact-unit recovery and handoff
+            # cleanup. It calls back into the already-ready API lease broker.
+            supervisor_recover=(
+                lambda: supervisor_request(
+                    deployment.supervisor_socket, "recover", None,
+                    timeout_seconds=1800.0,
+                )
+            ),
+            executor_recover=runtime_executor.recover_orphaned_jobs,
+        )
+        executor_recovery = recovery['executor']
+        if executor_recovery['count']:
+            print(f"Recovered {executor_recovery['count']} orphaned runtime test job(s)", flush=True)
+        # Production-only dispatcher: the profile resolver has already checked
+        # the explicit acknowledgement, systemd backend, canonical paths and
+        # independent execution opt-in. Startup recovery must finish first.
+        runtime_runner = RuntimeSupervisorClientRunner(
+            supervisor_socket=deployment.supervisor_socket,
+        )
+        def cancel_runtime_job_for_shutdown(job_id):
+            # Persist cancellation while the API-owned broker and DB are still
+            # available. The executor's live cancellation predicate observes
+            # this flag and the supervisor revalidates it before unit start.
+            with league.connect() as connection:
+                runtime_executor._init(connection)
+                connection.execute(
+                    "UPDATE runtime_test_jobs SET cancel_requested=1 "
+                    "WHERE id=? AND status IN ('queued','running')",
+                    (job_id,),
+                )
+
+        if deployment.production_requested:
+            runtime_api_worker = RuntimeApiWorker(
+                deployment=deployment, runner=runtime_runner,
+                cancel_active=cancel_runtime_job_for_shutdown,
+            )
+        if not shutdown_requested.is_set():
+            if runtime_api_worker is not None:
+                runtime_api_worker.start()
+            if background_jobs_enabled():
+                threading.Thread(target=_hf_download_planner_loop, daemon=True, name='hf-download-planner').start()
+                hf_candidate_queue.start_background_workers()
+                hf_candidate_runtime.start_background_planner()
+            LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _prune_jsonl(LIVE_EVENTS_LOG, LIVE_EVENT_RETENTION_SECONDS, 500)
+            _prune_jsonl(MODEL_RESPONSES_LOG, MODEL_RESPONSE_RETENTION_SECONDS, 200)
+            http_server = ThreadingHTTPServer((HOST, PORT), Handler)
+            bound_host, bound_port = http_server.server_address[:2]
+            print(f'Local AI Chess Arena: http://{bound_host}:{bound_port}', flush=True)
+            _serve_http_until_shutdown(http_server, shutdown_requested)
+    finally:
+        try:
+            if runtime_api_worker is not None:
+                # The longest supervisor start request is bounded at 1800s;
+                # exact-unit stop may need up to 120s after cancellation.
+                runtime_api_worker.stop(timeout_seconds=1930)
+        finally:
+            try:
+                if lease_broker is not None:
+                    lease_broker.shutdown()
+            finally:
+                try:
+                    if lease_broker_thread is not None:
+                        lease_broker_thread.join(timeout=5)
+                finally:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+                    signal.signal(signal.SIGINT, previous_sigint)

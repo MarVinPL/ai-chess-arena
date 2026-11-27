@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 from remote_worker_result_journal import WorkerResultJournal
+from elimination_chess import checkpoint_board
 
 
 class BoundWorkerResults(WorkerResultJournal):
@@ -51,9 +52,7 @@ class BoundWorkerResults(WorkerResultJournal):
             if checkpoint.get('phase') != 'game' or checkpoint.get('pairing', {}).get('id') != pairing_id:
                 raise ValueError('Not an active pairing')
             import chess
-            board = chess.Board(checkpoint['fen'])
-            if not board.is_valid():
-                raise ValueError('Invalid checkpoint board')
+            board = checkpoint_board(checkpoint)
             if db.execute('SELECT 1 FROM remote_job_binding WHERE job_id=?', (job_id,)).fetchone():
                 raise ValueError('Duplicate job')
             # Staging a result marks the worker idle, but the chess move is
@@ -103,9 +102,13 @@ class BoundWorkerResults(WorkerResultJournal):
                        (job_id, worker_id, tournament_id, pairing_id, expected_sha256, checkpoint['fen']))
             if inference_requested:
                 from remote_worker_protocol import validate_job
-                validate_job({'version': 1, 'job_id': job_id, 'fen': checkpoint['fen'],
-                              'model_sha256': model_sha256, 'max_tokens': max_tokens,
-                              'timeout_seconds': timeout_seconds})
+                payload = {'version': 1, 'job_id': job_id, 'fen': checkpoint['fen'],
+                           'model_sha256': model_sha256, 'max_tokens': max_tokens,
+                           'timeout_seconds': timeout_seconds}
+                if 'variant' in checkpoint:
+                    payload.update(version=3, variant=checkpoint['variant'],
+                                   legal_moves=sorted(m.uci() for m in board.legal_moves))
+                validate_job(payload)
                 # The job-to-model binding commits in the same transaction as
                 # the worker reservation and authoritative FEN binding.
                 db.execute('INSERT INTO remote_inference_manifest VALUES (?,?,?,?)',
@@ -152,7 +155,7 @@ class BoundWorkerResults(WorkerResultJournal):
             old = json.loads(stored[0])
             if old.get('phase') != 'game' or old.get('pairing', {}).get('id') != pairing_id or old.get('fen') != fen:
                 raise ValueError('Source position changed')
-            board = chess.Board(fen)
+            board = checkpoint_board(old)
             move = validate_result(result, {'job_id': job_id}, board)
             old_moves, new_moves = old.get('moves'), checkpoint.get('moves')
             if not isinstance(old_moves, list) or not isinstance(new_moves, list) or new_moves[:-1] != old_moves or len(new_moves) != len(old_moves) + 1:

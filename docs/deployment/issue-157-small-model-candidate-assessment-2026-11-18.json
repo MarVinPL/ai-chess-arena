@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "assessment_date": "2026-11-18",
+  "scope": "Metadata-only candidate suitability and deterministic RAM-policy calculation; no weights downloaded, no model code executed, no inference.",
+  "host_snapshot": {
+    "mem_total_bytes": 4012273664,
+    "mem_available_bytes": 1743609856,
+    "mem_available_gib": 1.624,
+    "swap_total_bytes": 2147479552,
+    "swap_free_bytes": 950001664
+  },
+  "resource_policy": {
+    "memory_multiplier": 1.5,
+    "model_memory_reserve_bytes": 1610612736,
+    "host_ram_reserve_bytes": 1610612736,
+    "required_host_available_formula": "artifact_size_bytes * 1.5 + 3 GiB"
+  },
+  "candidates": [
+    {
+      "catalog_id": "arena:2",
+      "repo_id": "QuantFactory/SmolLM2-360M-Instruct-GGUF",
+      "revision": "10ac3ac5c618d6cdbe76c2845747feed4b5d71ac",
+      "revision_matches": true,
+      "license_declaration": "apache-2.0",
+      "license_file_present_in_gguf_repo": false,
+      "model_card_language": [
+        "en"
+      ],
+      "pipeline_tag": null,
+      "gguf_file": "SmolLM2-360M-Instruct.Q2_K.gguf",
+      "lfs_sha256": "d13c8b95c170f16175bbd4e28ba4bd8d23647039ac63be20d1eb0a26598fbdd3",
+      "ram_estimate": {
+        "artifact_size_bytes": 218673792,
+        "artifact_size_mib": 208.54,
+        "required_host_available_bytes": 3549236160,
+        "required_host_available_gib": 3.305,
+        "host_shortfall_bytes": 1805626304,
+        "host_shortfall_gib": 1.682,
+        "preflight_pass": false
+      },
+      "disposition": "not_recommended_for_polish-first arena; keep metadata-only, not runtime-selected",
+      "blockers": [
+        "Upstream SmolLM2 card says models primarily understand and generate English.",
+        "GGUF mirror has no LICENSE file; card declares Apache-2.0 but source-chain review remains necessary.",
+        "Current MemAvailable is below conservative policy threshold."
+      ]
+    },
+    {
+      "catalog_id": "arena:1",
+      "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "revision_matches": true,
+      "license_declaration": "apache-2.0",
+      "license_file_present_in_repo": true,
+      "license_file": "LICENSE",
+      "pipeline_tag": "text-generation",
+      "model_card_language": "multilingual support claimed for 29+ languages; Polish is not explicitly named in the retrieved list and still needs task-specific validation",
+      "gguf_file": "qwen2.5-0.5b-instruct-q2_k.gguf",
+      "lfs_sha256": "9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8",
+      "ram_estimate": {
+        "artifact_size_bytes": 415182688,
+        "artifact_size_mib": 395.95,
+        "required_host_available_bytes": 3843999504,
+        "required_host_available_gib": 3.58,
+        "host_shortfall_bytes": 2100389648,
+        "host_shortfall_gib": 1.956,
+        "preflight_pass": false
+      },
+      "disposition": "preferred metadata candidate for future multilingual evaluation, not runtime-selected",
+      "blockers": [
+        "Current MemAvailable is below conservative policy threshold.",
+        "No Polish-specific task test has been run.",
+        "No model weights have been downloaded or executed."
+      ]
+    },
+    {
+      "catalog_id": "hf:LiquidAI/LFM2.5-350M-GGUF",
+      "repo_id": "LiquidAI/LFM2.5-350M-GGUF",
+      "revision": "657e078c94084481950a2d555a941481f715536b",
+      "revision_matches": true,
+      "license_declaration": "lfm1.0 (tagged other)",
+      "license_files": [
+        "LICENSE",
+        "qad/LICENSE"
+      ],
+      "language_tags": [
+        "en",
+        "ar",
+        "zh",
+        "fr",
+        "de",
+        "ja",
+        "ko",
+        "es"
+      ],
+      "disposition": "not selected; custom license requires separate compatibility review and Polish is not among declared languages"
+    }
+  ],
+  "additional_finding": {
+    "catalog_id": "hf:abenzerps/Apodex-1.1-mini-GGUF",
+    "repo_id": "abenzerps/Apodex-1.1-mini-GGUF",
+    "revision": "e44e0cbd3151d08a9f5a4cbf19cd44560685de04",
+    "model_card_parameter_count": "35.95B",
+    "IQ1_M_file_size": "8.82 GB (rounded model-card figure)",
+    "disposition": "not a small model despite the 1.1-mini name; excluded from low-RAM shortlist. Existing download allowlist entry was not changed in this assessment."
+  },
+  "conclusion": "No candidate can pass the current RAM preflight on this host. The policy has fixed model and host reserves totaling 3 GiB before artifact-dependent overhead, while MemAvailable is below 2 GiB. Reducing artifact size alone cannot solve this. Do not weaken reserves or stop services to force a pass without a separate explicit decision.",
+  "safety_state": {
+    "runtime_candidates": [],
+    "runtime_test_only_grant_active": false,
+    "weights_downloaded_during_assessment": false,
+    "model_executed": false,
+    "inference_authorized": false,
+    "tournament_admission": false,
+    "production_changed": false
+  }
+}

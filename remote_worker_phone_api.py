@@ -26,7 +26,10 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
         return False
 
     try:
-        if set(payload) != (
+        fields = set(payload)
+        if path.endswith("/ready") and "protocol_version" in fields:
+            fields.remove("protocol_version")
+        if fields != (
             {"worker_id", "token", "nonce", "model_sha256"}
             if path.endswith("/ready") else
             {"worker_id", "token", "nonce", "result"}
@@ -68,7 +71,7 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
         elif path.endswith("/ready"):
             from remote_worker_inference_delivery import WorkerInferenceDelivery
             response["state"] = WorkerInferenceDelivery(db).register_local_ready(
-                worker_id, payload["model_sha256"],
+                worker_id, payload["model_sha256"], payload.get("protocol_version", 2),
             )
         elif path.endswith("/job-result"):
             from remote_worker_inference_delivery import WorkerInferenceDelivery
