@@ -83,7 +83,7 @@ def test_bad_machine_auth_and_nonce_never_leak_state(gateway, monkeypatch):
     ):
         code, body = post("job-poll", request_body)
         assert code == 400 and "nonce" not in body
-    assert post("job-poll", credentials(token), content_type="text/plain")[0] == 400
+    assert post("job-poll", credentials(token), content_type="text/plain")[0] == 415
 
 
 def test_v2_job_ready_result_http_roundtrip_without_lease_completion(gateway, monkeypatch):

@@ -1,0 +1,128 @@
+{
+  "artifacts": {
+    "runtime_supervisor.pyz": {
+      "mode": "0o600",
+      "sha256": "bddd166dc46d14f2dcb6d08ac7acfd41e7e46e8c023a51c343719a0f19bbeb02",
+      "size": 44746,
+      "zip_entries": [
+        "__main__.py",
+        "model_permissions.py",
+        "runtime_artifact_handoff.py",
+        "runtime_lease_broker.py",
+        "runtime_resource_policy.py",
+        "runtime_revocation_watchdog.py",
+        "runtime_socket_handoff.py",
+        "runtime_supervisor.py",
+        "runtime_supervisor_authority.py",
+        "runtime_supervisor_handlers.py",
+        "runtime_supervisor_ipc.py",
+        "runtime_supervisor_service.py",
+        "runtime_systemd.py",
+        "runtime_systemd_backend.py"
+      ]
+    },
+    "runtime_worker": {
+      "mode": "0o755",
+      "sha256": "d7d7ab4be3637bb9c618e1e6d1ec67cbfcd7d847b791b31d045b7d7486d6dc1d",
+      "size": 9574,
+      "zip_entries": [
+        "__main__.py",
+        "runtime_resource_policy.py",
+        "runtime_socket_handoff.py",
+        "runtime_unix_bridge.py"
+      ]
+    }
+  },
+  "build_host": "existing-vps",
+  "execution": "NO worker process, model binary, or inference started",
+  "model_artifact": {
+    "present_in_quarantine": false,
+    "downloaded_by_current_approval_action": false,
+    "filename": "Light-R1-14B-Q4_0.gguf",
+    "repository": "360ZhiNao/Light-R1-14B-DS-GGUF",
+    "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+    "size_bytes": 8517725312,
+    "sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa",
+    "status": "removed_by_owner_request",
+    "license_review": "owner_accepted_with_dataset_caveat; verified_permissive=false",
+    "original_transfer_provenance": "unknown; no matching download job/event record",
+    "runtime_preflight": "not_eligible_removed_from_candidate_pool",
+    "test_only_grant_active": false,
+    "inference_run": false,
+    "tournament_admission": false,
+    "removed_at": "2026-11-18T22:10:00Z",
+    "removal_scope": "Light-R1 exact pinned artifact; all Spark-X2.5 4B GGUF variants found in quarantine",
+    "removal_note": "Exact Light-R1 and Spark-X2.5 4B quarantine files were unlinked after exact path/type/size checks; hashes were recorded from prior verification. Artifact registry rows were removed and durable removal events recorded. No model was executed."
+  },
+  "python": "3.13.5",
+  "reproducibility": "two independent builds byte-identical",
+  "runtime_binary_cross_check": {
+    "canonical_runtime_install_present": false,
+    "executed": false,
+    "expected_sha256": "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50",
+    "observed_existing_path": "/home/debian/ai-agent/bin/llamafile",
+    "observed_mode": "0755",
+    "observed_owner": "debian:debian",
+    "observed_sha256": "756bf97febae557084e8ced9bde7a1cb0c7f6ce778530d582afa219406237a50",
+    "observed_size_bytes": 43856395,
+    "status": "hash match only; not approved or installable",
+    "worker_root_owner_contract": "FAIL (requires UID 0)"
+  },
+  "smoke_tests": {
+    "supervisor_missing_profile_ack": "rejected before service imports",
+    "worker_no_args_exit": 2,
+    "worker_no_args_stderr_contains_job": true
+  },
+  "source_commit": "45b1c8bb16a8792d2f578624dc0aa2d71b7d7220",
+  "source_sha256": {
+    "model_permissions.py": "a255e7c27a85387a33dcaf82a48960fef247bf921ed13449d5ae39e7626a15a4",
+    "runtime_artifact_handoff.py": "311bc37ae81ad83008d28d385f2feb9799080d702da785ec6a6b05a0e490bb2f",
+    "runtime_lease_broker.py": "9dfbe3afd28192ff8edb65cb65cc6c3441aa79d34ad8b12dba38d40902e01fdf",
+    "runtime_resource_policy.py": "cb3ed1438c5b0aa5bc5cae13291b8928cb230422c4ba6e2fda910274521e66ca",
+    "runtime_revocation_watchdog.py": "9947ff16c44af9ae9fce0550bbdd6b649b451480616a9d716deb7a5068066543",
+    "runtime_socket_handoff.py": "df86a29018fdd66fcc528ada901f45418ef71b1fd5f4b629ff41660282dc14b0",
+    "runtime_supervisor.py": "8e7065871e247ff342270affa74861b5968f13d28d63cde6612482c48eddb457",
+    "runtime_supervisor_authority.py": "a0f1e1bcd6e7097aa093f4b82e6d5e1e58b93e420a2d24fa6bfc0a0eced1248f",
+    "runtime_supervisor_handlers.py": "977fbecdae7e671b1a52307a963058302774359f34ece38f3ce0b52d1d055349",
+    "runtime_supervisor_ipc.py": "ff7ba23366c86724dcdde95d318fd71e3376970af5eb0c4d83d31dab53d34bc5",
+    "runtime_supervisor_service.py": "1b926d1c7e3f878b22687b72bc8a6e60e6dd6fa2b5e012b4ddfc5a305ff5f8b7",
+    "runtime_systemd.py": "cc5c8448bf49ab478ffde33a3c01aa315f50533f58ca81bb4fe8dad78c779961",
+    "runtime_systemd_backend.py": "9b557e63396647b7f6ac72e9076f6dfeb15f005c656d68820ac60661b11e80cc",
+    "runtime_unix_bridge.py": "bd7ee6100727840d4db6bd6eee6693a6039a75148edb9c2b253c55e5b4a3efc8",
+    "runtime_worker_supervised.py": "e5a03a4f02959d0633497bc7219dc471a71cf8687f88bbe798b53b5bef951ce1",
+    "tools/build_runtime_supervisor_bundle.py": "36c32aefd2d589aea53be6762de95540c737af58ad84d0ae4829b6946f41b487",
+    "tools/build_runtime_worker_bundle.py": "c4f68758b533c59cabc0e8943fffe45daede5e8b66cce9307a74d9a4f79f3845"
+  },
+  "source_tree": "3e0a7312962b62b52d954abd3f98ad0ced35edeb",
+  "zipfile_zlib": "1.3.1",
+  "removed_quarantine_artifacts": [
+    {
+      "model": "Light-R1-14B-Q4_0.gguf",
+      "repository": "360ZhiNao/Light-R1-14B-DS-GGUF",
+      "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+      "size_bytes": 8517725312,
+      "sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa"
+    },
+    {
+      "model": "Spark-X2.5-4B-Q4_0.gguf",
+      "repository": "abenzerps/Spark-X2.5-4B-GGUF",
+      "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a",
+      "size_bytes": 2405581632,
+      "sha256": "33873ba76d69a72231ab0790d879cd252d53ee0fe648c3b44b04dec69fea25ec"
+    },
+    {
+      "model": "Spark-X2.5-4B-Q4_K_M.gguf",
+      "repository": "abenzerps/Spark-X2.5-4B-GGUF",
+      "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a",
+      "size_bytes": 2600223552,
+      "sha256": "7934660bfc5b9bf04be0a0ac6179a1d16e1d4331b448857c86b8b2801b3ef72c"
+    },
+    {
+      "model": "Spark-X2.5-4B-Q5_K_M.gguf",
+      "repository": "abenzerps/Spark-X2.5-4B-GGUF",
+      "revision": "5eb255d86a3d0a3db3c589d171f833ef4ff4b00a",
+      "size_bytes": 2977895232,
+      "sha256": "d585f155289ed7b73f2f644e475445fcc40f1aa5131ca807eade1c726895535a"
+    }
+  ]
+}

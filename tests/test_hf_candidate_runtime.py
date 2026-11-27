@@ -11,6 +11,10 @@ import league
 
 
 class RuntimePreflightTests(unittest.TestCase):
+
+    def test_removed_light_r1_is_not_in_runtime_candidate_allowlist(self):
+        self.assertFalse(any('Light-R1' in item[0] or 'Light-R1' in item[2] for item in runtime.RUNTIME_CANDIDATES))
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.root=Path(self.tmp.name)

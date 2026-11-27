@@ -1,0 +1,5 @@
+# Install this drop-in only as part of the separately approved production
+# runtime enablement. Do not activate it for disabled/staging deployments.
+[Unit]
+Requires=ai-chess-arena-runtime-supervisor.service
+After=ai-chess-arena-runtime-supervisor.service
