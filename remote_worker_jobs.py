@@ -4,6 +4,8 @@ Only coordinator-validated transitions may modify this registry. Missing rows,
 expired leases and interrupted tasks fail closed. This is not a job scheduler.
 """
 import re
+from contextlib import closing
+from pathlib import Path
 import secrets
 import sqlite3
 import time
@@ -311,13 +313,19 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
-    def journal_evidence(self, worker_id, token, nonce, *, admit):
+    @staticmethod
+    def journal_evidence(path, worker_id, token, nonce, *, admit, clock=time.time):
         """Read-only advisory evidence, never authority to initialize or install."""
         from remote_worker_tokens import WorkerTokenStore
-        tokens = WorkerTokenStore(self.path, clock=self.clock)
-        with self._db() as db:
+        if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+            raise ValueError('Invalid evidence nonce')
+        # Never instantiate a schema-creating store on this read-only route.
+        uri = Path(path).resolve().as_uri() + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True, timeout=3)) as db, db:
+            db.execute('PRAGMA query_only=ON')
             db.execute('BEGIN')
-            if not tokens.authenticate_in_snapshot(db, worker_id, token):
+            started = clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=clock):
                 return None
             admit(worker_id)
             row = db.execute(
@@ -335,7 +343,12 @@ class DurableWorkerJobs:
                 flags[table] = (bool(db.execute(
                     f'SELECT 1 FROM {table} WHERE worker_id=?', (worker_id,)).fetchone())
                     if exists else None)
-            now = self.clock()
+            now = clock()
+            # Do not publish a freshly timestamped old snapshot or expired token.
+            if not 0 <= now - started <= 3:
+                raise ValueError('Snapshot deadline exceeded')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                return None
             idle = bool(row and row[0] == 'idle_confirmed' and row[1] is None
                         and row[2] is None and row[3] is not None
                         and 0 <= now - row[3] <= 30)
@@ -343,7 +356,7 @@ class DurableWorkerJobs:
             return {
                 'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
                 'worker_id': worker_id, 'nonce': nonce,
-                'checked_at_unix_ms': int(now * 1000),
+                'checked_at_unix_ms': int(started * 1000),
                 'state': 'idle_confirmed' if clear else 'unknown',
                 'active_tasks': 0 if clear else None,
                 'hold_present': flags['worker_update_holds'],

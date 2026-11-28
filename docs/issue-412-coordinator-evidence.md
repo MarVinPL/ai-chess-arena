@@ -36,3 +36,10 @@ must fail closed. No migration, installer changes or deployment in #412.
 
 Verification: HTTP tests with temporary SQLite databases and loopback server,
 including independent concurrent writer under WAL.
+
+Review hardening: the route opens SQLite in read-only URI mode, with query_only,
+without invoking schema-creating constructors. Missing tables cannot be silently
+recreated by this endpoint. Snapshot timestamp is captured before the first
+read; snapshots taking more than three seconds are rejected and token expiry
+is checked again before response. Revocation or coordinator changes after the
+snapshot remain a reason to require fresh fenced authorization in #414.

@@ -2084,8 +2084,8 @@ class Handler(BaseHTTPRequestHandler):
                 nonce = payload['nonce']
                 if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
                     raise WorkerRequestError(400)
-                evidence = remote_worker_job_registry.WorkerJobRegistry(DB).journal_evidence(
-                    payload['worker_id'], payload['token'], nonce,
+                evidence = remote_worker_job_registry.WorkerJobRegistry.journal_evidence(
+                    DB, payload['worker_id'], payload['token'], nonce,
                     admit=lambda worker_id: self._admit_worker_identity(path, worker_id))
                 if evidence is None:
                     self.send_json({'error': 'Brak autoryzacji'}, 401)

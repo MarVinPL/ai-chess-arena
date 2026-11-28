@@ -478,8 +478,47 @@ def test_journal_evidence_snapshot_is_consistent_during_concurrent_write(endpoin
         with sqlite3.connect(db) as writer:
             writer.execute("INSERT INTO worker_update_holds VALUES (?,?,?,?)",
                            (WORKER_ID, "a"*64, 1, 2))
-    before = registry.journal_evidence(WORKER_ID, token, NONCE, admit=admit)
-    after = registry.journal_evidence(WORKER_ID, token, NONCE, admit=lambda _: None)
+    before = registry.journal_evidence(db, WORKER_ID, token, NONCE, admit=admit)
+    after = registry.journal_evidence(db, WORKER_ID, token, NONCE, admit=lambda _: None)
     assert before["hold_present"] is False and before["state"] == "idle_confirmed"
     assert after["hold_present"] is True and after["state"] == "unknown"
     assert before["initialization_allowed"] is False
+
+
+def test_journal_evidence_does_not_create_missing_schema(endpoint):
+    db, token, post = endpoint
+    journal_idle(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TABLE worker_update_holds")
+    status, data = post(request_data(token), route="update-journal-evidence")
+    assert status == 200 and data["hold_present"] is None and data["state"] == "unknown"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT 1 FROM sqlite_schema WHERE name='worker_update_holds'").fetchone() is None
+
+
+def test_journal_evidence_rejects_slow_snapshot_and_expired_token(endpoint):
+    db, token, _ = endpoint
+    journal_idle(db)
+    registry = remote_worker_job_registry.WorkerJobRegistry
+    now = time.time()
+    times = iter((now, now, now+4))
+    with pytest.raises(ValueError, match="deadline"):
+        registry.journal_evidence(db, WORKER_ID, token, NONCE,
+                                  admit=lambda _: None, clock=lambda: next(times))
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_tokens SET expires_at=?", (now+1,))
+    times = iter((now, now, now+2))
+    assert registry.journal_evidence(db, WORKER_ID, token, NONCE,
+                                    admit=lambda _: None, clock=lambda: next(times)) is None
+
+
+def test_journal_evidence_rate_limit_and_running_state(endpoint):
+    db, token, post = endpoint
+    journal_idle(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_job_safety SET state='running', job_id=?, deadline=?",
+                     ("job_12345678", time.time()+60))
+    for _ in range(12):
+        status, data = post(request_data(token), route="update-journal-evidence")
+        assert status == 200 and data["state"] == "unknown"
+    assert post(request_data(token), route="update-journal-evidence")[0] == 429

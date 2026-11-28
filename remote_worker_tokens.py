@@ -60,9 +60,10 @@ class WorkerTokenStore:
 
     def authenticate(self, worker_id: str, token: str) -> bool:
         with self._connect() as db:
-            return self.authenticate_in_snapshot(db, worker_id, token)
+            return self.authenticate_in_snapshot(db, worker_id, token, clock=self.clock)
 
-    def authenticate_in_snapshot(self, db, worker_id: str, token: str) -> bool:
+    @staticmethod
+    def authenticate_in_snapshot(db, worker_id: str, token: str, *, clock=time.time) -> bool:
         """Authenticate against the caller's SQLite transaction."""
         if not isinstance(worker_id, str) or not _WORKER.fullmatch(worker_id):
             return False
@@ -70,8 +71,8 @@ class WorkerTokenStore:
             return False
         row = db.execute('SELECT token_digest, expires_at, revoked_at FROM worker_tokens WHERE worker_id=?',
                          (worker_id,)).fetchone()
-        return bool(row and row[2] is None and row[1] > self.clock()
-                    and hmac.compare_digest(row[0], self._digest(token)))
+        return bool(row and row[2] is None and row[1] > clock()
+                    and hmac.compare_digest(row[0], WorkerTokenStore._digest(token)))
 
     def revoke(self, worker_id: str) -> None:
         """Admin-only operation: immediately invalidates existing token."""
