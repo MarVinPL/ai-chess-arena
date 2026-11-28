@@ -725,7 +725,7 @@ def test_journal_init_completion_storage_failure_rolls_back(endpoint):
 
     db, token, post = endpoint
     journal_idle(db)
-    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+    assert post(request_data(token), route="journal-init-acquire", headers={"Host": "arena.example"})[0] == 200
     origin = "https://arena.example"
     marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
                                 sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
