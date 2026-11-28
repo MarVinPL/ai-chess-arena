@@ -27,6 +27,10 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
                 created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
 
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_fences (
+                worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL,
+                token_digest BLOB NOT NULL, created_at REAL NOT NULL)""")
+
             # Shared coordinator lock. Requests must block a racing new
             # assignment before a trusted STOP/checkpoint ACK is delivered.
             db.execute('''CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
@@ -52,6 +56,25 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY,
                 released_at REAL NOT NULL
             )''')
+
+    @staticmethod
+    def _guard_journal_init_writes(db, table, *, predicate='1'):
+        # These persistent triggers also cover callers writing through their own
+        # SQLite connection. Safety may still be invalidated to UNKNOWN.
+        for operation in ('INSERT', 'UPDATE'):
+            db.execute(f"""CREATE TRIGGER IF NOT EXISTS journal_init_guard_{table}_{operation}
+                BEFORE {operation} ON {table}
+                WHEN {predicate} AND EXISTS (
+                    SELECT 1 FROM worker_journal_init_fences WHERE worker_id=NEW.worker_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'Worker journal initialization fenced');
+                END""")
+
+    @staticmethod
+    def _journal_init_fenced(db, worker_id):
+        return db.execute('SELECT 1 FROM worker_journal_init_fences WHERE worker_id=?',
+                          (worker_id,)).fetchone() is not None
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -84,6 +107,8 @@ class DurableWorkerJobs:
             raise ValueError('Worker pause for update pending; assignment blocked')
 
     def _reject_update_hold(self, db, worker_id):
+        if self._journal_init_fenced(db, worker_id):
+            raise ValueError('Worker journal initialization fenced')
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
         # blocking assignments until explicit coordinator reconciliation.
         # An expiry alone never proves that Android's installer has finished.
@@ -281,10 +306,12 @@ class DurableWorkerJobs:
         if type(max_idle_age_seconds) not in (int, float) or not 0 < max_idle_age_seconds <= 30:
             raise ValueError('Invalid idle evidence lifetime')
         with self._db() as db:
+            db.execute('BEGIN')
             row = db.execute(
                 'SELECT state,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            fenced = self._journal_init_fenced(db, worker_id)
             hold = db.execute(
                 'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                 (worker_id,)
@@ -300,7 +327,7 @@ class DurableWorkerJobs:
         now = self.clock()
         # An in-flight stop request is never fresh idle evidence, even if
         # another process has just committed a terminal job result.
-        if not row or hold or pause or resume:
+        if not row or fenced or hold or pause or resume:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
@@ -312,6 +339,59 @@ class DurableWorkerJobs:
         ):
             return 'idle_confirmed', 0
         return 'unknown', None
+
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit):
+        """Durable non-expiring fence. No automatic release on timeout/restart."""
+        from remote_worker_tokens import WorkerTokenStore
+        if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+            raise ValueError('Invalid nonce')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
+                return None
+            admit(worker_id)
+            if self._journal_init_fenced(db, worker_id):
+                raise ValueError('Initialization already fenced; reconciliation required')
+            row = db.execute(
+                'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            for table in ('worker_update_holds', 'worker_update_pause_requests',
+                          'worker_update_resume', 'worker_inference_assignments',
+                          'worker_idle_update_recovery'):
+                if db.execute(f'SELECT 1 FROM {table} WHERE worker_id=?', (worker_id,)).fetchone():
+                    raise ValueError('Unresolved worker state')
+            if db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='worker_result_journal'"
+            ).fetchone() and db.execute(
+                "SELECT 1 FROM worker_result_journal WHERE worker_id=? AND state='pending_application'",
+                (worker_id,),
+            ).fetchone():
+                raise ValueError('Worker has unapplied result')
+            self._guard_journal_init_writes(
+                db, 'worker_job_safety',
+                predicate="(NEW.state != 'unknown' OR NEW.job_id IS NOT NULL OR NEW.deadline IS NOT NULL)",
+            )
+            for table in ('worker_update_holds', 'worker_update_pause_requests',
+                          'worker_update_resume', 'worker_idle_update_recovery',
+                          'worker_inference_assignments', 'worker_inference_capabilities'):
+                self._guard_journal_init_writes(db, table)
+            now = self.clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                db.rollback()
+                return None
+            if not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
+                raise ValueError('Worker not freshly idle')
+            db.execute(
+                'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
+                (worker_id, nonce, WorkerTokenStore._digest(token), now),
+            )
+        return {
+            'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+            'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
+            'checked_at_unix_ms': int(now * 1000), 'install_allowed': False,
+        }
 
     @staticmethod
     def journal_evidence(path, worker_id, token, nonce, *, admit, clock=time.time):
@@ -334,7 +414,7 @@ class DurableWorkerJobs:
             # Missing schema is uncertainty, not evidence of an empty registry.
             tables = ('worker_update_holds', 'worker_update_pause_requests',
                       'worker_update_resume', 'worker_inference_assignments',
-                      'worker_idle_update_recovery')
+                      'worker_idle_update_recovery', 'worker_journal_init_fences')
             flags = {}
             for table in tables:
                 exists = db.execute(

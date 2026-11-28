@@ -149,6 +149,8 @@ class WorkerInferenceDelivery:
                                 WHERE p.worker_id=c.worker_id)
                 AND NOT EXISTS (SELECT 1 FROM worker_update_resume r
                                 WHERE r.worker_id=c.worker_id)
+                AND NOT EXISTS (SELECT 1 FROM worker_journal_init_fences f
+                                WHERE f.worker_id=c.worker_id)
                 ORDER BY c.checked_at DESC, c.worker_id ASC LIMIT 1""",
                 (model_sha256, now - 30, now, protocol_version),
             ).fetchone()
@@ -235,7 +237,7 @@ class WorkerInferenceDelivery:
                 f"SELECT 1 FROM {table} WHERE worker_id=?", (worker_id,),
             ).fetchone() for table in (
                 "worker_update_holds", "worker_update_pause_requests",
-                "worker_update_resume"
+                "worker_update_resume", "worker_journal_init_fences"
             ))
         if barriers:
             return {"state": "blocked"}

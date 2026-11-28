@@ -18,6 +18,8 @@ def assert_worker_eligible(db_path, worker_id, *, liveness_verified=False):
     jobs = BoundWorkerResults(db_path)
     with jobs._db() as db:
         db.execute('BEGIN IMMEDIATE')
+        if jobs._journal_init_fenced(db, worker_id):
+            raise WorkerNotReady('Worker journal initialization fenced')
         state = db.execute('SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?',
                            (worker_id,)).fetchone()
         if not state or state != ('idle_confirmed', None, None):
