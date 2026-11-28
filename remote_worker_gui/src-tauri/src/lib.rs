@@ -403,8 +403,8 @@ async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<
 // Read untrusted HTTPS JSON with a strict memory budget, including chunked
 // responses and inaccurate Content-Length values. Never allow a remote host
 // to allocate unlimited memory on an Android device.
-async fn bounded_json_response(mut response: reqwest::Response, limit: usize)
-    -> Result<serde_json::Value, String> {
+async fn bounded_json_response<T: serde::de::DeserializeOwned>(mut response: reqwest::Response, limit: usize)
+    -> Result<T, String> {
     if response.content_length().map(|n| n > limit as u64).unwrap_or(false) {
         return Err("Zbyt duża odpowiedź HTTPS".into());
     }
