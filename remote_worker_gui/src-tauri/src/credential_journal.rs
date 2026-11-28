@@ -318,6 +318,39 @@ mod android {
         result
     }
 
+    pub(crate) struct JournalInitCompletion {
+        pub(crate) origin: String,
+        pub(crate) worker_id: String,
+        pub(crate) nonce: String,
+        pub(crate) pair_marker: String,
+    }
+
+    pub(crate) fn completion(
+        server: &str, worker_id: &str, machine_token: &str, nonce: &str,
+    ) -> Result<JournalInitCompletion, String> {
+        let _credentials = crate::credential_change_gate()?;
+        if crate::token_entry()?.get_password()? != machine_token
+            || nonce.len() != 32
+            || !nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(ERROR.into());
+        }
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
+        let root = crate::android_worker_token_store::journal_root()?;
+        let pair_marker = authorization_marker(server, worker_id, machine_token, nonce)?;
+        if pair_id(&root)?.as_deref() != Some(&pair_marker)
+            || checked_read(&dir(&root, Slot::PendingHold)?, &Native(Slot::PendingHold))?.is_some()
+            || checked_read(&dir(&root, Slot::PendingInstall)?, &Native(Slot::PendingInstall))?.is_some()
+        {
+            return Err(ERROR.into());
+        }
+        let origin = reqwest::Url::parse(server).map_err(|_| ERROR)?.origin().ascii_serialization();
+        Ok(JournalInitCompletion { origin, worker_id: worker_id.into(), nonce: nonce.into(), pair_marker })
+    }
+
     fn require_pair() -> Result<std::path::PathBuf, String> {
         let root = crate::android_worker_token_store::journal_root()?;
         pair_id(&root)?.ok_or(ERROR)?;
@@ -361,7 +394,7 @@ mod android {
     }
 }
 #[cfg(target_os = "android")]
-pub(crate) use android::{delete_expected, initialize_authorized_pair, insert, read};
+pub(crate) use android::{completion, delete_expected, initialize_authorized_pair, insert, read};
 
 #[cfg(test)]
 mod tests {
