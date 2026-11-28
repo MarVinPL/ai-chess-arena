@@ -10,6 +10,17 @@ Stała liga lokalnych modeli GGUF na VPS. Zawodnicy i wyniki pozostają w histor
 - Remisy, zwycięstwa, porażki, mat, pat, powtórzenia, reguła 50 posunięć i pozostałe zakończenia zapisujemy osobno.
 - Ruchy waliduje python-chess. Nielegalny ruch nie jest wykonywany i trafia do statystyk.
 
+## Wariant Szachy Eliminacyjne
+
+Wariant turniejowy ustalony dla AI Chess Arena:
+
+- Partia kończy się natychmiast, gdy król jednej ze stron zostanie zbity.
+- Partia kończy się również, gdy jedna ze stron nie ma już żadnej bierki, łącznie z królem. Jest to równoważny warunek awaryjny — zbicie króla samo w sobie wystarcza do zakończenia partii, nawet jeśli pozostałe bierki tej strony nadal stoją na planszy.
+- Zwycięża strona, która zbiła króla przeciwnika; w przypadku stwierdzenia braku wszystkich bierek przeciwnika zwycięża druga strona.
+- Szach-mat nie jest warunkiem zakończenia partii. Samo zagrożenie króla nie kończy gry — rozstrzygające jest jego zbicie.
+- To wariant niestandardowy, odrębny od klasycznych szachów. Implementacja musi jawnie obsługiwać zbicie króla i nie może polegać wyłącznie na standardowym `python-chess` `is_game_over()`/rozstrzyganiu mata.
+- Zapis tej reguły w dokumentacji określa oczekiwane zasady, ale sam w sobie nie potwierdza jeszcze, że runner, API, panel, PGN i wznowienia partii obsługują ten wariant. Wdrożenie wymaga osobnej implementacji i testów regresji.
+
 ## Czas
 - Brak limitu czasu na ruch i brak automatycznego odrzucania wolnych modeli.
 - Mierzymy czas każdego ruchu, średnią i medianę czasu ruchu oraz łączny czas partii.

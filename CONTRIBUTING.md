@@ -16,6 +16,15 @@
 - Before merging, verify that the PR is not behind the current `main`. If safe synchronization cannot be completed, stop and report the blocker rather than merging a stale branch.
 - Synchronization is maintenance of the same PR branch; it never authorizes combining Issues. **One Issue = one branch = one PR** remains mandatory.
 
+## Large projects: EPIC → issues → pull requests
+
+- For a substantial, multi-stage initiative, create **one parent tracking issue (EPIC)** with a concise goal, acceptance criteria, dependencies, and a checklist linking its child issues.
+- Break the work into independently reviewable, testable child issues with clear scope. For implementation work, **each child issue gets its own branch and one dedicated PR**; retain the existing oldest-unfinished-work priority and main-sync rules. An EPIC does not override work queue order.
+- Every child PR must include `Closes #<child-issue-number>`, pass relevant tests and review, and be merged before its checklist item is marked completed. Keep evidence in the child PR/issue. Never claim completion based only on an open PR or an unmerged branch.
+- Keep the EPIC checklist synchronized with verified child issue status. Do not open an extra PR merely to complete or close the tracking EPIC.
+- Close the EPIC only after all child issues are complete **and** the integrated solution satisfies the overall acceptance criteria. Explicitly distinguish merge from deployment; deploy only after separate authorization.
+- Example: [AI Chess Arena UI redesign EPIC #304](https://github.com/MarVinPL/ai-chess-arena/issues/304), tracking issues #299–#303.
+
 ## One issue = one pull request
 
 - Every implementation issue must have exactly one dedicated PR.
@@ -35,6 +44,14 @@
 - GitHub assigns Issue and PR numbers automatically from one repository-wide sequence. A separately created Issue and its PR therefore have different numbers; neither can be chosen or edited to force equality.
 - In every status report, identify the pair explicitly as `Issue #N → PR #M`. Never label the PR number as the Issue number, or imply that two different GitHub objects share one number.
 - Do not create fake aliases, renumber references, or try to reserve future numbers. If a task must have only one GitHub number, the PR itself can serve as the task record only after the repository owner explicitly changes the `One issue = one pull request` policy; do not make that policy change implicitly.
+
+## Security review policy
+
+- Security reviews and release-gate assessments for AI Chess Arena are performed internally by the implementation team, with documented evidence and an explicit disposition.
+- **An external security audit or an independent external auditor is not a repository requirement or a release prerequisite.** Do not add either as a mandatory gate in Issues, PR checklists, deployment plans, or project documentation unless the repository owner explicitly changes this policy.
+- Internal findings must be recorded as `PASS`, `FAIL`, or `NOT VERIFIED`, with the reviewed commit/scope, evidence references, severity, remediation, and accountable release-owner sign-off. Never report `PASS` without evidence.
+- Internal review does not waive technical controls, artifact provenance/signing requirements, operational recovery tests, or explicit release-owner approvals that apply to a particular change.
+- For Issue #157, the detailed implementation is defined in [`docs/deployment/issue-157-internal-audit-packet-2026-11-18.md`](docs/deployment/issue-157-internal-audit-packet-2026-11-18.md).
 
 ## Completion and release
 

@@ -74,7 +74,7 @@ def test_runner_dispatches_bound_job_via_http_pull_and_commits_once(tmp_path):
         stop.stopped = True
     try:
         result = SequentialChessRunner(NoLocalInference(), move_provider=bridge.provide).play_game(
-            {'name': 'White'}, {'name': 'Black'}, stop_event=stop, progress=publish)
+            {'name': 'White'}, {'name': 'Black'}, stop_event=stop, progress=publish, variant="standard")
         assert not worker_errors, worker_errors
         assert result['status'] == 'stopped'
         assert [m['uci'] for m in tournament_checkpoint.load(path, 1)['moves']] == ['e2e4']

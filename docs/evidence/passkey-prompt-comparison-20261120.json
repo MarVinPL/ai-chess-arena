@@ -1,0 +1,166 @@
+{
+  "created_utc": "2026-11-20T17:32:54Z",
+  "runtime": {
+    "binary": "llamafile v0.10.6",
+    "threads": 2,
+    "context": 2048,
+    "device": "CPU",
+    "temperature": 0.0,
+    "max_tokens": 420,
+    "timeout": "none",
+    "sequence": "one model and one request at a time"
+  },
+  "prompt_variants": {
+    "old": "user question only; no system message",
+    "new": "Jesteś egzaminowanym asystentem technicznym. Odpowiadaj po polsku, chyba że pytanie wyraźnie prosi o inny język. Najpierw podaj bezpośrednią odpowiedź, potem krótko ją uzasadnij. Pisz prostym, precyzyjnym językiem; objaśnij skrót lub termin techniczny przy pierwszym użyciu. Używaj krótkich akapitów albo listy kroków, gdy opisujesz procedurę. Oddzielaj fakty od założeń. Nie wymyślaj nazw ustawień, zachowania przeglądarek, gwarancji ani szczegółów implementacji. Jeśli czegoś nie da się ustalić na podstawie pytania lub powszechnie znanych zasad, powiedz wprost, czego nie wiesz. Odpowiadaj na wszystkie części pytania, ale nie dodawaj niepowiązanych dygresji. Dla pytań o bezpieczeństwo wskaż najważniejsze ryzyko i praktyczne zabezpieczenie. Nie ujawniaj ukrytego rozumowania; przedstawiaj wyłącznie zwięzłe uzasadnienie i wnioski."
+  },
+  "models": [
+    {
+      "name": "SmolLM2 360M Q2_K",
+      "file": "SmolLM2-360M-Instruct.Q2_K.gguf",
+      "results": [
+        {
+          "question_number": 1,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 65.3939,
+          "answer": "Jak działa Passkey?\n\nPodsumuj si, że więcej osobie, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj si, jak działa kryptografia, klucza publicznego i prywatnego, rolę serwera oraz odporność na phishing.\n\nA:\n\nPodsumuj"
+        },
+        {
+          "question_number": 1,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 111.1483,
+          "answer": "Dla krótkich klientów, który zostały zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zost"
+        },
+        {
+          "question_number": 2,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 62.7048,
+          "answer": "Więcejności:\n\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n- WebAuthn:\n-"
+        },
+        {
+          "question_number": 2,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 70.7309,
+          "answer": "Nie wyśywanie znanych zasadów, jakie zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zostać zosta"
+        },
+        {
+          "question_number": 3,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 24.9928,
+          "answer": "Zaprojektuj bezpieczne zaproszenie współadministratora do Browser VPS z właścicielą właściej przez Telegram i rejestracji własnego Passkey. Uwzględnij jednorazowość, wygaśnięcie i odrzucenie zaproszenia."
+        },
+        {
+          "question_number": 3,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 74.1766,
+          "answer": "Nie wyraźnie jako wyraźnie ją uzasadnij. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie wyraźnie jako wyraźnie ją uzasadnij. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jednorazowość, wygaśnięcie i odrzucenie zaproszenia. Nie ujawuj jed"
+        }
+      ],
+      "sha256": "d13c8b95c170f16175bbd4e28ba4bd8d23647039ac63be20d1eb0a26598fbdd3"
+    },
+    {
+      "name": "Qwen2 0.5B Q4_K_M",
+      "file": "qwen2-0_5b-instruct-q4_k_m.gguf",
+      "results": [
+        {
+          "question_number": 1,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 21.4763,
+          "answer": "Passkey jest kluczem publicznym, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dostosowane do pasy. Passkey jest używany jako klucz publiczny, który jest używany przez serwer do przekształcenia danych, które są dost"
+        },
+        {
+          "question_number": 1,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 27.5082,
+          "answer": "Passkey jest systemem, który umożliwia użytkownikowi zalogować się do serwera lub aplikacji, zgodnie z swoim kluczem publicznym. Passkey jest używany jako klucz publiczny, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest wykorzystywany jako klucz prywatny, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność, który jest używany przez serwer, aby zalogować użytkownika do serwera lub aplikacji.\n\nPasskey jest używany jako klucz odporność"
+        },
+        {
+          "question_number": 2,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 20.9051,
+          "answer": "Passkey, który użytkownik rejestruje na Androidzie w Chrome, to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji.\n\nPasskey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt, który jest używany przez użytkownika do zalogowania się do aplikacji. Passkey to obiekt"
+        },
+        {
+          "question_number": 2,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 23.7356,
+          "answer": "Passkey w Androidzie w Chrome to konto użytkownika, który jest zalogowany do aplikacji Android. Passkey w Telegramie to konto użytkownika, który jest zalogowany do aplikacji Telegram. \n\nRP ID to identyfikator rejestru, który jest używany przez Google w zalogowaniu użytkowników do aplikacji Google. RP ID jest używany do zalogowania użytkowników do Google Play Store, Google Drive, Google Photos, Google Photos, Google Drive, Google Sheets, Google Sheets, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs, Google Docs"
+        },
+        {
+          "question_number": 3,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 24.4389,
+          "answer": "Zaproszenie współadministratora do Browser VPS z weryfikacją właściciela przez Telegram i rejestracją własnego Passkey powinno obejmować następujące czynniki:\n\n1. Bezpieczne zaproszenie: Zaproszenie powinno być bezpieczne, aby nie przeszkodzić z kontroli użytkownika. Wartość zaproszenia powinna być zazwyczaj 1000 lub więcej znaków.\n\n2. Weryfikacja właściciela: Zaproszenie powinno być weryfikowane przez właściciela. W tym przypadku, zaproszenie powinno być zazwyczaj zazwyczaj 100 znaków.\n\n3. Wygaśnięcie: Zaproszenie powinno być wygaśnięte przez właściciela. Wartość wygaśnięcia powinna być zazwyczaj 100 znaków.\n\n4. Odrzucenie: Zaproszenie powinno być odrzucone przez właściciela. Wartość odrzuconeń powinna być zazwyczaj 100 znaków.\n\n5. Uwzględnienie: Zaproszenie powinno być uwzględnione przez właściciela. Wartość uwzględnienia powinna być zazwyczaj 100 znaków.\n\n6. Bezpieczne zaproszenie: Zaproszenie powinno być bezpieczne, aby nie przeszkodzić z kontroli użytkownika. Wartość zaproszenia powinna być zazwyczaj 1000 lub więcej znaków.\n\n7. Weryfikacja właściciela: Zaproszenie powinno być weryfikowane przez właściciela. W tym przypadku, zaproszenie powin"
+        },
+        {
+          "question_number": 3,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 26.5523,
+          "answer": "Zaprojektowanie bezpiecznego zaproszenia współadministratora do Browser VPS z weryfikacją właściciela przez Telegram i rejestracją własnego Passkey jest bardzo ważne. \n\n1. Jednorazowość: Bezpieczne zaproszenie może być zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwyczaj zazwycz"
+        }
+      ],
+      "sha256": "f0a42bb979ca62b5e61f3bf924ab4b6a40aa091825ee7dcb4039949980ab81a8"
+    },
+    {
+      "name": "Qwen2.5 0.5B Q2_K",
+      "file": "qwen2.5-0.5b-instruct-q2_k.gguf",
+      "results": [
+        {
+          "question_number": 1,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 64.1888,
+          "answer": "Passkey to jest kryptografia, która jest używana do szybkiego przetłumaciania danych. Kryptografia klucza to to, jak to jest, a kryptografia publiczna to to, jak to jest. \n\nKryptografia klucza to to, jak to jest. Kryptografia klucza to to, jak to jest. \n\nPasskey to jest klucz publicznego, który jest szybkościowym i szybkościowym. Kryptografia klucza to to, jak to jest. \n\nPasskey to jest klucz prywatny, który jest szybkościowym i szybkościowym. Kryptografia klucza to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer, który to jest to jest. Serwer to to, jak to jest. \n\nPasskey to jest serwer"
+        },
+        {
+          "question_number": 1,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 93.3363,
+          "answer": "Passkey to kryptografia publicznego, która umożliwia szybki i bezpieczne dostawanie kluczy. Serwer Passkey to serwer, który jest w celu dostarczenia kluczy publicznego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a nie kluczy prywatnego. Serwer Passkey jest w celu dostarczenia kluczy publicznego, a"
+        },
+        {
+          "question_number": 2,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 65.1431,
+          "answer": "Rapidly Password (RP) ID, origin, WebAuthn, i WebAuthn są kluczowe elementy w przeglądarkach, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, aby uzyskać dostęp do swojego konta. Warto zauważyć, że nie wszystkie przeglądarki mogą być zgodne z takim standardem, a niektóre mogą być niezależne od RP ID, origin, WebAuthn, a WebAuthn mogą być niezależne od WebAuthn.\n\nRapidly Password (RP) ID to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku. W przypadku RP ID, użytkownik może dostarczyć informacje o swoim użytkowniku, aby uzyskać dostęp do swojego konta, a nie tylko informacje o swoim użytkowniku. RP ID to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, a nie tylko informacje o swoim użytkowniku.\n\nOrigin to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, a nie tylko informacje o swoim użytkowniku. Origin to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, a nie tylko informacje o swoim użytkowniku.\n\nWebAuthn to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, a nie tylko informacje o swoim użytkowniku. WebAuthn to identyfikatory, które umożliwiają użytkownikom dostarczyć informacje o swoim użytkowniku, a nie tylko informacje o swoim użytkowniku.\n\nWebAuthn nie jest zgodny z standardem WebAuthn, a WebAuthn nie"
+        },
+        {
+          "question_number": 2,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 63.4571,
+          "answer": "RP ID (Registration Password ID) to identyfikatory, które umożliwiają użytkownikom logowania się w przeglądarkach. Origin to identyfikatory, które umożliwiają użytkownikom logowanie się w przeglądarkach. WebAuthn to identyfikatory, które umożliwiają użytkownikom logowanie się w przeglądarkach. \n\nPowyższe problemy przeglądarki wbudowanej mogą zawierać:\n\n1. WebAuthn: WebAuthn może być nieodpowiednicy, jeśli przeglądarka nie jest zgodna z specyfikacją WebAuthn. W takim przypadku, użytkownik może być zalogowany, ale nie będzie mógł logować się w przeglądarkach.\n\n2. RP ID: WebAuthn może być nieodpowiednicy, jeśli przeglądarka nie jest zgodna z specyfikacją RP ID. W takim przypadku, użytkownik może być zalogowany, ale nie będzie mógł logować się w przeglądarkach.\n\n3. Origin: WebAuthn może być nieodpowiednicy, jeśli przeglądarka nie jest zgodna z specyfikacją origin. W takim przypadku, użytkownik może być zalogowany, ale nie będzie mógł logować się w przeglądarkach.\n\n4. RP ID: WebAuthn może być nieodpowiednicy, jeśli przeglądarka nie jest zgodna z specyfikacją RP ID. W takim przypadku, użytkownik może być zalogowany, ale nie będzie mógł logować się w przeglądarkach.\n\n5. Origin: WebAuthn może być nieodpowiednicy, jeśli przeglądarka nie jest zgodna z specyfikacją origin. W takim przypadku, użytkownik może być zalogowany, ale nie będzie mógł logować się w przeglądarkach.\n\n6. WebAuthn: WebAuthn"
+        },
+        {
+          "question_number": 3,
+          "variant": "old",
+          "status": "answered",
+          "seconds": 66.7844,
+          "answer": "Zaprojektuję bezpieczne zaproszenie współadministratora do Browser VPS z weryfikacją właściciela przez Telegram i rejestracją własnego Passkey. W tym celu, zazwyczaje:\n\n1. **Wygaśnięcie zaproszenia:**\n   - Wygaśnięcie zaproszenia jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypadku tego, że użytkownik zazwyczaje, to jest to, jaką jest w przypadku, gdy użytkownik zazwyczaje, ale nie jest zgodny z wymaganiem. W przypad"
+        },
+        {
+          "question_number": 3,
+          "variant": "new",
+          "status": "answered",
+          "seconds": 16.4402,
+          "answer": "Zaprojektuj bezpieczne zaproszenie współadministratora do Browser VPS, z weryfikacją właściciela przez Telegram i rejestrację własnego Passkey. Uwzględnij jednorazowość, wygaśnięcie i odrzucenie zaproszenia."
+        }
+      ],
+      "sha256": "9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8"
+    }
+  ]
+}

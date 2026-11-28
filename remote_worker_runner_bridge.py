@@ -6,6 +6,7 @@ this bridge writes the active checkpoint while a remote job is in flight.
 """
 import secrets
 import chess
+from elimination_chess import EliminationBoard
 import tournament_checkpoint
 from remote_worker_job_binding import BoundWorkerResults
 from remote_worker_protocol import validate_result
@@ -28,7 +29,8 @@ class RemoteRunnerBridge:
         if stop_event is not None and stop_event.is_set():
             raise RuntimeError('Game stopped')
         checkpoint = tournament_checkpoint.load(self.db_path, self.tournament_id)
-        if checkpoint is None or checkpoint.get('fen') != board.fen():
+        if (checkpoint is None or checkpoint.get('fen') != board.fen()
+                or checkpoint.get('variant', 'standard') != ('elimination' if isinstance(board, EliminationBoard) else 'standard')):
             raise ValueError('Runner and durable checkpoint disagree')
         with self.journal._db() as db:
             digest = db.execute('SELECT sha256 FROM tournament_checkpoints WHERE tournament_id=?', (self.tournament_id,)).fetchone()[0]

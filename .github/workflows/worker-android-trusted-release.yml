@@ -1,0 +1,361 @@
+name: Android Worker trusted signing and release
+
+# Manual trusted release. NEVER run via pull_request_target.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Source pull request number
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character source commit
+        required: true
+        type: string
+      version:
+        description: Application version (X.Y.Z)
+        required: true
+        type: string
+      version_code:
+        description: Expected Android versionCode
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - Pre-release
+          - Latest
+        default: Pre-release
+      test_number:
+        description: Pre-release sequence number
+        required: true
+        type: string
+        default: '1'
+
+permissions: {}
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  PR_NUMBER: ${{ inputs.pr_number }}
+  APP_VERSION: ${{ inputs.version }}
+  VERSION_CODE: ${{ inputs.version_code }}
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+  TEST_NUMBER: ${{ inputs.test_number }}
+
+concurrency:
+  group: worker-android-trusted-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - name: Check exact source before building without signing secrets
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APP_VERSION" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]{0,8}$ ]]
+          [[ "$TEST_NUMBER" =~ ^[1-9][0-9]{0,5}$ ]]
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if [[ "$RELEASE_CHANNEL" == Pre-release ]]; then
+            jq -e --arg sha "$SOURCE_SHA" --arg repo "$GITHUB_REPOSITORY" '.state == "open" and .head.sha == $sha and .head.repo.full_name == $repo and .base.ref == "main"' <<< "$pr" >/dev/null
+            event=pull_request
+            android_job='android / apk'
+            tag="worker-v$APP_VERSION-test.$TEST_NUMBER"
+          elif [[ "$RELEASE_CHANNEL" == Latest ]]; then
+            jq -e --arg sha "$SOURCE_SHA" '.merged == true and .merge_commit_sha == $sha and .base.ref == "main"' <<< "$pr" >/dev/null
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+            event=push
+            android_job='android_signed / apk'
+            tag="worker-v$APP_VERSION"
+          else
+            exit 1
+          fi
+          check_ci() {
+            local workflow="$1" event="$2" job="$3" run
+            run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" -f head_sha="$SOURCE_SHA" -f event="$event" -f per_page=100 | jq -er --arg sha "$SOURCE_SHA" --arg event "$event" '[.workflow_runs[] | select(.head_sha == $sha and .event == $event)][0] | select(.status == "completed" and .conclusion == "success") | .id')"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" | jq -e --arg job "$job" 'any(.jobs[]; .name == $job and .conclusion == "success")' >/dev/null
+          }
+          if [[ "$RELEASE_CHANNEL" == Pre-release ]]; then
+            check_ci python-tests.yml push tests
+            check_ci python-tests.yml pull_request tests
+          else
+            check_ci python-tests.yml workflow_dispatch tests
+          fi
+          check_ci worker-multiplatform.yml "$event" "$android_job"
+          # Fail closed on API errors; distinguish nonexistent release from failure.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -es --arg tag "$tag" 'all(.[][]; .tag_name != $tag)' >/dev/null
+          refs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq '.[] | .ref')"
+          if grep -Fxq "refs/tags/$tag" <<< "$refs"; then exit 1; fi
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Confirm exact code and application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          tauri = json.loads(Path('src-tauri/tauri.conf.json').read_text())
+          package = json.loads(Path('package.json').read_text())
+          assert tauri['identifier'] == 'pl.marvin.aichessarena.worker'
+          assert tauri['version'] == package['version'] == os.environ['APP_VERSION']
+          PY
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Android CLI without deprecated sdkmanager
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
+      - name: Install Android 16 API36 and pinned NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          test -x "$android"
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install \
+            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+          set -o pipefail
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: remote_worker_gui/src-tauri
+          key: android-arm64-trusted-release
+      - name: Compile Android Worker in an untrusted job WITHOUT secrets
+        run: |
+          set -euo pipefail
+          npm ci
+          npx tauri android init --ci --skip-targets-install
+          python3 android/inject_package_installer.py
+          npx tauri android build --apk --target aarch64 --ci --debug
+      - name: Verify unsigned-by-original APK identity and make content-addressed artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          test -s "$apk" && test ! -L "$apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          mkdir -p dist-original-key
+          cp "$apk" dist-original-key/worker-untrusted-debug.apk
+          (cd dist-original-key && sha256sum worker-untrusted-debug.apk > SHA256SUMS)
+          (cd dist-original-key && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-release-untrusted-build
+          path: remote_worker_gui/dist-original-key/
+          retention-days: 7
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: android-signing
+    permissions:
+      contents: read
+    steps:
+      # This is a NEW trusted runner: never checkout/run source code here.
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-release-untrusted-build
+          path: input
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Android CLI and signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/android-commandline-tools.zip"
+          staging="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+            --output "$archive"
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $archive" | sha256sum --check -
+          unzip -q "$archive" -d "$staging"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
+          mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
+          android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
+          set +o pipefail
+          yes | "$android" --sdk="$ANDROID_HOME" sdk install build-tools/36.0.0
+          set -o pipefail
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/zipalign"
+      - name: Reject invalid or swapped APK before loading the original keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f input/worker-untrusted-debug.apk
+          test ! -L input/worker-untrusted-debug.apk
+          test -f input/SHA256SUMS && test ! -L input/SHA256SUMS
+          test "$(wc -l < input/SHA256SUMS)" -eq 1
+          test "$(awk '{print $2}' input/SHA256SUMS)" = worker-untrusted-debug.apk
+          (cd input && sha256sum --check SHA256SUMS)
+          apk=input/worker-untrusted-debug.apk
+          test "$(stat -c %s "$apk")" -gt 1024
+          test "$(stat -c %s "$apk")" -lt 209715200
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+      - name: Re-sign APK using original debug cert in isolated trusted job
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          ks="$RUNNER_TEMP/worker-original.keystore"
+          trap 'rm -f "$ks"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$ks"
+          chmod 600 "$ks"
+          cert="$("$JAVA_HOME/bin/keytool" -list -v -keystore "$ks" \
+            -alias androiddebugkey -storepass:env STORE_PASSWORD |
+            sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          mkdir -p dist
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$ks" --ks-key-alias androiddebugkey \
+            --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --v4-signing-enabled false \
+            --out dist/worker-arm64.apk \
+            input/worker-untrusted-debug.apk
+      - name: Independently verify original signature, version and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=dist/worker-arm64.apk
+          test -s "$apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          cert="$("$tools/apksigner" verify --print-certs "$apk" |
+            sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          (cd dist && sha256sum worker-arm64.apk > SHA256SUMS)
+          printf '%s\n' \
+            "Source PR: $PR_NUMBER" "Source SHA: $SOURCE_SHA" \
+            "Version: $APP_VERSION ($VERSION_CODE)" "Channel: $RELEASE_CHANNEL" \
+            "Certificate SHA-256: $cert" "ABI: arm64-v8a" \
+            "Workflow run: $GITHUB_RUN_ID" > dist/PROVENANCE.txt
+          (cd dist && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-release-original-key-verified
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: sign
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-release-original-key-verified
+          path: dist
+      - name: Publish verified release without overwrite
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -f dist/PROVENANCE.txt
+          test -f dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
+          if [[ "$RELEASE_CHANNEL" == Pre-release ]]; then
+            tag="worker-v$APP_VERSION-test.$TEST_NUMBER"
+            flags=(--prerelease --latest=false)
+          elif [[ "$RELEASE_CHANNEL" == Latest ]]; then
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+            tag="worker-v$APP_VERSION"
+            flags=(--latest=true)
+          else
+            exit 1
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -es --arg tag "$tag" 'all(.[][]; .tag_name != $tag)' >/dev/null
+          refs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq '.[] | .ref')"
+          if grep -Fxq "refs/tags/$tag" <<< "$refs"; then exit 1; fi
+          if [[ "$RELEASE_CHANNEL" == Pre-release ]]; then
+            name="ai-chess-arena-worker-v$APP_VERSION-test$TEST_NUMBER-arm64.apk"
+          else
+            name="ai-chess-arena-worker-v$APP_VERSION-arm64.apk"
+          fi
+          mv dist/worker-arm64.apk "dist/$name"
+          (cd dist && sha256sum "$name" > SHA256SUMS && sha256sum --check SHA256SUMS)
+          printf '%s\n' "Android Worker $APP_VERSION — $RELEASE_CHANNEL" \
+            "Source: PR #$PR_NUMBER, $SOURCE_SHA" \
+            "Original certificate verified. Physical Android testing is separate." > release-notes.md
+          gh release create "$tag" "dist/$name" dist/SHA256SUMS dist/PROVENANCE.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" "${flags[@]}" \
+            --title "AI Chess Arena Worker $APP_VERSION ($RELEASE_CHANNEL)" --notes-file release-notes.md

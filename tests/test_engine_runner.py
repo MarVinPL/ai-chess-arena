@@ -16,11 +16,18 @@ class FakeRuntime:
 
 
 class EngineRunnerTests(unittest.TestCase):
+    def play_capture_game(self, runtime, white, black, **kwargs):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+        start = EliminationBoard('4k3/4r3/8/8/8/8/R3P3/4K3 w - - 0 1')
+        with patch('engine_runner.EliminationBoard', return_value=start):
+            return SequentialChessRunner(runtime).play_game(white, black, **kwargs)
+
     def test_models_alternate_and_each_side_uses_own_identity(self):
         runtime = FakeRuntime()
         runner = SequentialChessRunner(runtime)
-        # Fool's mate from the standard position, supplied as deterministic fake moves.
-        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        # Deterministic elimination sequence: the final move captures the white king.
+        sequence = ['a2a3', 'e7e2', 'a3a4', 'e2e1']
         class FoolRuntime:
             def __init__(self): self.calls = []
             def generate(self, path, board, stop_event=None, recent_moves=None):
@@ -28,7 +35,7 @@ class EngineRunnerTests(unittest.TestCase):
                 self.calls.append((str(path), board.turn))
                 return chess.Move.from_uci(uci), {'seconds': 0.01}
         fake = FoolRuntime()
-        result = SequentialChessRunner(fake).play_game(
+        result = self.play_capture_game(fake,
             {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
             {'name': 'Beta', 'path': '/tmp/beta.gguf'})
         self.assertEqual(result['status'], 'finished')
@@ -38,8 +45,85 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn('[White "Alpha"]', result['pgn'])
         self.assertIn('[Black "Beta"]', result['pgn'])
 
+    def test_runner_preserves_nonwinning_model_move_when_king_capture_is_available(self):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        class OverlookingRuntime:
+            def generate(self, path, current_board, stop_event=None, **kwargs):
+                return chess.Move.from_uci('e2e7'), {'seconds': 0.5, 'response': 'e2e7'}
+
+        stop = threading.Event()
+        with patch('engine_runner.EliminationBoard', return_value=board):
+            result = SequentialChessRunner(OverlookingRuntime()).play_game(
+                {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
+                {'name': 'Beta', 'path': '/tmp/beta.gguf'},
+                stop_event=stop, progress=lambda record: stop.set())
+
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['moves'][0]['uci'], 'e2e7')
+        self.assertIsNone(result['moves'][0]['move_override'])
+        self.assertIsNotNone(board.king(chess.BLACK))
+        self.assertFalse(board.is_game_over())
+
+    def test_runner_finishes_only_after_a_king_capture_and_exports_variant_pgn(self):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        class KingCaptureRuntime:
+            def generate(self, path, current_board, stop_event=None, **kwargs):
+                return chess.Move.from_uci('e2e8'), {'seconds': 0.01}
+
+        with patch('engine_runner.EliminationBoard', return_value=board):
+            result = SequentialChessRunner(KingCaptureRuntime()).play_game(
+                {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
+                {'name': 'Beta', 'path': '/tmp/beta.gguf'})
+
+        self.assertEqual(result['status'], 'finished')
+        self.assertEqual(result['result'], '1-0')
+        self.assertEqual(result['termination'], 'VARIANT_LOSS')
+        self.assertEqual(result['moves'][0]['uci'], 'e2e8')
+        self.assertIn('[Variant "Elimination Chess"]', result['pgn'])
+
+    def test_checkpoint_resume_can_finish_with_king_capture_and_variant_pgn(self):
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+
+        initial_fen = '4k2r/8/8/8/8/8/4R3/K7 w - - 0 1'
+        history_board = EliminationBoard(initial_fen)
+        saved_moves = []
+        for ply, uci in enumerate(('a1b1', 'h8g8'), 1):
+            move = chess.Move.from_uci(uci)
+            color = 'white' if history_board.turn else 'black'
+            san = history_board.san(move)
+            history_board.push(move)
+            saved_moves.append({'ply': ply, 'uci': uci, 'san': san, 'color': color,
+                                'model': 'Alpha' if color == 'white' else 'Beta',
+                                'seconds': 0.01, 'fen': history_board.fen()})
+
+        class KingCaptureRuntime:
+            def generate(self, path, current_board, stop_event=None, **kwargs):
+                self.asserted_variant = isinstance(current_board, EliminationBoard)
+                return chess.Move.from_uci('e2e8'), {'seconds': 0.01}
+
+        runtime = KingCaptureRuntime()
+        player = {'name': 'Alpha', 'path': '/tmp/alpha.gguf'}
+        with patch('engine_runner.EliminationBoard', return_value=EliminationBoard(initial_fen)):
+            result = SequentialChessRunner(runtime).play_game(
+                player, {'name': 'Beta', 'path': '/tmp/beta.gguf'},
+                resume_moves=saved_moves, resume_fen=history_board.fen(),
+                resume_move_times=[0.01, 0.01])
+
+        self.assertTrue(runtime.asserted_variant)
+        self.assertEqual(result['status'], 'finished')
+        self.assertEqual(result['result'], '1-0')
+        self.assertEqual([move['uci'] for move in result['moves']], ['a1b1', 'h8g8', 'e2e8'])
+        self.assertIn('[Variant "Elimination Chess"]', result['pgn'])
+
     def test_target_with_draft_is_one_player_configuration(self):
-        sequence=['f2f3','e7e5','g2g4','d8h4']
+        sequence=['a2a3','e7e2','a3a4','e2e1']
         class PairRuntime:
             def __init__(self): self.calls=[]
             def generate(self,path,board,stop_event=None,draft_model_path=None,recent_moves=None):
@@ -47,7 +131,7 @@ class EngineRunnerTests(unittest.TestCase):
                 self.calls.append((str(path),str(draft_model_path) if draft_model_path else None))
                 return chess.Move.from_uci(uci),{'seconds':0.01}
         fake=PairRuntime()
-        result=SequentialChessRunner(fake).play_game(
+        result=self.play_capture_game(fake,
             {'name':'Alpha + MTP','path':'/tmp/alpha.gguf','draft_path':'/tmp/alpha-draft.gguf'},
             {'name':'Beta','path':'/tmp/beta.gguf'})
         self.assertEqual(result['status'],'finished')
@@ -55,7 +139,7 @@ class EngineRunnerTests(unittest.TestCase):
                                      ('/tmp/alpha.gguf','/tmp/alpha-draft.gguf'),('/tmp/beta.gguf',None)])
 
     def test_progress_callback_receives_each_validated_move_and_position(self):
-        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        sequence = ['a2a3', 'e7e2', 'a3a4', 'e2e1']
         class FoolRuntime:
             def __init__(self): self.calls = []
             def generate(self, path, board, stop_event=None, recent_moves=None):
@@ -63,18 +147,18 @@ class EngineRunnerTests(unittest.TestCase):
                 self.calls.append(uci)
                 return chess.Move.from_uci(uci), {'seconds': 0.02}
         progress = []
-        result = SequentialChessRunner(FoolRuntime()).play_game(
+        result = self.play_capture_game(FoolRuntime(),
             {'name': 'Alpha', 'path': '/tmp/alpha.gguf'},
             {'name': 'Beta', 'path': '/tmp/beta.gguf'}, progress=progress.append)
         self.assertEqual(len(progress), 4)
         self.assertEqual([item['uci'] for item in progress], sequence)
         self.assertTrue(all(item.get('fen') for item in progress))
-        self.assertEqual(progress[-1]['san'], 'Qh4#')
+        self.assertEqual(progress[-1]['san'], 'Rxe1')
         self.assertEqual(progress[-1]['fen'], result['fen'])
 
     def test_arbiter_intervention_is_passed_to_model_and_audited(self):
         from unittest.mock import patch
-        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        sequence = ['a2a3', 'e7e2', 'a3a4', 'e2e1']
         class ArbiterRuntime:
             def __init__(self): self.calls = []
             def generate(self, path, board, stop_event=None, recent_moves=None, arbiter_signal=None):
@@ -87,14 +171,14 @@ class EngineRunnerTests(unittest.TestCase):
         runtime = ArbiterRuntime()
         signal = {'type': 'piece_cycle', 'reason': 'powtarzany cykl'}
         with patch('engine_runner.arbiter.detect_stagnation', return_value=signal):
-            result = SequentialChessRunner(runtime).play_game(
+            result = self.play_capture_game(runtime,
                 {'name': 'Alpha', 'path': '/tmp/a.gguf'},
                 {'name': 'Beta', 'path': '/tmp/b.gguf'})
         self.assertEqual(runtime.calls[0]['type'], 'piece_cycle')
         self.assertEqual(result['arbiter_intervention_count'], 3)
         self.assertEqual(result['arbiter_events'][0]['response_seconds'], 0.25)
-        self.assertEqual(result['arbiter_events'][0]['selected_move'], 'f2f3')
-        self.assertEqual(result['moves'][0]['uci'], 'f2f3')  # arbiter never makes a move
+        self.assertEqual(result['arbiter_events'][0]['selected_move'], 'a2a3')
+        self.assertEqual(result['moves'][0]['uci'], 'a2a3')  # arbiter never makes a move
 
     def test_stop_before_first_move_returns_stopped(self):
         event = threading.Event(); event.set()
@@ -181,7 +265,7 @@ class EngineRunnerTests(unittest.TestCase):
         outputs = iter([Response('not-a-move'), Response('e2e4')])
         prompts = []
         def fake_open(request, timeout=None):
-            prompts.append(json.loads(request.data.decode())['messages'][0]['content'])
+            prompts.append(json.loads(request.data.decode())['messages'][1]['content'])
             return next(outputs)
         runtime = LlamafileRuntime()
         try:
@@ -258,7 +342,7 @@ class EngineRunnerTests(unittest.TestCase):
             move, meta = runtime.generate('/tmp/model.gguf', board)
         self.assertEqual(move.uci(), 'g1h3')
         self.assertEqual(len(requests), 2)
-        self.assertIn('poprzednia odpowiedź', requests[1]['messages'][0]['content'])
+        self.assertIn('poprzednia odpowiedź', requests[1]['messages'][1]['content'])
         self.assertIn('retrying', [stage for stage, _ in events])
         self.assertEqual(meta['response'], 'g1h3')
 
@@ -289,14 +373,58 @@ class EngineRunnerTests(unittest.TestCase):
             runtime.shutdown()
 
         self.assertEqual(move.uci(), 'g1h3')
-        self.assertNotIn('grammar', requests[0])
-        self.assertTrue(requests[0]['chat_template_kwargs']['enable_thinking'])
+        self.assertIn('grammar', requests[0])
+        self.assertIn('grammar', requests[1])
+        self.assertEqual(requests[0]['messages'][0]['role'], 'system')
+        self.assertIn('standard chess', requests[0]['messages'][0]['content'])
+        self.assertNotIn('do not restrict moves', requests[0]['messages'][0]['content'])
+        self.assertFalse(requests[0]['chat_template_kwargs']['enable_thinking'])
         self.assertFalse(requests[1]['chat_template_kwargs']['enable_thinking'])
-        grammar = requests[1]['grammar']
+        grammar = requests[0]['grammar']
         self.assertTrue(grammar.startswith('root ::= '))
         self.assertIn('"g1h3"', grammar)
         self.assertNotIn('"e2e5"', grammar)
         self.assertEqual(grammar.count('"'), 40)
+
+    def test_king_capture_is_not_suggested_in_initial_or_retry_prompt(self):
+        import json
+        from unittest.mock import patch
+        from elimination_chess import EliminationBoard
+        from engine_runner import LlamafileRuntime
+
+        outputs = iter(["invalid", "e2e7"])
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({'choices': [{'message': {'content': next(outputs)}}]}).encode()
+
+        requests = []
+        def fake_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data.decode()))
+            return Response()
+
+        board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')
+        runtime = LlamafileRuntime()
+        try:
+            with patch.object(runtime, 'ensure_loaded'), patch(
+                    'urllib.request.urlopen', side_effect=fake_urlopen):
+                move, _ = runtime.generate('/tmp/model.gguf', board)
+        finally:
+            runtime.shutdown()
+
+        self.assertEqual(move.uci(), 'e2e7')
+        self.assertEqual(len(requests), 2)
+        system_prompt = requests[0]['messages'][0]['content']
+        move_prompt = requests[0]['messages'][1]['content']
+        self.assertNotIn('MUSISZ to zrobić', system_prompt)
+        self.assertNotIn('MUST do so', system_prompt)
+        self.assertNotIn('KING-CAPTURE WIN MOVES', move_prompt)
+        self.assertNotIn('KING-CAPTURE WIN MOVES', requests[1]['messages'][1]['content'])
+        for request in requests:
+            self.assertIn('\"e2e7\"', request['grammar'])
+            self.assertIn('\"e2e8\"', request['grammar'])
+        self.assertIn('e2e8', move_prompt)
 
     def test_generate_retries_illegal_move_and_never_accepts_it(self):
         import json
@@ -317,7 +445,7 @@ class EngineRunnerTests(unittest.TestCase):
         with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
             with self.assertRaisesRegex(RunnerError, 'po 2 próbach'):
                 runtime.generate('/tmp/model.gguf', chess.Board())
-        retry_prompt = requests[1]['messages'][0]['content']
+        retry_prompt = requests[1]['messages'][1]['content']
         self.assertIn('e2e5', retry_prompt)
         self.assertIn('NIELEGALNY', retry_prompt)
         self.assertIn('LEGAL MOVES:', retry_prompt)
@@ -366,8 +494,9 @@ class EngineRunnerTests(unittest.TestCase):
             ['illegal_uci', 'illegal_uci'])
         self.assertTrue(all(not item['valid_move']
                             for item in caught.exception.budget_observations))
-        self.assertNotIn('grammar', requests[0])
+        self.assertIn('grammar', requests[0])
         self.assertIn('grammar', requests[1])
+        self.assertNotIn("\"g6d8\"", requests[0]["grammar"])
         self.assertNotIn('"g6d8"', requests[1]['grammar'])
 
 
@@ -473,8 +602,8 @@ class EngineRunnerTests(unittest.TestCase):
         with patch.object(runtime, 'ensure_loaded'), patch('urllib.request.urlopen', side_effect=fake_urlopen):
             move, _ = runtime.generate('/tmp/model.gguf', board, recent_moves=history)
         self.assertEqual(move.uci(), 'g1g2')
-        first_prompt = requests[0]['messages'][0]['content']
-        retry_prompt = requests[1]['messages'][0]['content']
+        first_prompt = requests[0]['messages'][1]['content']
+        retry_prompt = requests[1]['messages'][1]['content']
         self.assertNotIn('g1h1', first_prompt.split('LEGAL MOVES: ', 1)[1])
         self.assertIn('powtarza cofnięcie', retry_prompt)
         self.assertIn('g1g2', retry_prompt)
@@ -497,7 +626,7 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertIn(chess.Move.from_uci('e1d1'), allowed)
 
     def test_thinking_setting_is_passed_per_competitor_and_saved_with_moves(self):
-        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        sequence = ['a2a3', 'e7e2', 'a3a4', 'e2e1']
         class ThinkingRuntime:
             def __init__(self): self.settings=[]
             def generate(self, path, board, stop_event=None, recent_moves=None, enable_thinking=False, temperature=0.0, max_tokens=16):
@@ -505,7 +634,7 @@ class EngineRunnerTests(unittest.TestCase):
                 uci=sequence[len(self.settings)-1]
                 return chess.Move.from_uci(uci), {'seconds':0.01,'thinking':bool(enable_thinking)}
         fake=ThinkingRuntime()
-        result=SequentialChessRunner(fake).play_game(
+        result=self.play_capture_game(fake,
             {'name':'Alpha · thinking ON','path':'/tmp/a.gguf','thinking':True,
              'inference':{'thinking':True,'temperature':0.25,'max_tokens':512}},
             {'name':'Alpha · thinking OFF','path':'/tmp/a.gguf','thinking':False,
@@ -514,7 +643,7 @@ class EngineRunnerTests(unittest.TestCase):
         self.assertEqual([m['thinking'] for m in result['moves']],[True,False,True,False])
         self.assertEqual(result['moves'][0]['inference']['max_tokens'],512)
 
-    def test_llamafile_payload_enables_thinking_for_selected_competitor(self):
+    def test_llamafile_grammar_mode_disables_thinking_for_selected_competitor(self):
         import json
         from unittest.mock import patch
         from engine_runner import LlamafileRuntime
@@ -535,13 +664,14 @@ class EngineRunnerTests(unittest.TestCase):
         finally:
             runtime.shutdown()
         self.assertEqual(move.uci(),'e2e4')
-        self.assertTrue(captured['payload']['chat_template_kwargs']['enable_thinking'])
+        self.assertFalse(captured['payload']['chat_template_kwargs']['enable_thinking'])
+        self.assertIn('grammar', captured['payload'])
         self.assertEqual(captured['payload']['max_tokens'],512)
         self.assertEqual(captured['payload']['temperature'],0.25)
         self.assertTrue(meta['thinking'])
 
     def test_sequential_runner_passes_move_history_to_both_models(self):
-        sequence = ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+        sequence = ['a2a3', 'e7e2', 'a3a4', 'e2e1']
         class HistoryRuntime:
             def __init__(self): self.histories=[]
             def generate(self, path, board, stop_event=None, recent_moves=None):
@@ -549,14 +679,14 @@ class EngineRunnerTests(unittest.TestCase):
                 uci = sequence[len(self.histories)-1]
                 return chess.Move.from_uci(uci), {'seconds': 0.01}
         fake = HistoryRuntime()
-        SequentialChessRunner(fake).play_game(
+        self.play_capture_game(fake,
             {'name':'Alpha','path':'/tmp/a.gguf'},
             {'name':'Beta','path':'/tmp/b.gguf'})
         self.assertEqual(fake.histories[0], [])
-        self.assertEqual(fake.histories[1][0]['uci'], 'f2f3')
-        self.assertEqual(fake.histories[1][0]['piece'], 'P')
-        self.assertEqual(fake.histories[2][1]['uci'], 'e7e5')
-        self.assertEqual(fake.histories[2][1]['piece'], 'p')
+        self.assertEqual(fake.histories[1][0]['uci'], 'a2a3')
+        self.assertEqual(fake.histories[1][0]['piece'], 'R')
+        self.assertEqual(fake.histories[2][1]['uci'], 'e7e2')
+        self.assertEqual(fake.histories[2][1]['piece'], 'r')
 
 
     def test_runner_error_preserves_final_position_and_legal_history(self):

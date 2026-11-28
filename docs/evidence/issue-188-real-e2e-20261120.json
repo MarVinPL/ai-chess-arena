@@ -1,0 +1,302 @@
+{
+  "date": "2026-11-20",
+  "scope": "isolated Issue #188 validation; no production changes",
+  "real_model_tournament": {
+    "tournament_status": "completed",
+    "pairing_status": "completed",
+    "game_id": 1,
+    "result": "1-0",
+    "move_count": 1,
+    "pgn_variant": true,
+    "pgn_has_king_capture": true,
+    "checkpoint_count_after_finish": 0,
+    "move_records": [
+      {
+        "ply": 1,
+        "color": "white",
+        "model": "Qwen2.5 real E2E",
+        "model_id": 1,
+        "thinking": false,
+        "inference": {
+          "thinking": false,
+          "temperature": 0.0,
+          "max_tokens": 16
+        },
+        "budget_observations": [
+          {
+            "max_tokens": 16,
+            "completion_tokens": 5,
+            "finish_reason": "stop",
+            "truncated": false,
+            "valid_move": true,
+            "attempt": 1
+          }
+        ],
+        "uci": "e2e8",
+        "san": "Rxe8",
+        "piece": "R",
+        "seconds": 46.2928,
+        "fen": "4R3/8/8/8/8/8/8/4K3 b - - 0 1",
+        "model_proposed_uci": "e2e7",
+        "move_override": "forced_king_capture",
+        "move_override_reason": "Immediate legal king capture takes priority",
+        "arbiter_intervention": false,
+        "arbiter_signal": null,
+        "arbiter_response": null
+      }
+    ],
+    "events": [
+      {
+        "stage": "starting",
+        "message": "Przygotowanie turnieju"
+      },
+      {
+        "stage": "game_prepare",
+        "message": "Przygotowanie partii: Qwen2.5 real E2E vs Qwen2 real opponent"
+      },
+      {
+        "stage": "game_ready",
+        "message": "Partia gotowa: Qwen2.5 real E2E vs Qwen2 real opponent"
+      },
+      {
+        "stage": "game_running",
+        "message": "Rozpoczęto partię"
+      },
+      {
+        "stage": "model_loading",
+        "message": "Ładowanie modelu: Qwen2.5 real E2E"
+      },
+      {
+        "stage": "model_ready",
+        "message": "Model gotowy: Qwen2.5 real E2E"
+      },
+      {
+        "stage": "generating",
+        "message": "Model generuje propozycję ruchu"
+      },
+      {
+        "stage": "move_generated",
+        "message": "Model zaproponował ruch: e2e7"
+      },
+      {
+        "stage": "move_played",
+        "message": "Ruch 1: Rxe8 (e2e8)"
+      },
+      {
+        "stage": "game_finished",
+        "message": "Partia zakończona: 1-0"
+      },
+      {
+        "stage": "completed",
+        "message": "Turniej zakończony"
+      }
+    ],
+    "tournament_error": "",
+    "runtime_loaded_model_after_finish": null
+  },
+  "panel_http_and_pgn_routes": {
+    "panel_http_status": 200,
+    "variant_notice_in_panel_html": true,
+    "games_api_count": 1,
+    "games_api_result": "1-0",
+    "game_detail_override": "forced_king_capture",
+    "single_game_pgn_status": 200,
+    "single_game_pgn_variant": true,
+    "single_game_pgn_king_capture": true,
+    "export_pgn_status": 200,
+    "export_pgn_variant": true,
+    "export_pgn_king_capture": true
+  },
+  "headless_chromium": {
+    "chromium_exit_code": 0,
+    "variant_notice_rendered": true,
+    "board_square_count": 64,
+    "board_rendered": true,
+    "page_title_present": true
+  },
+  "real_model_round_robin_two_players": {
+    "tournament_status": "completed",
+    "pairing_statuses": [
+      "completed",
+      "completed"
+    ],
+    "pairing_game_ids": [
+      1,
+      2
+    ],
+    "game_count": 2,
+    "game_results": [
+      "1-0",
+      "1-0"
+    ],
+    "move_counts": [
+      1,
+      1
+    ],
+    "pgn_variants": [
+      true,
+      true
+    ],
+    "pgn_king_captures": [
+      true,
+      true
+    ],
+    "checkpoint_count_after_finish": 0,
+    "move_records": [
+      [
+        {
+          "ply": 1,
+          "color": "white",
+          "model": "Qwen2.5 real E2E",
+          "model_id": 1,
+          "thinking": false,
+          "inference": {
+            "thinking": false,
+            "temperature": 0.0,
+            "max_tokens": 16
+          },
+          "budget_observations": [
+            {
+              "max_tokens": 16,
+              "completion_tokens": 5,
+              "finish_reason": "stop",
+              "truncated": false,
+              "valid_move": true,
+              "attempt": 1
+            }
+          ],
+          "uci": "e2e8",
+          "san": "Rxe8",
+          "piece": "R",
+          "seconds": 48.4555,
+          "fen": "4R3/8/8/8/8/8/8/4K3 b - - 0 1",
+          "model_proposed_uci": "e2e7",
+          "move_override": "forced_king_capture",
+          "move_override_reason": "Immediate legal king capture takes priority",
+          "arbiter_intervention": false,
+          "arbiter_signal": null,
+          "arbiter_response": null
+        }
+      ],
+      [
+        {
+          "ply": 1,
+          "color": "white",
+          "model": "Qwen2 real opponent",
+          "model_id": 2,
+          "thinking": false,
+          "inference": {
+            "thinking": false,
+            "temperature": 0.0,
+            "max_tokens": 16
+          },
+          "budget_observations": [
+            {
+              "max_tokens": 16,
+              "completion_tokens": 5,
+              "finish_reason": "stop",
+              "truncated": false,
+              "valid_move": true,
+              "attempt": 1
+            }
+          ],
+          "uci": "e2e8",
+          "san": "Rxe8",
+          "piece": "R",
+          "seconds": 7.5393,
+          "fen": "4R3/8/8/8/8/8/8/4K3 b - - 0 1",
+          "model_proposed_uci": null,
+          "move_override": null,
+          "move_override_reason": null,
+          "arbiter_intervention": false,
+          "arbiter_signal": null,
+          "arbiter_response": null
+        }
+      ]
+    ],
+    "events": [
+      {
+        "stage": "starting",
+        "message": "Przygotowanie turnieju"
+      },
+      {
+        "stage": "game_prepare",
+        "message": "Przygotowanie partii: Qwen2.5 real E2E vs Qwen2 real opponent"
+      },
+      {
+        "stage": "game_ready",
+        "message": "Partia gotowa: Qwen2.5 real E2E vs Qwen2 real opponent"
+      },
+      {
+        "stage": "game_running",
+        "message": "Rozpoczęto partię"
+      },
+      {
+        "stage": "model_loading",
+        "message": "Ładowanie modelu: Qwen2.5 real E2E"
+      },
+      {
+        "stage": "model_ready",
+        "message": "Model gotowy: Qwen2.5 real E2E"
+      },
+      {
+        "stage": "generating",
+        "message": "Model generuje propozycję ruchu"
+      },
+      {
+        "stage": "move_generated",
+        "message": "Model zaproponował ruch: e2e7"
+      },
+      {
+        "stage": "move_played",
+        "message": "Ruch 1: Rxe8 (e2e8)"
+      },
+      {
+        "stage": "game_finished",
+        "message": "Partia zakończona: 1-0"
+      },
+      {
+        "stage": "game_prepare",
+        "message": "Przygotowanie partii: Qwen2 real opponent vs Qwen2.5 real E2E"
+      },
+      {
+        "stage": "game_ready",
+        "message": "Partia gotowa: Qwen2 real opponent vs Qwen2.5 real E2E"
+      },
+      {
+        "stage": "game_running",
+        "message": "Rozpoczęto partię"
+      },
+      {
+        "stage": "model_loading",
+        "message": "Ładowanie modelu: Qwen2 real opponent"
+      },
+      {
+        "stage": "model_ready",
+        "message": "Model gotowy: Qwen2 real opponent"
+      },
+      {
+        "stage": "generating",
+        "message": "Model generuje propozycję ruchu"
+      },
+      {
+        "stage": "move_generated",
+        "message": "Model zaproponował ruch: e2e8"
+      },
+      {
+        "stage": "move_played",
+        "message": "Ruch 1: Rxe8 (e2e8)"
+      },
+      {
+        "stage": "game_finished",
+        "message": "Partia zakończona: 1-0"
+      },
+      {
+        "stage": "completed",
+        "message": "Turniej zakończony"
+      }
+    ],
+    "tournament_error": "",
+    "runtime_loaded_model_after_finish": null
+  }
+}

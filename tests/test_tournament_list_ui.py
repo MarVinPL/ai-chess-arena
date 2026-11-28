@@ -3,13 +3,13 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/arena.css").read_text(encoding="utf-8") + '\n' + (ROOT / "web/js/arena.js").read_text(encoding="utf-8")
 
 
 class TournamentListUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        start = HTML.index("function renderTournaments(rows)")
+        start = HTML.index("function renderTournaments(rows,force=false)")
         end = HTML.index("\nfunction renderModelStatus", start)
         cls.renderer = HTML[start:end]
 
@@ -39,7 +39,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("'/api/tournaments/'+t.id+'/preflight'", self.renderer)
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
-        self.assertIn("if(!readiness.ready){await showPreflight()", self.renderer)
+        self.assertIn("if(!readiness.ready){clearTournamentControl()", self.renderer)
         self.assertIn("Pokaż warunki dopuszczenia · model '+e.model_id", self.renderer)
         self.assertIn("Otwórz rejestr modeli i licencje", self.renderer)
         self.assertIn("Przygotuj propozycję do audytu · model '+e.model_id", self.renderer)
@@ -69,7 +69,8 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn("if(['planned','stopped','failed'].includes(t.status))", self.renderer)
         self.assertIn("check.textContent='Dlaczego nie startuje?'", self.renderer)
         self.assertIn("check.onclick=showPreflight", self.renderer)
-        self.assertIn("if(t.status==='planned')showPreflight()", self.renderer)
+        self.assertIn("if(expandedTournamentDiagnostics.has(t.id))showPreflight()", self.renderer)
+        self.assertNotIn("if(t.status==='planned')showPreflight()", self.renderer)
         self.assertIn("if(t.status==='running')", self.renderer)
         self.assertIn("completed:'Zakończony'", self.renderer)
 
@@ -100,7 +101,7 @@ class TournamentListUiTests(unittest.TestCase):
         self.assertIn(".tournament-card__fields{grid-template-columns:repeat(2,minmax(0,1fr))}", HTML)
         self.assertIn(".tournament-card__actions button{flex:1 1 100%}", HTML)
         self.assertIn(".tournament-card button:focus-visible", HTML)
-        self.assertRegex(HTML, r"@media\(max-width:760px\)")
+        self.assertRegex(HTML, r"@media\(orientation:portrait\),\(max-width:760px\)")
         self.assertIn("overflow-x:hidden", HTML)
 
     def test_renderer_uses_dom_text_nodes_for_model_data(self):

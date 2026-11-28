@@ -4,6 +4,7 @@ Only coordinator-validated transitions may modify this registry. Missing rows,
 expired leases and interrupted tasks fail closed. This is not a job scheduler.
 """
 import re
+import secrets
 import sqlite3
 import time
 
@@ -20,6 +21,36 @@ class DurableWorkerJobs:
                 CHECK(state IN ('running','idle_confirmed','unknown')),
                 deadline REAL, updated_at REAL NOT NULL)''')
 
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_update_holds (
+                worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
+                created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
+
+            # Shared coordinator lock. Requests must block a racing new
+            # assignment before a trusted STOP/checkpoint ACK is delivered.
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
+                worker_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                phase TEXT NOT NULL CHECK(phase IN ('requested','acknowledged')),
+                created_at REAL NOT NULL,
+                acknowledged_at REAL
+            )''')
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_update_resume (
+                worker_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                checkpoint_json TEXT NOT NULL,
+                checkpoint_sha256 TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )''')
+            # Only a previously idle, explicitly released update reservation
+            # can produce this one-time recovery proof. An UNKNOWN worker
+            # without it must never re-enroll as idle after a crash.
+            db.execute('''CREATE TABLE IF NOT EXISTS worker_idle_update_recovery (
+                worker_id TEXT PRIMARY KEY,
+                released_at REAL NOT NULL
+            )''')
+
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.execute('PRAGMA busy_timeout=10000')
@@ -29,6 +60,158 @@ class DurableWorkerJobs:
     def _id(value):
         if not isinstance(value, str) or not _ID.fullmatch(value):
             raise ValueError('Invalid identifier')
+
+    def _reject_pending_resume(self, db, worker_id):
+        # A locally stored resumable job remains owned by the coordinator
+        # even after Android completed and the update hold was released.
+        # Never start an unrelated assignment or a second installer before
+        # the interrupted job has been reconciled by the resume dispatcher.
+        if db.execute(
+            'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+            (worker_id,)
+        ).fetchone():
+            raise ValueError('Worker resume checkpoint pending; assignment blocked')
+
+    def _reject_pending_pause(self, db, worker_id):
+        # A requested or ACKed pause is not idle. Block assignment even if
+        # another coordinator thread commits the last job concurrently.
+        if db.execute(
+            'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+            (worker_id,)
+        ).fetchone():
+            raise ValueError('Worker pause for update pending; assignment blocked')
+
+    def _reject_update_hold(self, db, worker_id):
+        # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
+        # blocking assignments until explicit coordinator reconciliation.
+        # An expiry alone never proves that Android's installer has finished.
+        if db.execute('SELECT 1 FROM worker_update_holds WHERE worker_id=?',
+                      (worker_id,)).fetchone():
+            raise ValueError('Worker reserved for update; assignment blocked')
+
+    def reserve_update(self, worker_id, *, ttl_seconds=300, hold_token=None):
+        """Atomically reserve a recently confirmed idle worker for update.
+
+        Only a coordinator-controlled call may invoke this method. The token
+        is a random capability; never expose it to worker listing or logs.
+        Expiry limits its validity for installation, not the durable block.
+        """
+        self._id(worker_id)
+        if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= 900:
+            raise ValueError('Invalid update hold TTL')
+        now = self.clock()
+        # Android journals its CSPRNG-generated hold token securely BEFORE
+        # calling the coordinator, so a lost response cannot orphan the hold.
+        # Legacy trusted callers may still let the server generate the token.
+        if hold_token is None:
+            token = secrets.token_hex(32)
+        elif (not isinstance(hold_token, str) or
+              not re.fullmatch(r'[0-9a-f]{64}', hold_token)):
+            raise ValueError('Invalid client-generated update hold token')
+        else:
+            token = hold_token
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
+            row = db.execute('''SELECT state,job_id,deadline,updated_at
+                                FROM worker_job_safety WHERE worker_id=?''',
+                             (worker_id,)).fetchone()
+            if not row or row[0] != 'idle_confirmed' or row[1] is not None or (
+                row[2] is not None
+            ) or not (0 <= now - row[3] <= 30):
+                raise ValueError('Worker idle is not freshly confirmed')
+            db.execute(
+                'DELETE FROM worker_idle_update_recovery WHERE worker_id=?',
+                (worker_id,),
+            )
+            db.execute('''INSERT INTO worker_update_holds
+                (worker_id,hold_token,created_at,expires_at) VALUES (?,?,?,?)''',
+                (worker_id, token, now, now + ttl_seconds))
+        return token
+
+    def validate_update_hold(self, worker_id, token):
+        """Return true only for currently usable reservation evidence."""
+        self._id(worker_id)
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            return False
+        with self._db() as db:
+            row = db.execute('''SELECT hold_token,expires_at FROM worker_update_holds
+                                WHERE worker_id=?''', (worker_id,)).fetchone()
+        return bool(row and secrets.compare_digest(row[0], token)
+                    and self.clock() < row[1])
+
+    def inspect_update_hold(self, worker_id, token):
+        """Read-only recovery evidence for the original, journaled token.
+
+        'absent' does NOT prove that Android PackageInstaller has finished.
+        'expired' remains a durable assignment block, not an auto-release.
+        A different token is rejected without disclosing reservation details.
+        """
+        self._id(worker_id)
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            raise ValueError('Invalid update reservation capability')
+        with self._db() as db:
+            row = db.execute(
+                'SELECT hold_token,expires_at FROM worker_update_holds WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+        if row is None:
+            return 'absent'
+        if not secrets.compare_digest(row[0], token):
+            raise ValueError('Update reservation mismatch')
+        return 'active' if self.clock() < row[1] else 'expired'
+
+    def release_update_hold(self, worker_id, token):
+        """Explicit coordinator release. Only the exact token clears a hold.
+
+        An expired reservation stays blocked; an authenticated release holding
+        the original token can still recover it after expiry.
+        """
+        self._id(worker_id)
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            raise ValueError('Invalid update reservation')
+        with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('''SELECT hold_token FROM worker_update_holds
+                                WHERE worker_id=?''', (worker_id,)).fetchone()
+            if not row or not secrets.compare_digest(row[0], token):
+                raise ValueError('Wrong update reservation')
+            worker = db.execute(
+                'SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            pause = db.execute(
+                'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            resume = db.execute(
+                'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            db.execute('DELETE FROM worker_update_holds WHERE worker_id=?',
+                       (worker_id,))
+            db.execute(
+                'DELETE FROM worker_idle_update_recovery WHERE worker_id=?',
+                (worker_id,),
+            )
+            now = self.clock()
+            if worker == ('idle_confirmed', None, None) and not pause and not resume:
+                # A genuine idle update has no interrupted inference to
+                # recover. The original exact hold-token release is trusted;
+                # the next authenticated on-phone readiness may consume this
+                # bounded proof ONCE to clear UNKNOWN after OS installation.
+                db.execute(
+                    'INSERT INTO worker_idle_update_recovery VALUES (?,?)',
+                    (worker_id, now),
+                )
+            # Releasing the hold is NOT proof that the app came back online.
+            # Even a verified idle update becomes UNKNOWN until its one-time
+            # recovery evidence and on-phone local model are both checked.
+            db.execute('''UPDATE worker_job_safety SET state='unknown',
+                          job_id=NULL,deadline=NULL,updated_at=?
+                          WHERE worker_id=?''', (now, worker_id))
 
     def assign(self, worker_id, job_id, *, timeout_seconds):
         """Called only by coordinator after assignment is durably accepted."""
@@ -40,6 +223,9 @@ class DurableWorkerJobs:
         with self._db() as db:
             # Serialize read-check-write across independent coordinator processes.
             db.execute('BEGIN IMMEDIATE')
+            self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
             row = db.execute('SELECT state FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row and row[0] != 'idle_confirmed':
                 raise ValueError('Worker not confirmed idle')
@@ -70,6 +256,48 @@ class DurableWorkerJobs:
         if row[0] == 'running' and (row[1] is None or row[1] <= self.clock()):
             return 'unknown'
         return row[0]
+
+    def update_safety_snapshot(self, worker_id, *, max_idle_age_seconds=30):
+        """Coordinator-owned evidence: stale terminal state must not imply idle.
+
+        Return a snapshot only. This cannot reserve idle, block job assignment,
+        or authorize installation. A new assignment may begin immediately.
+        """
+        self._id(worker_id)
+        if type(max_idle_age_seconds) not in (int, float) or not 0 < max_idle_age_seconds <= 30:
+            raise ValueError('Invalid idle evidence lifetime')
+        with self._db() as db:
+            row = db.execute(
+                'SELECT state,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+            hold = db.execute(
+                'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+            pause = db.execute(
+                'SELECT 1 FROM worker_update_pause_requests WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+            resume = db.execute(
+                'SELECT 1 FROM worker_update_resume WHERE worker_id=?',
+                (worker_id,)
+            ).fetchone()
+        now = self.clock()
+        # An in-flight stop request is never fresh idle evidence, even if
+        # another process has just committed a terminal job result.
+        if not row or hold or pause or resume:
+            return 'unknown', None
+        state, deadline, updated_at = row
+        if state == 'running':
+            return ('running', 1) if deadline is not None and deadline > now else ('unknown', None)
+        # Only a recently committed terminal result can prove idle. Never
+        # refresh an old DB row merely because a read-only API was called.
+        if state == 'idle_confirmed' and updated_at is not None and (
+            0 <= now - updated_at <= max_idle_age_seconds
+        ):
+            return 'idle_confirmed', 0
+        return 'unknown', None
 
     def recover_after_restart(self):
         """Invalidate every persisted idle/running claim on coordinator boot.

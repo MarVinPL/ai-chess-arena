@@ -3,7 +3,7 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+HTML = (ROOT / "index.html").read_text(encoding="utf-8") + '\n' + (ROOT / "web/css/arena.css").read_text(encoding="utf-8") + '\n' + (ROOT / "web/js/arena.js").read_text(encoding="utf-8")
 
 
 class TournamentLoadingRegressionTests(unittest.TestCase):
@@ -30,10 +30,12 @@ class TournamentLoadingRegressionTests(unittest.TestCase):
     def test_other_failed_sections_have_explicit_errors(self):
         self.assertIn("Nie udało się odczytać części rankingu:", self.loader)
         self.assertIn("Nie udało się odczytać modeli:", self.loader)
-        self.assertIn("Nie udało się odczytać turniejów:", self.loader)
+        sync = HTML[HTML.index("async function syncTournamentCards()"):HTML.index("function renderTournaments(rows,force=false)")]
+        self.assertIn("Nie udało się odczytać turniejów:", sync)
+        self.assertIn("if(!r.ok)throw Error", sync)
 
     def test_html_document_has_closing_tags(self):
-        self.assertTrue(HTML.rstrip().endswith("</script></body></html>"))
+        self.assertTrue((ROOT / "index.html").read_text(encoding="utf-8").rstrip().endswith('<script src="/assets/arena.js"></script></body></html>'))
 
 
 if __name__ == "__main__":

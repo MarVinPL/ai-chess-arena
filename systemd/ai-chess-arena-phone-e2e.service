@@ -1,0 +1,32 @@
+[Unit]
+Description=AI Chess Arena Phone E2E (isolated sandbox)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=arena-phone-test
+Group=arena-phone-test
+SupplementaryGroups=debian
+WorkingDirectory=/home/debian/ai-chess-arena-phone-e2e-current
+ExecStart=/home/debian/ai-chess-arena/.venv/bin/python /home/debian/ai-chess-arena-phone-e2e-current/remote_worker_phone_sandbox.py serve --db /var/lib/ai-chess-arena-phone-e2e/arena.sqlite3 --port 8191
+Restart=on-failure
+RestartSec=3s
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ARENA_PHONE_WORKER_API_ENABLED=1
+Environment=ARENA_PHONE_INFERENCE_ENABLED=0
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+InaccessiblePaths=/var/lib/ai-chess-arena
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ai-chess-arena-phone-e2e
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arena-phone-e2e

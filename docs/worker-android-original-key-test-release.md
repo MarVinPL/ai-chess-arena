@@ -60,3 +60,9 @@ No private keystore is committed, logged, copied into assets, or given to
 untrusted PR jobs. Distribution is manual. No new paid services are used.
 The in-app updater remains disabled until authenticated idle-state and signature
 checks exist. Linux and Windows builds remain paused.
+
+**Naming convention:** published prerelease APK filenames use `pre`, not
+`test` (for example `ai-chess-arena-worker-v0.1.0-pre1-arm64.apk`).
+The already established immutable historical release tag remains unchanged;
+this naming adjustment does not change the Android package, versionCode,
+or signing certificate.

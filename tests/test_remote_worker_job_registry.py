@@ -64,6 +64,8 @@ def test_isolated_server_boot_invalidates_real_sqlite_before_listener(tmp_path):
     import ast
     from pathlib import Path
     import server
+    from threading import Event
+    from types import SimpleNamespace
 
     path = tmp_path / 'isolated.sqlite'
     registry = WorkerJobRegistry(path)
@@ -88,19 +90,29 @@ def test_isolated_server_boot_invalidates_real_sqlite_before_listener(tmp_path):
     class FakeHTTPServer:
         def __init__(self, *_):
             assert registry.state(worker) == 'unknown'
+            self.server_address = ('127.0.0.1', 0)
             executed.append('listener')
         def serve_forever(self):
             pass
 
     globals_for_boot = dict(vars(server), DB=path,
                             db_init=lambda: executed.append('db_init'),
-                            threading=type('Threading', (), {'Thread': FakeThread}),
+                            threading=SimpleNamespace(Thread=FakeThread, Event=Event),
+                            resolve_runtime_deployment=lambda: SimpleNamespace(supervisor_requested=False, production_requested=False, supervisor_socket=None),
+                            recover_runtime_on_startup=lambda **kw: {'executor': {'count': 0}},
+                            background_jobs_enabled=lambda: True,
+                            LOG_DIR=tmp_path / 'logs',
+                            _serve_http_until_shutdown=lambda http, event: http.serve_forever(),
                             ThreadingHTTPServer=FakeHTTPServer,
                             _prune_jsonl=lambda *_: None,
                             hf_candidate_queue=type('Queue', (), {'start_background_workers': staticmethod(lambda: None)}),
                             hf_candidate_runtime=type('Runtime', (), {'start_background_planner': staticmethod(lambda: None)}))
-    exec(compile(ast.Module(body=entry.body, type_ignores=[]), '<isolated-server-boot>', 'exec'),
-         globals_for_boot)
+    try:
+        exec(compile(ast.Module(body=entry.body, type_ignores=[]), '<isolated-server-boot>', 'exec'),
+             globals_for_boot)
+    finally:
+        if '_coordinator_lock' in globals_for_boot:
+            globals_for_boot['_coordinator_lock'].close()
     assert executed == ['db_init', 'thread', 'listener']
     assert registry.state(worker) == 'unknown'
 

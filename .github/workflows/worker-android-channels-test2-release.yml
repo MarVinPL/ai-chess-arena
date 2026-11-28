@@ -1,0 +1,244 @@
+name: Worker channels Android test.2 original-key prerelease
+
+# Trusted, manual, one-shot test APK. Build a pinned, already reviewed
+# remote Worker commit WITHOUT secrets. A separate clean runner signs it.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: worker-test2-original-key
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    defaults:
+      run:
+        working-directory: remote_worker_gui
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx1536m'
+    steps:
+      - name: Verify reviewed Worker base PR still points to pinned source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(gh api repos/MarVinPL/ai-chess-arena/pulls/193 --jq '.head.sha')"
+          test "$actual" = '16d4a98bedf08f4f985caed4701e922fb99a9866'
+      - uses: actions/checkout@v6
+        with:
+          ref: 16d4a98bedf08f4f985caed4701e922fb99a9866
+          persist-credentials: false
+      - name: Verify precise reviewed source commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '16d4a98bedf08f4f985caed4701e922fb99a9866'
+          grep -Fq 'id="updateChannel"' public/index.html
+          grep -Fq 'value="pre-release"' public/index.html
+          grep -Fq 'value="latest"' public/index.html
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: remote_worker_gui/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+      - name: Install Android SDK and NDK (no paid services)
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: remote_worker_gui/src-tauri
+          key: android-arm64-test2
+      - name: Compile Worker without the original signing key
+        run: |
+          set -euo pipefail
+          npm ci
+          npx tauri android init --ci
+          npx tauri android build --apk --target aarch64 --ci --debug
+      - name: Verify build result and hash before handing it to signer
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          input=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+          test -s "$input"
+          "$tools/apksigner" verify "$input"
+          "$tools/zipalign" -c -p 4 "$input"
+          badging="$("$tools/aapt" dump badging "$input")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1000' versionName='0.1.0'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          mkdir -p dist-test2
+          cp "$input" dist-test2/ai-chess-arena-worker-arm64-debug.apk
+          (cd dist-test2 && sha256sum ai-chess-arena-worker-arm64-debug.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-test2-untrusted-build
+          path: remote_worker_gui/dist-test2/
+          retention-days: 7
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-test2-untrusted-build
+          path: input
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+      - name: Install Android signing tools
+        run: |
+          set -euo pipefail
+          sdkmanager "build-tools;36.0.0"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
+      - name: Verify exact build artifact before restoring the keystore
+        run: |
+          set -euo pipefail
+          (cd input && sha256sum -c SHA256SUMS)
+          apk=input/ai-chess-arena-worker-arm64-debug.apk
+          test -s "$apk"
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/apksigner" verify "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1000' versionName='0.1.0'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+      - name: Re-sign using isolated original debug key from Secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.WORKER_ANDROID_DEBUG_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          mkdir -p dist
+          ks="$RUNNER_TEMP/worker-original-debug-test2.keystore"
+          trap 'rm -f "$ks"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$ks"
+          chmod 600 "$ks"
+          cert="$("$JAVA_HOME/bin/keytool" -list -v -keystore "$ks" -alias androiddebugkey -storepass:env STORE_PASSWORD | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$ks" --ks-key-alias androiddebugkey \
+            --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --v4-signing-enabled false \
+            --out dist/ai-chess-arena-worker-v0.1.0-test2-arm64.apk \
+            input/ai-chess-arena-worker-arm64-debug.apk
+      - name: Verify signature and provenance after signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=dist/ai-chess-arena-worker-v0.1.0-test2-arm64.apk
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -p 4 "$apk"
+          cert="$("$tools/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test "$cert" = 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          badging="$("$tools/aapt" dump badging "$apk")"
+          grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='1000' versionName='0.1.0'" <<< "$badging"
+          grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          (cd dist && sha256sum ai-chess-arena-worker-v0.1.0-test2-arm64.apk > SHA256SUMS)
+          cat > dist/PROVENANCE.txt <<'EOF'
+          AI Chess Arena Worker Android Test 2 — NOT a production release.
+          Source PR: https://github.com/MarVinPL/ai-chess-arena/pull/193
+          Source commit: 16d4a98bedf08f4f985caed4701e922fb99a9866 (unmerged into main).
+          Source builds executed without access to signing Secrets.
+          Signing ran separately in a clean runner, using the original debug key.
+          Signing certificate SHA-256: 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12
+          Package: pl.marvin.aichessarena.worker
+          versionCode: 1000
+          versionName: 0.1.0
+          Architecture: arm64-v8a
+          Feature: Android update channels Latest and Pre-release.
+          No automatic installation, no GGUF inference enabled.
+          No keystore or private key is shipped.
+          EOF
+          (cd dist && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v6
+        with:
+          name: worker-test2-original-key-verified
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: sign
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-test2-original-key-verified
+          path: dist
+      - name: Publish exactly one verified manual Android prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          tag=worker-v0.1.0-test.2
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists; refusing to overwrite."
+            exit 1
+          fi
+          cat > release-notes.md <<'EOF'
+          **Android Worker test release 2 — ARM64, not production.**
+
+          This build provides a choice of **Latest** (stable) and **Pre-release** (test) update channels in Android Worker. The choice is saved locally, and the release check is read-only. Automatic APK installation remains disabled.
+
+          - Source PR: https://github.com/MarVinPL/ai-chess-arena/pull/193
+          - Exact app source: 16d4a98bedf08f4f985caed4701e922fb99a9866 (not yet in main).
+          - Same signing certificate as test.1, SHA-256: 3f0449ec3a2399ec669cce2dcbd6aa7262671345dfb983c33e2cadf4d1b0da12.
+          - Package: pl.marvin.aichessarena.worker; versionName 0.1.0; versionCode 1000; ARM64.
+          - The versionCode did not increase: this is a same-version, compatible-signature manual update.
+          - Do not uninstall the existing application; open the APK with the Android installer and confirm the update. Verify locally that stored settings and token survive.
+
+          Do not confuse a successful build with proof of on-device installation. The private key is never included; see PROVENANCE.txt and SHA256SUMS.
+          EOF
+          gh release create "$tag" \
+            "dist/ai-chess-arena-worker-v0.1.0-test2-arm64.apk" \
+            "dist/SHA256SUMS" "dist/PROVENANCE.txt" \
+            --repo "$GITHUB_REPOSITORY" --target 16d4a98bedf08f4f985caed4701e922fb99a9866 \
+            --prerelease --latest=false \
+            --title "AI Chess Arena Worker 0.1.0 test.2 — update channels" \
+            --notes-file release-notes.md
