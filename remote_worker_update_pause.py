@@ -37,6 +37,15 @@ class WorkerUpdatePause:
                 worker_id TEXT PRIMARY KEY, job_id TEXT NOT NULL,
                 request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL, received_at REAL NOT NULL
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_native_stop_receipts (
+                worker_id TEXT NOT NULL, job_id TEXT NOT NULL,
+                request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL,
+                received_at REAL NOT NULL,
+                PRIMARY KEY (worker_id, job_id, request_id, lease_sha256)
+            )""")
+            db.execute("""INSERT OR IGNORE INTO worker_native_stop_receipts
+                SELECT worker_id, job_id, request_id, lease_sha256, received_at
+                FROM worker_native_stop_reports""")
             db.execute("""CREATE TABLE IF NOT EXISTS worker_update_resume (
                 worker_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
@@ -174,8 +183,7 @@ class WorkerUpdatePause:
         return hashlib.sha256(token.encode("ascii")).hexdigest()
 
     @staticmethod
-    def _validate_native_stop(db, worker_id, job_id, request_id, lease_token, now):
-        """Validate one transaction snapshot; never write or acknowledge STOP."""
+    def _native_stop_identity(worker_id, job_id, request_id, lease_token):
         DurableWorkerJobs._id(worker_id)
         DurableWorkerJobs._id(job_id)
         if not isinstance(request_id, str) or len(request_id) != 32 or any(ch not in "0123456789abcdef" for ch in request_id):
@@ -184,7 +192,28 @@ class WorkerUpdatePause:
             ch not in "0123456789abcdef" for ch in lease_token
         ):
             raise ValueError("Invalid execution lease")
-        digest = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
+        return (worker_id, job_id, request_id,
+                hashlib.sha256(lease_token.encode("ascii")).hexdigest())
+
+    @staticmethod
+    def _receipt_exists(db, identity):
+        # Older databases may not yet have the receipt ledger; recovery is read-only.
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_native_stop_receipts'").fetchone():
+            return False
+        return db.execute("""SELECT 1 FROM worker_native_stop_receipts
+            WHERE worker_id=? AND job_id=? AND request_id=? AND lease_sha256=?""",
+            identity).fetchone() is not None
+
+    @staticmethod
+    def _receipt(identity):
+        _, job_id, request_id, digest = identity
+        return dict(state="stop_report_received", job_id=job_id, request_id=request_id,
+                    lease_sha256=digest, install_allowed=False, dispatch_allowed=False)
+
+    @staticmethod
+    def _validate_native_stop(db, worker_id, job_id, request_id, lease_token, now):
+        """Validate one transaction snapshot; never write or acknowledge STOP."""
+        digest = WorkerUpdatePause._native_stop_identity(worker_id, job_id, request_id, lease_token)[3]
         DurableWorkerJobs._reject_update_hold(db, worker_id)
         pending = db.execute(
             "SELECT p.stop_lease_sha256 FROM worker_update_pause_requests p JOIN worker_job_safety j "
@@ -212,15 +241,25 @@ class WorkerUpdatePause:
             if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
                 raise PermissionError("Worker authentication failed")
             admit()
+            identity = WorkerUpdatePause._native_stop_identity(worker_id, job_id, request_id, lease_token)
+            if WorkerUpdatePause._receipt_exists(db, identity):
+                return WorkerUpdatePause._receipt(identity)
             WorkerUpdatePause._validate_native_stop(db, worker_id, job_id, request_id, lease_token, now)
             return {"state": "stop_recovery_validated", "job_id": job_id,
                     "request_id": request_id, "install_allowed": False, "dispatch_allowed": False}
 
-    def record_native_stop(self, worker_id, job_id, request_id, lease_token):
-        """Record the executor's report. Only the coordinator may verify a checkpoint."""
+    def record_native_stop(self, worker_id, job_id, request_id, lease_token, token, *, admit=lambda: None):
+        """Commit a receipt before returning; historical retries never change live state."""
+        from remote_worker_tokens import WorkerTokenStore
         with self.jobs._db() as db:
             db.execute("BEGIN IMMEDIATE")
             now = self.clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                raise PermissionError("Worker authentication failed")
+            admit()
+            identity = self._native_stop_identity(worker_id, job_id, request_id, lease_token)
+            if self._receipt_exists(db, identity):
+                return self._receipt(identity)
             digest = self._validate_native_stop(db, worker_id, job_id, request_id, lease_token, now)
             db.execute(
                 "INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?) "
@@ -230,6 +269,9 @@ class WorkerUpdatePause:
                 "OR job_id!=excluded.job_id OR lease_sha256!=excluded.lease_sha256",
                 (worker_id, job_id, request_id, digest, now),
             )
+            db.execute("INSERT INTO worker_native_stop_receipts VALUES (?,?,?,?,?)",
+                       (*identity, now))
+        return self._receipt(identity)
 
     def acknowledge(self, worker_id, job_id, request_id, *,
                     worker_stopped, checkpoint_verified, lease_token_sha256=None):

@@ -50,13 +50,15 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
         handler.send_json({"error": "Nieprawidłowe żądanie Workera"}, 400)
         return True
 
-    if path.endswith("/native-stop-recovery"):
+    if path.endswith(("/native-stop-recovery", "/native-stop-report")):
         from remote_worker_update_pause import WorkerUpdatePause
         try:
-            result = WorkerUpdatePause.validate_native_stop(
-                db, worker_id, payload["job_id"], payload["request_id"], payload["lease_token"], token,
-                admit=lambda: admit_identity(path, worker_id),
-            )
+            args = (worker_id, payload["job_id"], payload["request_id"], payload["lease_token"], token)
+            admit = lambda: admit_identity(path, worker_id)
+            if path.endswith("/native-stop-recovery"):
+                result = WorkerUpdatePause.validate_native_stop(db, *args, admit=admit)
+            else:
+                result = WorkerUpdatePause(db).record_native_stop(*args, admit=admit)
             handler.send_json(dict(result, authenticated=True, source="coordinator",
                                    worker_id=worker_id, nonce=nonce))
         except PermissionError:
@@ -102,12 +104,6 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
             response.update(WorkerInferenceDelivery(db).submit_inference_result(
                 worker_id, payload["result"],
             ))
-        elif path.endswith("/native-stop-report"):
-            from remote_worker_update_pause import WorkerUpdatePause
-            WorkerUpdatePause(db).record_native_stop(
-                worker_id, payload["job_id"], payload["request_id"], payload["lease_token"],
-            )
-            response.update(state="stop_report_received", install_allowed=False)
         elif path.endswith("/update-pause-poll"):
             from remote_worker_update_pause import WorkerUpdatePause
             response["instruction"] = WorkerUpdatePause(db).poll_stop_instruction(worker_id)
