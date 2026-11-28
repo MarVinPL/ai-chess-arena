@@ -18,14 +18,14 @@ mod android_update_install_journal;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
+mod credential_vault;
+mod credential_vault_native;
 #[allow(dead_code)]
 mod android_update_install_state;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
-const TOKEN_ACCOUNT: &str = "worker-token";
 
 // A pending coordinator hold requires the *original* machine token for
 // explicit authenticated release. Never let webview rotation/deletion orphan it.
@@ -131,53 +131,23 @@ fn inspect_android_install_sessions() -> Result<&'static str, String> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn token_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
-        .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
-}
-
-#[cfg(target_os = "android")]
-fn token_entry() -> Result<android_worker_token_store::AndroidTokenEntry, String> {
-    // Never use keyring v3 on Android: it silently selects an in-memory
-    // mock credential store, losing the machine token after app restart.
-    Ok(android_worker_token_store::AndroidTokenEntry)
+fn token_entry() -> Result<credential_vault::CredentialVault<credential_vault_native::NativeBackend>, String> {
+    credential_vault_native::native()
 }
 
 #[tauri::command]
 fn store_worker_token(token: String) -> Result<(), String> {
-    ensure_no_pending_update()?;
-    // Never return, log, or serialize the secret back to the frontend.
-    if token.len() < 24 || token.len() > 512 || !token.is_ascii()
-        || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-        return Err("Nieprawidłowy format tokenu".to_string());
-    }
-    token_entry()?.set_password(&token)
-        .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".to_string())
+    token_entry()?.set_password(&token, ensure_no_pending_update)
 }
 
 #[tauri::command]
 fn has_saved_worker_token() -> bool {
-    token_entry().and_then(|entry| entry.get_password()
-        .map_err(|_| "Brak zapisanego tokenu".to_string())).is_ok()
+    token_entry().and_then(|entry| entry.get_password()).is_ok()
 }
 
 #[tauri::command]
 fn forget_worker_token() -> Result<(), String> {
-    ensure_no_pending_update()?;
-    let entry = token_entry()?;
-    #[cfg(not(target_os = "android"))]
-    {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
-        }
-    }
-    #[cfg(target_os = "android")]
-    {
-        entry.delete_credential()
-            .map_err(|_| "Nie udało się usunąć tokenu z Android Keystore".to_string())
-    }
+    token_entry()?.delete_credential(ensure_no_pending_update)
 }
 
 

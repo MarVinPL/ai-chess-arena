@@ -14,18 +14,20 @@ GUI = ROOT / "remote_worker_gui"
 KOTLIN = (GUI / "android/WorkerCredentialVault.kt").read_text()
 NATIVE = (GUI / "src-tauri/src/android_worker_token_store.rs").read_text()
 LIB = (GUI / "src-tauri/src/lib.rs").read_text()
+ADAPTER = (GUI / "src-tauri/src/credential_vault_native.rs").read_text()
+VAULT = (GUI / "src-tauri/src/credential_vault.rs").read_text()
 INJECTOR = GUI / "android/inject_package_installer.py"
 
 
 def test_android_never_uses_mock_keyring_v3_and_keeps_token_out_of_webview():
-    assert '#[cfg(not(target_os = "android"))]\nfn token_entry()' in LIB
-    assert '#[cfg(target_os = "android")]\nfn token_entry()' in LIB
-    assert "android_worker_token_store::AndroidTokenEntry" in LIB
+    assert '#[cfg(not(target_os = "android"))]\npub(crate) type NativeBackend = keyring::Entry;' in ADAPTER
+    assert '#[cfg(target_os = "android")]\npub(crate) type NativeBackend' in ADAPTER
+    assert "android_worker_token_store::AndroidTokenEntry" in ADAPTER
     assert "mod android_worker_token_store;" in LIB
     assert "token_entry()?.get_password()" in LIB
     assert "token_entry()?.set_password(" in LIB
     assert 'fn has_saved_worker_token() -> bool' in LIB
-    assert "never use keyring" in LIB.lower()
+    assert "never use keyring" in ADAPTER.lower()
     assert "WorkerCredentialVault" in NATIVE
     assert "getClassLoader" in NATIVE and "loadClass" in NATIVE
     assert "env.call_static_method(" in NATIVE
@@ -83,8 +85,15 @@ def test_generated_android_project_copies_the_token_vault(tmp_path, monkeypatch)
 
 
 def test_android_upgrade_keeps_original_server_token_and_never_claims_migration():
-    section = LIB.split(
-        "fn token_entry() -> Result<android_worker_token_store::AndroidTokenEntry", 1
-    )[1].split("#[tauri::command]", 1)[0]
+    section = ADAPTER.split("fn native()", 1)[1]
     assert "delete_credential" not in section
     assert "http://" not in KOTLIN
+
+
+def test_vault_serializes_and_guards_mutations():
+    for method, mutation in (("set_password", "self.backend.write"), ("delete_credential", "self.backend.delete")):
+        section = VAULT.split("pub(crate) fn " + method, 1)[1]
+        assert section.index("self.operations.lock()") < section.index("check()?") < section.index(mutation)
+    assert "tauri::command" not in VAULT
+    assert "tauri::command" not in ADAPTER
+    assert 'keyring::Entry::new("pl.marvin.aichessarena.worker", "worker-token")' in ADAPTER
