@@ -9,8 +9,8 @@ pub(crate) type NativeBackend = keyring::Entry;
 
 #[cfg(target_os = "android")]
 impl Backend for NativeBackend {
-    fn read(&self) -> Result<String, String> {
-        self.get_password()
+    fn read(&self) -> Result<Option<String>, String> {
+        self.read_optional()
     }
     fn write(&self, value: &str) -> Result<(), String> {
         self.set_password(value)
@@ -23,9 +23,12 @@ impl Backend for NativeBackend {
 
 #[cfg(not(target_os = "android"))]
 impl Backend for NativeBackend {
-    fn read(&self) -> Result<String, String> {
-        self.get_password()
-            .map_err(|_| "Brak zapisanego tokenu".into())
+    fn read(&self) -> Result<Option<String>, String> {
+        match self.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("Systemowy magazyn poświadczeń jest niedostępny".into()),
+        }
     }
     fn write(&self, value: &str) -> Result<(), String> {
         self.set_password(value)

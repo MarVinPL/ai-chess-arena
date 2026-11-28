@@ -27,13 +27,14 @@ object WorkerCredentialVault {
     private const val TAG_BITS = 128
     private const val GCM_IV_LENGTH = 12
 
-    private fun key(): SecretKey {
+    private fun key(allowCreate: Boolean): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore")
         store.load(null)
         val existing = store.getKey(KEY_ALIAS, null)
         if (existing != null) {
             return existing as? SecretKey ?: throw IllegalStateException("Wrong Android Keystore key")
         }
+        check(allowCreate) { "Android Keystore key missing" }
         val generator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore"
         )
@@ -57,7 +58,10 @@ object WorkerCredentialVault {
             it.isLetterOrDigit() && it.code < 128 || it == '_' || it == '-'
         }) { "Invalid worker token" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val prefs = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        // Verify existing ciphertext before replacing it; corruption is not absence.
+        if (prefs.contains(PREF_TOKEN)) check(load(context) != null)
+        cipher.init(Cipher.ENCRYPT_MODE, key(!prefs.contains(PREF_TOKEN)))
         val iv = cipher.iv
         require(iv.size == GCM_IV_LENGTH) { "Unexpected GCM IV" }
         val encrypted = cipher.doFinal(token.toByteArray(StandardCharsets.US_ASCII))
@@ -81,7 +85,7 @@ object WorkerCredentialVault {
         val iv = data.copyOfRange(1, 1 + GCM_IV_LENGTH)
         val ciphertext = data.copyOfRange(1 + GCM_IV_LENGTH, data.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.DECRYPT_MODE, key(false), GCMParameterSpec(TAG_BITS, iv))
         // A wrong key, tampered data or restored ciphertext MUST fail closed.
         val bytes = cipher.doFinal(ciphertext)
         val plaintext = String(bytes, StandardCharsets.US_ASCII)
@@ -96,6 +100,8 @@ object WorkerCredentialVault {
     @JvmStatic
     @Synchronized
     fun clear(context: Context) {
+        // Do not discard an unreadable credential via normal UI operations.
+        load(context)
         if (!context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
                 .edit().remove(PREF_TOKEN).commit()) {
             throw IllegalStateException("Android failed to remove token")

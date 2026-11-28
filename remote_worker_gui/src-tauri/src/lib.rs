@@ -145,6 +145,16 @@ fn has_saved_worker_token() -> bool {
     token_entry().and_then(|entry| entry.get_password()).is_ok()
 }
 
+// No secret crosses IPC; distinguish missing from inaccessible storage.
+#[tauri::command]
+fn worker_token_state() -> &'static str {
+    match token_entry().and_then(|entry| entry.read_optional()) {
+        Ok(Some(_)) => "saved",
+        Ok(None) => "missing",
+        Err(_) => "unavailable",
+    }
+}
+
 #[tauri::command]
 fn forget_worker_token() -> Result<(), String> {
     token_entry()?.delete_credential(ensure_no_pending_update)
@@ -205,7 +215,7 @@ async fn verify_worker_connection(server: String, worker_id: String) -> Result<b
         url.path() != "/" || url.port().is_some() {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12))
@@ -328,7 +338,7 @@ async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<
         url.fragment().is_some() || url.port().is_some() {
         return Err("Adres Workera musi być HTTPS bez portu, ścieżki i danych".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12)).build()
@@ -401,7 +411,7 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         url.path() != "/" || url.port().is_some() {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12)).build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/update-safety")
@@ -1168,7 +1178,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, worker_token_state, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

@@ -740,8 +740,8 @@ async function refreshTokenState(){
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke)return;
   try {
-    const saved=await invoke('has_saved_worker_token');
-    tokenMessage.textContent=saved?'Token zapisany w systemowym magazynie poświadczeń.':'Brak zapisanego tokenu.';
+    const state=await invoke('worker_token_state');
+    tokenMessage.textContent=state==='saved'?'Token zapisany w systemowym magazynie poświadczeń.':state==='missing'?'Brak zapisanego tokenu.':'Magazyn poświadczeń niedostępny lub uszkodzony. Nie resetuj danych aplikacji.';
   }catch(_error){tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
 }
 document.getElementById('saveToken').addEventListener('click',async()=>{
@@ -786,9 +786,10 @@ document.getElementById('pair').addEventListener('click',async()=>{
  button.disabled=true;
  setConnectionFeedback('checking','Sprawdzanie połączenia HTTPS i tokenu…');
  try{
-  const saved=await invoke('has_saved_worker_token');
+  const state=await invoke('worker_token_state');
   if(revision!==connectionRevision || server!==document.getElementById('server').value.trim() || workerId!==document.getElementById('workerId').value.trim())return;
-  if(!saved){setConnectionFeedback('missing','Brak zapisanego tokenu lub niedostępny magazyn. Najpierw zapisz token.');return;}
+  if(state==='missing'){setConnectionFeedback('missing','Brak zapisanego tokenu. Najpierw zapisz token.');return;}
+  if(state!=='saved'){setConnectionFeedback('error','Magazyn poświadczeń niedostępny lub uszkodzony.');return;}
   const ok=await invoke('verify_worker_connection',{server,workerId});
   // Reject delayed responses after the address, ID, or stored token changes.
   if(revision!==connectionRevision ||
