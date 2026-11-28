@@ -32,9 +32,11 @@ def test_platform_icon_routing(name, group, trigger):
 
 def test_windows_icon_has_valid_directory_and_png_payload():
     data = (ROOT / ICONS / 'icon.ico').read_bytes()
-    assert struct.unpack_from('<HHH', data) == (0, 1, 1)
-    width, height, _, _, planes, bits, size, offset = struct.unpack_from('<BBBBHHII', data, 6)
-    assert (width, height, planes, bits) == (64, 64, 1, 32)
-    assert offset >= 22 and offset + size == len(data)
-    assert data[offset:offset+8] == b'\x89PNG\r\n\x1a\n'
-    assert struct.unpack_from('>II', data, offset + 16) == (64, 64)
+    assert struct.unpack_from('<HHH', data) == (0, 1, 6)
+    for i, expected in enumerate((32, 16, 24, 48, 64, 256)):
+        width, height, _, _, planes, bits, size, offset = struct.unpack_from(
+            '<BBBBHHII', data, 6 + i * 16)
+        assert (width or 256, height or 256, planes, bits) == (expected, expected, 1, 32)
+        assert offset >= 102 and offset + size <= len(data)
+        assert data[offset:offset+8] == b'\x89PNG\r\n\x1a\n'
+        assert struct.unpack_from('>II', data, offset + 16) == (expected, expected)
