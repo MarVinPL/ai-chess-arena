@@ -11,6 +11,8 @@ mod android_update_download;
 // Never expose this as a claim that a staged APK is ready for installation.
 #[allow(dead_code)]
 mod android_update_identity;
+#[allow(dead_code)]
+mod android_update_install_evidence;
 #[cfg(target_os = "android")]
 mod android_update_package_manager;
 #[cfg(target_os = "android")]

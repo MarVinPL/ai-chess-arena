@@ -392,7 +392,8 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
                    'getAppPackageName', 'getSessionId', 'isCommitted'):
         assert f'"{method}"' in source
     assert 'if count < 0 || count > 1' in source
-    assert 'if count == 0 { return Ok(SessionObservation::NoVisibleSession); }' in source
+    assert 'if count == 0 { return Ok((SessionObservation::NoVisibleSession, None)); }' in source
+    assert 'observe_own_session_details().map(|(observation, _)| observation)' in source
     assert 'target.as_deref() != Some(WORKER_PACKAGE_ID)' in source
     assert 'owner.as_deref() != Some(WORKER_PACKAGE_ID)' in source
     assert 'fn observation_is_terminal(_observation: SessionObservation) -> bool' in source

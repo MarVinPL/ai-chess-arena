@@ -90,28 +90,35 @@ pub(crate) fn inspect_installed_worker_identity() -> Result<PlatformApkIdentity,
     let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(java_error)?;
     let mut env = vm.attach_current_thread().map_err(java_error)?;
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
-    let own_name = env.call_method(&context, "getPackageName",
-        "()Ljava/lang/String;", &[])
-        .map_err(java_error)?.l().map_err(java_error)?;
-    if own_name.is_null() {
-        return Err("Nie można potwierdzić pakietu uruchomionej aplikacji".into());
+    let result = (|| {
+        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let own_name = env.call_method(&context, "getPackageName",
+            "()Ljava/lang/String;", &[])
+            .map_err(java_error)?.l().map_err(java_error)?;
+        if own_name.is_null() {
+            return Err("Nie można potwierdzić pakietu uruchomionej aplikacji".into());
+        }
+        let actual_name = env.get_string(&JString::from(own_name))
+            .map_err(java_error)?.to_string_lossy().into_owned();
+        if actual_name != WORKER_PACKAGE_ID {
+            return Err("Uruchomiony pakiet nie jest Workerem Areny".into());
+        }
+        let pm = env.call_method(&context, "getPackageManager",
+            "()Landroid/content/pm/PackageManager;", &[])
+            .map_err(java_error)?.l().map_err(java_error)?;
+        if pm.is_null() { return Err("Brak Android PackageManager".into()); }
+        let package_name = env.new_string(WORKER_PACKAGE_ID).map_err(java_error)?;
+        let info = env.call_method(&pm, "getPackageInfo",
+            "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+            &[JValue::Object(package_name.as_ref()), JValue::Int(GET_SIGNING_CERTIFICATES)])
+            .map_err(java_error)?.l().map_err(java_error)?;
+        read_android_identity(&mut env, &info)
+    })();
+    if env.exception_check().map_err(java_error)? {
+        env.exception_clear().map_err(java_error)?;
+        return Err("Nie można odczytać tożsamości APK".into());
     }
-    let actual_name = env.get_string(&JString::from(own_name))
-        .map_err(java_error)?.to_string_lossy().into_owned();
-    if actual_name != WORKER_PACKAGE_ID {
-        return Err("Uruchomiony pakiet nie jest Workerem Areny".into());
-    }
-    let pm = env.call_method(&context, "getPackageManager",
-        "()Landroid/content/pm/PackageManager;", &[])
-        .map_err(java_error)?.l().map_err(java_error)?;
-    if pm.is_null() { return Err("Brak Android PackageManager".into()); }
-    let package_name = env.new_string(WORKER_PACKAGE_ID).map_err(java_error)?;
-    let info = env.call_method(&pm, "getPackageInfo",
-        "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
-        &[JValue::Object(package_name.as_ref()), JValue::Int(GET_SIGNING_CERTIFICATES)])
-        .map_err(java_error)?.l().map_err(java_error)?;
-    read_android_identity(&mut env, &info)
+    result
 }
 
 /// Obtain *both* identities via Android PackageManager. The caller supplies
@@ -151,4 +158,33 @@ pub(crate) fn inspect_staged_worker_apk_details(
     let candidate_identity = read_android_identity(&mut env, &candidate)?;
     Ok((check_platform_apk_identity(&installed_identity, &candidate_identity),
         installed_identity.long_version_code, candidate_identity.long_version_code))
+}
+
+/// PackageManager history is a hint, not proof of a clean credential store.
+pub(crate) fn inspect_install_times() -> Result<(i64, i64), String> {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(java_error)?;
+    let mut env = vm.attach_current_thread().map_err(java_error)?;
+    let result = (|| {
+        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let pm = env.call_method(&context, "getPackageManager",
+            "()Landroid/content/pm/PackageManager;", &[])
+            .map_err(java_error)?.l().map_err(java_error)?;
+        let name = env.new_string(WORKER_PACKAGE_ID).map_err(java_error)?;
+        let info = env.call_method(&pm, "getPackageInfo",
+            "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+            &[JValue::Object(name.as_ref()), JValue::Int(0)])
+            .map_err(java_error)?.l().map_err(java_error)?;
+        if info.is_null() { return Err("Brak historii pakietu".into()); }
+        let first = env.get_field(&info, "firstInstallTime", "J")
+            .map_err(java_error)?.j().map_err(java_error)?;
+        let last = env.get_field(&info, "lastUpdateTime", "J")
+            .map_err(java_error)?.j().map_err(java_error)?;
+        Ok((first, last))
+    })();
+    if env.exception_check().map_err(java_error)? {
+        env.exception_clear().map_err(java_error)?;
+        return Err("Nie można odczytać historii pakietu".into());
+    }
+    result
 }
