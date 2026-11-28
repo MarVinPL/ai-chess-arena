@@ -277,7 +277,7 @@ def test_coordinator_reservation_transport_is_native_and_not_exposed_to_webview(
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
 
 
-def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
+def test_update_hold_is_journaled_to_native_store_before_http_reserve():
     lib = LIB.read_text(encoding="utf-8")
     coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
     recovery = (ROOT / "remote_worker_gui/src-tauri/src/android_update_recovery.rs").read_text(encoding="utf-8")
@@ -285,11 +285,13 @@ def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
     assert "mod android_update_recovery;" in lib
     assert 'const HOLD_ACCOUNT: &str = "coordinator-update-hold-v1"' in recovery
     assert 'keyring::Entry::new(HOLD_SERVICE, HOLD_ACCOUNT)' in recovery
-    assert 'entry()?.set_password(&serialized)' in recovery
+    assert 'entry()?.set_password(&serialized)' in ''.join(recovery.split())
+    assert 'credential_journal::insert(crate::credential_vault::Slot::PendingHold, &serialized)' in recovery
     assert "load_pending()?.is_some()" in recovery
     assert "load_pending()?.as_ref() != Some(record)" in recovery
     assert "load_pending()?.as_ref() != Some(expected)" in recovery
-    assert "entry()?.delete_credential()" in recovery
+    assert "entry()?.delete_credential()" in "".join(recovery.split())
+    assert "credential_journal::delete_expected" in recovery
     before = coordinator.index('save_pending(&pending)?')
     network = coordinator.index('let response = update_http_client()?.post(endpoint)', before)
     assert before < network
@@ -316,8 +318,8 @@ def test_update_recovery_status_never_exposes_hold_and_prevents_token_rotation()
     assert "Ok(Some(_)) => Err(" in guard
     assert "Err(_) => Err(" in guard
     assert "hold_token" not in guard
-    assert "fn store_worker_token(token: String) -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
-    assert "fn forget_worker_token() -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
+    assert "token_entry()?.set_password(&token, ensure_no_pending_update)" in lib
+    assert "token_entry()?.delete_credential(ensure_no_pending_update)" in lib
     status = lib.split("fn update_recovery_status()", 1)[1].split("fn token_entry()", 1)[0]
     assert "Ok(Some(_)) => UpdateRecoveryStatus" in status
     assert "Err(_) => UpdateRecoveryStatus" in status
@@ -390,7 +392,8 @@ def test_package_installer_own_sessions_are_read_only_and_never_confirm_install(
                    'getAppPackageName', 'getSessionId', 'isCommitted'):
         assert f'"{method}"' in source
     assert 'if count < 0 || count > 1' in source
-    assert 'if count == 0 { return Ok(SessionObservation::NoVisibleSession); }' in source
+    assert 'if count == 0 { return Ok((SessionObservation::NoVisibleSession, None)); }' in source
+    assert 'observe_own_session_details().map(|(observation, _)| observation)' in source
     assert 'target.as_deref() != Some(WORKER_PACKAGE_ID)' in source
     assert 'owner.as_deref() != Some(WORKER_PACKAGE_ID)' in source
     assert 'fn observation_is_terminal(_observation: SessionObservation) -> bool' in source

@@ -18,7 +18,7 @@ button[data-icon]::before{content:attr(data-icon);display:inline-block;margin-in
 <p class="muted" id="nativeDiagnosticFeedback" role="status" aria-live="polite">Obecność bibliotek i plików nie potwierdza gotowości do obliczeń.</p>
 <p class="muted">Próba sieciowa HEAD nie pobiera modeli. HTTPS jest poprawnym wynikiem negocjacji.</p>
 </div><p id="localInferenceStatus" class="muted" role="status" aria-live="polite">Aby liczyć na telefonie, uruchom lokalny llama.cpp na porcie 8088, a następnie sprawdź połączenie z Areną.</p></section><section class="panel"><h2>Aktualne zadanie</h2><div class="metric">Model podglądu: <strong id="jobModel" style="word-break:break-all">Brak</strong></div><div class="metric">FEN: <strong id="jobPosition" style="word-break:break-all">—</strong></div><div class="metric">ID: <strong id="jobMove">—</strong></div><div class="metric"><span class="muted">Model SHA-256</span><strong id="myAssignedModel">Brak</strong></div><div class="metric"><span class="muted">Zadanie</span><strong id="myAssignedGame">—</strong></div><div class="metric"><span class="muted">Wykonywanie</span><strong id="myAssignedStatus">Brak przydziału</strong></div><div id="myWorkerBoardSection" hidden><p class="muted" id="myWorkerBoardTitle"></p><div id="myWorkerBoard" class="worker-board" role="img" aria-label="Szachownica partii wykonywanej przez ten telefon"></div><p class="muted" id="myWorkerBoardProgress" role="status"></p></div><p class="muted" id="myWorkerBoardEmpty">Brak aktywnej partii przypisanej do tego telefonu.</p></section><section class="panel"><h2>Stan urządzenia</h2><div class="metric"><span class="muted">Połączenie</span><span class="status" id="connectionStatus">Nieaktywne</span></div><div class="metric"><span class="muted">Wykonywanie obliczeń</span><strong>Wyłączone</strong></div><div class="metric"><span class="muted">Wykorzystanie zasobów</span><strong>0%</strong></div></section></div><section class="panel" style="margin-top:16px" aria-labelledby="updateTitle"><h2 id="updateTitle">Aktualizacje aplikacji</h2><label for="updateChannel">Kanał aktualizacji</label><select id="updateChannel" aria-describedby="updateChannelHelp"><option value="latest">Latest — stabilne</option><option value="pre-release">Pre-release — testowe</option></select><p class="muted" id="updateChannelHelp">Wybór kanału zmienia tylko sprawdzanie wydań na GitHub; nie pobiera ani nie instaluje APK.</p><a id="workerReleaseLink" href="#" rel="noopener noreferrer" target="_blank" hidden>Otwórz wydanie na GitHub</a><a id="updateNow" class="release-action" rel="noopener noreferrer" target="_blank" aria-describedby="updateManualHelp" hidden>Aktualizuj</a><p class="muted" id="updateManualHelp">Przycisk Aktualizuj otwiera oficjalną stronę wydania na GitHub do ręcznej aktualizacji. Nie pobiera ani nie instaluje APK.</p><p class="muted" id="updateStatus" role="status">Sprawdź, czy dostępna jest nowa wersja. Stabilne APK można zweryfikować i zainstalować po rezerwacji koordynatora i potwierdzeniu Androida.</p><label for="autoUpdateCheck"><input id="autoUpdateCheck" type="checkbox" checked> Automatycznie sprawdzaj dostępność nowych wersji (maksymalnie raz na 24 godziny przy uruchomieniu aplikacji)</label>
-<button id="checkUpdate" type="button" class="secondary" data-icon="↻">Sprawdź aktualizacje</button><a id="manualWorkerUpdate" href="#" target="_blank" rel="noopener noreferrer" hidden style="display:none;margin-left:10px;color:#b9c6ff">Otwórz wydanie APK w przeglądarce</a><button id="downloadWorkerApk" type="button" class="secondary" hidden disabled data-icon="↓">Pobierz APK</button><button id="installWorkerApk" type="button" hidden disabled data-icon="⬇">Zainstaluj aktualizację</button><button id="resumeWorkerGame" type="button" disabled title="Wznowienie wymaga lokalnego silnika obliczeń na tym telefonie" data-icon="▶">Wznów</button><p class="muted" id="resumeWorkerStatus" role="status" aria-live="polite">Sprawdzanie możliwości wznowienia…</p><progress id="apkDownloadProgress" max="100" value="0" hidden aria-label="Postęp pobierania APK"></progress><p class="muted" id="apkDownloadStatus" role="status">Instalacja APK pozostaje wyłączona do czasu weryfikacji certyfikatu i stanu zadań.</p><button id="checkUpdateSafety" type="button" class="secondary" data-icon="✓">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p><button id="checkCoordinatorStop" type="button" class="secondary" data-icon="■">Sprawdź polecenie STOP z Areny</button><p class="muted" id="coordinatorStopStatus" role="status" aria-live="polite">Odczyt poleceń nie wstrzymuje obliczeń ani nie zezwala na instalację.</p><p class="muted" id="updateRecoveryStatus" role="status" aria-live="polite">Sprawdzanie lokalnej rezerwacji aktualizacji…</p><button id="inspectUpdateHold" type="button" class="secondary" hidden disabled data-icon="⌕">Sprawdź rezerwację na serwerze</button><p class="muted" id="updateHoldRemoteStatus" role="status" aria-live="polite"></p><button id="inspectAndroidSessions" type="button" class="secondary" hidden disabled data-icon="☷">Sprawdź sesje instalatora Android</button><p class="muted" id="androidSessionsStatus" role="status" aria-live="polite"></p></section>
+<button id="checkUpdate" type="button" class="secondary" data-icon="↻">Sprawdź aktualizacje</button><a id="manualWorkerUpdate" href="#" target="_blank" rel="noopener noreferrer" hidden style="display:none;margin-left:10px;color:#b9c6ff">Otwórz wydanie APK w przeglądarce</a><button id="downloadWorkerApk" type="button" class="secondary" hidden disabled data-icon="↓">Pobierz APK</button><button id="installWorkerApk" type="button" hidden disabled data-icon="⬇">Zainstaluj aktualizację</button><button id="resumeWorkerGame" type="button" disabled title="Wznowienie wymaga lokalnego silnika obliczeń na tym telefonie" data-icon="▶">Wznów</button><p class="muted" id="resumeWorkerStatus" role="status" aria-live="polite">Sprawdzanie możliwości wznowienia…</p><progress id="apkDownloadProgress" max="100" value="0" hidden aria-label="Postęp pobierania APK"></progress><p class="muted" id="apkDownloadStatus" role="status">Instalacja APK pozostaje wyłączona do czasu weryfikacji certyfikatu i stanu zadań.</p><button id="checkUpdateSafety" type="button" class="secondary" data-icon="✓">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p><button id="checkCoordinatorStop" type="button" class="secondary" data-icon="■">Sprawdź polecenie STOP z Areny</button><p class="muted" id="coordinatorStopStatus" role="status" aria-live="polite">Odczyt poleceń nie wstrzymuje obliczeń ani nie zezwala na instalację.</p><p class="muted" id="updateRecoveryStatus" role="status" aria-live="polite">Sprawdzanie lokalnej rezerwacji aktualizacji…</p><button id="initializeUpdateJournals" type="button" class="secondary" hidden>Uzgodnij dzienniki aktualizacji</button><p id="journalInitializationStatus" class="muted" role="status" aria-live="polite"></p><button id="inspectUpdateHold" type="button" class="secondary" hidden disabled data-icon="⌕">Sprawdź rezerwację na serwerze</button><p class="muted" id="updateHoldRemoteStatus" role="status" aria-live="polite"></p><button id="inspectAndroidSessions" type="button" class="secondary" hidden disabled data-icon="☷">Sprawdź sesje instalatora Android</button><p class="muted" id="androidSessionsStatus" role="status" aria-live="polite"></p></section>
 <aside class="notice" role="status"><span id="backendStatus">Sprawdzanie lokalnego backendu…</span> Token można zapisać i usunąć lokalnie. Weryfikacja tokenu przez VPS jest dostępna po kliknięciu „Sprawdź połączenie HTTPS”. Obliczenia nie są jeszcze podłączone, a przyciski sterowania pozostają nieaktywne.</aside></main><script>
 'use strict';
 // Persist the actual registered Worker ID (including user-chosen IDs like
@@ -673,9 +673,11 @@ async function refreshUpdateRecoveryStatus(){
   const sessions=document.getElementById('inspectAndroidSessions');
   sessions.hidden=result?.pending!==true;
   sessions.disabled=result?.pending!==true;
+  document.getElementById('forgetToken').disabled=result?.blocked!==false;
   if(result?.blocked!==false){
-   document.getElementById('saveToken').disabled=true;
-   document.getElementById('forgetToken').disabled=true;
+   // Native registration may store a first credential without clearing journal state.
+   const android=await invoke('phone_inference_supported');
+   if(!android)document.getElementById('saveToken').disabled=true;
   }
  }catch(_){
   label.textContent='Nie można sprawdzić rezerwacji. Zmiana tokenu zablokowana.';
@@ -712,6 +714,36 @@ document.getElementById('checkCoordinatorStop').addEventListener('click',async()
  }catch(_){
   label.textContent='Nie można zweryfikować polecenia Areny. Brak STOP/ACK; instalacja zablokowana.';
  }finally{coordinatorStopCheckInFlight=false;button.disabled=false;}
+});
+const initializeUpdateJournals=document.getElementById('initializeUpdateJournals');
+const journalInitializationStatus=document.getElementById('journalInitializationStatus');
+async function showJournalInitialization(){
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke)return;
+ try{initializeUpdateJournals.hidden=!(await invoke('phone_inference_supported'));}
+ catch(_error){initializeUpdateJournals.hidden=true;}
+}
+void showJournalInitialization();
+for(const field of ['server','workerId']){
+ document.getElementById(field).addEventListener('input',()=>{journalInitializationStatus.textContent='';});
+}
+initializeUpdateJournals.addEventListener('click',async()=>{
+ const invoke=window.__TAURI__?.core?.invoke;
+ if(!invoke||initializeUpdateJournals.disabled)return;
+ const target=connectionSnapshot();
+ initializeUpdateJournals.disabled=true;
+ journalInitializationStatus.textContent='Uzgadnianie dzienników z Areną…';
+ try{
+  const state=await invoke('initialize_update_journals',{server:target.server,workerId:target.workerId});
+  if(!connectionIsCurrent(target))return;
+  journalInitializationStatus.textContent=state==='already_initialized'
+   ?'Dzienniki są już zainicjalizowane.':'Dzienniki są gotowe. Stan przydziałów nadal potwierdza Arena.';
+  await refreshUpdateRecoveryStatus();
+ }catch(_error){
+  if(connectionIsCurrent(target)){
+   journalInitializationStatus.textContent='Nie potwierdzono inicjalizacji. Sprawdź token, stan instalatora i zgodę administratora Areny.';
+  }
+ }finally{initializeUpdateJournals.disabled=false;}
 });
 document.getElementById('inspectUpdateHold').addEventListener('click',async()=>{
  const button=document.getElementById('inspectUpdateHold');
@@ -784,30 +816,47 @@ function invalidateJobPreview(){
 for(const field of ['server','workerId']){
  document.getElementById(field).addEventListener('input',invalidateJobPreview);
 }
+let tokenStateRevision=0;
 async function refreshTokenState(){
+  const revision=++tokenStateRevision;
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke)return;
   try {
-    const saved=await invoke('has_saved_worker_token');
-    tokenMessage.textContent=saved?'Token zapisany w systemowym magazynie poświadczeń.':'Brak zapisanego tokenu.';
-  }catch(_error){tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
+    const state=await invoke('worker_token_state');
+    if(revision!==tokenStateRevision)return;
+    tokenMessage.textContent=state==='saved'?'Token zapisany w systemowym magazynie poświadczeń.':state==='missing'?'Brak zapisanego tokenu.':'Magazyn poświadczeń niedostępny lub uszkodzony. Nie resetuj danych aplikacji.';
+  }catch(_error){if(revision===tokenStateRevision)tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
 }
 document.getElementById('saveToken').addEventListener('click',async()=>{
   const field=document.getElementById('code');
   const invoke=window.__TAURI__?.core?.invoke;
-  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
+  const button=document.getElementById('saveToken');
+  if(button.disabled)return;
+  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji natywnej.';return;}
   if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
+  ++tokenStateRevision;
   invalidateJobPreview(); // Invalidate any pending HTTPS verification before changing the secret.
+  const server=document.getElementById('server');
+  const worker=document.getElementById('workerId');
+  const controls=[button,server,worker,field];
+  const disabled=controls.map(control=>control.disabled);
+  controls.forEach(control=>{control.disabled=true;});
+  tokenMessage.textContent='Sprawdzanie możliwości zapisania tokenu…';
   try {
-    await invoke('store_worker_token',{token:field.value});
+    await invoke('store_worker_token',{token:field.value,server:server.value.trim(),workerId:worker.value.trim()});
     field.value='';
     invalidateJobPreview();
     await refreshTokenState();
-  }catch(_error){tokenMessage.textContent='Nie udało się zapisać tokenu. Sprawdź format i systemowy magazyn poświadczeń.';}
+  }catch(error){
+    tokenMessage.textContent=typeof error==='string'?error:'Nie udało się zapisać tokenu.';
+  }finally{
+    controls.forEach((control,index)=>{control.disabled=disabled[index];});
+  }
 });
 document.getElementById('forgetToken').addEventListener('click',async()=>{
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke){tokenMessage.textContent='Usuwanie tokenu wymaga aplikacji desktopowej.';return;}
+  ++tokenStateRevision;
   invalidateJobPreview(); // Pending HTTPS checks must never restore an authenticated preview.
   try{
     await invoke('forget_worker_token');
@@ -834,9 +883,10 @@ document.getElementById('pair').addEventListener('click',async()=>{
  button.disabled=true;
  setConnectionFeedback('checking','Sprawdzanie połączenia HTTPS i tokenu…');
  try{
-  const saved=await invoke('has_saved_worker_token');
+  const state=await invoke('worker_token_state');
   if(revision!==connectionRevision || server!==document.getElementById('server').value.trim() || workerId!==document.getElementById('workerId').value.trim())return;
-  if(!saved){setConnectionFeedback('missing','Brak zapisanego tokenu lub niedostępny magazyn. Najpierw zapisz token.');return;}
+  if(state==='missing'){setConnectionFeedback('missing','Brak zapisanego tokenu. Najpierw zapisz token.');return;}
+  if(state!=='saved'){setConnectionFeedback('error','Magazyn poświadczeń niedostępny lub uszkodzony.');return;}
   const ok=await invoke('verify_worker_connection',{server,workerId});
   // Reject delayed responses after the address, ID, or stored token changes.
   if(revision!==connectionRevision ||

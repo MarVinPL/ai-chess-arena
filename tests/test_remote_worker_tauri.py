@@ -49,11 +49,13 @@ def test_token_onboarding_does_not_persist_plaintext():
 def test_native_token_storage_never_exposes_secret():
     rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
     html = (ROOT / 'public' / 'index.html').read_text()
-    assert 'keyring::Entry::new' in rust
+    adapter = (ROOT / 'src-tauri' / 'src' / 'credential_vault_native.rs').read_text()
+    assert 'keyring::Entry::new' in adapter
+    assert 'credential_vault_native::native()' in rust
     assert 'store_worker_token' in rust
     assert 'has_saved_worker_token' in rust
     assert 'forget_worker_token' in rust
-    assert "invoke('store_worker_token',{token:field.value})" in html
+    assert "invoke('store_worker_token',{token:field.value,server:server.value.trim(),workerId:worker.value.trim()})" in html
     assert "invoke('forget_worker_token')" in html
     assert 'localStorage.setItem(token' not in html
     assert 'localStorage.setItem(field.value' not in html
@@ -63,9 +65,6 @@ def test_native_token_storage_never_exposes_secret():
 def test_https_authentication_response_is_bounded_before_json_parsing():
     rust = (ROOT / 'src-tauri' / 'src' / 'lib.rs').read_text()
     auth = rust.split('async fn verify_worker_connection(', 1)[1].split('\n// Read-only, explicit job inspection.', 1)[0]
-    assert 'const MAX_AUTH_RESPONSE_BYTES: usize = 4096;' in auth
-    assert 'response.content_length()' in auth
-    assert 'response.chunk().await' in auth
-    assert 'chunk.len() > MAX_AUTH_RESPONSE_BYTES - bytes.len()' in auth
-    assert 'serde_json::from_slice(&bytes)' in auth
+    assert 'bounded_json_response(response, 4096).await?' in auth
+    assert 'result.confirms_identity(worker_id)' in auth
     assert 'response.json().await' not in auth

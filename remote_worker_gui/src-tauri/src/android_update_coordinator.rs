@@ -3,7 +3,9 @@
 //! identify the Worker, report zero tasks and carry a recent server timestamp.
 //! This is only a read-only safety check, NOT permission to install.
 
+use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_IDLE_AGE_MS: u64 = 30_000;
@@ -123,7 +125,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report" | "journal-init-acquire" | "journal-init-complete") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -151,6 +153,192 @@ fn update_http_client() -> Result<reqwest::Client, String> {
         .build().map_err(|_| "Nie można utworzyć klienta HTTPS".into())
 }
 
+/// Native proof that this coordinator fenced this Worker for this token.
+#[allow(dead_code)]
+pub(crate) struct JournalInitAuthorization {
+    server: reqwest::Url,
+    worker_id: String,
+    token_digest: [u8; 32],
+    nonce: String,
+    checked_at_unix_ms: u64,
+    baseline_version: Option<u64>,
+}
+
+#[allow(dead_code)]
+impl JournalInitAuthorization {
+    pub(crate) fn matches(
+        &self, base: &str, worker_id: &str, machine_token: &str, now_ms: u64,
+    ) -> bool {
+        let token_digest: [u8; 32] = Sha256::digest(machine_token.as_bytes()).into();
+        coordinator_endpoint(base, "journal-init-acquire").as_ref() == Ok(&self.server)
+            && self.worker_id == worker_id
+            && self.token_digest == token_digest
+            && journal_init_time_current(self.checked_at_unix_ms, now_ms)
+    }
+
+    pub(crate) fn baseline_version(&self) -> Option<u64> {
+        self.baseline_version
+    }
+
+    pub(crate) fn nonce(&self) -> &str {
+        &self.nonce
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JournalInitReply {
+    contract_version: u64,
+    authenticated: bool,
+    source: String,
+    worker_id: String,
+    nonce: String,
+    fenced: bool,
+    checked_at_unix_ms: u64,
+    install_allowed: bool,
+    #[serde(default)]
+    baseline_version: Option<u64>,
+}
+
+fn journal_init_time_current(checked_at: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(checked_at) <= MAX_IDLE_AGE_MS
+        && checked_at.saturating_sub(now_ms) <= MAX_FUTURE_SKEW_MS
+}
+
+impl JournalInitReply {
+    fn verify(
+        self, server: reqwest::Url, worker_id: &str, machine_token: &str,
+        nonce: String, started_ms: u64, now_ms: u64, baseline_version: Option<u64>,
+    ) -> Result<JournalInitAuthorization, String> {
+        if self.baseline_version != baseline_version || self.contract_version != 1 || !self.authenticated || self.source != "coordinator"
+            || self.worker_id != worker_id || self.nonce != nonce
+            || !self.fenced || self.install_allowed || now_ms < started_ms
+            || self.checked_at_unix_ms < started_ms.saturating_sub(MAX_FUTURE_SKEW_MS)
+            || !journal_init_time_current(self.checked_at_unix_ms, now_ms)
+        {
+            return Err("Koordynator nie potwierdził blokady inicjalizacji".into());
+        }
+        Ok(JournalInitAuthorization {
+            server,
+            worker_id: self.worker_id,
+            token_digest: Sha256::digest(machine_token.as_bytes()).into(),
+            nonce,
+            checked_at_unix_ms: self.checked_at_unix_ms,
+            baseline_version: self.baseline_version,
+        })
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) async fn acquire_journal_init(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<JournalInitAuthorization, String> {
+    request_journal_init(base, worker_id, machine_token, random_nonce()?, false, None).await
+}
+
+pub(crate) async fn request_journal_init(
+    base: &str, worker_id: &str, machine_token: &str, nonce: String, retry: bool, baseline_version: Option<u64>,
+) -> Result<JournalInitAuthorization, String> {
+    if !valid_worker_id(worker_id)
+        || !(24..=512).contains(&machine_token.len())
+        || !machine_token.is_ascii()
+    {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let endpoint = coordinator_endpoint(base, "journal-init-acquire")?;
+    let started_ms = system_unix_ms()?;
+    let mut payload = serde_json::json!({
+        "worker_id": worker_id, "token": machine_token, "nonce": nonce
+    });
+    if retry {
+        payload["retry"] = Value::Bool(true);
+    }
+    if let Some(version) = baseline_version {
+        payload["baseline_version"] = version.into();
+    }
+    let response = update_http_client()?.post(endpoint.clone())
+        .json(&payload)
+        .send().await.map_err(|_| "Brak odpowiedzi koordynatora inicjalizacji")?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Koordynator odmówił blokady inicjalizacji".into());
+    }
+    let reply: JournalInitReply = crate::bounded_json_response(response, 4096).await?;
+    reply.verify(endpoint, worker_id, machine_token, nonce, started_ms, system_unix_ms()?, baseline_version)
+}
+
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+pub(crate) async fn complete_journal_init(
+    base: &str, worker_id: &str,
+) -> Result<(), String> {
+    let endpoint = coordinator_endpoint(base, "journal-init-complete")?;
+    let token = crate::token_entry()?.get_password()?;
+    // This call holds the credential and journal gates only for local I/O.
+    let completion = crate::credential_journal::completion(base, worker_id, &token)?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": completion.worker_id, "token": token, "nonce": completion.nonce,
+            "pair_marker": completion.pair_marker, "origin": completion.origin,
+        }))
+        .send().await.map_err(|_| "Brak potwierdzenia koordynatora inicjalizacji")?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Koordynator odmówił zatwierdzenia inicjalizacji".into());
+    }
+    let reply: Value = crate::bounded_json_response(response, 4096).await?;
+    if reply != serde_json::json!({
+        "contract_version": 1, "authenticated": true, "source": "coordinator",
+        "worker_id": worker_id, "nonce": completion.nonce, "completed": true,
+        "state": "unknown", "install_allowed": false,
+    }) {
+        return Err("Nieprawidłowe potwierdzenie inicjalizacji".into());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", test))]
+struct JournalReconciliation;
+
+#[cfg(any(target_os = "android", test))]
+static RECONCILING_JOURNALS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(any(target_os = "android", test))]
+impl JournalReconciliation {
+    fn start() -> Result<Self, String> {
+        use std::sync::atomic::Ordering;
+        RECONCILING_JOURNALS.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map(|_| Self).map_err(|_| "Trwa już uzgadnianie dzienników".into())
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+impl Drop for JournalReconciliation {
+    fn drop(&mut self) {
+        RECONCILING_JOURNALS.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Restart-safe driver for a native package observation and a coordinator
+/// baseline approval. The WebView supplies only the connection identity.
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+pub(crate) async fn reconcile_journal_initialization(
+    base: &str, worker_id: &str,
+    expectation: &crate::credential_journal::JournalBaseline,
+) -> Result<(), String> {
+    let _operation = JournalReconciliation::start()?;
+    coordinator_endpoint(base, "journal-init-acquire")?;
+    if !valid_worker_id(worker_id) { return Err("Nieprawidłowy identyfikator Workera".into()); }
+    let (token, nonce, committed) =
+        crate::credential_journal::prepare_reconciliation(base, worker_id, expectation)?;
+    if !committed {
+        let authorization = request_journal_init(base, worker_id, &token, nonce, true, Some(expectation.version())).await?;
+        crate::credential_journal::initialize_authorized_pair(base, worker_id, &authorization, expectation)?;
+    }
+    complete_journal_init(base, worker_id).await?;
+    crate::credential_journal::finish_reconciliation(base, worker_id, &token)
+}
+
 /// Authenticated, atomic coordinator reservation. A future installer must
 /// acquire this only after it has verified APK bytes AND OS signing identity.
 /// This API is internal; it is intentionally not a Tauri webview command.
@@ -170,7 +358,16 @@ pub(crate) async fn reserve_update(
         server: base.to_owned(), worker_id: worker_id.to_owned(), hold_token,
     };
     // The journal MUST be recoverable before the coordinator sees the request.
-    crate::android_update_recovery::save_pending(&pending)?;
+    {
+        let _credential_guard = crate::credential_change_gate()?;
+        if crate::token_entry()?.get_password()? != machine_token {
+            return Err("Token Workera zmienił się".into());
+        }
+        if crate::android_update_install_journal::load()?.is_some() {
+            return Err("Nierozliczona instalacja".into());
+        }
+        crate::android_update_recovery::save_pending(&pending)?;
+    }
     let nonce = random_nonce()?;
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({
@@ -766,7 +963,7 @@ pub(crate) async fn report_native_stop(
             "nonce": nonce, "job_id": job_id, "request_id": request_id, "lease_token": lease_token}))
         .send().await.map_err(|_| "Nie można przesłać raportu STOP")?;
     if !response.status().is_success() { return Err("Arena odrzuciła raport STOP".into()); }
-    let body = crate::bounded_json_response(response, 4096).await?;
+    let body: Value = crate::bounded_json_response(response, 4096).await?;
     if body.get("authenticated").and_then(Value::as_bool) != Some(true)
         || body.get("source").and_then(Value::as_str) != Some("coordinator")
         || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
@@ -800,6 +997,97 @@ mod tests {
         assert!(native_stop_binding(&StopInstruction::None, &job).is_err());
     }
 
+
+    #[test]
+    fn journal_reconciliation_rejects_concurrent_attempts_until_cancelled() {
+        let current = JournalReconciliation::start().unwrap();
+        assert!(std::thread::spawn(|| JournalReconciliation::start().is_err()).join().unwrap());
+        drop(current);
+        assert!(JournalReconciliation::start().is_ok());
+    }
+
+    fn journal_init_reply() -> Value {
+        json!({
+            "contract_version": 1, "authenticated": true, "source": "coordinator",
+            "worker_id": "worker_12345678", "nonce": NONCE, "fenced": true,
+            "checked_at_unix_ms": 1_000_000, "install_allowed": false,
+        })
+    }
+
+    fn verify_journal_init(reply: Value, started: u64, now: u64) -> Result<JournalInitAuthorization, String> {
+        let body: JournalInitReply = serde_json::from_value(reply)
+            .map_err(|_| "Nieprawidłowa odpowiedź HTTPS")?;
+        body.verify(
+            coordinator_endpoint("https://arena.example", "journal-init-acquire")?,
+            "worker_12345678", &"a".repeat(43), NONCE.into(), started, now, None,
+        )
+    }
+
+    #[test]
+    fn baseline_request_rejects_legacy_reply_without_explicit_approval() {
+        for (version, accepted) in [(None, false), (Some(10), true), (Some(11), false)] {
+            let mut payload = journal_init_reply();
+            if let Some(version) = version {
+                payload["baseline_version"] = json!(version);
+            }
+            let reply: JournalInitReply = serde_json::from_value(payload).unwrap();
+            let proof = reply.verify(
+                coordinator_endpoint("https://arena.example", "journal-init-acquire").unwrap(),
+                "worker_12345678", &"a".repeat(43), NONCE.into(), 999_000, 1_000_001, Some(10),
+            );
+            assert_eq!(proof.is_ok(), accepted);
+        }
+    }
+
+    #[test]
+    fn journal_init_authorization_is_bound_to_origin_worker_token_nonce_and_time() {
+        let proof = verify_journal_init(journal_init_reply(), 999_000, 1_000_001).unwrap();
+        assert_eq!(proof.nonce(), NONCE);
+        assert!(proof.matches("https://arena.example/", "worker_12345678", &"a".repeat(43), 1_030_000));
+        assert!(!proof.matches("https://another.example", "worker_12345678", &"a".repeat(43), 1_000_001));
+        assert!(!proof.matches("https://arena.example", "worker_87654321", &"a".repeat(43), 1_000_001));
+        assert!(!proof.matches("https://arena.example", "worker_12345678", &"b".repeat(43), 1_000_001));
+        assert!(!proof.matches("https://arena.example", "worker_12345678", &"a".repeat(43), 1_030_001));
+    }
+
+    #[test]
+    fn journal_init_rejects_conflicting_unknown_and_stale_fields() {
+        for (field, value) in [
+            ("contract_version", json!(2)),
+            ("authenticated", json!(false)),
+            ("source", json!("client")),
+            ("worker_id", json!("worker_87654321")),
+            ("nonce", json!("0".repeat(32))),
+            ("fenced", json!(false)),
+            ("install_allowed", json!(true)),
+            ("checked_at_unix_ms", json!(1_005_001)),
+            ("extra", json!(true)),
+        ] {
+            let mut response = journal_init_reply();
+            response[field] = value;
+            assert!(verify_journal_init(response, 999_000, 1_000_000).is_err(), "{field}");
+        }
+        assert!(verify_journal_init(journal_init_reply(), 1_005_001, 1_005_002).is_err());
+        assert!(verify_journal_init(journal_init_reply(), 999_000, 1_030_001).is_err());
+        assert!(verify_journal_init(journal_init_reply(), 1_000_002, 1_000_001).is_err());
+        let original = journal_init_reply().to_string();
+        let duplicated = original.replacen('{', "{\"nonce\":\"duplicate\",", 1);
+        assert!(serde_json::from_str::<JournalInitReply>(&duplicated).is_err());
+    }
+
+    #[test]
+    fn journal_init_rejects_bad_https_origin_and_unreachable_server() {
+        for base in [
+            "http://arena.example", "https://arena.example/path",
+            "https://user@arena.example", "https://arena.example?x=y",
+        ] {
+            assert!(coordinator_endpoint(base, "journal-init-acquire").is_err());
+        }
+        let result = tauri::async_runtime::block_on(acquire_journal_init(
+            "https://[::1]", "worker_12345678", &"a".repeat(43),
+        ));
+        assert!(result.is_err());
+    }
     fn reply() -> Value {
         json!({
             "state": "idle_confirmed", "authenticated": true,

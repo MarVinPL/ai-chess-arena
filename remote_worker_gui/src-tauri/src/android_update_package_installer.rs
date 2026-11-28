@@ -28,66 +28,76 @@ fn java_string(env: &mut JNIEnv<'_>, object: JObject<'_>) -> Result<Option<Strin
 /// Classify only sessions belonging to this installed app and naming Worker
 /// as target; unexpected owners/targets fail closed as Ambiguous.
 pub(crate) fn observe_own_session() -> Result<SessionObservation, String> {
+    observe_own_session_details().map(|(observation, _)| observation)
+}
+
+pub(crate) fn observe_own_session_details() -> Result<(SessionObservation, Option<i32>), String> {
     let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(jni_error)?;
     let mut env = vm.attach_current_thread().map_err(jni_error)?;
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
-    let package = env.call_method(&context, "getPackageName", "()Ljava/lang/String;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    let own_package = java_string(&mut env, package)?
-        .ok_or("Android nie udostępnił nazwy własnej aplikacji")?;
-    if own_package != WORKER_PACKAGE_ID {
-        return Err("Uruchomiono inną aplikację niż Worker".into());
-    }
+    let result = (|| {
+        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let package = env.call_method(&context, "getPackageName", "()Ljava/lang/String;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        let own_package = java_string(&mut env, package)?
+            .ok_or("Android nie udostępnił nazwy własnej aplikacji")?;
+        if own_package != WORKER_PACKAGE_ID {
+            return Err("Uruchomiono inną aplikację niż Worker".into());
+        }
 
-    let pm = env.call_method(&context, "getPackageManager",
-        "()Landroid/content/pm/PackageManager;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    if pm.is_null() { return Err("Brak Android PackageManager".into()); }
-    let installer = env.call_method(&pm, "getPackageInstaller",
-        "()Landroid/content/pm/PackageInstaller;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    if installer.is_null() { return Err("Brak Android PackageInstaller".into()); }
-    let sessions = env.call_method(&installer, "getMySessions",
-        "()Ljava/util/List;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    if sessions.is_null() { return Err("Brak listy własnych sesji Android".into()); }
-    let count = env.call_method(&sessions, "size", "()I", &[])
-        .map_err(jni_error)?.i().map_err(jni_error)?;
-    if count < 0 || count > 1 {
-        // Do not choose an arbitrary session if another install is ongoing.
-        return Ok(SessionObservation::Ambiguous);
-    }
-    if count == 0 { return Ok(SessionObservation::NoVisibleSession); }
+        let pm = env.call_method(&context, "getPackageManager",
+            "()Landroid/content/pm/PackageManager;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        if pm.is_null() { return Err("Brak Android PackageManager".into()); }
+        let installer = env.call_method(&pm, "getPackageInstaller",
+            "()Landroid/content/pm/PackageInstaller;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        if installer.is_null() { return Err("Brak Android PackageInstaller".into()); }
+        let sessions = env.call_method(&installer, "getMySessions",
+            "()Ljava/util/List;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        if sessions.is_null() { return Err("Brak listy własnych sesji Android".into()); }
+        let count = env.call_method(&sessions, "size", "()I", &[])
+            .map_err(jni_error)?.i().map_err(jni_error)?;
+        if count < 0 || count > 1 {
+            // Do not choose an arbitrary session if another install is ongoing.
+            return Ok((SessionObservation::Ambiguous, None));
+        }
+        if count == 0 { return Ok((SessionObservation::NoVisibleSession, None)); }
 
-    let info = env.call_method(&sessions, "get", "(I)Ljava/lang/Object;",
-        &[jni::objects::JValue::Int(0)])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    if info.is_null() { return Err("Nieprawidłowa sesja instalatora".into()); }
-    let package = env.call_method(&info, "getAppPackageName",
-        "()Ljava/lang/String;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    let target = java_string(&mut env, package)?;
-    let installer_name = env.call_method(&info, "getInstallerPackageName",
-        "()Ljava/lang/String;", &[])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    let owner = java_string(&mut env, installer_name)?;
-    if target.as_deref() != Some(WORKER_PACKAGE_ID)
-        || owner.as_deref() != Some(WORKER_PACKAGE_ID) {
-        return Ok(SessionObservation::Ambiguous);
+        let info = env.call_method(&sessions, "get", "(I)Ljava/lang/Object;",
+            &[jni::objects::JValue::Int(0)])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        if info.is_null() { return Err("Nieprawidłowa sesja instalatora".into()); }
+        let package = env.call_method(&info, "getAppPackageName",
+            "()Ljava/lang/String;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        let target = java_string(&mut env, package)?;
+        let installer_name = env.call_method(&info, "getInstallerPackageName",
+            "()Ljava/lang/String;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        let owner = java_string(&mut env, installer_name)?;
+        if target.as_deref() != Some(WORKER_PACKAGE_ID)
+            || owner.as_deref() != Some(WORKER_PACKAGE_ID) {
+            return Ok((SessionObservation::Ambiguous, None));
+        }
+        let session_id = env.call_method(&info, "getSessionId", "()I", &[])
+            .map_err(jni_error)?.i().map_err(jni_error)?;
+        if session_id < 0 { return Err("Nieprawidłowy identyfikator sesji".into()); }
+        let committed = env.call_method(&info, "isCommitted", "()Z", &[])
+            .map_err(jni_error)?.z().map_err(jni_error)?;
+        Ok((if committed {
+            SessionObservation::CommittedOrAwaitingConsent
+        } else {
+            SessionObservation::Uncommitted
+        }, Some(session_id)))
+    })();
+    if env.exception_check().map_err(jni_error)? {
+        env.exception_clear().map_err(jni_error)?;
+        return Err("Nie można odczytać sesji instalatora".into());
     }
-    let session_id = env.call_method(&info, "getSessionId", "()I", &[])
-        .map_err(jni_error)?.i().map_err(jni_error)?;
-    if session_id < 0 { return Err("Nieprawidłowy identyfikator sesji".into()); }
-    let committed = env.call_method(&info, "isCommitted", "()Z", &[])
-        .map_err(jni_error)?.z().map_err(jni_error)?;
-    Ok(if committed {
-        SessionObservation::CommittedOrAwaitingConsent
-    } else {
-        SessionObservation::Uncommitted
-    })
+    result
 }
-
 
 /* Native PackageInstaller staging. This is deliberately internal: the
  * caller must have checked the downloaded bytes and the installed + staged
@@ -295,35 +305,52 @@ pub(crate) fn commit_staged_session(session_id: i32) -> Result<(), String> {
 /// to the journaled session ID. No callback alone proves installation.
 #[allow(dead_code)]
 pub(crate) fn read_session_result(expected_session_id: i32) -> Result<Option<i32>, String> {
-    use jni::objects::JValue;
     if expected_session_id < 0 { return Err("Nieprawidłowy identyfikator sesji".into()); }
+    match read_callback_snapshot()? {
+        None => Ok(None),
+        Some((id, status)) if id == expected_session_id => Ok(Some(status)),
+        _ => Err("Callback Androida dotyczy innej instalacji".into()),
+    }
+}
+
+pub(crate) fn read_callback_snapshot() -> Result<Option<(i32, i32)>, String> {
+    use jni::objects::JValue;
     let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(jni_error)?;
     let mut env = vm.attach_current_thread().map_err(jni_error)?;
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
-    let pref_name = env.new_string("worker_android_installer_status_v1")
-        .map_err(jni_error)?;
-    let prefs = env.call_method(&context, "getSharedPreferences",
-        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-        &[JValue::Object(pref_name.as_ref()), JValue::Int(0)])
-        .map_err(jni_error)?.l().map_err(jni_error)?;
-    let sid_key = env.new_string("session_id").map_err(jni_error)?;
-    let recorded_id = env.call_method(&prefs, "getInt",
-        "(Ljava/lang/String;I)I",
-        &[JValue::Object(sid_key.as_ref()), JValue::Int(-1)])
-        .map_err(jni_error)?.i().map_err(jni_error)?;
-    if recorded_id == -1 { return Ok(None); }
-    if recorded_id != expected_session_id {
-        return Err("Callback Androida dotyczy innej instalacji".into());
+    let result = (|| {
+        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let pref_name = env.new_string("worker_android_installer_status_v1").map_err(jni_error)?;
+        let prefs = env.call_method(&context, "getSharedPreferences",
+            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
+            &[JValue::Object(pref_name.as_ref()), JValue::Int(0)])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        let map = env.call_method(&prefs, "getAll", "()Ljava/util/Map;", &[])
+            .map_err(jni_error)?.l().map_err(jni_error)?;
+        if map.is_null() { return Err("Brak odczytu callbacku".into()); }
+        let mut read = |key: &str| -> Result<Option<i32>, String> {
+            let name = env.new_string(key).map_err(jni_error)?;
+            let value = env.call_method(&map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;",
+                &[JValue::Object(name.as_ref())]).map_err(jni_error)?.l().map_err(jni_error)?;
+            if value.is_null() { return Ok(None); }
+            if !env.is_instance_of(&value, "java/lang/Integer").map_err(jni_error)? {
+                return Err("Nieprawidłowy typ callbacku".into());
+            }
+            Ok(Some(env.call_method(&value, "intValue", "()I", &[])
+                .map_err(jni_error)?.i().map_err(jni_error)?))
+        };
+        match (read("session_id")?, read("installer_status")?) {
+            (None, None) => Ok(None),
+            (Some(id), Some(status)) if id >= 0 && (-1..=8).contains(&status) =>
+                Ok(Some((id, status))),
+            _ => Err("Niepełny lub nieznany callback instalatora".into()),
+        }
+    })();
+    if env.exception_check().map_err(jni_error)? {
+        env.exception_clear().map_err(jni_error)?;
+        return Err("Nie można odczytać callbacku instalatora".into());
     }
-    let status_key = env.new_string("installer_status").map_err(jni_error)?;
-    let status = env.call_method(&prefs, "getInt", "(Ljava/lang/String;I)I",
-        &[JValue::Object(status_key.as_ref()), JValue::Int(-1000)])
-        .map_err(jni_error)?.i().map_err(jni_error)?;
-    if status == -1000 { return Ok(None); }
-    // Android success is STATUS_SUCCESS == 0, but the installed version
-    // and original signing cert are still rechecked through PackageManager.
-    Ok(Some(status))
+    result
 }
 
 pub(crate) fn observation_is_terminal(_observation: SessionObservation) -> bool {

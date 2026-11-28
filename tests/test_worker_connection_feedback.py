@@ -41,18 +41,21 @@ async function reject(t,v){t.pending.shift().reject(v);await tick();}
 function check(t,state){assert.equal(t.state(),state);assert.ok(t.get('connectionFeedbackIcon').textContent);assert.ok(t.get('connectionFeedbackText').textContent);assert.equal(t.get('backendStatus').textContent,'Unrelated token status');}
 (async()=>{
  let t=setup({native:false});await t.click();check(t,'error');
- t=setup();let work=t.click();check(t,'checking');assert.equal(t.get('pair').disabled,true);await t.click();assert.equal(t.calls.length,1);await resolve(t,false);await work;check(t,'missing');assert.equal(t.get('pair').disabled,false);
- t=setup();work=t.click();await resolve(t,true);await resolve(t,false);await work;check(t,'rejected');assert.equal(t.run('phonePaired'),false);
- t=setup();work=t.click();await resolve(t,true);await resolve(t,true);await resolve(t,true);await work;check(t,'ok');assert.equal(t.run('phonePaired'),true);assert.equal(t.get('previewJob').disabled,false);
- t=setup({persist:false});work=t.click();await resolve(t,true);await resolve(t,true);await resolve(t,true);await work;check(t,'error');assert.equal(t.run('phonePaired'),false);
+ t=setup();let work=t.click();check(t,'checking');assert.equal(t.get('pair').disabled,true);await t.click();assert.equal(t.calls.length,1);assert.deepEqual(t.calls,['worker_token_state']);await resolve(t,'missing');await work;check(t,'missing');assert.equal(t.get('pair').disabled,false);
+ for(const state of ['unavailable','unexpected']){
+  t=setup();work=t.click();await resolve(t,state);await work;check(t,'error');assert.deepEqual(t.calls,['worker_token_state']);assert.equal(t.run('phonePaired'),false);assert.equal(t.get('previewJob').disabled,true);assert.equal(t.get('pair').disabled,false);assert.match(t.get('connectionFeedbackText').textContent,/Magazyn poświadczeń niedostępny/);
+ }
+ t=setup();work=t.click();await resolve(t,'saved');await resolve(t,false);await work;check(t,'rejected');assert.equal(t.run('phonePaired'),false);
+ t=setup();work=t.click();await resolve(t,'saved');await resolve(t,true);await resolve(t,true);await work;check(t,'ok');assert.equal(t.run('phonePaired'),true);assert.equal(t.get('previewJob').disabled,false);
+ t=setup({persist:false});work=t.click();await resolve(t,'saved');await resolve(t,true);await resolve(t,true);await work;check(t,'error');assert.equal(t.run('phonePaired'),false);
  for(const err of ['Brak zapisanego tokenu','network','secret-should-not-be-shown']){
-  t=setup();work=t.click();await resolve(t,true);await reject(t,err);await work;check(t,err==='Brak zapisanego tokenu'?'missing':'error');assert.equal(t.get('pair').disabled,false);assert.ok(!t.get('connectionFeedbackText').textContent.includes('secret-should-not-be-shown'));
+  t=setup();work=t.click();await resolve(t,'saved');await reject(t,err);await work;check(t,err==='Brak zapisanego tokenu'?'missing':'error');assert.equal(t.get('pair').disabled,false);assert.ok(!t.get('connectionFeedbackText').textContent.includes('secret-should-not-be-shown'));
  }
  for(const change of ['server','workerId','token'])for(const stage of [0,1,2])for(const fail of [false,true]){
-  t=setup();work=t.click();if(stage>=1)await resolve(t,true);if(stage>=2)await resolve(t,true);
+  t=setup();work=t.click();if(stage>=1)await resolve(t,'saved');if(stage>=2)await resolve(t,true);
   if(change!=='token')t.get(change).value='changed';t.run('invalidateJobPreview()');
   const msg=t.get('connectionFeedbackText').textContent;
-  if(fail)await reject(t,'late error');else await resolve(t,true);
+  if(fail)await reject(t,'late error');else await resolve(t,stage===0?'saved':true);
   await work;check(t,'idle');assert.equal(t.get('connectionFeedbackText').textContent,msg);assert.equal(t.run('phonePaired'),false);assert.equal(t.get('previewJob').disabled,true);assert.equal(t.get('pair').disabled,false);
  }
 })().catch(e=>{console.error(e);process.exitCode=1;});

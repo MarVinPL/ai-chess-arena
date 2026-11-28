@@ -14,7 +14,8 @@ ROUTE_LIMITS = {
     'job-poll': 120, 'model-source': 12, 'ready': 12, 'job-result': 30,
     'update-pause-poll': 120, 'native-stop-report': 30, 'board-view': 120,
     'update-resume-status': 30, 'update-reserve': 12,
-    'update-release': 12, 'update-hold-status': 30,
+    'update-release': 12, 'update-hold-status': 30, 'update-journal-evidence': 12,
+    'journal-init-acquire': 12, 'journal-init-complete': 12,
 }
 
 

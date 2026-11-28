@@ -3,7 +3,11 @@
 Only coordinator-validated transitions may modify this registry. Missing rows,
 expired leases and interrupted tasks fail closed. This is not a job scheduler.
 """
+import hashlib
+import hmac
 import re
+from contextlib import closing
+from pathlib import Path
 import secrets
 import sqlite3
 import time
@@ -31,6 +35,20 @@ class DurableWorkerJobs:
             db.execute('''CREATE TABLE IF NOT EXISTS worker_model_maintenance_holds (
                 worker_id TEXT PRIMARY KEY, hold_token TEXT NOT NULL,
                 created_at REAL NOT NULL, expires_at REAL NOT NULL)''')
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_fences (
+                worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL,
+                token_digest BLOB NOT NULL, created_at REAL NOT NULL)""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_origins (
+                worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL, origin TEXT NOT NULL)""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_completions (
+                worker_id TEXT NOT NULL, nonce TEXT NOT NULL, token_digest BLOB NOT NULL,
+                pair_marker TEXT NOT NULL, PRIMARY KEY (worker_id, nonce))""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_baselines (
+                worker_id TEXT PRIMARY KEY, token_digest BLOB NOT NULL, origin TEXT NOT NULL,
+                version_code INTEGER NOT NULL, nonce TEXT)""")
 
             # Shared coordinator lock. Requests must block a racing new
             # assignment before a trusted STOP/checkpoint ACK is delivered.
@@ -57,6 +75,25 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY,
                 released_at REAL NOT NULL
             )''')
+
+    @staticmethod
+    def _guard_journal_init_writes(db, table, *, predicate='1'):
+        # These persistent triggers also cover callers writing through their own
+        # SQLite connection. Safety may still be invalidated to UNKNOWN.
+        for operation in ('INSERT', 'UPDATE'):
+            db.execute(f"""CREATE TRIGGER IF NOT EXISTS journal_init_guard_{table}_{operation}
+                BEFORE {operation} ON {table}
+                WHEN {predicate} AND EXISTS (
+                    SELECT 1 FROM worker_journal_init_fences WHERE worker_id=NEW.worker_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'Worker journal initialization fenced');
+                END""")
+
+    @staticmethod
+    def _journal_init_fenced(db, worker_id):
+        return db.execute('SELECT 1 FROM worker_journal_init_fences WHERE worker_id=?',
+                          (worker_id,)).fetchone() is not None
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -97,6 +134,8 @@ class DurableWorkerJobs:
             raise ValueError('Worker model maintenance requires reconciliation')
 
     def _reject_update_hold(self, db, worker_id):
+        if self._journal_init_fenced(db, worker_id):
+            raise ValueError('Worker journal initialization fenced')
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
         # blocking assignments until explicit coordinator reconciliation.
         # An expiry alone never proves that Android's installer has finished.
@@ -363,10 +402,12 @@ class DurableWorkerJobs:
         if type(max_idle_age_seconds) not in (int, float) or not 0 < max_idle_age_seconds <= 30:
             raise ValueError('Invalid idle evidence lifetime')
         with self._db() as db:
+            db.execute('BEGIN')
             row = db.execute(
                 'SELECT state,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
                 (worker_id,)
             ).fetchone()
+            fenced = self._journal_init_fenced(db, worker_id)
             hold = db.execute(
                 'SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                 (worker_id,)
@@ -383,7 +424,7 @@ class DurableWorkerJobs:
         now = self.clock()
         # An in-flight stop request is never fresh idle evidence, even if
         # another process has just committed a terminal job result.
-        if not row or hold or maintenance or pause or resume:
+        if not row or fenced or hold or maintenance or pause or resume:
             return 'unknown', None
         state, deadline, updated_at = row
         if state == 'running':
@@ -395,6 +436,252 @@ class DurableWorkerJobs:
         ):
             return 'idle_confirmed', 0
         return 'unknown', None
+
+    def approve_journal_baseline(self, worker_id, origin, version_code):
+        """Offline operator attestation of the device's reconciled baseline."""
+        from urllib.parse import urlsplit
+
+        from remote_worker_tokens import WorkerTokenStore
+
+        WorkerTokenStore._worker(worker_id)
+
+        parsed = urlsplit(origin)
+        host = parsed.hostname
+        if (
+            not host or origin != f'https://{host}' or len(host) > 253
+            or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                   for label in host.split('.'))
+        ):
+            raise ValueError('Expected canonical HTTPS origin')
+        if type(version_code) is not int or not 0 < version_code < 2**63:
+            raise ValueError('Invalid installed version code')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            credential = db.execute(
+                'SELECT token_digest FROM worker_tokens WHERE worker_id=? AND revoked_at IS NULL AND expires_at>?',
+                (worker_id, self.clock()),
+            ).fetchone()
+            if not credential or self._journal_init_fenced(db, worker_id):
+                raise ValueError('Worker credential or journal state prevents approval')
+            # Approval is a separate offline action. Preserve its original
+            # binding if the Worker already has an approval or rotates tokens.
+            result = db.execute(
+                'INSERT INTO worker_journal_baselines VALUES (?,?,?,?,NULL) ON CONFLICT(worker_id) DO NOTHING',
+                (worker_id, credential[0], origin, version_code),
+            )
+            if result.rowcount != 1:
+                raise ValueError('Worker already has a baseline approval')
+
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None, retry=False, baseline_version=None):
+        """Durable non-expiring fence. No automatic release on timeout/restart."""
+        if baseline_version is not None and (type(baseline_version) is not int or not 0 < baseline_version < 2**63):
+            raise ValueError('Invalid installed version code')
+        from remote_worker_tokens import WorkerTokenStore
+        if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+            raise ValueError('Invalid nonce')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
+                return None
+            admit(worker_id)
+            approval = db.execute(
+                'SELECT token_digest,origin,version_code,nonce FROM worker_journal_baselines WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            if baseline_version is not None:
+                if (not approval or approval[:3] != (WorkerTokenStore._digest(token), origin, baseline_version)
+                        or approval[3] not in (None, nonce)):
+                    raise ValueError('Missing or conflicting baseline approval')
+            elif approval and approval[3] == nonce:
+                raise ValueError('Baseline version required for this retry')
+            existing = self._journal_init_fenced(db, worker_id)
+            if existing:
+                binding = db.execute(
+                    """SELECT f.nonce,f.token_digest,o.origin FROM worker_journal_init_fences f
+                    JOIN worker_journal_init_origins o USING (worker_id,nonce)
+                    WHERE f.worker_id=?""", (worker_id,),
+                ).fetchone()
+                if not retry or origin is None or binding != (nonce, WorkerTokenStore._digest(token), origin):
+                    raise ValueError('Initialization already fenced; reconciliation required')
+            if db.execute(
+                'SELECT 1 FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?', (worker_id, nonce),
+            ).fetchone():
+                raise ValueError('Initialization already completed')
+            row = db.execute(
+                'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            for table in ('worker_update_holds', 'worker_update_pause_requests',
+                          'worker_update_resume', 'worker_inference_assignments',
+                          'worker_idle_update_recovery', 'worker_model_maintenance_holds'):
+                if db.execute(f'SELECT 1 FROM {table} WHERE worker_id=?', (worker_id,)).fetchone():
+                    raise ValueError('Unresolved worker state')
+            if db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='worker_result_journal'"
+            ).fetchone() and db.execute(
+                "SELECT 1 FROM worker_result_journal WHERE worker_id=? AND state='pending_application'",
+                (worker_id,),
+            ).fetchone():
+                raise ValueError('Worker has unapplied result')
+            self._guard_journal_init_writes(
+                db, 'worker_job_safety',
+                predicate="(NEW.state != 'unknown' OR NEW.job_id IS NOT NULL OR NEW.deadline IS NOT NULL)",
+            )
+            for table in ('worker_update_holds', 'worker_update_pause_requests',
+                          'worker_update_resume', 'worker_idle_update_recovery',
+                          'worker_inference_assignments', 'worker_inference_capabilities', 'worker_model_maintenance_holds'):
+                self._guard_journal_init_writes(db, table)
+            now = self.clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                db.rollback()
+                return None
+            if existing:
+                if baseline_version is not None and approval[3] != nonce:
+                    raise ValueError('Baseline approval is not bound to this fence')
+                if not row or row[:3] not in (('idle_confirmed', None, None), ('unknown', None, None)):
+                    raise ValueError('Worker state changed during initialization')
+            else:
+                if baseline_version is not None and approval[3] is not None:
+                    raise ValueError('Baseline approval has already been used')
+                if baseline_version is not None and row is None:
+                    db.execute("INSERT INTO worker_job_safety VALUES (?,NULL,'unknown',NULL,?)", (worker_id, now))
+                elif not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
+                    raise ValueError('Worker not freshly idle')
+                if baseline_version is not None:
+                    db.execute('UPDATE worker_journal_baselines SET nonce=? WHERE worker_id=?', (nonce, worker_id))
+                db.execute(
+                    'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
+                    (worker_id, nonce, WorkerTokenStore._digest(token), now),
+                )
+                if origin is not None:
+                    db.execute('INSERT INTO worker_journal_init_origins VALUES (?,?,?)', (worker_id, nonce, origin))
+        return {
+            'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+            'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
+            'checked_at_unix_ms': int(now * 1000), 'install_allowed': False,
+            **({'baseline_version': baseline_version} if baseline_version is not None else {}),
+        }
+
+    def complete_journal_init(self, worker_id, token, nonce, pair_marker, *, origin, admit):
+        """Acknowledge a durable pair, then require fresh independent idle reconciliation."""
+        from remote_worker_tokens import WorkerTokenStore
+
+        if (not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce)
+                or not isinstance(pair_marker, str) or not re.fullmatch(r'[0-9a-f]{64}', pair_marker)):
+            raise ValueError('Invalid journal initialization confirmation')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
+                return None
+            admit(worker_id)
+            digest = WorkerTokenStore._digest(token)
+            expected = hashlib.sha256(b'\0'.join(
+                (origin.encode('ascii'), worker_id.encode('ascii'), digest, nonce.encode('ascii'))
+            )).hexdigest()
+            if not hmac.compare_digest(expected, pair_marker):
+                raise ValueError('Journal confirmation identity mismatch')
+
+            fence = db.execute('SELECT nonce,token_digest FROM worker_journal_init_fences WHERE worker_id=?',
+                               (worker_id,)).fetchone()
+            if fence and (fence != (nonce, digest) or db.execute(
+                'SELECT origin FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                (worker_id, nonce),
+            ).fetchone() != (origin,)):
+                raise ValueError('Journal initialization fence changed')
+            receipt = db.execute(
+                'SELECT token_digest,pair_marker FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?',
+                (worker_id, nonce),
+            ).fetchone()
+            if receipt != (digest, pair_marker):
+                if receipt or not fence:
+                    raise ValueError('Missing or conflicting journal initialization fence')
+                state = db.execute(
+                    'SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?', (worker_id,),
+                ).fetchone()
+                if state not in (('idle_confirmed', None, None), ('unknown', None, None)):
+                    raise ValueError('Worker state changed during journal initialization')
+                now = self.clock()
+                if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                    return None
+                db.execute(
+                    """UPDATE worker_job_safety SET state='unknown',updated_at=?
+                    WHERE worker_id=? AND job_id IS NULL AND deadline IS NULL""", (now, worker_id),
+                )
+                db.execute(
+                    'INSERT INTO worker_journal_init_completions VALUES (?,?,?,?)',
+                    (worker_id, nonce, digest, pair_marker),
+                )
+                deleted = db.execute(
+                    'DELETE FROM worker_journal_init_fences WHERE worker_id=? AND nonce=? AND token_digest=?',
+                    (worker_id, nonce, digest),
+                )
+                if deleted.rowcount != 1:
+                    raise ValueError('Journal initialization fence changed')
+                db.execute('DELETE FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                           (worker_id, nonce))
+        return {
+            'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+            'worker_id': worker_id, 'nonce': nonce, 'completed': True,
+            'state': 'unknown', 'install_allowed': False,
+        }
+
+    @staticmethod
+    def journal_evidence(path, worker_id, token, nonce, *, admit, clock=time.time):
+        """Read-only advisory evidence, never authority to initialize or install."""
+        from remote_worker_tokens import WorkerTokenStore
+        if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+            raise ValueError('Invalid evidence nonce')
+        # Never instantiate a schema-creating store on this read-only route.
+        uri = Path(path).resolve().as_uri() + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True, timeout=3)) as db, db:
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')
+            started = clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=clock):
+                return None
+            admit(worker_id)
+            row = db.execute(
+                'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,)).fetchone()
+            # Missing schema is uncertainty, not evidence of an empty registry.
+            tables = ('worker_update_holds', 'worker_update_pause_requests',
+                      'worker_update_resume', 'worker_inference_assignments',
+                      'worker_idle_update_recovery', 'worker_journal_init_fences', 'worker_model_maintenance_holds')
+            flags = {}
+            for table in tables:
+                exists = db.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+                    (table,)).fetchone()
+                flags[table] = (bool(db.execute(
+                    f'SELECT 1 FROM {table} WHERE worker_id=?', (worker_id,)).fetchone())
+                    if exists else None)
+            now = clock()
+            # Do not publish a freshly timestamped old snapshot or expired token.
+            if not 0 <= now - started <= 3:
+                raise ValueError('Snapshot deadline exceeded')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                return None
+            idle = bool(row and row[0] == 'idle_confirmed' and row[1] is None
+                        and row[2] is None and row[3] is not None
+                        and 0 <= now - row[3] <= 30)
+            clear = idle and all(value is False for value in flags.values())
+            return {
+                'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+                'worker_id': worker_id, 'nonce': nonce,
+                'checked_at_unix_ms': int(started * 1000),
+                'state': 'idle_confirmed' if clear else 'unknown',
+                'active_tasks': 0 if clear else None,
+                'hold_present': flags['worker_update_holds'],
+                'pause_present': flags['worker_update_pause_requests'],
+                'checkpoint_present': flags['worker_update_resume'],
+                'assignment_present': flags['worker_inference_assignments'],
+                'release_recovery_present': flags['worker_idle_update_recovery'],
+                'snapshot_only': True, 'initialization_allowed': False,
+                'install_allowed': False,
+            }
 
     def recover_after_restart(self):
         """Invalidate every persisted idle/running claim on coordinator boot.

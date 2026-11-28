@@ -14,31 +14,41 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-ARTIFACT_NAMES = (
-    "worker-linux-unsigned",
-    "worker-windows-unsigned",
-    "ai-chess-arena-worker-arm64-debug",
-)
+ARTIFACT_JOBS = {
+    "worker-linux-unsigned": "LINUX_RESULT",
+    "worker-windows-unsigned": "WINDOWS_RESULT",
+    "ai-chess-arena-worker-arm64-debug": "ANDROID_SIGNED_RESULT",
+}
 
 
 def select_old_artifact_ids(artifacts: list[dict], name: str, run_id: int) -> list[int]:
     """Return old main-branch IDs only if this run uploaded a replacement."""
-    matching = [a for a in artifacts if a.get("name") == name]
-    current = [
-        a for a in matching
-        if not a.get("expired")
-        and a.get("workflow_run", {}).get("id") == run_id
-        and a.get("workflow_run", {}).get("head_branch") == "main"
-    ]
-    if not current:
+    matching = [a for a in artifacts if a.get("name") == name
+                and a.get("workflow_run", {}).get("head_branch") == "main"]
+    # Run IDs are not a documented chronological ordering contract.
+    # Require explicit creation timestamps and protect equal/newer runs.
+    current = [a for a in matching if a.get("expired") is False
+               and a["workflow_run"].get("id") == run_id]
+    if len(current) != 1:
         return []
-    current_ids = {int(a["id"]) for a in current}
-    return sorted({
-        int(a["id"])
-        for a in matching
-        if a.get("workflow_run", {}).get("head_branch") == "main"
-        and int(a["id"]) not in current_ids
-    })
+    from datetime import datetime
+    def created(a):
+        value = datetime.fromisoformat(a["created_at"].replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            raise ValueError("Missing timezone")
+        return value
+    replacement = current[0]
+    try:
+        cutoff = created(replacement)
+        # A newer upload can belong to a rerun of an older run. Protect both
+        # dimensions; skip ambiguous records instead of guessing.
+        return sorted({a["id"] for a in matching
+                       if type(a["id"]) is int and a["id"] > 0
+                       and type(a["workflow_run"].get("id")) is int
+                       and a["workflow_run"]["id"] < run_id
+                       and created(a) < cutoff})
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return []
 
 
 def request_json(url: str, token: str, method: str = "GET") -> dict:
@@ -81,13 +91,19 @@ def main() -> int:
         return 2
     run_id = int(run)
     try:
-        for name in ARTIFACT_NAMES:
+        for name, result_env in ARTIFACT_JOBS.items():
+            if os.environ.get(result_env) != "success":
+                continue
             artifacts = list_artifacts(repo, token, name)
             old_ids = select_old_artifact_ids(artifacts, name, run_id)
             if not old_ids:
                 print(f"{name}: no verified new artifact or no older main artifact")
                 continue
             for artifact_id in old_ids:
+                # Revalidate the replacement and candidate before every DELETE.
+                fresh = list_artifacts(repo, token, name)
+                if artifact_id not in select_old_artifact_ids(fresh, name, run_id):
+                    continue
                 request_json(
                     f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}",
                     token, method="DELETE"

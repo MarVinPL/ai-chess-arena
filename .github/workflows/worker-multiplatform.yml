@@ -285,6 +285,9 @@ jobs:
       WORKER_ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.WORKER_ANDROID_DEBUG_KEY_PASSWORD }}
 
   prune:
+    concurrency:
+      group: worker-artifact-prune-main
+      cancel-in-progress: false
     needs: [detect, linux, windows, android, android_signed]
     # The elevated token is never exposed to application builds or pull requests.
     if: always() && needs.detect.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -297,4 +300,7 @@ jobs:
       - name: Keep only the newest successful main artifact per built platform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          ANDROID_SIGNED_RESULT: ${{ needs.android_signed.result }}
         run: python scripts/prune_worker_ci_artifacts.py

@@ -1,3 +1,6 @@
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[allow(dead_code)]
+mod credential_journal;
 // Native updater asset metadata gate; installation stays disabled until
 // verified APK bytes, signing certificate, package and coordinator idle checks.
 #[allow(dead_code)]
@@ -8,6 +11,8 @@ mod android_update_download;
 // Never expose this as a claim that a staged APK is ready for installation.
 #[allow(dead_code)]
 mod android_update_identity;
+#[allow(dead_code)]
+mod android_update_install_evidence;
 #[cfg(target_os = "android")]
 mod android_update_package_manager;
 #[cfg(target_os = "android")]
@@ -38,18 +43,25 @@ mod android_llama_runtime;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
+mod credential_vault;
+mod credential_vault_native;
 #[allow(dead_code)]
 mod android_update_install_state;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const TOKEN_SERVICE: &str = "pl.marvin.aichessarena.worker";
-const TOKEN_ACCOUNT: &str = "worker-token";
+
+// Lock order: change gate -> token vault -> journal gate. Never across await.
+static CREDENTIAL_CHANGE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) fn credential_change_gate() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    CREDENTIAL_CHANGE_GATE.lock().map_err(|_| "Blokada poświadczeń niedostępna".into())
+}
 
 // A pending coordinator hold requires the *original* machine token for
 // explicit authenticated release. Never let webview rotation/deletion orphan it.
 fn ensure_no_pending_update() -> Result<(), String> {
+    if android_update_install_journal::load()?.is_some() { return Err("Nierozliczona instalacja".into()); }
     match android_update_recovery::load_pending() {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(
@@ -72,6 +84,15 @@ struct UpdateRecoveryStatus {
 /// Rust. Corrupt/unavailable keyring is displayed as BLOCKED, not empty.
 #[tauri::command]
 fn update_recovery_status() -> UpdateRecoveryStatus {
+    let _guard = match credential_change_gate() {
+        Ok(guard) => guard,
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan aktualizacji niedostępny." },
+    };
+    match android_update_install_journal::load() {
+        Ok(None) => (),
+        Ok(Some(_)) => return UpdateRecoveryStatus { pending: true, blocked: true, message: "Nierozliczona instalacja APK." },
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan instalacji niedostępny lub uszkodzony." },
+    }
     match android_update_recovery::load_pending() {
         Ok(None) => UpdateRecoveryStatus {
             pending: false, blocked: false,
@@ -88,6 +109,27 @@ fn update_recovery_status() -> UpdateRecoveryStatus {
     }
 }
 
+#[tauri::command]
+async fn initialize_update_journals(server: String, worker_id: String) -> Result<&'static str, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (server, worker_id);
+        Err("Inicjalizacja dzienników jest dostępna na Androidzie.".into())
+    }
+    #[cfg(target_os = "android")]
+    {
+        if !credential_journal::needs_initialization()? {
+            return Ok("already_initialized");
+        }
+        if android_local_llama::generation_active() {
+            return Err("Zatrzymaj lokalne obliczenia przed inicjalizacją dzienników.".into());
+        }
+        let baseline = credential_journal::JournalBaseline::inspect()?;
+        android_update_coordinator::reconcile_journal_initialization(&server, &worker_id, &baseline).await?;
+        Ok("initialized")
+    }
+}
+
 // Recovery is read-only: the private hold capability is used inside Rust,
 // never returned to the webview. No reservation is released automatically.
 #[tauri::command]
@@ -95,8 +137,7 @@ async fn inspect_update_hold() -> Result<String, String> {
     if android_update_recovery::load_pending()?.is_none() {
         return Err("Brak oczekującej rezerwacji".into());
     }
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak oryginalnego tokenu Workera".to_string())?;
+    let machine_token = token_entry()?.get_password()?;
     let status = android_update_coordinator::inspect_pending_update(&machine_token).await?;
     Ok(status.to_owned())
 }
@@ -110,8 +151,7 @@ async fn poll_worker_update_pause(server: String, worker_id: String) -> Result<&
     if android_update_recovery::load_pending()?.is_some() {
         return Err("Trwa uzgadnianie poprzedniej aktualizacji".into());
     }
-    let token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_string())?;
+    let token = token_entry()?.get_password()?;
     use android_update_coordinator::StopInstruction;
     match android_update_coordinator::poll_pause_instruction(
         &server, &worker_id, &token,
@@ -151,53 +191,48 @@ fn inspect_android_install_sessions() -> Result<&'static str, String> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn token_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)
-        .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())
-}
-
-#[cfg(target_os = "android")]
-fn token_entry() -> Result<android_worker_token_store::AndroidTokenEntry, String> {
-    // Never use keyring v3 on Android: it silently selects an in-memory
-    // mock credential store, losing the machine token after app restart.
-    Ok(android_worker_token_store::AndroidTokenEntry)
+fn token_entry() -> Result<credential_vault::CredentialVault<credential_vault_native::NativeBackend>, String> {
+    credential_vault_native::native()
 }
 
 #[tauri::command]
-fn store_worker_token(token: String) -> Result<(), String> {
-    ensure_no_pending_update()?;
-    // Never return, log, or serialize the secret back to the frontend.
-    if token.len() < 24 || token.len() > 512 || !token.is_ascii()
-        || !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-        return Err("Nieprawidłowy format tokenu".to_string());
+async fn store_worker_token(token: String, server: String, worker_id: String) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (server, worker_id);
+        let _credential_guard = credential_change_gate()?;
+        token_entry()?.set_password(&token, ensure_no_pending_update)
     }
-    token_entry()?.set_password(&token)
-        .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".to_string())
+    #[cfg(target_os = "android")]
+    {
+        let vault = token_entry()?;
+        vault.authenticate_registration(&token, authenticate_worker(&server, &worker_id, &token)).await?;
+        let _credential_guard = credential_change_gate()?;
+        // This only stores an authenticated credential. Journal gates still
+        // apply and an unknown reservation remains unknown.
+        vault.insert_registration_token(&token, credential_journal::check_registration_storage)
+    }
 }
 
 #[tauri::command]
 fn has_saved_worker_token() -> bool {
-    token_entry().and_then(|entry| entry.get_password()
-        .map_err(|_| "Brak zapisanego tokenu".to_string())).is_ok()
+    token_entry().and_then(|entry| entry.get_password()).is_ok()
+}
+
+// No secret crosses IPC; distinguish missing from inaccessible storage.
+#[tauri::command]
+fn worker_token_state() -> &'static str {
+    match token_entry().and_then(|entry| entry.read_optional()) {
+        Ok(Some(_)) => "saved",
+        Ok(None) => "missing",
+        Err(_) => "unavailable",
+    }
 }
 
 #[tauri::command]
 fn forget_worker_token() -> Result<(), String> {
-    ensure_no_pending_update()?;
-    let entry = token_entry()?;
-    #[cfg(not(target_os = "android"))]
-    {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Nie udało się usunąć tokenu".to_string()),
-        }
-    }
-    #[cfg(target_os = "android")]
-    {
-        entry.delete_credential()
-            .map_err(|_| "Nie udało się usunąć tokenu z Android Keystore".to_string())
-    }
+    let _credential_guard = credential_change_gate()?;
+    token_entry()?.delete_credential(ensure_no_pending_update)
 }
 
 
@@ -289,44 +324,73 @@ async fn inspect_phone_quic_protocol() -> Result<String, String> {
 // HTTPS is mandatory; redirect following is disabled to avoid credential leakage.
 #[tauri::command]
 async fn verify_worker_connection(server: String, worker_id: String) -> Result<bool, String> {
-    if worker_id.len() < 8 || worker_id.len() > 96 ||
-        !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+    let token = token_entry()?.get_password()?;
+    authenticate_worker(&server, &worker_id, &token).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerAuthentication {
+    authenticated: bool,
+    worker_id: String,
+}
+
+impl WorkerAuthentication {
+    fn confirms_identity(&self, worker_id: &str) -> bool {
+        self.authenticated && self.worker_id == worker_id
+    }
+}
+
+async fn authenticate_worker(server: &str, worker_id: &str, token: &str) -> Result<bool, String> {
+    if !(8..=96).contains(&worker_id.len())
+        || !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
         return Err("Nieprawidłowy identyfikator komputera".into());
     }
-    let url = reqwest::Url::parse(&server).map_err(|_| "Nieprawidłowy adres serwera")?;
-    if url.scheme() != "https" || url.host_str().is_none() || url.username() != "" ||
-        url.password().is_some() || url.query().is_some() || url.fragment().is_some() ||
-        url.path() != "/" || url.port().is_some() {
+    let url = reqwest::Url::parse(server).map_err(|_| "Nieprawidłowy adres serwera")?;
+    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty()
+        || url.password().is_some() || url.query().is_some() || url.fragment().is_some()
+        || url.path() != "/" || url.port().is_some()
+    {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12))
         .build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/authenticate")
         .map_err(|_| "Nieprawidłowy adres endpointu")?;
-    let mut response = client.post(endpoint).json(&serde_json::json!({
+    let response = client.post(endpoint).json(&serde_json::json!({
         "worker_id": worker_id, "token": token
     })).send().await.map_err(|_| "Nie udało się połączyć przez HTTPS")?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Ok(false); }
-    if !response.status().is_success() { return Err("Serwer odrzucił żądanie".into()); }
-    // A remote endpoint can lie about Content-Length or use chunked encoding.
-    // Bound actual response bytes before parsing, including on low-memory Android.
-    const MAX_AUTH_RESPONSE_BYTES: usize = 4096;
-    if response.content_length().map(|n| n > MAX_AUTH_RESPONSE_BYTES as u64).unwrap_or(false) {
-        return Err("Zbyt duża odpowiedź serwera".into());
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(false);
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
-        if chunk.len() > MAX_AUTH_RESPONSE_BYTES - bytes.len() {
-            return Err("Zbyt duża odpowiedź serwera".into());
-        }
-        bytes.extend_from_slice(&chunk);
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Serwer odrzucił żądanie".into());
     }
-    let result: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
-    Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
+
+    let result: WorkerAuthentication = bounded_json_response(response, 4096).await?;
+    Ok(result.confirms_identity(worker_id))
+}
+
+#[cfg(test)]
+#[test]
+fn worker_authentication_requires_exact_confirmed_identity() {
+    let id = "worker_12345678";
+    let accepted = r#"{"authenticated":true,"worker_id":"worker_12345678"}"#;
+    let reply: WorkerAuthentication = serde_json::from_str(accepted).unwrap();
+    assert!(reply.confirms_identity(id));
+    assert!(!reply.confirms_identity("worker_87654321"));
+    let rejected: WorkerAuthentication =
+        serde_json::from_str(&accepted.replace("true", "false")).unwrap();
+    assert!(!rejected.confirms_identity(id));
+    for malformed in [
+        r#"{"authenticated":true}"#,
+        r#"{"authenticated":false,"authenticated":true,"worker_id":"worker_12345678"}"#,
+    ] {
+        assert!(serde_json::from_str::<WorkerAuthentication>(malformed).is_err());
+    }
 }
 
 // Read-only, explicit job inspection. This never starts inferencing, downloads
@@ -422,7 +486,7 @@ async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<
         url.fragment().is_some() || url.port().is_some() {
         return Err("Adres Workera musi być HTTPS bez portu, ścieżki i danych".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12)).build()
@@ -466,8 +530,8 @@ async fn preview_worker_job(server: String, worker_id: String) -> Result<Option<
 // Read untrusted HTTPS JSON with a strict memory budget, including chunked
 // responses and inaccurate Content-Length values. Never allow a remote host
 // to allocate unlimited memory on an Android device.
-async fn bounded_json_response(mut response: reqwest::Response, limit: usize)
-    -> Result<serde_json::Value, String> {
+async fn bounded_json_response<T: serde::de::DeserializeOwned>(mut response: reqwest::Response, limit: usize)
+    -> Result<T, String> {
     if response.content_length().map(|n| n > limit as u64).unwrap_or(false) {
         return Err("Zbyt duża odpowiedź HTTPS".into());
     }
@@ -495,7 +559,7 @@ async fn check_update_safety(server: String, worker_id: String) -> Result<String
         url.path() != "/" || url.port().is_some() {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password().map_err(|_| "Brak zapisanego tokenu")?;
+    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12)).build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/update-safety")
@@ -777,8 +841,7 @@ async fn install_downloaded_worker_apk(
         if !android_update_package_manager::can_request_package_installation()? {
             return Err("Zezwól Android Workerowi na instalowanie aplikacji w ustawieniach systemu".into());
         }
-        let machine_token = token_entry()?.get_password()
-            .map_err(|_| "Brak tokenu Workera".to_string())?;
+        let machine_token = token_entry()?.get_password()?;
         // reserve_update journals the random hold before any network request.
         // The coordinator rejects running jobs and blocks further assignments.
         android_update_coordinator::reserve_update(&server, &worker_id, &machine_token).await?;
@@ -809,8 +872,7 @@ async fn poll_my_inference_job(
         || android_update_install_journal::load()?.is_some() {
         return Ok(serde_json::json!({"state": "blocked"}));
     }
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    let machine_token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_my_inference_job(
         &server, &worker_id, &machine_token,
     ).await
@@ -861,8 +923,7 @@ async fn execute_phone_inference_once(
             || android_update_install_journal::load()?.is_some() {
             return Err("Trwa aktualizacja APK — inferencja zablokowana".into());
         }
-        let token = token_entry()?.get_password()
-            .map_err(|_| "Brak oryginalnego tokenu Workera".to_owned())?;
+        let token = token_entry()?.get_password()?;
         let assignment = android_update_coordinator::fetch_my_inference_job(
             &server, &worker_id, &token,
         ).await?;
@@ -917,8 +978,7 @@ async fn execute_phone_inference_once(
 async fn get_my_worker_board(
     server: String, worker_id: String,
 ) -> Result<serde_json::Value, String> {
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    let machine_token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_worker_board_view(
         &server, &worker_id, &machine_token,
     ).await
@@ -946,8 +1006,7 @@ async fn reconcile_idle_phone_after_update(
         if android_local_llama::generation_active() {
             return Err("Telefon nadal wykonuje inferencję".into());
         }
-        let token = token_entry()?.get_password()
-            .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+        let token = token_entry()?.get_password()?;
         let resume = android_update_coordinator::fetch_resume_status(
             &server, &worker_id, &token,
         ).await?;
@@ -984,8 +1043,7 @@ async fn inspect_worker_resume_readiness(
         || android_update_install_journal::load()?.is_some() {
         return Ok("waiting_update_reconciliation");
     }
-    let token = token_entry()?.get_password()
-        .map_err(|_| "Brak tokenu Workera".to_owned())?;
+    let token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_resume_status(&server, &worker_id, &token).await
 }
 
@@ -1048,16 +1106,14 @@ async fn reconcile_installed_worker_update() -> Result<&'static str, String> {
             if !old_app_intact || !status.is_some_and(|code| code > 0) {
                 return Ok("not_confirmed");
             }
-            let machine_token = token_entry()?.get_password()
-                .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+            let machine_token = token_entry()?.get_password()?;
             android_update_coordinator::release_update(
                 &pending.server, &pending.worker_id, &machine_token,
             ).await?;
             android_update_install_journal::clear_confirmed(&journal)?;
             return Ok("installation_cancelled");
         }
-        let machine_token = token_entry()?.get_password()
-            .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+        let machine_token = token_entry()?.get_password()?;
         android_update_coordinator::release_update(
             &pending.server, &pending.worker_id, &machine_token,
         ).await?;
@@ -1263,7 +1319,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_embedded_llama_engine, inspect_phone_quic_protocol, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_embedded_llama_engine, inspect_phone_quic_protocol, inspect_phone_local_model, store_worker_token, has_saved_worker_token, worker_token_state, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, initialize_update_journals, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

@@ -52,6 +52,22 @@ def test_worker_release_metadata_json_is_bounded():
 def test_all_native_coordinator_json_replies_are_bounded():
     coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
     assert not re.search(r"\.json\(\)\.await", coordinator)
-    assert coordinator.count("crate::bounded_json_response(") == 11
-    assert "crate::bounded_json_response(response, 32 * 1024).await" in coordinator
-    assert coordinator.count(", 4096).await") == 10
+    limits = {
+        "request_journal_init": "4096",
+        "complete_journal_init": "4096",
+        "reserve_update": "4096",
+        "inspect_pending_update": "4096",
+        "release_update": "4096",
+        "announce_phone_ready": "4096",
+        "submit_my_inference_move": "4096",
+        "fetch_native_inference_job": "32 * 1024",
+        "fetch_my_approved_gguf": "4096",
+        "fetch_worker_board_view": "4096",
+        "fetch_resume_status": "4096",
+        "poll_pause_instruction": "4096",
+        "report_native_stop": "4096",
+    }
+    assert coordinator.count("crate::bounded_json_response(") == len(limits)
+    for name, limit in limits.items():
+        body = _function_body(coordinator, name)
+        assert re.search(rf"crate::bounded_json_response\((?:response|reply), {re.escape(limit)}\)\.await", body), name

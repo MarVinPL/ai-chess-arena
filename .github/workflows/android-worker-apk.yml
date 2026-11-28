@@ -238,6 +238,7 @@ jobs:
           for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
             grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
           done
+          python3 android/verify_apk_backup.py "$ANDROID_HOME/build-tools/36.0.0/aapt" "$apk"
           signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           test -x "$signer"
           "$signer" verify --verbose "$apk"
