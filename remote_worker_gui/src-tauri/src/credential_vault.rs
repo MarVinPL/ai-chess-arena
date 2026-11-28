@@ -4,7 +4,7 @@ use std::sync::Mutex;
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
 pub(crate) trait Backend {
-    fn read(&self) -> Result<String, String>;
+    fn read(&self) -> Result<Option<String>, String>;
     fn write(&self, value: &str) -> Result<(), String>;
     fn delete(&self) -> Result<(), String>;
 }
@@ -28,12 +28,25 @@ impl<B: Backend> CredentialVault<B> {
             operations: &OPERATIONS,
         }
     }
-    pub(crate) fn get_password(&self) -> Result<String, String> {
+    pub(crate) fn read_optional(&self) -> Result<Option<String>, String> {
         let _guard = self
             .operations
             .lock()
             .map_err(|_| "Magazyn poświadczeń niedostępny")?;
-        self.backend.read()
+        self.checked_read()
+    }
+
+    fn checked_read(&self) -> Result<Option<String>, String> {
+        let value = self.backend.read()?;
+        if value.as_ref().is_some_and(|v| !valid(v)) {
+            return Err("Nieprawidłowe dane magazynu poświadczeń".into());
+        }
+        Ok(value)
+    }
+
+    pub(crate) fn get_password(&self) -> Result<String, String> {
+        self.read_optional()?
+            .ok_or_else(|| "Brak zapisanego tokenu".into())
     }
 
     pub(crate) fn set_password(
@@ -49,6 +62,7 @@ impl<B: Backend> CredentialVault<B> {
         if !valid(value) {
             return Err("Nieprawidłowy format tokenu".into());
         }
+        self.checked_read()?;
         self.backend
             .write(value)
             .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".into())
@@ -63,6 +77,7 @@ impl<B: Backend> CredentialVault<B> {
             .lock()
             .map_err(|_| "Magazyn poświadczeń niedostępny")?;
         check()?;
+        self.checked_read()?;
         self.backend.delete()
     }
 }
@@ -73,8 +88,8 @@ mod tests {
     #[derive(Default)]
     struct Fake(Mutex<Option<String>>);
     impl Backend for Fake {
-        fn read(&self) -> Result<String, String> {
-            self.0.lock().unwrap().clone().ok_or("missing".into())
+        fn read(&self) -> Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().clone())
         }
         fn write(&self, value: &str) -> Result<(), String> {
             *self.0.lock().unwrap() = Some(value.into());
@@ -87,6 +102,32 @@ mod tests {
     }
     fn vault() -> CredentialVault<Fake> {
         CredentialVault::new(Fake::default())
+    }
+    #[test]
+    fn absence_corruption_and_backend_failure_are_distinct() {
+        let v = vault();
+        assert_eq!(v.read_optional(), Ok(None));
+        *v.backend.0.lock().unwrap() = Some("invalid".into());
+        assert!(v.read_optional().is_err());
+        assert!(v.set_password(&"a".repeat(32), || Ok(())).is_err());
+        assert!(v.delete_credential(|| Ok(())).is_err());
+        assert_eq!(v.backend.0.lock().unwrap().as_deref(), Some("invalid"));
+        struct Broken;
+        impl Backend for Broken {
+            fn read(&self) -> Result<Option<String>, String> {
+                Err("unavailable".into())
+            }
+            fn write(&self, _: &str) -> Result<(), String> {
+                Err("commit failed".into())
+            }
+            fn delete(&self) -> Result<(), String> {
+                Err("commit failed".into())
+            }
+        }
+        let broken = CredentialVault::new(Broken);
+        assert!(broken.read_optional().is_err());
+        assert!(broken.set_password(&"a".repeat(32), || Ok(())).is_err());
+        assert!(broken.delete_credential(|| Ok(())).is_err());
     }
     #[test]
     fn lifecycle_and_rotation() {

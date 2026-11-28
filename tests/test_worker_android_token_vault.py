@@ -31,7 +31,7 @@ def test_android_never_uses_mock_keyring_v3_and_keeps_token_out_of_webview():
     assert "WorkerCredentialVault" in NATIVE
     assert "getClassLoader" in NATIVE and "loadClass" in NATIVE
     assert "env.call_static_method(" in NATIVE
-    assert "get_password" in NATIVE and "set_password" in NATIVE
+    assert "read_optional" in NATIVE and "set_password" in NATIVE
     assert "delete_credential" in NATIVE
     assert "localStorage.setItem(" not in KOTLIN
 
@@ -97,3 +97,32 @@ def test_vault_serializes_and_guards_mutations():
     assert "tauri::command" not in VAULT
     assert "tauri::command" not in ADAPTER
     assert 'keyring::Entry::new("pl.marvin.aichessarena.worker", "worker-token")' in ADAPTER
+
+def test_missing_key_and_corrupt_ciphertext_are_not_reset():
+    assert 'key(false)' in KOTLIN
+    assert 'key(!prefs.contains(PREF_TOKEN))' in KOTLIN
+    assert 'if (prefs.contains(PREF_TOKEN)) check(load(context) != null)' in KOTLIN
+    assert 'check(allowCreate)' in KOTLIN
+    clear = KOTLIN.split('fun clear(context: Context)', 1)[1]
+    assert clear.index('load(context)') < clear.index('.edit().remove(PREF_TOKEN)')
+    assert 'exception_clear()' in NATIVE
+    assert 'Ok(None)' in NATIVE
+    assert 'Err(keyring::Error::NoEntry) => Ok(None)' in ADAPTER
+
+def test_token_state_ipc_distinguishes_absence_and_failure():
+    state = LIB.split('fn worker_token_state()', 1)[1].split('#[tauri::command]', 1)[0]
+    assert 'Ok(Some(_)) => "saved"' in state
+    assert 'Ok(None) => "missing"' in state
+    assert 'Err(_) => "unavailable"' in state
+    html = (GUI / 'public/index.html').read_text()
+    assert "invoke('worker_token_state')" in html
+    assert "if(state!=='saved')" in html
+
+
+def test_failed_commit_blocks_access_and_stale_status_is_ignored():
+    assert 'check(!uncertain)' in KOTLIN
+    for method in ('save', 'clear'):
+        section = KOTLIN.split('fun ' + method + '(', 1)[1].split('@JvmStatic', 1)[0]
+        assert section.index('uncertain = true') < section.index('.commit()') < section.index('uncertain = false')
+    html = (GUI / 'public/index.html').read_text()
+    assert 'if(revision!==tokenStateRevision)return;' in html
