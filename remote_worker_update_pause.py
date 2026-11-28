@@ -173,32 +173,55 @@ class WorkerUpdatePause:
             raise ValueError("Invalid STOP assignment lease")
         return hashlib.sha256(token.encode("ascii")).hexdigest()
 
-    def record_native_stop(self, worker_id, job_id, request_id, lease_token):
-        """Record the executor's report. Only the coordinator may verify a checkpoint."""
-        self.jobs._id(worker_id)
-        self.jobs._id(job_id)
-        if not isinstance(request_id, str) or len(request_id) != 32:
+    @staticmethod
+    def _validate_native_stop(db, worker_id, job_id, request_id, lease_token, now):
+        """Validate one transaction snapshot; never write or acknowledge STOP."""
+        DurableWorkerJobs._id(worker_id)
+        DurableWorkerJobs._id(job_id)
+        if not isinstance(request_id, str) or len(request_id) != 32 or any(ch not in "0123456789abcdef" for ch in request_id):
             raise ValueError("Invalid STOP request")
         if not isinstance(lease_token, str) or len(lease_token) != 64 or any(
             ch not in "0123456789abcdef" for ch in lease_token
         ):
             raise ValueError("Invalid execution lease")
         digest = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
+        DurableWorkerJobs._reject_update_hold(db, worker_id)
+        pending = db.execute(
+            "SELECT p.stop_lease_sha256 FROM worker_update_pause_requests p JOIN worker_job_safety j "
+            "ON j.worker_id=p.worker_id AND j.job_id=p.job_id "
+            "WHERE p.worker_id=? AND p.job_id=? AND p.request_id=? "
+            "AND p.phase='requested' AND j.state='running' AND j.deadline>?",
+            (worker_id, job_id, request_id, now),
+        ).fetchone()
+        expected = WorkerUpdatePause._stop_lease_digest(db, worker_id, job_id)
+        if (not pending or pending[0] != expected or expected is None
+                or not secrets.compare_digest(expected, digest)):
+            raise ValueError("Stale native STOP report")
+        return digest
+
+    @staticmethod
+    def validate_native_stop(path, worker_id, job_id, request_id, lease_token, token, *, clock=time.time, admit=lambda: None):
+        """Authenticate and validate in the same read-only SQLite snapshot."""
+        from contextlib import closing
+        from pathlib import Path
+        from remote_worker_tokens import WorkerTokenStore
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            now = clock()
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                raise PermissionError("Worker authentication failed")
+            admit()
+            WorkerUpdatePause._validate_native_stop(db, worker_id, job_id, request_id, lease_token, now)
+            return {"state": "stop_recovery_validated", "job_id": job_id,
+                    "request_id": request_id, "install_allowed": False, "dispatch_allowed": False}
+
+    def record_native_stop(self, worker_id, job_id, request_id, lease_token):
+        """Record the executor's report. Only the coordinator may verify a checkpoint."""
         with self.jobs._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            self.jobs._reject_update_hold(db, worker_id)
             now = self.clock()
-            pending = db.execute(
-                "SELECT p.stop_lease_sha256 FROM worker_update_pause_requests p JOIN worker_job_safety j "
-                "ON j.worker_id=p.worker_id AND j.job_id=p.job_id "
-                "WHERE p.worker_id=? AND p.job_id=? AND p.request_id=? "
-                "AND p.phase='requested' AND j.state='running' AND j.deadline>?",
-                (worker_id, job_id, request_id, now),
-            ).fetchone()
-            expected = self._stop_lease_digest(db, worker_id, job_id)
-            if (not pending or pending[0] != expected or expected is None
-                    or not secrets.compare_digest(expected, digest)):
-                raise ValueError("Stale native STOP report")
+            digest = self._validate_native_stop(db, worker_id, job_id, request_id, lease_token, now)
             db.execute(
                 "INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?) "
                 "ON CONFLICT(worker_id) DO UPDATE SET job_id=excluded.job_id, "

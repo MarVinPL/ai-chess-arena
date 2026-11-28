@@ -119,8 +119,9 @@ class DurableWorkerJobs:
         ).fetchone():
             raise ValueError('Worker pause for update pending; assignment blocked')
 
-    def _reject_update_hold(self, db, worker_id):
-        if self._journal_init_fenced(db, worker_id):
+    @staticmethod
+    def _reject_update_hold(db, worker_id):
+        if DurableWorkerJobs._journal_init_fenced(db, worker_id):
             raise ValueError('Worker journal initialization fenced')
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
         # blocking assignments until explicit coordinator reconciliation.
