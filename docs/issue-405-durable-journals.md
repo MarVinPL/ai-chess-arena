@@ -26,3 +26,10 @@ A legacy mock store cannot establish absence of an outstanding remote hold.
 
 Verification: standalone Rust synthetic failure/restart tests and Python source-contract
 tests. ARM64 build and real device persistence still require verification.
+
+Review hardening: sync the staging directory before rename, sync the root even when the
+slot directory already exists, and fence further journal operations in the current
+process on failed mutation (including ambiguous final directory sync). The recovery
+status checks both journals under the change gate; Android installation journaling
+requires an existing hold. A crash between confirmed remote release and local install
+cleanup remains blocked for #406 reconciliation, not an automatic retry or reset.

@@ -62,6 +62,15 @@ struct UpdateRecoveryStatus {
 /// Rust. Corrupt/unavailable keyring is displayed as BLOCKED, not empty.
 #[tauri::command]
 fn update_recovery_status() -> UpdateRecoveryStatus {
+    let _guard = match credential_change_gate() {
+        Ok(guard) => guard,
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan aktualizacji niedostępny." },
+    };
+    match android_update_install_journal::load() {
+        Ok(None) => (),
+        Ok(Some(_)) => return UpdateRecoveryStatus { pending: true, blocked: true, message: "Nierozliczona instalacja APK." },
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan instalacji niedostępny lub uszkodzony." },
+    }
     match android_update_recovery::load_pending() {
         Ok(None) => UpdateRecoveryStatus {
             pending: false, blocked: false,

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 #[cfg(target_os = "android")]
-static GATE: Mutex<()> = Mutex::new(());
+static GATE: Mutex<bool> = Mutex::new(false);
 const ERROR: &str = "Dziennik aktualizacji wymaga uzgodnienia";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -70,6 +70,9 @@ fn set_state(dir: &Path, next: State) -> Result<(), String> {
     })
     .map_err(|_| ERROR)?;
     f.sync_all().map_err(|_| ERROR)?;
+    File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| ERROR)?;
     fs::rename(stage, dir.join("state.v1")).map_err(|_| ERROR)?;
     File::open(dir)
         .and_then(|f| f.sync_all())
@@ -178,25 +181,49 @@ mod android {
         let root = crate::android_worker_token_store::journal_root()?;
         let path = root.join(name);
         match fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => File::open(&root)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| ERROR)?,
+            Ok(()) => (),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(_) => return Err(ERROR.into()),
         }
+        File::open(&root)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| ERROR)?;
         Ok(path)
     }
     pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
-        let _guard = GATE.lock().map_err(|_| ERROR)?;
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
         checked_read(&dir(slot)?, &Native(slot))
     }
     pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
-        let _guard = GATE.lock().map_err(|_| ERROR)?;
-        checked_insert(&dir(slot)?, &Native(slot), raw)
+        let mut guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
+        let path = dir(slot)?;
+        // A failed final directory sync can leave a visible but not durable marker.
+        // Fence the process on any failed mutation until restart/reconciliation.
+        let result = checked_insert(&path, &Native(slot), raw);
+        if result.is_err() {
+            *guard = true;
+        }
+        result
     }
     pub(crate) fn delete_expected(slot: Slot, raw: &str) -> Result<(), String> {
-        let _guard = GATE.lock().map_err(|_| ERROR)?;
-        checked_delete(&dir(slot)?, &Native(slot), raw)
+        let mut guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
+        let path = dir(slot)?;
+        // A failed final directory sync can leave a visible but not durable marker.
+        // Fence the process on any failed mutation until restart/reconciliation.
+        let result = checked_delete(&path, &Native(slot), raw);
+        if result.is_err() {
+            *guard = true;
+        }
+        result
     }
 }
 #[cfg(target_os = "android")]

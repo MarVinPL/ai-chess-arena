@@ -56,6 +56,10 @@ pub(crate) fn load() -> Result<Option<PendingInstall>, String> {
 /// previous installation; both the journal and hold survive process death.
 pub(crate) fn save(p: &PendingInstall) -> Result<(), String> {
     let _credential_guard = crate::credential_change_gate()?;
+    #[cfg(target_os = "android")]
+    if crate::android_update_recovery::load_pending()?.is_none() {
+        return Err("Brak rezerwacji dla instalacji".into());
+    }
     if !valid(p) {
         return Err("Nieprawidłowa instalacja".into());
     }

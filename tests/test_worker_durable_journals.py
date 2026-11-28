@@ -32,3 +32,15 @@ def test_change_gate_fences_reservation_and_token_mutations():
     assert "f.sync_all()" in journal
     assert "credential_migration" not in journal
     assert "initialize_empty" not in lib
+
+def test_failed_marker_commit_fences_process_and_install_status():
+    journal = (SRC / "credential_journal.rs").read_text()
+    assert "Mutex<bool>" in journal
+    assert journal.count("*guard = true") == 2
+    stage = journal.split("fn set_state(", 1)[1].split("trait Store", 1)[0]
+    assert stage.index("f.sync_all()") < stage.index("File::open(dir)") < stage.index("fs::rename")
+    status = (SRC / "lib.rs").read_text().split("fn update_recovery_status()", 1)[1].split("#[tauri::command]", 1)[0]
+    assert status.index("credential_change_gate()") < status.index("android_update_install_journal::load()")
+    assert "blocked: true" in status
+    save = (SRC / "android_update_install_journal.rs").read_text().split("pub(crate) fn save(", 1)[1].split("pub(crate) fn clear_confirmed", 1)[0]
+    assert "android_update_recovery::load_pending()?.is_none()" in save
