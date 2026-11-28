@@ -311,6 +311,50 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
+    def journal_evidence(self, worker_id, token, nonce, *, admit):
+        """Read-only advisory evidence, never authority to initialize or install."""
+        from remote_worker_tokens import WorkerTokenStore
+        tokens = WorkerTokenStore(self.path, clock=self.clock)
+        with self._db() as db:
+            db.execute('BEGIN')
+            if not tokens.authenticate_in_snapshot(db, worker_id, token):
+                return None
+            admit(worker_id)
+            row = db.execute(
+                'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
+                (worker_id,)).fetchone()
+            # Missing schema is uncertainty, not evidence of an empty registry.
+            tables = ('worker_update_holds', 'worker_update_pause_requests',
+                      'worker_update_resume', 'worker_inference_assignments',
+                      'worker_idle_update_recovery')
+            flags = {}
+            for table in tables:
+                exists = db.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+                    (table,)).fetchone()
+                flags[table] = (bool(db.execute(
+                    f'SELECT 1 FROM {table} WHERE worker_id=?', (worker_id,)).fetchone())
+                    if exists else None)
+            now = self.clock()
+            idle = bool(row and row[0] == 'idle_confirmed' and row[1] is None
+                        and row[2] is None and row[3] is not None
+                        and 0 <= now - row[3] <= 30)
+            clear = idle and all(value is False for value in flags.values())
+            return {
+                'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+                'worker_id': worker_id, 'nonce': nonce,
+                'checked_at_unix_ms': int(now * 1000),
+                'state': 'idle_confirmed' if clear else 'unknown',
+                'active_tasks': 0 if clear else None,
+                'hold_present': flags['worker_update_holds'],
+                'pause_present': flags['worker_update_pause_requests'],
+                'checkpoint_present': flags['worker_update_resume'],
+                'assignment_present': flags['worker_inference_assignments'],
+                'release_recovery_present': flags['worker_idle_update_recovery'],
+                'snapshot_only': True, 'initialization_allowed': False,
+                'install_allowed': False,
+            }
+
     def recover_after_restart(self):
         """Invalidate every persisted idle/running claim on coordinator boot.
 

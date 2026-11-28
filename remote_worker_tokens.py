@@ -59,13 +59,17 @@ class WorkerTokenStore:
         return token
 
     def authenticate(self, worker_id: str, token: str) -> bool:
+        with self._connect() as db:
+            return self.authenticate_in_snapshot(db, worker_id, token)
+
+    def authenticate_in_snapshot(self, db, worker_id: str, token: str) -> bool:
+        """Authenticate against the caller's SQLite transaction."""
         if not isinstance(worker_id, str) or not _WORKER.fullmatch(worker_id):
             return False
         if not isinstance(token, str) or not 24 <= len(token) <= 512 or not token.isascii():
             return False
-        with self._connect() as db:
-            row = db.execute('SELECT token_digest, expires_at, revoked_at FROM worker_tokens WHERE worker_id=?',
-                             (worker_id,)).fetchone()
+        row = db.execute('SELECT token_digest, expires_at, revoked_at FROM worker_tokens WHERE worker_id=?',
+                         (worker_id,)).fetchone()
         return bool(row and row[2] is None and row[1] > self.clock()
                     and hmac.compare_digest(row[0], self._digest(token)))
 
