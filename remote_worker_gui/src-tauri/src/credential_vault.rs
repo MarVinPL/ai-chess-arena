@@ -303,6 +303,7 @@ mod tests {
 pub(crate) enum Slot {
     PendingHold,
     PendingInstall,
+    NativeStop,
 }
 
 #[cfg(target_os = "android")]
@@ -311,6 +312,7 @@ impl Slot {
         match self {
             Self::PendingHold => "pending-hold-v1",
             Self::PendingInstall => "pending-install-v1",
+            Self::NativeStop => "native-stop-v1",
         }
     }
 }
@@ -320,12 +322,22 @@ pub(crate) mod journals {
     use super::Slot;
     use crate::android_worker_token_store as native;
     pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
+        if matches!(slot, Slot::NativeStop) { return Err("Niedozwolony slot".into()); }
         native::journal_read(slot.account())
     }
     pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err("Niedozwolony slot".into()); }
         native::journal_mutate("journalInsert", slot.account(), raw)
     }
     pub(crate) fn delete_expected(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err("Niedozwolony slot".into()); }
         native::journal_mutate("journalDelete", slot.account(), raw)
     }
+    pub(crate) fn stop_read() -> Result<Option<String>, String> {
+        native::journal_read("native-stop-v1")
+    }
+    pub(crate) fn stop_insert(proof: &crate::android_native_stop_outbox::JoinedStop) -> Result<(), String> {
+        native::stop_insert(proof)
+    }
+
 }

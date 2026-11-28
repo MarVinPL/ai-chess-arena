@@ -66,8 +66,18 @@ def test_all_native_coordinator_json_replies_are_bounded():
         "fetch_resume_status": "4096",
         "poll_pause_instruction": "4096",
         "report_native_stop": "4096",
+        "validate_pending_stop_at": "4096",
     }
     assert coordinator.count("crate::bounded_json_response(") == len(limits)
     for name, limit in limits.items():
         body = _function_body(coordinator, name)
         assert re.search(rf"crate::bounded_json_response\((?:response|reply), {re.escape(limit)}\)\.await", body), name
+
+def test_native_stop_recovery_reply_is_bounded():
+    coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
+    body = _function_body(coordinator, "validate_pending_stop")
+    assert 'coordinator_endpoint(base, "native-stop-recovery")' in body
+    transport = _function_body(coordinator, "validate_pending_stop_at")
+    assert "validate_pending_stop_at(" in body
+    assert "crate::bounded_json_response(response, 4096).await" in transport
+    assert ".json().await" not in transport

@@ -125,7 +125,8 @@ class DurableWorkerJobs:
         ).fetchone():
             raise ValueError('Worker pause for update pending; assignment blocked')
 
-    def _reject_model_maintenance_hold(self, db, worker_id):
+    @staticmethod
+    def _reject_model_maintenance_hold(db, worker_id):
         # Expiry alone NEVER releases a model-maintenance reservation.
         if db.execute(
             'SELECT 1 FROM worker_model_maintenance_holds WHERE worker_id=?',
@@ -133,8 +134,9 @@ class DurableWorkerJobs:
         ).fetchone():
             raise ValueError('Worker model maintenance requires reconciliation')
 
-    def _reject_update_hold(self, db, worker_id):
-        if self._journal_init_fenced(db, worker_id):
+    @staticmethod
+    def _reject_update_hold(db, worker_id):
+        if DurableWorkerJobs._journal_init_fenced(db, worker_id):
             raise ValueError('Worker journal initialization fenced')
         # HOLD IS DURABLE AND FAIL-CLOSED: even an expired hold continues
         # blocking assignments until explicit coordinator reconciliation.
@@ -142,7 +144,7 @@ class DurableWorkerJobs:
         if db.execute('SELECT 1 FROM worker_update_holds WHERE worker_id=?',
                       (worker_id,)).fetchone():
             raise ValueError('Worker reserved for update; assignment blocked')
-        self._reject_model_maintenance_hold(db, worker_id)
+        DurableWorkerJobs._reject_model_maintenance_hold(db, worker_id)
 
     def reserve_model_maintenance(self, worker_id, *, ttl_seconds=300):
         """Coordinator-only, atomically fence out new work for cache inspection.

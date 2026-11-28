@@ -125,7 +125,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report" | "journal-init-acquire" | "journal-init-complete") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report" | "native-stop-recovery" | "journal-init-acquire" | "journal-init-complete") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -139,6 +139,72 @@ fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String
         .map_err(|_| "Nieprawidłowy endpoint koordynatora".into())
 }
 
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub(crate) fn stop_recovery_origin(base: &str) -> Result<String, String> {
+    Ok(coordinator_endpoint(base, "native-stop-recovery")?.origin().ascii_serialization())
+}
+
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StopRecoveryReply {
+    authenticated: bool,
+    source: String,
+    worker_id: String,
+    nonce: String,
+    job_id: String,
+    request_id: String,
+    state: String,
+    install_allowed: bool,
+    dispatch_allowed: bool,
+}
+#[cfg(any(target_os = "android", all(test, unix)))]
+impl StopRecoveryReply {
+    fn matches(&self, worker: &str, nonce: &str, job: &str, request: &str) -> bool {
+        self.authenticated && self.source == "coordinator" && self.worker_id == worker
+            && self.nonce == nonce && self.job_id == job && self.request_id == request
+            && self.state == "stop_recovery_validated" && !self.install_allowed && !self.dispatch_allowed
+    }
+}
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub(crate) async fn validate_pending_stop(
+    base: &str, worker: &str, token: &str, report: &crate::android_native_stop_outbox::StopReport,
+) -> Result<(), String> {
+    let (job, request, lease) = report.recovery_identity(base, worker)
+        .map_err(|_| "Niezgodna tożsamość raportu STOP")?;
+    let nonce = random_nonce()?;
+    let endpoint = coordinator_endpoint(base, "native-stop-recovery")?;
+    validate_pending_stop_at(endpoint, worker, token, job, request, lease, &nonce, update_http_client()?).await
+}
+
+#[cfg(any(target_os = "android", all(test, unix)))]
+async fn validate_pending_stop_at(
+    endpoint: reqwest::Url, worker: &str, token: &str, job: &str, request: &str,
+    lease: &str, nonce: &str, client: reqwest::Client,
+) -> Result<(), String> {
+    let response = client.post(endpoint)
+        .json(&serde_json::json!({"worker_id":worker,"token":token,"nonce":nonce,
+            "job_id":job,"request_id":request,"lease_token":lease}))
+        .send().await.map_err(|_| "Koordynator STOP niedostępny")?;
+    if response.status() != reqwest::StatusCode::OK { return Err("Koordynator odrzucił recovery STOP".into()); }
+    let reply: StopRecoveryReply = crate::bounded_json_response(response, 4096).await
+        .map_err(|_| "Nieprawidłowa odpowiedź recovery STOP")?;
+    if !reply.matches(worker, nonce, job, request) { return Err("Niezgodna odpowiedź recovery STOP".into()); }
+    Ok(())
+}
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub(crate) async fn pending_stop_dispatch_gate<F: std::future::Future<Output = Result<(), String>>>(
+    report: Option<crate::android_native_stop_outbox::StopReport>,
+    validate: impl FnOnce(crate::android_native_stop_outbox::StopReport) -> F,
+) -> Result<(), String> {
+    match report {
+        None => Ok(()),
+        Some(report) => {
+            validate(report).await?;
+            Err("Raport STOP oczekuje na dostarczenie i uzgodnienie".into())
+        }
+    }
+}
 #[allow(dead_code)]
 fn valid_worker_id(worker_id: &str) -> bool {
     (8..=96).contains(&worker_id.len()) && worker_id.bytes().all(|c|
@@ -1249,4 +1315,58 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
     }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn stop_recovery_reply_is_strictly_bound() {
+    let v = serde_json::json!({"authenticated":true,"source":"coordinator","worker_id":"worker_1234",
+        "nonce":"nonce","job_id":"job_12345678","request_id":"request",
+        "state":"stop_recovery_validated","install_allowed":false,"dispatch_allowed":false});
+    let reply: StopRecoveryReply = serde_json::from_value(v.clone()).unwrap();
+    assert!(reply.matches("worker_1234","nonce","job_12345678","request"));
+    for (field, wrong) in [
+        ("authenticated", serde_json::json!(false)), ("source", serde_json::json!("other")),
+        ("worker_id", serde_json::json!("other")), ("nonce", serde_json::json!("other")),
+        ("job_id", serde_json::json!("other")), ("request_id", serde_json::json!("other")),
+        ("state", serde_json::json!("other")), ("install_allowed", serde_json::json!(true)),
+        ("dispatch_allowed", serde_json::json!(true)),
+    ] {
+        let mut bad = v.clone();
+        bad[field] = wrong;
+        let reply: StopRecoveryReply = serde_json::from_value(bad).unwrap();
+        assert!(!reply.matches("worker_1234","nonce","job_12345678","request"));
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) async fn test_unavailable_stop_transport(
+    report: crate::android_native_stop_outbox::StopReport,
+) -> Result<(), String> {
+    let (job, request, lease) = report.recovery_identity("https://127.0.0.1", "worker_1234")
+        .map_err(|_| "Unexpected test report identity")?;
+    // Reserve a loopback port and drop the connection immediately: deterministic
+    // real TLS transport failure, no DNS, external network or production token.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let peer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => { drop(stream); return true; }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(5)),
+                _ => return false,
+            }
+        }
+    });
+    let endpoint = reqwest::Url::parse(&format!("https://{address}/api/remote-workers/native-stop-recovery")).unwrap();
+    let client = reqwest::Client::builder().no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(4)).build().unwrap();
+    let result = validate_pending_stop_at(endpoint, "worker_1234", "synthetic-token",
+        job, request, lease, &random_nonce().unwrap(), client).await;
+    assert!(peer.join().unwrap(), "test must reach the loopback transport");
+    result
 }

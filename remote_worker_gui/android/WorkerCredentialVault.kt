@@ -122,7 +122,7 @@ object WorkerCredentialVault {
 
     // Separate journal namespace and AES key per slot; never reuse token storage.
     private fun journalSlot(slot: String): String {
-        require(slot == "pending-hold-v1" || slot == "pending-install-v1")
+        require(slot == "pending-hold-v1" || slot == "pending-install-v1" || slot == "native-stop-v1")
         return slot
     }
 
@@ -188,6 +188,7 @@ object WorkerCredentialVault {
     @JvmStatic
     @Synchronized
     fun journalDelete(context: Context, slot: String, expected: String) {
+        require(slot != "native-stop-v1")
         val name = journalSlot(slot)
         check(journalLoad(context, name) == expected)
         uncertain = true

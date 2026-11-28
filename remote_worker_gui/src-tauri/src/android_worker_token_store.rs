@@ -161,6 +161,15 @@ pub(crate) fn journal_read(slot: &str) -> Result<Option<String>, String> {
 }
 
 pub(crate) fn journal_mutate(method: &str, slot: &str, raw: &str) -> Result<(), String> {
+    if slot == "native-stop-v1" { return Err("Niedozwolony slot".into()); }
+    journal_mutate_inner(method, slot, raw)
+}
+pub(crate) fn stop_insert(proof: &crate::android_native_stop_outbox::JoinedStop) -> Result<(), String> {
+    let bytes = proof.encoded();
+    let raw = std::str::from_utf8(&bytes).map_err(|_| "Nieprawidłowy raport STOP")?;
+    journal_mutate_inner("journalInsert", "native-stop-v1", raw)
+}
+fn journal_mutate_inner(method: &str, slot: &str, raw: &str) -> Result<(), String> {
     with_vault(|env, class, context| {
         let name = env.new_string(slot).map_err(java_failure)?;
         let value = env.new_string(raw).map_err(java_failure)?;
