@@ -68,7 +68,7 @@ const source = [
 ].join('\n');
 function setup() {
  const elements = new Map(), pending=[], calls=[], boards=[];
- const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,events:{},addEventListener(name,fn){this.events[name]=fn;}});return elements.get(id);};
+ const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,dataset:{},events:{},addEventListener(name,fn){this.events[name]=fn;}});return elements.get(id);};
  get('server').value='https://old.example';get('workerId').value='android_old_01';
  const context=vm.createContext({document:{getElementById:get,hidden:false},window:{__TAURI__:{core:{invoke:(name,args)=>{calls.push({name,args});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}}},renderWorkerArenaBoard:view=>boards.push(view)});
  vm.runInContext(source,context);
