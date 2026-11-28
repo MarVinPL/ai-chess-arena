@@ -31,6 +31,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 object WorkerQuicTransport {
     private const val MAX_BYTES = 16L * 1024 * 1024 * 1024
     private val busy = AtomicBoolean(false)
+    // Registered by Rust before transfer; no capability is exposed to WebView.
+    @JvmStatic
+    private external fun nativePreparationAllowed(): Boolean
+
+    private fun requirePreparation() {
+        check(nativePreparationAllowed()) { "GGUF preparation lease revoked" }
+    }
+
     private val hex = Regex("^[0-9a-f]{64}$")
     private val pinned = Regex(
         "^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/resolve/[0-9a-fA-F]{40}/[A-Za-z0-9_.-]+\\.gguf$"
@@ -139,6 +147,7 @@ object WorkerQuicTransport {
         require(hex.matches(sha256))
         require(expectedBytes in 4..MAX_BYTES && reserveBytes >= 0)
         approvedUri(sourceUrl)
+        requirePreparation()
         check(busy.compareAndSet(false, true)) { "GGUF transfer already active" }
         var partial: File? = null
         var request: UrlRequest? = null
@@ -179,6 +188,7 @@ object WorkerQuicTransport {
                 ) {
                     try {
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         check(redirects++ < 3) { "Too many redirects" }
                         canonicalUri(newLocationUrl)
                         request.followRedirect()
@@ -191,6 +201,7 @@ object WorkerQuicTransport {
                 override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
                     try {
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         check(info.httpStatusCode == 200) { "Unexpected GGUF status" }
                         val reportedLength = info.headers.asMap.entries
                             .firstOrNull { it.key.equals("content-length", ignoreCase = true) }
@@ -213,6 +224,7 @@ object WorkerQuicTransport {
                 ) {
                     try {
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         byteBuffer.flip()
                         val count = byteBuffer.remaining()
                         received = Math.addExact(received, count.toLong())
@@ -234,6 +246,7 @@ object WorkerQuicTransport {
                             }
                         }
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         stream.write(bytes)
                         sha.update(bytes)
                         byteBuffer.clear()
@@ -247,6 +260,7 @@ object WorkerQuicTransport {
                 override fun onSucceeded(request: UrlRequest, info: UrlResponseInfo) {
                     try {
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         stream.fd.sync()
                         check(headerBytes == header.size &&
                             header.contentEquals(byteArrayOf(71, 71, 85, 70))) {
@@ -258,6 +272,7 @@ object WorkerQuicTransport {
                         check(root.usableSpace >= reserveBytes) { "insufficient_storage" }
                         check(!java.nio.file.Files.exists(complete.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) { "GGUF target already exists" }
                         check(!aborted.get()) { "GGUF transfer aborted" }
+                        requirePreparation()
                         check(protocol in setOf("h3", "h2", "http/1.1")) { "Unknown transport" }
                     } catch (e: Exception) {
                         error = "GGUF integrity or publishing failed"
@@ -277,16 +292,24 @@ object WorkerQuicTransport {
             try {
                 request = engine.newUrlRequestBuilder(sourceUrl, executor, callback).build()
                 request.start()
-                check(done.await(2, TimeUnit.HOURS)) { "GGUF transfer timed out" }
+                val deadline = System.nanoTime() + TimeUnit.HOURS.toNanos(2)
+                while (!done.await(1, TimeUnit.SECONDS)) {
+                    requirePreparation()
+                    check(System.nanoTime() < deadline) { "GGUF transfer timed out" }
+                }
             } finally {
                 // Abort publication before asynchronous cancellation returns.
                 aborted.set(true)
                 request?.cancel()
+                executor.shutdown()
+                // If a callback is still running, retain the busy fence until it exits.
+                while (!executor.awaitTermination(1, TimeUnit.SECONDS)) { }
                 stream.close()
             }
             check(error == null) { error ?: "GGUF transfer failed" }
             check(root.usableSpace >= reserveBytes) { "insufficient_storage" }
             check(!java.nio.file.Files.exists(complete.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            requirePreparation()
             java.nio.file.Files.move(pending.toPath(), complete.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
             return protocol
         } finally {

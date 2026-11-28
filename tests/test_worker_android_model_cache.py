@@ -132,8 +132,20 @@ def test_quic_publication_follows_successful_callback_and_reserve_check():
     assert "check(actual == sha256)" in callback
     assert "stream.fd.sync()" in callback
     assert "Files.move" not in callback
-    assert transfer.index("done.await(2, TimeUnit.HOURS)") < transfer.index("Files.move")
+    assert transfer.index("done.await(1, TimeUnit.SECONDS)") < transfer.index("Files.move")
     assert transfer.index("check(error == null)") < transfer.index("Files.move")
     assert "expectedBytes - received + count.toLong()" in transfer
     assert "StandardCopyOption.ATOMIC_MOVE" in transfer
     assert "LinkOption.NOFOLLOW_LINKS" in transfer
+
+def test_http3_requires_native_lease_throughout_transfer():
+    bridge = (BASE / "remote_worker_gui/android/WorkerQuicTransport.kt").read_text()
+    rust = (BASE / "remote_worker_gui/src-tauri/src/android_model_quic.rs").read_text()
+    transfer = bridge.split("fun downloadApproved(", 1)[1]
+    assert transfer.count("requirePreparation()") >= 6
+    assert "private external fun nativePreparationAllowed()" in bridge
+    assert "register_native_methods" in rust
+    assert 'let _gate = crate::android_model_runtime_guard::begin_exclusive_update()?' in rust
+    assert "if sdk >= 34" in rust
+    assert "download_verified_gguf_via_http3(approved, check.clone())?" in rust
+    assert "download_with_controlled_fallback(" not in LIB

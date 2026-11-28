@@ -30,6 +30,11 @@ mod android_model_source;
 #[cfg(target_os = "android")]
 #[allow(dead_code)]
 mod android_model_quic;
+#[allow(dead_code)]
+mod android_model_runtime_guard;
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+mod android_llama_runtime;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
@@ -112,7 +117,7 @@ async fn poll_worker_update_pause(server: String, worker_id: String) -> Result<&
         &server, &worker_id, &token,
     ).await? {
         StopInstruction::None => Ok("none"),
-        StopInstruction::StopCheckpoint { .. } => Ok("stop_checkpoint"),
+        StopInstruction::StopCheckpoint { .. } | StopInstruction::NativeStopCheckpoint { .. } => Ok("stop_checkpoint"),
         StopInstruction::AwaitReconciliation => Ok("await_reconciliation"),
         StopInstruction::Blocked => Ok("blocked"),
     }
@@ -693,6 +698,7 @@ async fn install_downloaded_worker_apk(
         if android_local_llama::generation_active() {
             return Err("Telefon aktualnie oblicza ruch — instalacja APK zablokowana".into());
         }
+        let _gguf_gate = android_model_runtime_guard::begin_exclusive_update()?;
         // Never turn a failed/unknown coordinator response into an idle state.
         // The server's reserve transaction rechecks state atomically.
         let state = check_update_safety(server.clone(), worker_id.clone()).await?;
@@ -785,7 +791,7 @@ async fn check_phone_stop_gate(
                 Err("Arena zażądała STOP. Telefon nie wyśle ruchu; wymagane uzgodnienie checkpointu przez Arenę".into())
             }
         }
-        StopInstruction::AwaitReconciliation | StopInstruction::Blocked => {
+        StopInstruction::NativeStopCheckpoint { .. } | StopInstruction::AwaitReconciliation | StopInstruction::Blocked => {
             Err("Arena blokuje inferencję do uzgodnienia zatrzymania".into())
         }
     }
