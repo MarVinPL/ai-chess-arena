@@ -52,6 +52,6 @@ def test_worker_release_metadata_json_is_bounded():
 def test_all_native_coordinator_json_replies_are_bounded():
     coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
     assert not re.search(r"\.json\(\)\.await", coordinator)
-    assert coordinator.count("crate::bounded_json_response(") == 9
+    assert coordinator.count("crate::bounded_json_response(") == 11
     assert "crate::bounded_json_response(response, 32 * 1024).await" in coordinator
-    assert coordinator.count(", 4096).await") == 8
+    assert coordinator.count(", 4096).await") == 10

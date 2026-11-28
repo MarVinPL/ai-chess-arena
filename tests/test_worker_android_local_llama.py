@@ -74,8 +74,10 @@ def test_phone_model_is_restricted_to_arenas_canonical_legal_moves():
     assert 'Legal UCI moves:' in LOCAL
     assert 'request["grammar"] = json!(grammar)' in LOCAL
     assert 'legal_moves.contains(&proposed.as_str())' in LOCAL
-    assert 'matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8))' in COORD
+    assert 'matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8) | (4, 9))' in COORD
     assert 'let legal = job.get("legal_moves").and_then(Value::as_array)' in COORD
+    assert 'job.get("lease_token").and_then(Value::as_str)' in COORD
+    assert 'return Ok(serde_json::json!({"state": "blocked"}));' in COORD
 
 
 def test_real_phone_inference_checks_authenticated_stop_at_both_boundaries():

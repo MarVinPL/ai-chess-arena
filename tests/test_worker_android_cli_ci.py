@@ -11,7 +11,7 @@ def test_android_worker_uses_verified_android_cli_without_sdkmanager():
     assert '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583' in workflow
     assert 'sha256sum --check -' in workflow
     assert '--sdk="$ANDROID_HOME" sdk install' in workflow
-    for package in ('platform-tools', 'platforms/android-36', 'build-tools/36.0.0',
+    for package in ('platform-tools', 'platforms/android-37.0', 'build-tools/36.0.0',
                     'ndk/27.2.12479018'):
         assert package in workflow
     assert 'test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"' in workflow

@@ -146,15 +146,15 @@ jobs:
         run: |
           set -euo pipefail
           # Install SDK packages directly using the official Android CLI.
-          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          # Only Android 17 API 37.0 and the pinned NDK are needed for ARM64.
           android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
           # Android CLI prompts when a new Android SDK license must be accepted.
           # Exit status must come from the installer, not the yes process.
           set +o pipefail
           yes | "$android" --sdk="$ANDROID_HOME" sdk install \
-            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+            platform-tools platforms/android-37.0 build-tools/36.0.0 ndk/27.2.12479018
           set -o pipefail
-          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -s "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"

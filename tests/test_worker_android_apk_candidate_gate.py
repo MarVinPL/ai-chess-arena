@@ -422,7 +422,7 @@ def test_authenticated_stop_poll_is_wired_to_tauri_but_cannot_ack_or_install():
     assert 'async fn poll_worker_update_pause(server: String, worker_id: String)' in rust
     assert 'android_update_recovery::load_pending()?.is_some()' in rust
     assert 'android_update_coordinator::poll_pause_instruction(' in rust
-    assert 'StopInstruction::StopCheckpoint { .. } => Ok("stop_checkpoint")' in rust
+    assert 'StopInstruction::StopCheckpoint { .. } | StopInstruction::NativeStopCheckpoint { .. } => Ok("stop_checkpoint")' in rust
     assert 'poll_worker_update_pause, update_installation_readiness' in rust
     assert 'coordinator_endpoint(base, "update-pause-poll")?' in coordinator
     assert 'verify_pause_poll_reply(&body, worker_id, &nonce)' in coordinator

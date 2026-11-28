@@ -147,7 +147,7 @@ jobs:
           test ! -e "$ANDROID_HOME/cmdline-tools/22.0"
           mv "$staging/cmdline-tools" "$ANDROID_HOME/cmdline-tools/22.0"
           echo "$ANDROID_HOME/cmdline-tools/22.0/bin" >> "$GITHUB_PATH"
-      - name: Install Android 16 API36 and pinned NDK
+      - name: Install Android 17 API37 and pinned NDK
         shell: bash
         run: |
           set -euo pipefail
@@ -155,9 +155,9 @@ jobs:
           test -x "$android"
           set +o pipefail
           yes | "$android" --sdk="$ANDROID_HOME" sdk install \
-            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+            platform-tools platforms/android-37.0 build-tools/36.0.0 ndk/27.2.12479018
           set -o pipefail
-          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -s "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
@@ -174,6 +174,8 @@ jobs:
           npm ci
           npx tauri android init --ci --skip-targets-install
           python3 android/inject_package_installer.py
+          python3 android/force_extracted_native_libs.py
+          bash android/build_embedded_llama.sh
           npx tauri android build --apk --target aarch64 --ci --debug
       - name: Verify unsigned-by-original APK identity and make content-addressed artifact
         shell: bash
@@ -187,6 +189,10 @@ jobs:
           badging="$("$tools/aapt" dump badging "$apk")"
           grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
           grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          entries="$(unzip -Z1 "$apk")"
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
+            grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
+          done
           mkdir -p dist-original-key
           cp "$apk" dist-original-key/worker-untrusted-debug.apk
           (cd dist-original-key && sha256sum worker-untrusted-debug.apk > SHA256SUMS)
@@ -256,6 +262,10 @@ jobs:
           badging="$("$tools/aapt" dump badging "$apk")"
           grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
           grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          entries="$(unzip -Z1 "$apk")"
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
+            grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
+          done
       - name: Re-sign APK using original debug cert in isolated trusted job
         shell: bash
         env:
@@ -298,6 +308,10 @@ jobs:
           badging="$("$tools/aapt" dump badging "$apk")"
           grep -Fq "package: name='pl.marvin.aichessarena.worker' versionCode='$VERSION_CODE' versionName='$APP_VERSION'" <<< "$badging"
           grep -Fq "native-code: 'arm64-v8a'" <<< "$badging"
+          entries="$(unzip -Z1 "$apk")"
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
+            grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
+          done
           (cd dist && sha256sum worker-arm64.apk > SHA256SUMS)
           printf '%s\n' \
             "Source PR: $PR_NUMBER" "Source SHA: $SOURCE_SHA" \
