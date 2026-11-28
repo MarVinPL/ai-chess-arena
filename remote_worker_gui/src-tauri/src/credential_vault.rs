@@ -68,6 +68,49 @@ impl<B: Backend> CredentialVault<B> {
             .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".into())
     }
 
+    /// Write only the first authenticated token. Recheck under the vault lock
+    /// because a different registration may have finished during HTTPS.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn insert_registration_token(
+        &self, value: &str, check: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let _guard = self.operations.lock()
+            .map_err(|_| "Magazyn poświadczeń niedostępny")?;
+        if self.registration_token_missing(value)? {
+            check()?;
+            self.backend.write(value)
+                .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie")?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    fn registration_token_missing(&self, value: &str) -> Result<bool, String> {
+        if !valid(value) {
+            return Err("Nieprawidłowy format tokenu".into());
+        }
+        match self.checked_read()? {
+            None => Ok(true),
+            Some(current) if current == value => Ok(false),
+            Some(_) => Err("Zapisany token Workera różni się od podanego".into()),
+        }
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) async fn authenticate_registration(
+        &self, value: &str, authenticate: impl std::future::Future<Output = Result<bool, String>>,
+    ) -> Result<(), String> {
+        {
+            let _guard = self.operations.lock()
+                .map_err(|_| "Magazyn poświadczeń niedostępny")?;
+            self.registration_token_missing(value)?;
+        }
+        if !authenticate.await? {
+            return Err("Arena odrzuciła token dla tego identyfikatora Workera".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn delete_credential(
         &self,
         check: impl FnOnce() -> Result<(), String>,
@@ -129,6 +172,47 @@ mod tests {
         assert!(broken.set_password(&"a".repeat(32), || Ok(())).is_err());
         assert!(broken.delete_credential(|| Ok(())).is_err());
     }
+    #[test]
+    fn registration_only_persists_after_authentication_and_keeps_existing_token() {
+        let vault = vault();
+        let token = "a".repeat(43);
+        let other = "b".repeat(43);
+        let authenticate = |result| {
+            tauri::async_runtime::block_on(vault.authenticate_registration(
+                &token, std::future::ready(result),
+            ))
+        };
+        assert!(authenticate(Ok(false)).is_err());
+        assert!(authenticate(Err("offline".into())).is_err());
+        assert_eq!(vault.read_optional(), Ok(None));
+        authenticate(Ok(true)).unwrap();
+        assert_eq!(vault.read_optional(), Ok(None)); // Interrupted before local commit.
+        assert!(vault.insert_registration_token(&token, || Err("journal conflict".into())).is_err());
+        assert_eq!(vault.read_optional(), Ok(None));
+        vault.insert_registration_token(&token, || Ok(())).unwrap();
+        authenticate(Ok(true)).unwrap();
+        vault.insert_registration_token(&token, || panic!("existing credential must be left untouched")).unwrap();
+        assert!(vault.insert_registration_token(&other, || Ok(())).is_err());
+        assert_eq!(vault.get_password(), Ok(token));
+    }
+
+    #[test]
+    fn registration_rechecks_vault_after_await_and_rejects_unavailable_storage() {
+        let vault = vault();
+        let token = "a".repeat(43);
+        let other = "b".repeat(43);
+        tauri::async_runtime::block_on(vault.authenticate_registration(&token, async {
+            vault.insert_registration_token(&other, || Ok(())).unwrap();
+            Ok(true)
+        })).unwrap();
+        assert!(vault.insert_registration_token(&token, || Ok(())).is_err());
+        assert_eq!(vault.get_password(), Ok(other));
+        *vault.backend.0.lock().unwrap() = Some("corrupt".into());
+        assert!(tauri::async_runtime::block_on(vault.authenticate_registration(&token, async {
+            panic!("must not send a token when the local vault cannot be read")
+        })).is_err());
+    }
+
     #[test]
     fn lifecycle_and_rotation() {
         let v = vault();

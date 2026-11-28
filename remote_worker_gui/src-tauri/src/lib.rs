@@ -155,9 +155,22 @@ fn token_entry() -> Result<credential_vault::CredentialVault<credential_vault_na
 }
 
 #[tauri::command]
-fn store_worker_token(token: String) -> Result<(), String> {
-    let _credential_guard = credential_change_gate()?;
-    token_entry()?.set_password(&token, ensure_no_pending_update)
+async fn store_worker_token(token: String, server: String, worker_id: String) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (server, worker_id);
+        let _credential_guard = credential_change_gate()?;
+        token_entry()?.set_password(&token, ensure_no_pending_update)
+    }
+    #[cfg(target_os = "android")]
+    {
+        let vault = token_entry()?;
+        vault.authenticate_registration(&token, authenticate_worker(&server, &worker_id, &token)).await?;
+        let _credential_guard = credential_change_gate()?;
+        // This only stores an authenticated credential. Journal gates still
+        // apply and an unknown reservation remains unknown.
+        vault.insert_registration_token(&token, credential_journal::check_registration_storage)
+    }
 }
 
 #[tauri::command]
@@ -226,44 +239,73 @@ async fn inspect_phone_local_model() -> serde_json::Value {
 // HTTPS is mandatory; redirect following is disabled to avoid credential leakage.
 #[tauri::command]
 async fn verify_worker_connection(server: String, worker_id: String) -> Result<bool, String> {
-    if worker_id.len() < 8 || worker_id.len() > 96 ||
-        !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+    let token = token_entry()?.get_password()?;
+    authenticate_worker(&server, &worker_id, &token).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerAuthentication {
+    authenticated: bool,
+    worker_id: String,
+}
+
+impl WorkerAuthentication {
+    fn confirms_identity(&self, worker_id: &str) -> bool {
+        self.authenticated && self.worker_id == worker_id
+    }
+}
+
+async fn authenticate_worker(server: &str, worker_id: &str, token: &str) -> Result<bool, String> {
+    if !(8..=96).contains(&worker_id.len())
+        || !worker_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
         return Err("Nieprawidłowy identyfikator komputera".into());
     }
-    let url = reqwest::Url::parse(&server).map_err(|_| "Nieprawidłowy adres serwera")?;
-    if url.scheme() != "https" || url.host_str().is_none() || url.username() != "" ||
-        url.password().is_some() || url.query().is_some() || url.fragment().is_some() ||
-        url.path() != "/" || url.port().is_some() {
+    let url = reqwest::Url::parse(server).map_err(|_| "Nieprawidłowy adres serwera")?;
+    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty()
+        || url.password().is_some() || url.query().is_some() || url.fragment().is_some()
+        || url.path() != "/" || url.port().is_some()
+    {
         return Err("Wymagany adres HTTPS bez portu, ścieżki i danych logowania".into());
     }
-    let token = token_entry()?.get_password()?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12))
         .build().map_err(|_| "Błąd klienta HTTPS")?;
     let endpoint = url.join("api/remote-workers/authenticate")
         .map_err(|_| "Nieprawidłowy adres endpointu")?;
-    let mut response = client.post(endpoint).json(&serde_json::json!({
+    let response = client.post(endpoint).json(&serde_json::json!({
         "worker_id": worker_id, "token": token
     })).send().await.map_err(|_| "Nie udało się połączyć przez HTTPS")?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED { return Ok(false); }
-    if !response.status().is_success() { return Err("Serwer odrzucił żądanie".into()); }
-    // A remote endpoint can lie about Content-Length or use chunked encoding.
-    // Bound actual response bytes before parsing, including on low-memory Android.
-    const MAX_AUTH_RESPONSE_BYTES: usize = 4096;
-    if response.content_length().map(|n| n > MAX_AUTH_RESPONSE_BYTES as u64).unwrap_or(false) {
-        return Err("Zbyt duża odpowiedź serwera".into());
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(false);
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "Błąd odczytu HTTPS")? {
-        if chunk.len() > MAX_AUTH_RESPONSE_BYTES - bytes.len() {
-            return Err("Zbyt duża odpowiedź serwera".into());
-        }
-        bytes.extend_from_slice(&chunk);
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Serwer odrzucił żądanie".into());
     }
-    let result: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "Nieprawidłowa odpowiedź serwera")?;
-    Ok(result.get("authenticated") == Some(&serde_json::Value::Bool(true)))
+
+    let result: WorkerAuthentication = bounded_json_response(response, 4096).await?;
+    Ok(result.confirms_identity(worker_id))
+}
+
+#[cfg(test)]
+#[test]
+fn worker_authentication_requires_exact_confirmed_identity() {
+    let id = "worker_12345678";
+    let accepted = r#"{"authenticated":true,"worker_id":"worker_12345678"}"#;
+    let reply: WorkerAuthentication = serde_json::from_str(accepted).unwrap();
+    assert!(reply.confirms_identity(id));
+    assert!(!reply.confirms_identity("worker_87654321"));
+    let rejected: WorkerAuthentication =
+        serde_json::from_str(&accepted.replace("true", "false")).unwrap();
+    assert!(!rejected.confirms_identity(id));
+    for malformed in [
+        r#"{"authenticated":true}"#,
+        r#"{"authenticated":false,"authenticated":true,"worker_id":"worker_12345678"}"#,
+    ] {
+        assert!(serde_json::from_str::<WorkerAuthentication>(malformed).is_err());
+    }
 }
 
 // Read-only, explicit job inspection. This never starts inferencing, downloads

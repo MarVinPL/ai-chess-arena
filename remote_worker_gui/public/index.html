@@ -626,8 +626,10 @@ async function refreshUpdateRecoveryStatus(){
   sessions.hidden=result?.pending!==true;
   sessions.disabled=result?.pending!==true;
   if(result?.blocked!==false){
-   document.getElementById('saveToken').disabled=true;
    document.getElementById('forgetToken').disabled=true;
+   // Native registration may store a first credential without clearing journal state.
+   const android=await invoke('phone_inference_supported');
+   if(!android)document.getElementById('saveToken').disabled=true;
   }
  }catch(_){
   label.textContent='Nie można sprawdzić rezerwacji. Zmiana tokenu zablokowana.';
@@ -750,16 +752,28 @@ async function refreshTokenState(){
 document.getElementById('saveToken').addEventListener('click',async()=>{
   const field=document.getElementById('code');
   const invoke=window.__TAURI__?.core?.invoke;
-  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
+  const button=document.getElementById('saveToken');
+  if(button.disabled)return;
+  if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji natywnej.';return;}
   if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
   ++tokenStateRevision;
   invalidateJobPreview(); // Invalidate any pending HTTPS verification before changing the secret.
+  const server=document.getElementById('server');
+  const worker=document.getElementById('workerId');
+  const controls=[button,server,worker,field];
+  const disabled=controls.map(control=>control.disabled);
+  controls.forEach(control=>{control.disabled=true;});
+  tokenMessage.textContent='Sprawdzanie możliwości zapisania tokenu…';
   try {
-    await invoke('store_worker_token',{token:field.value});
+    await invoke('store_worker_token',{token:field.value,server:server.value.trim(),workerId:worker.value.trim()});
     field.value='';
     invalidateJobPreview();
     await refreshTokenState();
-  }catch(_error){tokenMessage.textContent='Nie udało się zapisać tokenu. Sprawdź format i systemowy magazyn poświadczeń.';}
+  }catch(error){
+    tokenMessage.textContent=typeof error==='string'?error:'Nie udało się zapisać tokenu.';
+  }finally{
+    controls.forEach((control,index)=>{control.disabled=disabled[index];});
+  }
 });
 document.getElementById('forgetToken').addEventListener('click',async()=>{
   const invoke=window.__TAURI__?.core?.invoke;

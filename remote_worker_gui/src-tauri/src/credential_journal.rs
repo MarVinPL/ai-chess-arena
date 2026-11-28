@@ -250,13 +250,16 @@ mod android {
             credential_vault::journals::delete_expected(self.0, raw).map_err(|_| ERROR.into())
         }
     }
-    fn dir(root: &Path, slot: Slot) -> Result<std::path::PathBuf, String> {
-        let name = match slot {
+    fn slot_path(root: &Path, slot: Slot) -> std::path::PathBuf {
+        root.join(match slot {
             Slot::PendingHold => "credential-pending-hold",
             Slot::PendingInstall => "credential-pending-install",
-        };
+        })
+    }
+
+    fn dir(root: &Path, slot: Slot) -> Result<std::path::PathBuf, String> {
         use std::os::unix::fs::DirBuilderExt;
-        let path = root.join(name);
+        let path = slot_path(root, slot);
         match fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => (),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
@@ -265,6 +268,26 @@ mod android {
         sync_dir(root)?;
         Ok(path)
     }
+    pub(crate) fn check_registration_storage() -> Result<(), String> {
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        let root = crate::android_worker_token_store::journal_root()?;
+        if *guard || pair_id(&root)?.is_some() {
+            return Err(ERROR.into());
+        }
+        for slot in [Slot::PendingHold, Slot::PendingInstall] {
+            let path = slot_path(&root, slot);
+            match fs::symlink_metadata(&path) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                Ok(_) if state(&path)? == State::Uninitialized => (),
+                _ => return Err(ERROR.into()),
+            }
+            if Native(slot).read()?.is_some() {
+                return Err(ERROR.into());
+            }
+        }
+        Ok(())
+    }
+
     fn authorization_marker(
         server: &str, worker_id: &str, token: &str, nonce: &str,
     ) -> Result<String, String> {
@@ -402,7 +425,7 @@ mod android {
     }
 }
 #[cfg(target_os = "android")]
-pub(crate) use android::{completion, delete_expected, initialize_authorized_pair, insert, read};
+pub(crate) use android::{check_registration_storage, completion, delete_expected, initialize_authorized_pair, insert, read};
 
 #[cfg(test)]
 mod tests {
