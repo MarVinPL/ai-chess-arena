@@ -717,3 +717,29 @@ def test_journal_init_completion_under_rotated_token_keeps_fence(endpoint):
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT nonce FROM worker_journal_init_fences").fetchall() == [(NONCE,)]
         assert conn.execute("SELECT 1 FROM worker_journal_init_completions").fetchone() is None
+
+
+
+def test_journal_init_completion_storage_failure_rolls_back(endpoint):
+    from hashlib import sha256
+
+    db, token, post = endpoint
+    journal_idle(db)
+    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+    origin = "https://arena.example"
+    marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
+                                sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
+    payload = dict(request_data(token), pair_marker=marker, origin=origin)
+    with sqlite3.connect(db) as conn:
+        conn.execute("""
+            CREATE TRIGGER fail_test_fence_delete BEFORE DELETE ON worker_journal_init_fences BEGIN
+                SELECT RAISE(ABORT, 'simulated storage failure');
+            END
+        """)
+    assert post(payload, route="journal-init-complete", headers={"Host": "arena.example"})[0] == 503
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT nonce FROM worker_journal_init_fences").fetchall() == [(NONCE,)]
+        assert conn.execute("SELECT 1 FROM worker_journal_init_completions").fetchone() is None
+        assert conn.execute("SELECT state FROM worker_job_safety").fetchone() == ("idle_confirmed",)
+        conn.execute("DROP TRIGGER fail_test_fence_delete")
+    assert post(payload, route="journal-init-complete", headers={"Host": "arena.example"})[0] == 200

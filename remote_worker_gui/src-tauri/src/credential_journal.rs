@@ -519,6 +519,42 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_marker_rename_leaves_both_slots_unavailable() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+
+        struct InterruptRename<'a>(&'a Path);
+        impl Store for InterruptRename<'_> {
+            fn read(&self) -> Result<Option<String>, String> {
+                // Once the stage exists, force rename to fail after the slot
+                // files have been synced. The namespace has no commit marker.
+                if self.0.join(PAIR_STAGE).exists() {
+                    fs::create_dir(self.0.join(PAIR_MARKER))
+                        .or_else(|err| if err.kind() == std::io::ErrorKind::AlreadyExists {
+                            Ok(())
+                        } else { Err(err) })
+                        .map_err(|_| ERROR)?;
+                }
+                Ok(None)
+            }
+
+            fn insert(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+            fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+        }
+
+        assert!(initialize_pair(
+            &root.0, &hold, &install, &Fake::default(), &InterruptRename(&root.0),
+            IDENTITY, PROVEN,
+        ).is_err());
+        assert_eq!(state(&hold), Ok(State::Empty));
+        assert_eq!(state(&install), Ok(State::Empty));
+        assert!(pair_id(&root.0).is_err());
+        assert!(initialize_pair(
+            &root.0, &hold, &install, &Fake::default(), &Fake::default(), IDENTITY, PROVEN,
+        ).is_err());
+    }
+
+    #[test]
     fn roundtrip_and_conflict() {
         let d = Temp::new();
         let s = Fake::default();
