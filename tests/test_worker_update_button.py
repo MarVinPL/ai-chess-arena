@@ -26,7 +26,11 @@ def test_button_cannot_show_for_equal_version_or_untrusted_release():
     assert "updateNow.hidden=false;" in html
     assert "url==='https://github.com/MarVinPL/ai-chess-arena/releases/tag/'+tag" in html
     assert html.index("hideReleaseLink();\n status.textContent='Sprawdzanie wydań") < html.index("const info=await invoke('check_worker_release'")
-    assert html.index("hideReleaseLink();\n document.getElementById('updateStatus')") > html.index("releaseChannel.addEventListener('change'")
+    change = html.split("releaseChannel.addEventListener('change'", 1)[1].split(
+        "document.getElementById('checkUpdate').addEventListener", 1)[0]
+    assert change.index("updateChannelRevision++;") < change.index("hideReleaseLink();")
+    assert change.index("hideReleaseLink();") < change.index("textContent='Wybrano kanał")
+    assert change.index("hideReleaseLink();") < change.index("void checkForWorkerUpdate();")
 
 
 def test_native_install_is_not_enabled_by_manual_button():

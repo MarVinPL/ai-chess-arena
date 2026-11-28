@@ -122,3 +122,55 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 })().catch(err=>{console.error(err);process.exitCode=1;});
 '''
     subprocess.run(['node', '-e', script, str(UI)], check=True, timeout=15)
+
+
+def test_update_channel_revision_fences_download_and_metadata():
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("node"):
+        pytest.skip("Node.js required")
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const html=fs.readFileSync(process.argv[1],'utf8');
+const source=html.slice(html.indexOf('const updateToggle='),html.indexOf('async function reconcileInstalledApkAtStartup'));
+function setup(){
+ const elements=new Map(),pending=[];
+ const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',hidden:true,disabled:false,style:{},events:{},removeAttribute(){},addEventListener(n,f){this.events[n]=f;}});return elements.get(id)};
+ const ctx=vm.createContext({document:{getElementById:get},localStorage:{getItem(){return null},setItem(){}},window:{__TAURI__:{core:{invoke(name){return new Promise((resolve,reject)=>pending.push({name,resolve,reject}))}}}}});
+ vm.runInContext(source,ctx);
+ return {get,pending,run:s=>vm.runInContext(s,ctx)};
+}
+const tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ for(const failure of [false,true]){
+  const t=setup(),dl=t.get('downloadWorkerApk');
+  dl.hidden=false;dl.disabled=false;
+  const work=dl.events.click();
+  assert.equal(t.pending[0].name,'download_worker_apk');
+  t.get('updateChannel').value='pre-release';t.get('updateChannel').events.change();
+  t.get('updateChannel').value='latest';t.get('updateChannel').events.change();
+  const status=t.get('apkDownloadStatus').textContent;
+  if(failure)t.pending[0].reject(Error('old download'));else t.pending[0].resolve();
+  await work;
+  assert.equal(t.get('apkDownloadStatus').textContent,status);
+  assert.equal(t.get('installWorkerApk').hidden,true);
+  assert.equal(t.pending.some(p=>p.name==='verify_downloaded_worker_apk'),false);
+ }
+ const t=setup(),dl=t.get('downloadWorkerApk');dl.hidden=false;dl.disabled=false;
+ const work=dl.events.click();t.pending[0].resolve();await tick();
+ assert.equal(t.pending[1].name,'verify_downloaded_worker_apk');
+ t.get('updateChannel').value='pre-release';t.get('updateChannel').events.change();
+ t.get('updateChannel').value='latest';t.get('updateChannel').events.change();
+ t.pending[1].resolve({verified:true,installer_permission:true});await work;
+ assert.equal(t.get('installWorkerApk').hidden,true);
+ const u=setup();const check=u.run('checkForWorkerUpdate()');
+ u.get('updateChannel').value='pre-release';u.get('updateChannel').events.change();
+ u.get('updateChannel').value='latest';u.get('updateChannel').events.change();
+ u.pending[0].resolve({update_available:true,apk_asset_available:true,latest_version:'worker-v9.9.9'});
+ await check;
+ assert.equal(u.get('downloadWorkerApk').hidden,true);
+ assert.equal(u.pending.length,2);
+})().catch(e=>{console.error(e);process.exitCode=1});
+"""
+    subprocess.run(["node", "-e", script, str(UI)], check=True, timeout=15)

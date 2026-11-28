@@ -662,6 +662,16 @@ def _prepare_game_execution_assets(white, black, *, phone_inference_enabled=Fals
     return _prepare_game_models(white, black, on_status=on_status)
 
 
+def _require_phone_pair_ready(delivery, white, black, variant):
+    """Recheck the selected pair before reserving a new checkpoint."""
+    if variant not in ('standard', 'elimination'):
+        raise ValueError('Nieznany wariant partii')
+    protocol = 3 if variant == 'elimination' else 2
+    for player in (white, black):
+        if delivery.find_ready_worker(player.get('model_sha256'), protocol) is None:
+            raise RuntimeError(f"Brak gotowego telefonu dla {player['name']} z protokołem v{protocol}")
+
+
 def live_moves_snapshot(move):
     with live_lock:
         previous = list(live_status.get('moves') or [])
@@ -1138,6 +1148,8 @@ def tournament_loop(tournament_id):
                 break
             runtime_context['execution_phase'] = 'game'
             variant = checkpoint.get('variant', 'standard') if checkpoint else 'elimination'
+            if phone_move_provider is not None:
+                _require_phone_pair_ready(phone_move_provider.delivery, white, black, variant)
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []

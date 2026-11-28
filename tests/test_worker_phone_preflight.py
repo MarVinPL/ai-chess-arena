@@ -116,3 +116,20 @@ def test_phone_preflight_requires_protocol_for_current_variant(monkeypatch, chec
     if not ready:
         assert len(result["blocked"]) == 2
         assert all("protokołem v3" in row["reasons"][0] or "wariantu partii" in row["reasons"][0] for row in result["blocked"])
+
+
+def test_pair_readiness_rechecks_protocol_after_classic_game():
+    class Delivery:
+        version = 2
+        def find_ready_worker(self, sha, protocol):
+            return "android_test_worker" if self.version >= protocol else None
+    delivery = Delivery()
+    white = {"name": "White", "model_sha256": "a" * 64}
+    black = {"name": "Black", "model_sha256": "b" * 64}
+    server._require_phone_pair_ready(delivery, white, black, "standard")
+    with pytest.raises(RuntimeError, match="protokołem v3"):
+        server._require_phone_pair_ready(delivery, white, black, "elimination")
+    delivery.version = 3
+    server._require_phone_pair_ready(delivery, white, black, "elimination")
+    with pytest.raises(ValueError, match="wariant"):
+        server._require_phone_pair_ready(delivery, white, black, "unknown")

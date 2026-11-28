@@ -3,7 +3,7 @@
 <style>
 :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#0d1422;color:#f1f5f9}*{box-sizing:border-box}body{margin:0;padding:24px}.shell{max-width:920px;margin:auto}.eyebrow{color:#a5b4fc;letter-spacing:.12em;font-size:12px;font-weight:700}.top{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap}h1{font-size:29px;margin:8px 0}p{color:#aab7ca}.pill{background:#273346;border:1px solid #40506b;border-radius:99px;padding:8px 14px;font-size:13px}.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-top:20px}.panel{background:#182335;border:1px solid #324259;border-radius:18px;padding:22px}h2{font-size:17px;margin:0 0 18px}.muted{color:#aab7ca;font-size:13px}label{display:block;margin:14px 0 6px;font-size:13px}input[type=text]{width:100%;background:#0d1422;border:1px solid #53627b;border-radius:9px;color:#fff;padding:12px;font:inherit}input[type=range]{width:100%;accent-color:#8b9aff}button{border:0;border-radius:10px;padding:12px 17px;background:#7c8cff;color:#0b1020;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}.worker-board{width:min(100%,380px);aspect-ratio:1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));border:2px solid #77869b;border-radius:7px;overflow:hidden;margin:12px auto}.worker-square{display:flex;align-items:center;justify-content:center;font-size:clamp(19px,5vw,38px);line-height:1;font-family:"DejaVu Sans",system-ui,sans-serif}.worker-square.light{background:#e8dfce;color:#182335}.worker-square.dark{background:#8195aa;color:#182335}.worker-square.last{box-shadow:inset 0 0 0 4px #fbbf24}.worker-square:empty::after{content:""}.secondary{background:#33435a;color:#fff}.buttons{display:flex;gap:9px;flex-wrap:wrap;margin-top:20px}.metric{display:flex;justify-content:space-between;border-bottom:1px solid #324259;padding:12px 0}.metric:last-child{border:0}.notice{margin-top:18px;border-left:3px solid #8b9aff;padding:12px 16px;background:#182335;color:#d6deeb;font-size:13px}.status{font-weight:700;color:#fbbf24}@media(max-width:680px){.grid{grid-template-columns:1fr}body{padding:14px}}
 select{width:100%;padding:12px;background:#0d1422;color:#fff;border:1px solid #53627b;border-radius:9px}.release-action{display:inline-block;padding:12px;color:#a5b4fc}.release-action[hidden]{display:none}
-</style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">AI CHESS ARENA · REMOTE WORKER</div><h1>Udostępnij moc komputera</h1><p>Ty decydujesz, kiedy i ile zasobów udostępniasz.</p></div><span class="pill" id="version">Wersja: sprawdzanie…</span><span class="pill" id="status">● Niepołączony</span></header><div class="grid"><section class="panel"><h2>Połącz z Areną</h2><label for="server">Adres serwera HTTPS</label><input id="server" type="text" value="https://arena.148-113-182-137.sslip.io" placeholder="https://arena.148-113-182-137.sslip.io" autocomplete="off"><label for="workerId">Identyfikator komputera</label><input id="workerId" type="text" placeholder="np. komputer_domowy_01" autocomplete="off"><label for="code">Token dostępu</label><input id="code" type="password" placeholder="Token wygenerowany w panelu Areny" autocomplete="off"><label><input id="rememberToken" type="checkbox" checked> Zapamiętaj token bezpiecznie na tym komputerze</label><div class="buttons"><button id="saveToken" type="button">Zapisz token</button><button id="pair" type="button">Sprawdź połączenie HTTPS</button><button id="previewJob" type="button" class="secondary" disabled>Sprawdź przydzielone zadanie</button><button class="secondary" id="forgetToken" type="button">Usuń zapisany token</button><button class="secondary" id="disconnect" disabled>Odłącz</button></div><p class="muted" id="jobFeedback" role="status" aria-live="polite">Podgląd zadania wymaga zaakceptowanego tokenu. Nie uruchamia obliczeń.</p><p class="muted">Token musi zostać wcześniej wygenerowany przez administratora Areny.</p></section><section class="panel"><h2>Limity zasobów</h2><label for="cpu">CPU: <strong id="cpuValue">50%</strong></label><input id="cpu" type="range" min="10" max="90" step="10" value="50"><label for="ram">RAM: <strong id="ramValue">2048 MB</strong></label><input id="ram" type="range" min="512" max="8192" step="512" value="2048"><label for="gpu">GPU: <strong id="gpuValue">Wyłączone</strong></label><input id="gpu" type="checkbox"><div class="buttons"><button id="start" disabled>Start lokalnie</button><button id="pause" class="secondary" disabled>Pauza po ruchu</button><button id="stop" class="secondary" disabled>Stop po ruchu</button></div><p id="localInferenceStatus" class="muted" role="status" aria-live="polite">Aby liczyć na telefonie, uruchom lokalny llama.cpp na porcie 8088, a następnie sprawdź połączenie z Areną.</p></section><section class="panel"><h2>Aktualne zadanie</h2><div class="metric">Model podglądu: <strong id="jobModel" style="word-break:break-all">Brak</strong></div><div class="metric">FEN: <strong id="jobPosition" style="word-break:break-all">—</strong></div><div class="metric">ID: <strong id="jobMove">—</strong></div><div class="metric"><span class="muted">Model SHA-256</span><strong id="myAssignedModel">Brak</strong></div><div class="metric"><span class="muted">Zadanie</span><strong id="myAssignedGame">—</strong></div><div class="metric"><span class="muted">Wykonywanie</span><strong id="myAssignedStatus">Brak przydziału</strong></div><div id="myWorkerBoardSection" hidden><p class="muted" id="myWorkerBoardTitle"></p><div id="myWorkerBoard" class="worker-board" role="img" aria-label="Szachownica partii wykonywanej przez ten telefon"></div><p class="muted" id="myWorkerBoardProgress" role="status"></p></div><p class="muted" id="myWorkerBoardEmpty">Brak aktywnej partii przypisanej do tego telefonu.</p></section><section class="panel"><h2>Stan urządzenia</h2><div class="metric"><span class="muted">Połączenie</span><span class="status" id="connectionStatus">Nieaktywne</span></div><div class="metric"><span class="muted">Wykonywanie obliczeń</span><strong>Wyłączone</strong></div><div class="metric"><span class="muted">Wykorzystanie zasobów</span><strong>0%</strong></div></section></div><section class="panel" style="margin-top:16px" aria-labelledby="updateTitle"><h2 id="updateTitle">Aktualizacje aplikacji</h2><label for="updateChannel">Kanał aktualizacji</label><select id="updateChannel" aria-describedby="updateChannelHelp"><option value="latest">Latest — stabilne</option><option value="pre-release">Pre-release — testowe</option></select><p class="muted" id="updateChannelHelp">Wybór kanału zmienia tylko sprawdzanie wydań na GitHub; nie pobiera ani nie instaluje APK.</p><a id="workerReleaseLink" href="#" rel="noopener noreferrer" target="_blank" hidden>Otwórz wydanie na GitHub</a><a id="updateNow" class="release-action" rel="noopener noreferrer" target="_blank" aria-describedby="updateManualHelp" hidden>Aktualizuj</a><p class="muted" id="updateManualHelp">Przycisk Aktualizuj otwiera oficjalną stronę wydania na GitHub do ręcznej aktualizacji. Nie pobiera ani nie instaluje APK.</p><p class="muted" id="updateStatus" role="status">Sprawdź, czy dostępna jest nowa wersja. Instalacja aktualizacji nie jest jeszcze obsługiwana.</p><label for="autoUpdateCheck"><input id="autoUpdateCheck" type="checkbox" checked> Automatycznie sprawdzaj dostępność nowych wersji (maksymalnie raz na 24 godziny przy uruchomieniu aplikacji)</label>
+</style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">AI CHESS ARENA · REMOTE WORKER</div><h1>Udostępnij moc komputera</h1><p>Ty decydujesz, kiedy i ile zasobów udostępniasz.</p></div><span class="pill" id="version">Wersja: sprawdzanie…</span><span class="pill" id="status">● Niepołączony</span></header><div class="grid"><section class="panel"><h2>Połącz z Areną</h2><label for="server">Adres serwera HTTPS</label><input id="server" type="text" value="https://arena.148-113-182-137.sslip.io" placeholder="https://arena.148-113-182-137.sslip.io" autocomplete="off"><label for="workerId">Identyfikator komputera</label><input id="workerId" type="text" placeholder="np. komputer_domowy_01" autocomplete="off"><label for="code">Token dostępu</label><input id="code" type="password" placeholder="Token wygenerowany w panelu Areny" autocomplete="off"><label><input id="rememberToken" type="checkbox" checked> Zapamiętaj token bezpiecznie na tym komputerze</label><div class="buttons"><button id="saveToken" type="button">Zapisz token</button><button id="pair" type="button">Sprawdź połączenie HTTPS</button><button id="previewJob" type="button" class="secondary" disabled>Sprawdź przydzielone zadanie</button><button class="secondary" id="forgetToken" type="button">Usuń zapisany token</button><button class="secondary" id="disconnect" disabled>Odłącz</button></div><p class="muted" id="jobFeedback" role="status" aria-live="polite">Podgląd zadania wymaga zaakceptowanego tokenu. Nie uruchamia obliczeń.</p><p class="muted">Token musi zostać wcześniej wygenerowany przez administratora Areny.</p></section><section class="panel"><h2>Limity zasobów</h2><label for="cpu">CPU: <strong id="cpuValue">50%</strong></label><input id="cpu" type="range" min="10" max="90" step="10" value="50"><label for="ram">RAM: <strong id="ramValue">2048 MB</strong></label><input id="ram" type="range" min="512" max="8192" step="512" value="2048"><label for="gpu">GPU: <strong id="gpuValue">Wyłączone</strong></label><input id="gpu" type="checkbox"><div class="buttons"><button id="start" disabled>Start lokalnie</button><button id="pause" class="secondary" disabled>Pauza po ruchu</button><button id="stop" class="secondary" disabled>Stop po ruchu</button></div><p id="localInferenceStatus" class="muted" role="status" aria-live="polite">Aby liczyć na telefonie, uruchom lokalny llama.cpp na porcie 8088, a następnie sprawdź połączenie z Areną.</p></section><section class="panel"><h2>Aktualne zadanie</h2><div class="metric">Model podglądu: <strong id="jobModel" style="word-break:break-all">Brak</strong></div><div class="metric">FEN: <strong id="jobPosition" style="word-break:break-all">—</strong></div><div class="metric">ID: <strong id="jobMove">—</strong></div><div class="metric"><span class="muted">Model SHA-256</span><strong id="myAssignedModel">Brak</strong></div><div class="metric"><span class="muted">Zadanie</span><strong id="myAssignedGame">—</strong></div><div class="metric"><span class="muted">Wykonywanie</span><strong id="myAssignedStatus">Brak przydziału</strong></div><div id="myWorkerBoardSection" hidden><p class="muted" id="myWorkerBoardTitle"></p><div id="myWorkerBoard" class="worker-board" role="img" aria-label="Szachownica partii wykonywanej przez ten telefon"></div><p class="muted" id="myWorkerBoardProgress" role="status"></p></div><p class="muted" id="myWorkerBoardEmpty">Brak aktywnej partii przypisanej do tego telefonu.</p></section><section class="panel"><h2>Stan urządzenia</h2><div class="metric"><span class="muted">Połączenie</span><span class="status" id="connectionStatus">Nieaktywne</span></div><div class="metric"><span class="muted">Wykonywanie obliczeń</span><strong>Wyłączone</strong></div><div class="metric"><span class="muted">Wykorzystanie zasobów</span><strong>0%</strong></div></section></div><section class="panel" style="margin-top:16px" aria-labelledby="updateTitle"><h2 id="updateTitle">Aktualizacje aplikacji</h2><label for="updateChannel">Kanał aktualizacji</label><select id="updateChannel" aria-describedby="updateChannelHelp"><option value="latest">Latest — stabilne</option><option value="pre-release">Pre-release — testowe</option></select><p class="muted" id="updateChannelHelp">Wybór kanału zmienia tylko sprawdzanie wydań na GitHub; nie pobiera ani nie instaluje APK.</p><a id="workerReleaseLink" href="#" rel="noopener noreferrer" target="_blank" hidden>Otwórz wydanie na GitHub</a><a id="updateNow" class="release-action" rel="noopener noreferrer" target="_blank" aria-describedby="updateManualHelp" hidden>Aktualizuj</a><p class="muted" id="updateManualHelp">Przycisk Aktualizuj otwiera oficjalną stronę wydania na GitHub do ręcznej aktualizacji. Nie pobiera ani nie instaluje APK.</p><p class="muted" id="updateStatus" role="status">Sprawdź, czy dostępna jest nowa wersja. Stabilne APK można zweryfikować i zainstalować po rezerwacji koordynatora i potwierdzeniu Androida.</p><label for="autoUpdateCheck"><input id="autoUpdateCheck" type="checkbox" checked> Automatycznie sprawdzaj dostępność nowych wersji (maksymalnie raz na 24 godziny przy uruchomieniu aplikacji)</label>
 <button id="checkUpdate" type="button" class="secondary">Sprawdź aktualizacje</button><a id="manualWorkerUpdate" href="#" target="_blank" rel="noopener noreferrer" hidden style="display:none;margin-left:10px;color:#b9c6ff">Otwórz wydanie APK w przeglądarce</a><button id="downloadWorkerApk" type="button" class="secondary" hidden disabled>Pobierz APK</button><button id="installWorkerApk" type="button" hidden disabled>Zainstaluj aktualizację</button><button id="resumeWorkerGame" type="button" disabled title="Wznowienie wymaga lokalnego silnika obliczeń na tym telefonie">Wznów</button><p class="muted" id="resumeWorkerStatus" role="status" aria-live="polite">Sprawdzanie możliwości wznowienia…</p><progress id="apkDownloadProgress" max="100" value="0" hidden aria-label="Postęp pobierania APK"></progress><p class="muted" id="apkDownloadStatus" role="status">Instalacja APK pozostaje wyłączona do czasu weryfikacji certyfikatu i stanu zadań.</p><button id="checkUpdateSafety" type="button" class="secondary">Sprawdź stan zadań</button><p class="muted" id="updateSafetyStatus" role="status">Instalacja aktualizacji jest wyłączona.</p><button id="checkCoordinatorStop" type="button" class="secondary">Sprawdź polecenie STOP z Areny</button><p class="muted" id="coordinatorStopStatus" role="status" aria-live="polite">Odczyt poleceń nie wstrzymuje obliczeń ani nie zezwala na instalację.</p><p class="muted" id="updateRecoveryStatus" role="status" aria-live="polite">Sprawdzanie lokalnej rezerwacji aktualizacji…</p><button id="inspectUpdateHold" type="button" class="secondary" hidden disabled>Sprawdź rezerwację na serwerze</button><p class="muted" id="updateHoldRemoteStatus" role="status" aria-live="polite"></p><button id="inspectAndroidSessions" type="button" class="secondary" hidden disabled>Sprawdź sesje instalatora Android</button><p class="muted" id="androidSessionsStatus" role="status" aria-live="polite"></p></section>
 <aside class="notice" role="status"><span id="backendStatus">Sprawdzanie lokalnego backendu…</span> Token można zapisać i usunąć lokalnie. Weryfikacja tokenu przez VPS jest dostępna po kliknięciu „Sprawdź połączenie HTTPS”. Obliczenia nie są jeszcze podłączone, a przyciski sterowania pozostają nieaktywne.</aside></main><script>
 'use strict';
@@ -312,10 +312,10 @@ updateToggle.addEventListener('change',()=>{
   document.getElementById('updateStatus').textContent='Nie można zapisać ustawienia automatycznego sprawdzania.';
  }
 });
-let checkingUpdate=false, channelChangedDuringCheck=false;
+let checkingUpdate=false, channelChangedDuringCheck=false, updateChannelRevision=0;
 async function checkForWorkerUpdate(){
  if(checkingUpdate){channelChangedDuringCheck=true;return;}
- const channel=releaseChannel.value;
+ const channel=releaseChannel.value, revision=updateChannelRevision;
  const status=document.getElementById('updateStatus');
  const button=document.getElementById('checkUpdate');
  const invoke=window.__TAURI__?.core?.invoke;
@@ -326,10 +326,11 @@ async function checkForWorkerUpdate(){
  status.textContent='Sprawdzanie wydań GitHub — '+(channel==='latest'?'Latest':'Pre-release')+'…';
  try{
   const info=await invoke('check_worker_release',{channel});
+  if(revision!==updateChannelRevision)return;
   if(channel!==releaseChannel.value)return; // Never show results from the old channel.
   const download=document.getElementById('downloadWorkerApk');
   download.hidden=!(channel==='latest' && info.update_available===true && info.apk_asset_available===true);
-  download.disabled=download.hidden;
+  download.disabled=download.hidden||downloadingWorkerApk;
   const tag=info?.latest_version;
   if(!tag){
    status.textContent='Brak opublikowanych wydań Workera w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Zainstalowana: '+info.current_version+'.';
@@ -358,7 +359,7 @@ async function checkForWorkerUpdate(){
   }
   try{localStorage.setItem(updateLastKey+'-'+channel,String(Date.now()));}catch(_){}
  }catch(_){
-  if(channel===releaseChannel.value)status.textContent='Nie udało się sprawdzić wydań w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Spróbuj później.';
+  if(revision===updateChannelRevision&&channel===releaseChannel.value)status.textContent='Nie udało się sprawdzić wydań w kanale '+(channel==='latest'?'Latest':'Pre-release')+'. Spróbuj później.';
  }finally{
   checkingUpdate=false;
   button.disabled=false;
@@ -376,12 +377,14 @@ releaseChannel.addEventListener('change',()=>{
   return;
  }
  storedChannel=channel;
+ updateChannelRevision++;
  hideReleaseLink();
+ apkProgress.hidden=true;apkStatus.textContent='';
  document.getElementById('updateStatus').textContent='Wybrano kanał '+(channel==='latest'?'Latest':'Pre-release')+'.';
  void checkForWorkerUpdate(); // An explicit channel change is a manual check.
 });
 document.getElementById('checkUpdate').addEventListener('click',checkForWorkerUpdate);
-let downloadingWorkerApk=false;
+let downloadingWorkerApk=false, downloadRevision=null;
 const apkProgress=document.getElementById('apkDownloadProgress');
 const apkStatus=document.getElementById('apkDownloadStatus');
 const downloadApkButton=document.getElementById('downloadWorkerApk');
@@ -391,35 +394,39 @@ const installApkButton=document.getElementById('installWorkerApk');
 if(window.__TAURI__?.event?.listen){
  void window.__TAURI__.event.listen('worker-apk-download-progress', event=>{
   const n=Number(event.payload?.received),total=Number(event.payload?.total);
-  if(!downloadingWorkerApk||!Number.isSafeInteger(n)||!Number.isSafeInteger(total)||total<=0||n<0||n>total)return;
+  if(!downloadingWorkerApk||downloadRevision!==updateChannelRevision||!Number.isSafeInteger(n)||!Number.isSafeInteger(total)||total<=0||n<0||n>total)return;
   apkProgress.value=Math.round(n/total*100);
   apkStatus.textContent=`Pobieranie APK: ${apkProgress.value}%`;
- }).catch(()=>{apkStatus.textContent='Nie można odczytać postępu pobierania.';});
+ }).catch(()=>{if(downloadingWorkerApk&&downloadRevision===updateChannelRevision)apkStatus.textContent='Nie można odczytać postępu pobierania.';});
 }
 downloadApkButton.addEventListener('click',async()=>{
  if(releaseChannel.value!=='latest'||downloadingWorkerApk || downloadApkButton.disabled)return;
  const invoke=window.__TAURI__?.core?.invoke;
  if(!invoke){apkStatus.textContent='Pobieranie wymaga aplikacji Android.';return;}
  installApkButton.hidden=true;installApkButton.disabled=true;
- downloadingWorkerApk=true;downloadApkButton.disabled=true;apkProgress.hidden=false;apkProgress.value=0;
+ const revision=updateChannelRevision;
+ downloadRevision=revision;downloadingWorkerApk=true;downloadApkButton.disabled=true;apkProgress.hidden=false;apkProgress.value=0;
  apkStatus.textContent='Pobieranie i weryfikacja SHA-256 APK…';
  try{
   await invoke('download_worker_apk');
+  if(revision!==updateChannelRevision)return;
   apkProgress.value=100;
   apkStatus.textContent='APK pobrany. Sprawdzanie certyfikatu i wersji przez Android…';
   const identity=await invoke('verify_downloaded_worker_apk');
+  if(revision!==updateChannelRevision)return;
   if(releaseChannel.value==='latest' && identity?.verified===true && identity.installer_permission===true){
    installApkButton.hidden=false;installApkButton.disabled=false;
   }
   apkStatus.textContent=identity?.verified===true
    ?(identity.installer_permission===true
-     ?'APK: certyfikat, pakiet i versionCode zgodne. Android dopuszcza zgłoszenie instalacji, ale instalator jest nadal wyłączony do czasu rezerwacji koordynatora i zgody użytkownika.'
+     ?'APK: certyfikat, pakiet i versionCode zgodne. Możesz rozpocząć procedurę instalacji. Wymaga rezerwacji koordynatora i potwierdzenia w Androidzie.'
      :'APK: certyfikat, pakiet i versionCode zgodne, ale Android nie udzielił aplikacji uprawnienia do żądania instalacji APK. Instalacja wyłączona.')
    :'APK odrzucony: certyfikat, pakiet lub wersja nie spełniają warunków. Instalacja wyłączona.';
  }catch(_){
+  if(revision!==updateChannelRevision)return;
   installApkButton.hidden=true;installApkButton.disabled=true;
   apkStatus.textContent='Nie udało się bezpiecznie pobrać APK. Żadna instalacja nie została uruchomiona.';
- }finally{downloadingWorkerApk=false;downloadApkButton.disabled=downloadApkButton.hidden||releaseChannel.value!=='latest';}
+ }finally{downloadRevision=null;downloadingWorkerApk=false;downloadApkButton.disabled=downloadApkButton.hidden||releaseChannel.value!=='latest';}
 });
 // The native command rechecks coordinator state, SHA-256 and signer
 // immediately before the OS PackageInstaller transaction.
@@ -683,6 +690,7 @@ function invalidateJobPreview(){
  phonePaired=false;phoneWorkerEnabled=false;refreshPhoneButtons();
  verifiedJobPreviewConnection=null;
  document.getElementById('previewJob').disabled=true;
+ document.getElementById('jobFeedback').textContent='Połączenie zmienione. Sprawdź ponownie token.';
 }
 for(const field of ['server','workerId']){
  document.getElementById(field).addEventListener('input',invalidateJobPreview);
@@ -766,15 +774,13 @@ document.getElementById('previewJob').addEventListener('click',async()=>{
  const invoke=window.__TAURI__?.core?.invoke;
  if(typeof invoke!=='function'){status.textContent='Wymagana aplikacja natywna.';return;}
  const connection=verifiedJobPreviewConnection;
+ const snapshot=connectionSnapshot();
  if(!connection){status.textContent='Najpierw sprawdź połączenie HTTPS.';return;}
  button.disabled=true;
  status.textContent='Odczyt przydzielonego zadania przez HTTPS…';
  try{
   const job=await invoke('preview_worker_job',connection);
-  if(verifiedJobPreviewConnection!==connection){
-   status.textContent='Połączenie zmienione. Sprawdź ponownie token.';
-   return;
-  }
+  if(!connectionIsCurrent(snapshot)||verifiedJobPreviewConnection!==connection)return;
   document.getElementById('jobModel').textContent=job?.model_sha256||'Brak';
   document.getElementById('jobPosition').textContent=job?.fen||'—';
   document.getElementById('jobMove').textContent=job?.job_id||'—';
@@ -782,7 +788,8 @@ document.getElementById('previewJob').addEventListener('click',async()=>{
     ? 'Zadanie odebrane do podglądu. Podgląd nie uruchamia obliczeń.'
     : 'Brak gotowego zadania inferencji. Obliczenia pozostają wyłączone.';
  }catch(error){
+  if(!connectionIsCurrent(snapshot)||verifiedJobPreviewConnection!==connection)return;
   status.textContent='Nie udało się odczytać zadania: '+String(error||'nieznany błąd');
- }finally{button.disabled=verifiedJobPreviewConnection===null;}
+ }finally{if(connectionIsCurrent(snapshot)&&verifiedJobPreviewConnection===connection)button.disabled=false;}
 });
 </script></body></html>
