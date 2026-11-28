@@ -8,10 +8,12 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_os = "android"))]
 const HOLD_SERVICE: &str = "pl.marvin.aichessarena.worker";
+#[cfg(not(target_os = "android"))]
 const HOLD_ACCOUNT: &str = "coordinator-update-hold-v1";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PendingHold {
     pub(crate) server: String,
     pub(crate) worker_id: String,
@@ -19,19 +21,30 @@ pub(crate) struct PendingHold {
 }
 
 fn valid_record(record: &PendingHold) -> bool {
-    let Ok(url) = reqwest::Url::parse(&record.server) else { return false };
-    url.scheme() == "https" && url.host_str().is_some()
-        && url.username().is_empty() && url.password().is_none()
-        && url.query().is_none() && url.fragment().is_none()
-        && url.port().is_none() && url.path() == "/"
+    let Ok(url) = reqwest::Url::parse(&record.server) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.port().is_none()
+        && url.path() == "/"
         && (8..=96).contains(&record.worker_id.len())
-        && record.worker_id.bytes().all(|b|
-            b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && record
+            .worker_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         && record.hold_token.len() == 64
-        && record.hold_token.bytes().all(|b|
-            b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && record
+            .hold_token
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+#[cfg(not(target_os = "android"))]
 fn entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(HOLD_SERVICE, HOLD_ACCOUNT)
         .map_err(|_| "Systemowy magazyn rezerwacji jest niedostępny".into())
@@ -40,6 +53,12 @@ fn entry() -> Result<keyring::Entry, String> {
 /// A missing entry is safe; unreadable/malformed entry is NOT treated as empty.
 #[allow(dead_code)]
 pub(crate) fn load_pending() -> Result<Option<PendingHold>, String> {
+    #[cfg(target_os = "android")]
+    let saved = match crate::credential_journal::read(crate::credential_vault::Slot::PendingHold)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    #[cfg(not(target_os = "android"))]
     let saved = match entry()?.get_password() {
         Ok(saved) => saved,
         Err(keyring::Error::NoEntry) => return Ok(None),
@@ -56,13 +75,19 @@ pub(crate) fn load_pending() -> Result<Option<PendingHold>, String> {
 /// Never replace a previous pending transaction; its hold must be reconciled.
 #[allow(dead_code)]
 pub(crate) fn save_pending(record: &PendingHold) -> Result<(), String> {
-    if !valid_record(record) { return Err("Nieprawidłowe dane rezerwacji".into()); }
+    if !valid_record(record) {
+        return Err("Nieprawidłowe dane rezerwacji".into());
+    }
     if load_pending()?.is_some() {
         return Err("Poprzednia rezerwacja wymaga uzgodnienia".into());
     }
     let serialized = serde_json::to_string(record)
         .map_err(|_| "Nie można przygotować zapisu rezerwacji".to_string())?;
-    entry()?.set_password(&serialized)
+    #[cfg(target_os = "android")]
+    crate::credential_journal::insert(crate::credential_vault::Slot::PendingHold, &serialized)?;
+    #[cfg(not(target_os = "android"))]
+    entry()?
+        .set_password(&serialized)
         .map_err(|_| "Nie można trwale zapisać tokenu rezerwacji".to_string())?;
     // Verify persistent read-back before allowing the network reservation.
     if load_pending()?.as_ref() != Some(record) {
@@ -75,11 +100,21 @@ pub(crate) fn save_pending(record: &PendingHold) -> Result<(), String> {
 /// reconciliation. Failure retains a recoverable journal; no silent fallback.
 #[allow(dead_code)]
 pub(crate) fn clear_pending(expected: &PendingHold) -> Result<(), String> {
+    let _credential_guard = crate::credential_change_gate()?;
     if load_pending()?.as_ref() != Some(expected) {
         return Err("Nie można potwierdzić właściwej rezerwacji".into());
     }
-    entry()?.delete_credential()
-        .map_err(|_| "Nie udało się usunąć zakończonej rezerwacji".into())
+    #[cfg(target_os = "android")]
+    {
+        let raw = serde_json::to_string(expected).map_err(|_| "Błąd dziennika")?;
+        crate::credential_journal::delete_expected(crate::credential_vault::Slot::PendingHold, &raw)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        entry()?
+            .delete_credential()
+            .map_err(|_| "Nie udało się usunąć zakończonej rezerwacji".into())
+    }
 }
 
 #[cfg(test)]

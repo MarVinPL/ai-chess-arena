@@ -170,7 +170,16 @@ pub(crate) async fn reserve_update(
         server: base.to_owned(), worker_id: worker_id.to_owned(), hold_token,
     };
     // The journal MUST be recoverable before the coordinator sees the request.
-    crate::android_update_recovery::save_pending(&pending)?;
+    {
+        let _credential_guard = crate::credential_change_gate()?;
+        if crate::token_entry()?.get_password()? != machine_token {
+            return Err("Token Workera zmienił się".into());
+        }
+        if crate::android_update_install_journal::load()?.is_some() {
+            return Err("Nierozliczona instalacja".into());
+        }
+        crate::android_update_recovery::save_pending(&pending)?;
+    }
     let nonce = random_nonce()?;
     let response = update_http_client()?.post(endpoint)
         .json(&serde_json::json!({

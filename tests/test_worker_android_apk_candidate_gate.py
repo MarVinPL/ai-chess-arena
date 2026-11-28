@@ -277,7 +277,7 @@ def test_coordinator_reservation_transport_is_native_and_not_exposed_to_webview(
     assert "may_install_update(VerifiedTaskState::Unknown, false, false)" in lib
 
 
-def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
+def test_update_hold_is_journaled_to_native_store_before_http_reserve():
     lib = LIB.read_text(encoding="utf-8")
     coordinator = (ROOT / "remote_worker_gui/src-tauri/src/android_update_coordinator.rs").read_text(encoding="utf-8")
     recovery = (ROOT / "remote_worker_gui/src-tauri/src/android_update_recovery.rs").read_text(encoding="utf-8")
@@ -285,11 +285,13 @@ def test_update_hold_is_journaled_to_native_keyring_before_http_reserve():
     assert "mod android_update_recovery;" in lib
     assert 'const HOLD_ACCOUNT: &str = "coordinator-update-hold-v1"' in recovery
     assert 'keyring::Entry::new(HOLD_SERVICE, HOLD_ACCOUNT)' in recovery
-    assert 'entry()?.set_password(&serialized)' in recovery
+    assert 'entry()?.set_password(&serialized)' in ''.join(recovery.split())
+    assert 'credential_journal::insert(crate::credential_vault::Slot::PendingHold, &serialized)' in recovery
     assert "load_pending()?.is_some()" in recovery
     assert "load_pending()?.as_ref() != Some(record)" in recovery
     assert "load_pending()?.as_ref() != Some(expected)" in recovery
-    assert "entry()?.delete_credential()" in recovery
+    assert "entry()?.delete_credential()" in "".join(recovery.split())
+    assert "credential_journal::delete_expected" in recovery
     before = coordinator.index('save_pending(&pending)?')
     network = coordinator.index('let response = update_http_client()?.post(endpoint)', before)
     assert before < network

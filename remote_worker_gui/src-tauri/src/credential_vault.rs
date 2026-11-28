@@ -156,3 +156,35 @@ mod tests {
         assert_eq!(v.get_password().unwrap(), token);
     }
 }
+
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy)]
+pub(crate) enum Slot {
+    PendingHold,
+    PendingInstall,
+}
+
+#[cfg(target_os = "android")]
+impl Slot {
+    pub(crate) fn account(self) -> &'static str {
+        match self {
+            Self::PendingHold => "pending-hold-v1",
+            Self::PendingInstall => "pending-install-v1",
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+pub(crate) mod journals {
+    use super::Slot;
+    use crate::android_worker_token_store as native;
+    pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
+        native::journal_read(slot.account())
+    }
+    pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
+        native::journal_mutate("journalInsert", slot.account(), raw)
+    }
+    pub(crate) fn delete_expected(slot: Slot, raw: &str) -> Result<(), String> {
+        native::journal_mutate("journalDelete", slot.account(), raw)
+    }
+}
