@@ -19,8 +19,7 @@ on:
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
   pull_request:
-    # Temporary stacked-PR target while Android Worker base PR #193 is open.
-    branches: [main, feat/issue-192-remote-worker-protocol]
+    branches: [main]
     paths:
       - 'remote_worker_gui/package.json'
       - 'remote_worker_gui/package-lock.json'

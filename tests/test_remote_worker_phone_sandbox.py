@@ -33,6 +33,8 @@ def sandbox(tmp_path, monkeypatch):
     with sqlite3.connect(destination) as con:
         assert con.execute("SELECT COUNT(*) FROM worker_tokens").fetchone()[0] == 1
     monkeypatch.setattr(server, "DB", destination)
+    from remote_worker_rate_policy import WorkerRatePolicy
+    monkeypatch.setattr(server, "_worker_rate_policy", WorkerRatePolicy())
     monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
     monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
     api = ThreadingHTTPServer(("127.0.0.1", 0), SandboxHandler)
@@ -195,3 +197,37 @@ def test_stop_request_fences_http_result_without_fake_ack_or_checkpoint(sandbox)
             "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
             (WORKER,)
         ).fetchone()[0] == 0
+
+
+def test_android_v3_readiness_can_receive_classic_v2_job(sandbox):
+    path, token, post = sandbox
+    who = auth(token)
+    request_payload = {**who, "model_sha256": MODEL_SHA, "protocol_version": 3}
+    status, reply = post("ready", request_payload)
+    assert status == 200
+    assert reply == {"authenticated": True, "source": "coordinator",
+                     "worker_id": WORKER, "nonce": NONCE, "state": "ready"}
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT protocol_version FROM worker_inference_capabilities WHERE worker_id=?", (WORKER,)).fetchone() == (3,)
+    job_id = arm_one_job(path, WORKER)
+    status, reply = post("job-poll", who)
+    assert status == 200 and reply["job"]["version"] == 2
+    assert reply["job"]["job_id"] == job_id
+    assert post("ready", request_payload)[1]["state"] == "blocked"
+    assert post("job-result", {**who, "result": {"version": 1, "job_id": job_id, "uci": "e2e4"}})[0] == 200
+    assert finalize_one_result(path, WORKER) == "e2e4"
+    assert post("job-poll", who)[1]["state"] == "none"
+    checkpoint = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    assert [move["uci"] for move in checkpoint["moves"]] == ["e2e4"]
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT state,job_id FROM worker_job_safety WHERE worker_id=?", (WORKER,)).fetchone() == ("idle_confirmed", None)
+
+
+@pytest.mark.parametrize("version", [None, True, 1, 4, "3"])
+def test_sandbox_rejects_invalid_protocol_without_registering(sandbox, version):
+    path, token, post = sandbox
+    status, _ = post("ready", {**auth(token), "model_sha256": MODEL_SHA, "protocol_version": version})
+    assert status == 400
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT count(*) FROM worker_inference_capabilities").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM worker_job_safety").fetchone()[0] == 0

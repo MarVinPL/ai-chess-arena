@@ -13,6 +13,8 @@ ROUTE_LIMITS = {
     'authenticate': 12, 'job': 12, 'update-safety': 12,
     'job-poll': 120, 'ready': 12, 'job-result': 30,
     'update-pause-poll': 120, 'board-view': 120,
+    'update-resume-status': 30, 'update-reserve': 12,
+    'update-release': 12, 'update-hold-status': 30,
 }
 
 

@@ -67,6 +67,16 @@ def test_update_safety_endpoint_fails_closed_without_durable_job_registry():
     from remote_worker_http_validation import MAX_BODY
     assert MAX_BODY == 2048
     assert "return read_worker_json(self, path)" in source
-    assert 'WorkerJobRegistry(DB).state(worker_id)' in endpoint
+    assert "self._admit_worker_identity(path, worker_id)" in endpoint
+    # API must rely on the coordinator's fresh durable snapshot, not a
+    # bare historical idle row or an optimistic default.
+    assert 'WorkerJobRegistry(DB)' in endpoint
+    assert 'registry.update_safety_snapshot(worker_id)' in endpoint
+    assert "re.fullmatch(r'[0-9a-f]{32}', nonce)" in endpoint
+    assert "'authenticated': True" in endpoint
+    assert "'source': 'coordinator'" in endpoint
+    assert "'nonce': nonce" in endpoint
+    assert "'active_tasks': active_tasks" in endpoint
+    assert "'checked_at_unix_ms': int(time.time() * 1000)" in endpoint
     assert "'install_allowed': False" in endpoint
     assert "'token': token" not in endpoint

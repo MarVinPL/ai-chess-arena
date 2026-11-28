@@ -46,6 +46,8 @@ def game_http(tmp_path, monkeypatch):
     token = WorkerTokenStore(db).issue(WORKER, ttl_seconds=600)
     delivery = WorkerInferenceDelivery(db)
     monkeypatch.setattr(server, "DB", db)
+    from remote_worker_rate_policy import WorkerRatePolicy
+    monkeypatch.setattr(server, "_worker_rate_policy", WorkerRatePolicy())
     monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
     monkeypatch.setenv("ARENA_PHONE_INFERENCE_ENABLED", "0")
     service = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)

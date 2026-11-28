@@ -51,6 +51,8 @@ def test_equal_version_test_release_not_misrepresented_as_upgrade():
 def test_stacked_android_pr_builds_without_unpausing_desktop_jobs():
     workflow = (Path(__file__).resolve().parents[1] /
                 '.github/workflows/worker-multiplatform.yml').read_text()
-    assert 'branches: [main, feat/issue-192-remote-worker-protocol]' in workflow
+    assert workflow.count('branches: [main]') == 2
+    assert 'feat/issue-192-remote-worker-protocol' not in workflow
+    assert 'feat/issue-194-worker-defaults' not in workflow
     assert "false && needs.detect.outputs.linux == 'true'" in workflow
     assert "false && needs.detect.outputs.windows == 'true'" in workflow

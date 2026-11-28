@@ -14,6 +14,31 @@ class RemoteWorkerProtocolTests(unittest.TestCase):
         self.assertEqual(validate_result({'version': 1, 'job_id': job['job_id'], 'uci': 'e2e4'},
                                          job, self.board), chess.Move.from_uci('e2e4'))
 
+
+    def test_protocol_v2_requires_complete_canonical_arena_legal_moves(self):
+        board = self.board.copy()
+        legal = sorted(move.uci() for move in board.legal_moves)
+        v2 = {**self.job, 'version': 2, 'legal_moves': legal}
+        self.assertEqual(validate_job(v2)['legal_moves'], legal)
+        self.assertEqual(
+            validate_result(
+                {'version': 1, 'job_id': v2['job_id'], 'uci': 'e2e4'},
+                v2, board,
+            ), chess.Move.from_uci('e2e4'),
+        )
+        bad_lists = [
+            [], legal[:-1], list(reversed(legal)),
+            legal + [legal[0]], legal + ['e7e5'],
+            'e2e4', ['e2e4', 'some extra code'],
+        ]
+        for wrong in bad_lists:
+            with self.subTest(wrong=wrong), self.assertRaises(ProtocolError):
+                validate_job({**v2, 'legal_moves': wrong})
+        with self.assertRaises(ProtocolError):
+            validate_job({**self.job, 'legal_moves': legal})  # v1 forbids extras
+        with self.assertRaises(ProtocolError):
+            validate_job({**v2, 'unknown': 'not allowed'})
+
     def test_v3_elimination_keeps_legal_king_capture_and_other_moves(self):
         from elimination_chess import EliminationBoard
         board = EliminationBoard('4k3/8/8/8/8/8/4R3/4K3 w - - 0 1')

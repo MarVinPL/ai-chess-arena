@@ -40,18 +40,19 @@ const end = html.indexOf('const cpu=', start);
 assert.ok(start >= 0 && end > start);
 const source = html.slice(start, end);
 const key = 'arena-worker-installation-id-v1';
-function launch(storage, fail = false, failCrypto = false) {
-  const fields = {workerId: {value: ''}, backendStatus: {textContent: ''}};
+function launch(storage, fail = false, failCrypto = false, silentFail = false) {
+  const events = {};
+  const fields = {workerId: {value: '', addEventListener: (name, fn) => {events[name]=fn;}}, backendStatus: {textContent: ''}};
   let calls = 0;
   vm.runInNewContext(source, {
     document: {getElementById: name => fields[name]},
     localStorage: {
       getItem: name => storage.get(name) ?? null,
-      setItem: (name, value) => {if (fail) throw Error('storage'); storage.set(name, value);}
+      setItem: (name, value) => {if (fail) throw Error('storage'); if (!silentFail) storage.set(name, value);}
     },
     crypto: {getRandomValues: bytes => {calls++; if (failCrypto) throw Error('crypto'); return webcrypto.getRandomValues(bytes);}}
   });
-  return {id: fields.workerId.value, status: fields.backendStatus.textContent, calls};
+  return {id: fields.workerId.value, status: fields.backendStatus.textContent, calls, edit: id => {fields.workerId.value=id; return events.change();}};
 }
 const store = new Map([['unrelated', 'unchanged']]);
 const first = launch(store);
@@ -63,11 +64,20 @@ assert.equal(store.size, 2);
 const restart = launch(store);
 assert.equal(restart.id, first.id);
 assert.equal(restart.calls, 0);
+assert.equal(restart.edit('android_marvin_01'), true);
+assert.equal(launch(store).id, 'android_marvin_01');
+assert.equal(restart.edit('bad'), false);
+assert.equal(launch(store).id, 'android_marvin_01');
+for (const options of [[true,false,false],[false,false,true]]) {
+  const instance=launch(store,...options);
+  assert.equal(instance.edit('android_other_01'),false);
+  assert.equal(store.get(key),'android_marvin_01');
+}
 const fresh = launch(new Map());
 assert.notEqual(fresh.id, first.id);
 const corrupt = new Map([[key, 'bad']]);
 assert.match(launch(corrupt).id, /^android_[0-9a-f]{32}$/);
-for (const failure of [launch(new Map(), true), launch(new Map(), false, true)]) {
+for (const failure of [launch(new Map(), true), launch(new Map(), false, true), launch(new Map(), false, false, true)]) {
   assert.equal(failure.id, '');
   assert.ok(failure.status.includes('Wpisz go ręcznie'));
 }

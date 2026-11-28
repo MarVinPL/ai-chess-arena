@@ -164,6 +164,11 @@ def set_live(stage, message, **fields):
             fields.setdefault('generation_started_at', live_status['stage_started_at'])
         elif 'generation_started_at' not in fields:
             fields['generation_started_at'] = None
+        # Worker attribution is per event. Never inherit identifiers from
+        # a previous live event when the tournament changes jobs or players.
+        for identity_key in ('worker_id', 'job_id'):
+            if identity_key not in fields:
+                live_status.pop(identity_key, None)
         if stage not in ('model_downloading', 'model_verifying', 'model_asset_ready'):
             fields.pop('asset_kind', None)
         if stage != 'model_downloading':
@@ -640,6 +645,33 @@ def _prepare_game_models(white, black, on_status=None):
     return prepared
 
 
+def _prepare_game_execution_assets(white, black, *, phone_inference_enabled=False, on_status=None):
+    """Avoid downloading large GGUF files onto the VPS in phone-only mode.
+
+    Arena still validates registry SHA, model eligibility and checkpoint.
+    The on-phone model runtime is solely responsible for actual inference.
+    When phone mode is off, retain the original local model lifecycle.
+    """
+    if phone_inference_enabled:
+        for player in (white, black):
+            digest = player.get('model_sha256')
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                raise ValueError('Phone inference requires pinned GGUF SHA-256')
+        return ({'path': None, 'draft_path': None},
+                {'path': None, 'draft_path': None})
+    return _prepare_game_models(white, black, on_status=on_status)
+
+
+def _require_phone_pair_ready(delivery, white, black, variant):
+    """Recheck the selected pair before reserving a new checkpoint."""
+    if variant not in ('standard', 'elimination'):
+        raise ValueError('Nieznany wariant partii')
+    protocol = 3 if variant == 'elimination' else 2
+    for player in (white, black):
+        if delivery.find_ready_worker(player.get('model_sha256'), protocol) is None:
+            raise RuntimeError(f"Brak gotowego telefonu dla {player['name']} z protokołem v{protocol}")
+
+
 def live_moves_snapshot(move):
     with live_lock:
         previous = list(live_status.get('moves') or [])
@@ -692,12 +724,42 @@ def tournament_preflight(tournament_id):
         tournament = connection.execute('SELECT format FROM tournaments WHERE id=?',
                                          (tournament_id,)).fetchone()
     tournament_format = tournament['format'] if tournament else ''
-    # The runner starts Llamafile only after this preflight succeeds.
-    # Requiring /health here would deadlock the lazy-start lifecycle.
-    runtime_available = llm_runtime_available()
+    # The VPS needs Llamafile only for local model execution. Explicitly
+    # selected phone mode requires a freshly ready on-device model for every
+    # entrant instead. No silent fallback to the VPS runner.
+    phone_mode = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+    if phone_mode:
+        from remote_worker_inference_delivery import WorkerInferenceDelivery
+        phone_delivery = WorkerInferenceDelivery(DB)
+        protocol_error = None
+        required_protocol = None
+        try:
+            checkpoint = tournament_checkpoint.load(DB, tournament_id)
+            variant = checkpoint.get('variant', 'standard') if checkpoint is not None else 'elimination'
+            if variant not in ('standard', 'elimination'):
+                raise ValueError('Nieznany wariant checkpointu')
+            required_protocol = 3 if variant == 'elimination' else 2
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            protocol_error = 'Nie można ustalić wariantu partii: ' + str(exc)
+        runtime_available = protocol_error is None
+    else:
+        # The local runner starts Llamafile only after preflight succeeds.
+        # Requiring /health here would deadlock the lazy-start lifecycle.
+        runtime_available = llm_runtime_available()
     blocked = []
     for entry in entries:
         reasons = list(entry['blockers'])
+        if phone_mode:
+            try:
+                model = _version_record(entry['version_id'])
+                sha = model.get('sha256')
+                if protocol_error is not None:
+                    raise ValueError(protocol_error)
+                if phone_delivery.find_ready_worker(sha, required_protocol) is None:
+                    raise ValueError('no ready matching phone')
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error):
+                reasons.append(protocol_error or f'brak gotowego telefonu z wymaganym lokalnym modelem i protokołem v{required_protocol}')
+                runtime_available = False
         if allowlist_error is not None:
             reasons.append('nie można zweryfikować allowlisty: ' + allowlist_error)
         else:
@@ -707,7 +769,7 @@ def tournament_preflight(tournament_id):
                 license_name=entry.get('license'),
                 license_verified=entry.get('license_verified') is True,
                 tournament_format=tournament_format))
-        if not runtime_available:
+        if not phone_mode and not runtime_available:
             reasons.append('lokalny runtime Llamafile jest niedostępny')
         entry['runtime_available'] = runtime_available
         entry['download_on_demand'] = bool(
@@ -1038,13 +1100,33 @@ def tournament_loop(tournament_id):
             return True
 
         runtime_context['execution_phase'] = 'game'
-        # Remote execution is not enabled in the production scheduler yet.
-        # Explicit selection prevents accidental activation and never constructs
-        # a second checkpoint writer alongside the local tournament runner.
+        # Optional phone inference is explicitly opt-in. The Arena retains
+        # one sequential runner and sole checkpoint ownership; no remote fallback.
         from remote_worker_runner_selection import select_game_runner
+        phone_inference_enabled = os.environ.get('ARENA_PHONE_INFERENCE_ENABLED') == '1'
+        phone_move_provider = None
+        if phone_inference_enabled:
+            from remote_worker_phone_move_provider import ArenaPhonePoolProvider
+
+            def report_phone_assignment(worker_id, job_id, fen, player):
+                # Arena controls the FEN and worker association: this event
+                # powers the Android read-only board, NOT local phone state.
+                set_live(
+                    'generating', 'Model oblicza ruch na telefonie',
+                    worker_id=worker_id, job_id=job_id, fen=fen,
+                    model=player.get('name'), white=runtime_context.get('white'),
+                    black=runtime_context.get('black'),
+                    pairing_id=pairing['id'],
+                )
+
+            phone_move_provider = ArenaPhonePoolProvider(
+                DB, on_assignment=report_phone_assignment,
+            )
         game_runner = select_game_runner(
             'local',
-            local_factory=lambda: engine_runner.SequentialChessRunner(tournament_runtime),
+            local_factory=lambda: engine_runner.SequentialChessRunner(
+                tournament_runtime, move_provider=phone_move_provider,
+            ),
         )
         while True:
             if tournament_stop_event.is_set():
@@ -1066,6 +1148,8 @@ def tournament_loop(tournament_id):
                 break
             runtime_context['execution_phase'] = 'game'
             variant = checkpoint.get('variant', 'standard') if checkpoint else 'elimination'
+            if phone_move_provider is not None:
+                _require_phone_pair_ready(phone_move_provider.delivery, white, black, variant)
             if checkpoint:
                 _validate_tournament_checkpoint(tournament_id, checkpoint, pairing, white, black)
                 resume_moves = checkpoint.get('moves') or []
@@ -1090,7 +1174,9 @@ def tournament_loop(tournament_id):
                 tournament_id, pairing, white, black, game_started,
                 resume_moves, resume_times, resume_fen, variant=variant))
             set_live('game_resume_prepare' if checkpoint else 'game_prepare',f'Przygotowanie partii: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'], execution_phase='game', variant=variant, moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None), response=None, proposed_move=None, legal_moves=[])
-            white_assets, black_assets = _prepare_game_models(white, black, on_status=set_live)
+            white_assets, black_assets = _prepare_game_execution_assets(
+                white, black, phone_inference_enabled=phone_inference_enabled, on_status=set_live,
+            )
             set_live('game_ready',f'Partia gotowa: {white["name"]} vs {black["name"]}', white=white['name'], black=black['name'], pairing_id=pairing['id'])
             game_white = {**white, **white_assets}; game_black = {**black, **black_assets}
             set_live('game_resumed' if checkpoint else 'game_running','Wznowiono partię' if checkpoint else 'Rozpoczęto partię', white=white['name'], black=black['name'], pairing_id=pairing['id'], moves=resume_moves, fen=resume_fen, last_move=(resume_moves[-1] if resume_moves else None))
@@ -1100,9 +1186,17 @@ def tournament_loop(tournament_id):
                 checkpoint_moves.append(dict(move))
                 checkpoint_times.append(float(move.get('seconds') or 0))
                 saved_fen = move.get('fen')
-                tournament_checkpoint.save(DB, tournament_id, _tournament_checkpoint_payload(
+                next_checkpoint = _tournament_checkpoint_payload(
                     tournament_id, pairing, white, black, game_started,
-                    checkpoint_moves, checkpoint_times, saved_fen, variant=variant))
+                    checkpoint_moves, checkpoint_times, saved_fen, variant=variant)
+                if phone_move_provider is None:
+                    tournament_checkpoint.save(DB, tournament_id, next_checkpoint)
+                else:
+                    # Same SQLite IMMEDIATE transaction commits the ONLY Arena
+                    # checkpoint and releases the phone result/lease. A crash
+                    # can never leave an idle phone with an uncommitted move.
+                    phone_move_provider.commit_checkpoint_for_record(
+                        tournament_id, next_checkpoint, move)
                 set_live('move_played', f"Ruch {move['ply']}: {move['san']} ({move['uci']})",
                          model=move['model'], color=move['color'], white=white['name'], black=black['name'], pairing_id=pairing['id'],
                          fen=move.get('fen'), last_move=move, moves=live_moves_snapshot(move))
@@ -1986,20 +2080,119 @@ class Handler(BaseHTTPRequestHandler):
             # Advisory state only; no install permission or state transition.
             try:
                 payload = self._read_worker_request(path)
-                if set(payload) != {'worker_id', 'token'}:
+                if set(payload) != {'worker_id', 'token', 'nonce'}:
                     raise WorkerRequestError(400)
-                worker_id, token = payload['worker_id'], payload['token']
+                worker_id, token, nonce = payload['worker_id'], payload['token'], payload['nonce']
+                # Random nonce binds this *authenticated* coordinator snapshot
+                # to one requester. Never mint/echo a nonce on auth failure.
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise WorkerRequestError(400)
                 if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
                     self.send_json({'error': 'Brak autoryzacji'}, 401)
                     return
                 self._admit_worker_identity(path, worker_id)
-                state = remote_worker_job_registry.WorkerJobRegistry(DB).state(worker_id)
-                self.send_json({'state': state, 'install_allowed': False,
-                                'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu i wersji'})
+                registry = remote_worker_job_registry.WorkerJobRegistry(DB)
+                state, active_tasks = registry.update_safety_snapshot(worker_id)
+                self.send_json({
+                    'state': state, 'authenticated': True,
+                    'source': 'coordinator', 'worker_id': worker_id,
+                    'nonce': nonce, 'active_tasks': active_tasks,
+                    'checked_at_unix_ms': int(time.time() * 1000),
+                    'install_allowed': False,
+                    'reason': 'Instalacja wymaga niezależnej weryfikacji podpisu, wersji i ponownego stanu zadań',
+                })
             except WorkerRequestError as exc:
                 self._reject_worker_request(exc)
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić stanu zadań'}, 500)
+            return
+        if path == '/api/remote-workers/update-resume-status':
+            # Machine-token authenticated, read-only resume readiness.
+            # Never issues a job lease or exposes an unverified checkpoint.
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token', 'nonce'}:
+                    raise WorkerRequestError(400)
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid resume status nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                self._admit_worker_identity(path, worker_id)
+                from remote_worker_update_pause import WorkerUpdatePause
+                snapshot = WorkerUpdatePause(DB).resume_status(worker_id)
+                self.send_json({
+                    'authenticated': True, 'source': 'coordinator',
+                    'worker_id': worker_id, 'nonce': nonce,
+                    'resume_available': False,
+                    **snapshot,
+                })
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowe żądanie wznowienia'}, 400)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić wznowienia'}, 500)
+            return
+        if path in ('/api/remote-workers/update-reserve', '/api/remote-workers/update-release',
+                     '/api/remote-workers/update-hold-status'):
+            # These are coordinator transactions, not an APK installer.
+            # The device must authenticate with its existing machine token.
+            # The server NEVER permits installation or exposes signing keys.
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token', 'nonce', 'hold_token'}:
+                    raise WorkerRequestError(400)
+                worker_id, token, nonce = (
+                    payload.get('worker_id'), payload.get('token'), payload.get('nonce'))
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise ValueError('Invalid update transaction nonce')
+                if not remote_worker_tokens.WorkerTokenStore(DB).authenticate(worker_id, token):
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                    return
+                self._admit_worker_identity(path, worker_id)
+                registry = remote_worker_job_registry.WorkerJobRegistry(DB)
+                if path == '/api/remote-workers/update-reserve':
+                    # A client-generated CSPRNG hold token is journaled in the
+                    # Android secure store BEFORE the network request. On lost
+                    # responses the client can recover without server secrets.
+                    proposed_token = payload.get('hold_token')
+                    if not isinstance(proposed_token, str) or not re.fullmatch(r'[0-9a-f]{64}', proposed_token):
+                        raise ValueError('Missing or malformed pre-journaled hold token')
+                    hold_token = registry.reserve_update(
+                        worker_id, hold_token=proposed_token)
+                    self.send_json({
+                        'state': 'reserved', 'authenticated': True,
+                        'source': 'coordinator', 'worker_id': worker_id,
+                        'nonce': nonce, 'hold_token': hold_token,
+                        'expires_at_unix_ms': int((time.time() + 300) * 1000),
+                        'install_allowed': False,
+                    })
+                elif path == '/api/remote-workers/update-hold-status':
+                    hold_token = payload.get('hold_token')
+                    reservation_state = registry.inspect_update_hold(worker_id, hold_token)
+                    self.send_json({
+                        'state': reservation_state, 'authenticated': True,
+                        'source': 'coordinator', 'worker_id': worker_id,
+                        'nonce': nonce, 'install_allowed': False,
+                    })
+                else:
+                    hold_token = payload.get('hold_token')
+                    registry.release_update_hold(worker_id, hold_token)
+                    self.send_json({
+                        'state': 'unknown', 'released': True,
+                        'authenticated': True, 'source': 'coordinator',
+                        'worker_id': worker_id, 'nonce': nonce,
+                        'install_allowed': False,
+                    })
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except (ValueError, UnicodeError, json.JSONDecodeError):
+                self.send_json({'error': 'Nieprawidłowy stan rezerwacji lub żądanie'}, 409)
+            except Exception:
+                self.send_json({'error': 'Nie można zmienić rezerwacji aktualizacji'}, 500)
             return
         if path == '/api/auth/logout':
             if not arena_auth.origin_allowed(self.headers.get('Origin')):
