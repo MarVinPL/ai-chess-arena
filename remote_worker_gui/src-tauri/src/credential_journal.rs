@@ -174,6 +174,13 @@ fn initialize_pair(
     root: &Path, hold_dir: &Path, install_dir: &Path,
     hold: &impl Store, install: &impl Store, identity: &str, evidence: BaselineEvidence,
 ) -> Result<(), String> {
+    initialize_pair_with_sync(root, hold_dir, install_dir, hold, install, identity, evidence, sync_dir)
+}
+
+fn initialize_pair_with_sync(
+    root: &Path, hold_dir: &Path, install_dir: &Path, hold: &impl Store, install: &impl Store,
+    identity: &str, evidence: BaselineEvidence, sync_root: impl Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     if !evidence.authenticated_idle || !evidence.installer_reconciled
         || !evidence.identity_bound || !valid_pair_id(identity.as_bytes())
     {
@@ -193,14 +200,14 @@ fn initialize_pair(
         .open(&stage).map_err(|_| ERROR)?;
     marker.write_all(identity.as_bytes()).map_err(|_| ERROR)?;
     marker.sync_all().map_err(|_| ERROR)?;
-    sync_dir(root)?;
+    sync_root(root)?;
     initialize_empty(hold_dir, hold, evidence)?;
     initialize_empty(install_dir, install, evidence)?;
     if checked_read(hold_dir, hold)?.is_some() || checked_read(install_dir, install)?.is_some() {
         return Err(ERROR.into());
     }
     fs::rename(stage, root.join(PAIR_MARKER)).map_err(|_| ERROR)?;
-    sync_dir(root)
+    sync_root(root)
 }
 
 fn checked_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
@@ -516,6 +523,55 @@ mod tests {
         set_state(&hold, State::Empty).unwrap();
         assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, IDENTITY, PROVEN).is_err());
         assert_eq!(pair_id(&root.0), Ok(None));
+    }
+
+    #[test]
+    fn interrupted_marker_rename_leaves_both_slots_unavailable() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+
+        struct InterruptRename<'a>(&'a Path);
+        impl Store for InterruptRename<'_> {
+            fn read(&self) -> Result<Option<String>, String> {
+                // Once the stage exists, force rename to fail after the slot
+                // files have been synced. The namespace has no commit marker.
+                if self.0.join(PAIR_STAGE).exists() {
+                    fs::create_dir(self.0.join(PAIR_MARKER))
+                        .or_else(|err| if err.kind() == std::io::ErrorKind::AlreadyExists {
+                            Ok(())
+                        } else { Err(err) })
+                        .map_err(|_| ERROR)?;
+                }
+                Ok(None)
+            }
+
+            fn insert(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+            fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+        }
+
+        assert!(initialize_pair(
+            &root.0, &hold, &install, &Fake::default(), &InterruptRename(&root.0),
+            IDENTITY, PROVEN,
+        ).is_err());
+        assert_eq!(state(&hold), Ok(State::Empty));
+        assert_eq!(state(&install), Ok(State::Empty));
+        assert!(pair_id(&root.0).is_err());
+        assert!(initialize_pair(
+            &root.0, &hold, &install, &Fake::default(), &Fake::default(), IDENTITY, PROVEN,
+        ).is_err());
+    }
+
+    #[test]
+    fn first_root_fsync_failure_keeps_pair_staged_and_both_slots_blocked() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+        assert!(initialize_pair_with_sync(
+            &root.0, &hold, &install, &Fake::default(), &Fake::default(),
+            IDENTITY, PROVEN, |_| Err(ERROR.into()),
+        ).is_err());
+        assert_eq!(state(&hold), Ok(State::Uninitialized));
+        assert_eq!(state(&install), Ok(State::Uninitialized));
+        assert!(pair_id(&root.0).is_err());
     }
 
     #[test]
