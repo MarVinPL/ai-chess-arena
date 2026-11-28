@@ -17,6 +17,7 @@ ROUTES = frozenset({
     "/api/remote-workers/job-result",
     "/api/remote-workers/update-pause-poll",
     "/api/remote-workers/native-stop-report",
+    "/api/remote-workers/native-stop-recovery",
     "/api/remote-workers/board-view",
 })
 
@@ -36,7 +37,7 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
             {"worker_id", "token", "nonce", "result"}
             if path.endswith("/job-result") else
             {"worker_id", "token", "nonce", "job_id", "request_id", "lease_token"}
-            if path.endswith("/native-stop-report") else
+            if path.endswith(("/native-stop-report", "/native-stop-recovery")) else
             {"worker_id", "token", "nonce"}
         ):
             raise ValueError("Unexpected protocol fields")
@@ -47,6 +48,26 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
             raise ValueError("Invalid nonce")
     except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
         handler.send_json({"error": "Nieprawidłowe żądanie Workera"}, 400)
+        return True
+
+    if path.endswith("/native-stop-recovery"):
+        from remote_worker_update_pause import WorkerUpdatePause
+        try:
+            result = WorkerUpdatePause.validate_native_stop(
+                db, worker_id, payload["job_id"], payload["request_id"], payload["lease_token"], token,
+                admit=lambda: admit_identity(path, worker_id),
+            )
+            handler.send_json(dict(result, authenticated=True, source="coordinator",
+                                   worker_id=worker_id, nonce=nonce))
+        except PermissionError:
+            handler.send_json({"error": "Brak autoryzacji Workera"}, 401)
+        except WorkerRequestError as exc:
+            handler.close_connection = True
+            handler.send_json({"error": "Limit żądań"}, exc.status)
+        except (ValueError, TypeError):
+            handler.send_json({"error": "Niedozwolony lub nieaktualny stan Workera"}, 409)
+        except Exception:
+            handler.send_json({"error": "Nie można obsłużyć żądania Workera"}, 500)
         return True
 
     if not WorkerTokenStore(db).authenticate(worker_id, token):

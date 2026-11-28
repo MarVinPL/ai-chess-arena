@@ -775,3 +775,49 @@ def test_coordinator_stop_retry_reuses_request_without_faking_ack(sandbox):
     with pytest.raises(ValueError, match="another state"):
         retry.request(WORKER, job_id)
     assert post("job-poll", who)[1]["state"] == "blocked"
+
+def test_native_stop_recovery_read_only(sandbox):
+    from concurrent.futures import ThreadPoolExecutor
+    from remote_worker_update_pause import WorkerUpdatePause
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA, "protocol_version": 4})[0] == 200
+    job_id = "recovery_" + "1" * 24
+    WorkerInferenceDelivery(path).assign_from_arena(WORKER, {
+        "version": 4, "variant": "standard", "job_id": job_id, "fen": chess.STARTING_FEN,
+        "model_sha256": MODEL_SHA, "legal_moves": sorted(m.uci() for m in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 600,
+    })
+    job = post("job-poll", who)[1]["job"]
+    pause = WorkerUpdatePause(path)
+    report = dict(who, job_id=job_id, request_id=pause.request(WORKER, job_id),
+                  lease_token=job["lease_token"])
+    def snapshot():
+        with sqlite3.connect(path) as db:
+            return tuple(db.iterdump())
+    before = snapshot()
+    route = "native-stop-recovery"
+    expected = dict(authenticated=True, source="coordinator", worker_id=WORKER, nonce=NONCE,
+                    state="stop_recovery_validated", job_id=job_id, request_id=report["request_id"],
+                    install_allowed=False, dispatch_allowed=False)
+    assert post(route, report) == (200, expected)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(lambda _: post(route, report), range(4))) == [(200, expected)] * 4
+    for wrong in (dict(job_id="wrong_job"), dict(request_id="f"*32), dict(lease_token="0"*64)):
+        assert post(route, dict(report, **wrong))[0] == 409
+    assert post(route, dict(report, token="invalid"))[0] == 401
+    assert post(route, dict(report, worker_id="other_worker"))[0] == 401
+    assert snapshot() == before
+    args = (path, WORKER, job_id, report["request_id"], report["lease_token"], token)
+    with pytest.raises(PermissionError):
+        WorkerUpdatePause.validate_native_stop(*args, clock=lambda: pause.clock()+601)
+    assert snapshot() == before
+    assert post("native-stop-report", report)[0] == 200
+    after = snapshot()
+    assert post(route, report) == (200, expected)
+    assert snapshot() == after
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_job_safety SET deadline=0 WHERE worker_id=?", (WORKER,))
+    expired = snapshot()
+    assert post(route, report)[0] == 409
+    assert snapshot() == expired
