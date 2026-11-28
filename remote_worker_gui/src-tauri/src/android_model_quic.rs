@@ -216,3 +216,27 @@ where P: FnMut(u64, u64), L: FnMut() -> Result<(), String> + Send + 'static {
     check_preparation_lease()?;
     Ok((path, "https".into()))
 }
+
+/// Explicit fixed-host HEAD diagnostic, independent of model transfer.
+pub(crate) fn probe_protocol() -> Result<String, String> {
+    with_android_files(|env, context, _| {
+        let loader = env.call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+            .map_err(|_| "Brak classloadera")?.l().map_err(|_| "Brak classloadera")?;
+        let name = env.new_string("pl.marvin.aichessarena.worker.WorkerQuicTransport")
+            .map_err(|_| "Brak nazwy mostu")?;
+        let class = env.call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[JValue::Object(name.as_ref())])
+            .map_err(|_| "Brak mostu QUIC")?.l().map_err(|_| "Brak mostu QUIC")?;
+        if class.is_null() { return Err("Brak mostu QUIC".into()); }
+        let result = env.call_static_method(JClass::from(class), "probeProtocol",
+            "(Landroid/content/Context;)Ljava/lang/String;", &[JValue::Object(context)])
+            .map_err(|_| "HttpEngine niedostępny")?.l().map_err(|_| "Brak odpowiedzi HTTP")?;
+        if result.is_null() { return Err("Brak protokołu".into()); }
+        let protocol: String = env.get_string(&JString::from(result))
+            .map_err(|_| "Nieprawidłowy protokół")?.into();
+        if !matches!(protocol.as_str(), "h3" | "h2" | "http/1.1") {
+            return Err("Nieznany protokół".into());
+        }
+        Ok(protocol)
+    })
+}

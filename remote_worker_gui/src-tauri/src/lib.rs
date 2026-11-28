@@ -241,6 +241,50 @@ async fn inspect_phone_local_model() -> serde_json::Value {
     }
 }
 
+#[tauri::command]
+async fn inspect_phone_model_storage() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            let root = android_model_quic::android_gguf_cache_root()?;
+            let inventory = android_model_cache::inspect_model_cache(&root)?;
+            let free = android_model_cache::android_private_free_bytes()?;
+            let reserve = android_model_cache::DEFAULT_FREE_RESERVE_BYTES;
+            Ok(serde_json::json!({"free_bytes": free, "reserve_bytes": reserve,
+                "available_for_models_bytes": free.saturating_sub(reserve),
+                "cached_models": inventory.model_count, "cached_bytes": inventory.occupied_bytes}))
+        }).await.map_err(|_| "Diagnostyka pamięci przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
+}
+
+#[tauri::command]
+async fn inspect_embedded_llama_engine() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            android_embedded_llama::probe_embedded_llama_library()?;
+            Ok(serde_json::json!({"abi_available": true,
+                "native_dispatch_enabled": false,
+                "legacy_generation_active": android_local_llama::generation_active()}))
+        }).await.map_err(|_| "Diagnostyka silnika przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
+}
+
+#[tauri::command]
+async fn inspect_phone_quic_protocol() -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(android_model_quic::probe_protocol)
+            .await.map_err(|_| "Diagnostyka QUIC przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
+}
+
 // The desktop app connects outbound only. Never pass the token into JS or a URL.
 // HTTPS is mandatory; redirect following is disabled to avoid credential leakage.
 #[tauri::command]
@@ -1219,7 +1263,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_embedded_llama_engine, inspect_phone_quic_protocol, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }
