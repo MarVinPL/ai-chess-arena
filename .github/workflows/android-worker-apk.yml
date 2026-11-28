@@ -228,6 +228,7 @@ jobs:
           set -euo pipefail
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           test -s "$apk"
+          python3 android/verify_apk_backup.py "$ANDROID_HOME/build-tools/36.0.0/aapt" "$apk"
           signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           test -x "$signer"
           "$signer" verify --verbose "$apk"
