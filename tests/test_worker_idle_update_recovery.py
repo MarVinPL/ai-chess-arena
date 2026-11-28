@@ -70,7 +70,7 @@ def test_paused_update_never_creates_idle_recovery_proof(tmp_path):
     delivery.jobs.reserve_update(WORKER, hold_token=TOKEN)
     with sqlite3.connect(path) as db:
         db.execute(
-            "INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+            "INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,?,?,?)",
             (WORKER, "job_12345678", "c" * 32, "acknowledged", 1000.0, 1000.0),
         )
     delivery.jobs.release_update_hold(WORKER, TOKEN)

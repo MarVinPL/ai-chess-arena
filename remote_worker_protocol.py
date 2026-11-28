@@ -6,6 +6,7 @@ from the coordinator in the worker protocol.
 from __future__ import annotations
 
 import re
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,13 +38,17 @@ def validate_job(message: Any) -> dict:
     version = message['version']
     required = {'version', 'job_id', 'fen', 'model_sha256',
                 'max_tokens', 'timeout_seconds'}
-    if version in (2, 3):
+    if version in (2, 3, 4):
         required.add('legal_moves')
     elif version != 1:
         raise ProtocolError('Unsupported protocol version')
-    if version == 3:
+    if version in (3, 4):
         required.add('variant')
+    if version == 4:
+        required.add('lease_token')
     data = _mapping(message, required)
+    if version == 4 and (not isinstance(data['lease_token'], str) or not _SHA.fullmatch(data['lease_token'])):
+        raise ProtocolError('Invalid lease fencing token')
     if not isinstance(data['job_id'], str) or not _ID.fullmatch(data['job_id']):
         raise ProtocolError('Invalid job ID')
     if not isinstance(data['model_sha256'], str) or not _SHA.fullmatch(data['model_sha256']):
@@ -58,7 +63,7 @@ def validate_job(message: Any) -> dict:
         board = board_for_variant(data['fen'], data.get('variant', 'standard'))
     except ValueError as exc:
         raise ProtocolError('Invalid FEN') from exc
-    if version in (2, 3):
+    if version in (2, 3, 4):
         moves = data['legal_moves']
         expected = sorted(move.uci() for move in board.legal_moves)
         if (not isinstance(moves, list) or not 1 <= len(moves) <= 256
@@ -71,14 +76,22 @@ def validate_result(message: Any, job: dict, board: chess.Board) -> chess.Move:
     """Verify correlation and legal UCI at the authoritative VPS coordinator."""
     if 'fen' in job and board.fen() != job['fen']:
         raise ProtocolError('Board changed since assignment')
-    if 'variant' in job or job.get('version') in (1, 2, 3) and 'model_sha256' in job:
+    if 'variant' in job or job.get('version') in (1, 2, 3, 4) and 'model_sha256' in job:
         expected_variant = job.get('variant', 'standard')
         actual_variant = 'elimination' if board.uci_variant == 'chess-elimination' else 'standard'
         if expected_variant != actual_variant:
             raise ProtocolError('Board variant differs from assignment')
-    data = _mapping(message, {'version', 'job_id', 'uci'})
-    if type(data['version']) is not int or data['version'] != 1:
+    fenced = job.get('version') == 4
+    fields = {'version', 'job_id', 'uci'}
+    if fenced:
+        fields.add('lease_token')
+    data = _mapping(message, fields)
+    if type(data['version']) is not int or data['version'] != (2 if fenced else 1):
         raise ProtocolError('Unsupported protocol version')
+    if fenced and (not isinstance(data['lease_token'], str)
+                   or not _SHA.fullmatch(data['lease_token'])
+                   or not secrets.compare_digest(data['lease_token'], job['lease_token'])):
+        raise ProtocolError('Stale or mismatched lease fencing token')
     if data['job_id'] != job['job_id']:
         raise ProtocolError('Unexpected job ID')
     if not isinstance(data['uci'], str) or not _UCI.fullmatch(data['uci']):

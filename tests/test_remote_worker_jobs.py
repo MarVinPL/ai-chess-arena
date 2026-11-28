@@ -128,3 +128,41 @@ def test_durable_termination_failure_does_not_commit_memory(tmp_path):
         sessions.terminate(worker, token, job['job_id'], status='error')
     assert sessions._jobs[job['job_id']].committed is False
     assert durable.state(worker) == 'unknown'
+
+
+def test_legacy_completion_cannot_bypass_phone_checkpoint(tmp_path):
+    import chess
+    from remote_worker_inference_delivery import WorkerInferenceDelivery
+    path = tmp_path / 'jobs.db'
+    worker, job_id = 'worker_12345678', 'job_12345678'
+    delivery = WorkerInferenceDelivery(path, clock=lambda: 100)
+    delivery.register_local_ready(worker, 'b' * 64, 4)
+    board = chess.Board()
+    delivery.assign_from_arena(worker, dict(
+        version=4, variant='standard', job_id=job_id, fen=board.fen(),
+        legal_moves=sorted(m.uci() for m in board.legal_moves),
+        model_sha256='b' * 64, max_tokens=16, timeout_seconds=90))
+    with pytest.raises(ValueError, match='atomic checkpoint'):
+        delivery.jobs.complete(worker, job_id)
+    assert delivery.jobs.state(worker) == 'running'
+    assert delivery.poll_assigned_job(worker)['state'] == 'assigned'
+
+
+@pytest.mark.parametrize('barrier', ['hold', 'pause', 'resume'])
+def test_legacy_completion_rechecks_barriers_atomically(tmp_path, barrier):
+    jobs = DurableWorkerJobs(tmp_path / 'jobs.db', clock=lambda: 100)
+    worker, job = 'worker_12345678', 'job_12345678'
+    jobs.assign(worker, job, timeout_seconds=90)
+    with jobs._db() as db:
+        if barrier == 'hold':
+            db.execute("INSERT INTO worker_update_holds VALUES (?,?,?,?)",
+                       (worker, 'a'*64, 100, 200))
+        elif barrier == 'pause':
+            db.execute("INSERT INTO worker_update_pause_requests (worker_id,job_id,request_id,phase,created_at,acknowledged_at) VALUES (?,?,?,?,?,?)",
+                       (worker, job, 'a'*32, 'requested', 100, None))
+        else:
+            db.execute("INSERT INTO worker_update_resume VALUES (?,?,?,?,?,?)",
+                       (worker, job, 'a'*32, '{}', 'b'*64, 100))
+    with pytest.raises(ValueError):
+        jobs.complete(worker, job)
+    assert jobs.state(worker) == 'running'

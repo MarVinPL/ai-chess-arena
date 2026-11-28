@@ -238,8 +238,20 @@ class DurableWorkerJobs:
         """Only after coordinator validates and commits terminal result."""
         self._id(worker_id)
         self._id(job_id)
-        now = self.clock()
         with self._db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._reject_update_hold(db, worker_id)
+            self._reject_pending_pause(db, worker_id)
+            self._reject_pending_resume(db, worker_id)
+            # Phone assignments can only be completed by the authoritative
+            # atomic checkpoint transaction, never by the legacy terminal API.
+            if db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='worker_inference_assignments'"
+            ).fetchone() and db.execute(
+                "SELECT 1 FROM worker_inference_assignments WHERE worker_id=?", (worker_id,)
+            ).fetchone():
+                raise ValueError('Phone assignment requires atomic checkpoint finalization')
+            now = self.clock()
             result = db.execute('''UPDATE worker_job_safety SET job_id=NULL,
                 state='idle_confirmed',deadline=NULL,updated_at=?
                 WHERE worker_id=? AND job_id=? AND state='running' AND deadline>?''',

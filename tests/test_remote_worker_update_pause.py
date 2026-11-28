@@ -62,7 +62,7 @@ def test_pause_ack_needs_stopped_worker_and_verified_checkpoint(tmp_path):
                           checkpoint_verified=True)
 
 
-def test_outdated_or_duplicate_pause_is_rejected(tmp_path):
+def test_outdated_pause_rejected_and_same_request_is_idempotent(tmp_path):
     db = tmp_path / "pause.db"
     now = [100.]
     jobs = running_registry(db, now)
@@ -70,8 +70,7 @@ def test_outdated_or_duplicate_pause_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="No active"):
         pause.request(WORKER, "job_87654321")
     req = pause.request(WORKER, JOB)
-    with pytest.raises(ValueError, match="already"):
-        pause.request(WORKER, JOB)
+    assert pause.request(WORKER, JOB) == req
     with pytest.raises(ValueError, match="mismatch"):
         pause.clear(WORKER, "f" * 32 if req != "f" * 32 else "e" * 32)
     assert pause.pending(WORKER)["request_id"] == req
@@ -101,10 +100,10 @@ def test_pending_pause_blocks_both_assignment_paths_and_idle_snapshot(tmp_path):
     jobs = running_registry(db, now)
     pause = WorkerUpdatePause(db, clock=lambda: now[0])
     request_id = pause.request(WORKER, JOB)
-    # The old task may complete concurrently. Its completion must not turn
-    # the worker into an assignable resource while STOP/ACK is outstanding.
-    jobs.complete(WORKER, JOB)
-    assert jobs.state(WORKER) == "idle_confirmed"
+    # STOP wins the transaction: late completion cannot release the lease.
+    with pytest.raises(ValueError, match="pause"):
+        jobs.complete(WORKER, JOB)
+    assert jobs.state(WORKER) == "running"
     assert jobs.update_safety_snapshot(WORKER) == ("unknown", None)
     with pytest.raises(ValueError, match="pause"):
         jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
@@ -117,6 +116,8 @@ def test_pending_pause_blocks_both_assignment_paths_and_idle_snapshot(tmp_path):
     assert pause.pending(WORKER)["request_id"] == request_id
     # A controlled cleanup is separate from update authorization.
     pause.clear(WORKER, request_id)
+    assert jobs.state(WORKER) == "running"
+    jobs.complete(WORKER, JOB)
     assert jobs.update_safety_snapshot(WORKER) == ("idle_confirmed", 0)
     jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
 
@@ -153,8 +154,8 @@ def test_pause_request_and_complete_assignment_race_remains_serialized(tmp_path)
 
     def complete_and_assign():
         jobs = DurableWorkerJobs(db, clock=lambda: now[0])
-        jobs.complete(WORKER, JOB)
         try:
+            jobs.complete(WORKER, JOB)
             jobs.assign(WORKER, "job_87654321", timeout_seconds=60)
             return "assigned"
         except ValueError:

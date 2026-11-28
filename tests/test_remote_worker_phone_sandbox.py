@@ -223,7 +223,7 @@ def test_android_v3_readiness_can_receive_classic_v2_job(sandbox):
         assert db.execute("SELECT state,job_id FROM worker_job_safety WHERE worker_id=?", (WORKER,)).fetchone() == ("idle_confirmed", None)
 
 
-@pytest.mark.parametrize("version", [None, True, 1, 4, "3"])
+@pytest.mark.parametrize("version", [None, True, 1, 5, "3"])
 def test_sandbox_rejects_invalid_protocol_without_registering(sandbox, version):
     path, token, post = sandbox
     status, _ = post("ready", {**auth(token), "model_sha256": MODEL_SHA, "protocol_version": version})
@@ -231,3 +231,547 @@ def test_sandbox_rejects_invalid_protocol_without_registering(sandbox, version):
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT count(*) FROM worker_inference_capabilities").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM worker_job_safety").fetchone()[0] == 0
+
+
+def test_power_loss_reconnect_never_recovers_running_job_from_ready(sandbox):
+    """Issue #291: a phone reboot is not evidence that a previous lease stopped."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    checkpoint_before = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    # Simulate loss of the client's in-memory session and a durable STOP request
+    # remaining in SQLite while the phone reconnects with its valid token.
+    req_id = WorkerUpdatePause(path).request(WORKER, job_id)
+    reopened = WorkerUpdatePause(path)
+    assert reopened.pending(WORKER) == {
+        "job_id": job_id, "request_id": req_id, "phase": "requested"
+    }
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[0] == 400
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": req_id
+    }
+    # Neither reboot nor reconnect can release the old lease or change chess.
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == checkpoint_before
+
+
+def test_stop_ack_must_not_be_inferred_from_reconnect_or_wrong_proof(sandbox):
+    """Issue #291: no STOP ACK from merely receiving STOP or asserting ready."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    stop = WorkerUpdatePause(path)
+    request_id = stop.request(WORKER, job_id)
+    old = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    cases = [
+        (False, False, request_id),
+        (True, False, request_id),
+        (False, True, request_id),
+        (True, True, "0" * 32),
+    ]
+    for stopped, checkpoint_verified, received_id in cases:
+        with pytest.raises(ValueError):
+            stop.acknowledge(
+                WORKER, job_id, received_id,
+                worker_stopped=stopped,
+                checkpoint_verified=checkpoint_verified,
+            )
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})[0] == 409
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == old
+
+
+def test_abrupt_power_loss_without_stop_does_not_reassign_or_recover(sandbox):
+    """A reconnect to a running job is not a successful STOP/ACK handshake."""
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    # Simulated process death: no STOP was requested or acknowledged.
+    # Valid old credentials on reconnect must not steal the running lease.
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "blocked"
+    code, job = post("job-poll", who)
+    assert code == 200 and job["state"] == "assigned"
+    assert job["job"]["job_id"] == job_id
+    assert post("update-pause-poll", who)[1]["instruction"] == {"action": "none"}
+    with pytest.raises(ValueError, match="idle"):
+        arm_one_job(path, WORKER)
+
+    # There is no new checkpoint or false idle transition.
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,)
+        ).fetchone()[0] == 0
+
+
+def test_trusted_ack_does_not_release_execution_lease_or_allow_replay(sandbox):
+    """ACK records a verified stop, but is NOT a new idle lease or move commit."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    before = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    pause = WorkerUpdatePause(path)
+    request_id = pause.request(WORKER, job_id)
+
+    # Only a trusted coordinator is allowed to call this method AFTER independent
+    # validation. The worker HTTP API exposes no route for asserting this proof.
+    pause.acknowledge(
+        WORKER, job_id, request_id,
+        worker_stopped=True, checkpoint_verified=True,
+    )
+    assert pause.poll_stop_instruction(WORKER) == {
+        "action": "await_reconciliation"
+    }
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "await_reconciliation"
+    }
+    with pytest.raises(ValueError, match="Stale pause"):
+        pause.acknowledge(
+            WORKER, job_id, request_id,
+            worker_stopped=True, checkpoint_verified=True,
+        )
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})[0] == 409
+    with pytest.raises(ValueError):
+        arm_one_job(path, WORKER)
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+
+    with sqlite3.connect(path) as db:
+        phase, ack_at = db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone()
+        assert phase == "acknowledged" and ack_at is not None
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 0
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == before
+
+
+def test_stop_between_result_read_and_checkpoint_commit(sandbox, monkeypatch):
+    """STOP arriving after runner's read must still prevent a chess commit."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original_checkpoint = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    code, reply = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4",
+    }})
+    assert code == 200 and reply["state"] == "received_not_applied"
+
+    result_read = threading.Event()
+    continue_finalization = threading.Event()
+    original_read = WorkerInferenceDelivery.read_arena_result
+
+    def delayed_read(self, worker_id, selected_job):
+        proposed = original_read(self, worker_id, selected_job)
+        result_read.set()
+        if not continue_finalization.wait(timeout=5):
+            raise RuntimeError("Timed out waiting to test concurrent STOP")
+        return proposed
+
+    monkeypatch.setattr(WorkerInferenceDelivery, "read_arena_result", delayed_read)
+    outcome = []
+
+    def finalize_in_background():
+        try:
+            outcome.append(("success", finalize_one_result(path, WORKER)))
+        except Exception as exc:
+            outcome.append(("error", exc))
+
+    runner = threading.Thread(target=finalize_in_background)
+    runner.start()
+    try:
+        assert result_read.wait(timeout=5), "Runner never reached result read"
+        request_id = WorkerUpdatePause(path).request(WORKER, job_id)
+        assert request_id
+    finally:
+        continue_finalization.set()
+        runner.join(timeout=5)
+
+    assert not runner.is_alive(), "Runner remained blocked"
+    assert len(outcome) == 1 and outcome[0][0] == "error"
+    assert isinstance(outcome[0][1], ValueError)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original_checkpoint
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 1
+
+
+def test_stop_fences_coordinator_read_even_for_result_received_before_stop(sandbox):
+    """A previously stored legal UCI must not be handed to the runner after STOP."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    response_code, accepted = post("job-result", {**who, "result": {
+        "version": 1, "job_id": job_id, "uci": "e2e4"
+    }})
+    assert response_code == 200 and accepted["state"] == "received_not_applied"
+    delivery = WorkerInferenceDelivery(path)
+    assert delivery.read_arena_result(WORKER, job_id) == "e2e4"
+
+    # STOP wins over an uncommitted result, including coordinator-side reads.
+    stop = WorkerUpdatePause(path)
+    request_id = stop.request(WORKER, job_id)
+    with pytest.raises(ValueError, match="fenced"):
+        delivery.read_arena_result(WORKER, job_id)
+    with pytest.raises(ValueError):
+        finalize_one_result(path, WORKER)
+    stop.acknowledge(WORKER, job_id, request_id,
+                     worker_stopped=True, checkpoint_verified=True)
+    with pytest.raises(ValueError, match="fenced"):
+        delivery.read_arena_result(WORKER, job_id)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+        assert db.execute(
+            "SELECT result_json FROM worker_inference_results WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() is not None  # still durable, but fenced from chess
+
+
+def test_opt_in_fenced_job_rejects_stale_lease_and_protocol_downgrade(sandbox):
+    """A new-generation assignment can never accept an old job's UCI receipt."""
+    import secrets
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA, "protocol_version": 4})[1]["state"] == "ready"
+    job_id = "fenced_" + secrets.token_hex(12)
+    job = {
+        "version": 4, "variant": "standard", "job_id": job_id, "fen": chess.STARTING_FEN,
+        "model_sha256": MODEL_SHA,
+        "legal_moves": sorted(move.uci() for move in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 600,
+    }
+    delivery = WorkerInferenceDelivery(path)
+    assert delivery.assign_from_arena(WORKER, job) == job_id
+    code, poll = post("job-poll", who)
+    assert code == 200
+    assert {k:v for k,v in poll["job"].items() if k != "lease_token"} == job
+    job = poll["job"]
+    lease_token = job["lease_token"]
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+
+    def result(version, **fields):
+        return post("job-result", {**who, "result": {
+            "version": version, "job_id": job_id, "uci": "e2e4", **fields,
+        }})[0]
+
+    assert result(1) == 409  # No old-protocol bypass.
+    assert result(2, lease_token="0" * 64) == 409
+    assert result(2, lease_token=lease_token[:-1] + "g") == 409
+    assert result(2, lease_token=lease_token) == 200
+    assert result(2, lease_token=lease_token) == 200  # idempotent receipt
+    assert delivery.read_arena_result(WORKER, job_id) == "e2e4"
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+    assert finalize_one_result(path, WORKER) == "e2e4"
+    with pytest.raises(ValueError):
+        delivery.submit_inference_result(WORKER, {
+            "version": 2, "job_id": job_id, "uci": "e2e4",
+            "lease_token": lease_token,
+        })
+
+
+def test_fenced_job_still_rejects_correct_capability_after_stop(sandbox):
+    """A matching v4 lease capability never overrides the durable STOP gate."""
+    import secrets
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA, "protocol_version": 4})[1]["state"] == "ready"
+    job_id = "fenced_" + secrets.token_hex(12)
+    job = {
+        "version": 4, "variant": "standard", "job_id": job_id, "fen": chess.STARTING_FEN,
+        "model_sha256": MODEL_SHA,
+        "legal_moves": sorted(move.uci() for move in chess.Board().legal_moves),
+        "max_tokens": 32, "timeout_seconds": 600,
+    }
+    delivery = WorkerInferenceDelivery(path)
+    delivery.assign_from_arena(WORKER, job)
+    job = post("job-poll", who)[1]["job"]
+    original = tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID)
+    request_id = WorkerUpdatePause(path).request(WORKER, job_id)
+    assert post("job-result", {**who, "result": {
+        "version": 2, "job_id": job_id, "uci": "e2e4",
+        "lease_token": job["lease_token"],
+    }})[0] == 409
+    assert post("job-poll", who)[1]["state"] == "blocked"
+    assert post("update-pause-poll", who)[1]["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": request_id,
+        "lease_token_sha256": hashlib.sha256(
+            job["lease_token"].encode("ascii")
+        ).hexdigest(),
+    }
+    # Retrying STOP never reveals the bearer lease token.
+    instruction = post("update-pause-poll", who)[1]["instruction"]
+    assert instruction["lease_token_sha256"] != job["lease_token"]
+    assert instruction["request_id"] == request_id
+    lease_digest = instruction["lease_token_sha256"]
+
+    pause = WorkerUpdatePause(path)
+    with pytest.raises(ValueError, match="native STOP report"):
+        pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+    assert pause.pending(WORKER)["phase"] == "requested"
+    report = {**who, "job_id": job_id, "request_id": request_id, "lease_token": job["lease_token"]}
+    for wrong in ({"request_id": "wrong"}, {"lease_token": lease_digest}):
+        assert post("native-stop-report", {**report, **wrong})[0] == 409
+    assert post("native-stop-report", {**report, "token": "invalid"})[0] == 401
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM worker_native_stop_reports").fetchone() == (0,)
+        original_report = None
+        for _ in range(2):
+            status, reply = post("native-stop-report", report)
+            assert status == 200 and reply["state"] == "stop_report_received"
+            assert reply["install_allowed"] is False and "lease_token" not in reply
+            stored = db.execute("SELECT * FROM worker_native_stop_reports").fetchone()
+            assert stored[:4] == (WORKER, job_id, request_id, lease_digest)
+            if original_report is not None:
+                assert stored == original_report
+            original_report = stored
+    assert pause.pending(WORKER)["phase"] == "requested"
+    for column, wrong, correct in (
+        ("job_id", "job_wrong00", job_id),
+        ("request_id", "f" * 32 if request_id != "f" * 32 else "e" * 32, request_id),
+        ("lease_sha256", "0" * 64 if lease_digest != "0" * 64 else "1" * 64, lease_digest),
+    ):
+        with sqlite3.connect(path) as db:
+            db.execute(f"UPDATE worker_native_stop_reports SET {column}=? WHERE worker_id=?",
+                       (wrong, WORKER))
+        with pytest.raises(ValueError, match="native STOP report"):
+            pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                              checkpoint_verified=True, lease_token_sha256=lease_digest)
+        assert pause.pending(WORKER)["phase"] == "requested"
+        with sqlite3.connect(path) as db:
+            db.execute(f"UPDATE worker_native_stop_reports SET {column}=? WHERE worker_id=?",
+                       (correct, WORKER))
+    for evidence in (None, "0" * 64, job["lease_token"]):
+        with pytest.raises(ValueError, match="stale or missing lease"):
+            pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                              checkpoint_verified=True, lease_token_sha256=evidence)
+    with pytest.raises(ValueError, match="has not stopped"):
+        pause.acknowledge(WORKER, job_id, request_id, worker_stopped=False,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+    assert post("update-pause-ack", {
+        **who, "job_id": job_id, "request_id": request_id,
+        "lease_token_sha256": lease_digest,
+    })[0] == 404
+    assert pause.pending(WORKER)["phase"] == "requested"
+
+    pause.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                      checkpoint_verified=True, lease_token_sha256=lease_digest)
+    with sqlite3.connect(path) as db:
+        before_retry = db.execute(
+            "SELECT phase, acknowledged_at FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()
+        assert before_retry[0] == "acknowledged"
+        retry = WorkerUpdatePause(path, clock=lambda: before_retry[1] + 1)
+        retry.acknowledge(WORKER, job_id, request_id, worker_stopped=True,
+                          checkpoint_verified=True, lease_token_sha256=lease_digest)
+        assert db.execute(
+            "SELECT phase, acknowledged_at FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == before_retry
+    assert post("update-pause-poll", who)[1]["instruction"] == {"action": "await_reconciliation"}
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+
+    params = dict(
+        hold_token="a" * 64,
+        checkpoint={"schema_version": 1, "job_id": job_id,
+                    "resume_mode": "resume", "payload": {"fen": chess.STARTING_FEN}},
+        worker_stopped_verified=True, checkpoint_verifier=lambda _: True,
+    )
+
+    def assert_blocked(pattern):
+        with pytest.raises(ValueError, match=pattern):
+            WorkerUpdatePause(path).finalize_verified_pause(WORKER, job_id, request_id, **params)
+        assert pause.pending(WORKER)["phase"] == "acknowledged"
+        assert pause.read_resume_checkpoint(WORKER) is None
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                              (WORKER,)).fetchone() == ("running", job_id)
+            assert db.execute("SELECT count(*) FROM worker_update_holds").fetchone()[0] == 0
+
+    with sqlite3.connect(path) as db:
+        db.execute("DELETE FROM worker_native_stop_reports WHERE worker_id=?", (WORKER,))
+    assert_blocked("native STOP report")
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO worker_native_stop_reports VALUES (?,?,?,?,?)", original_report)
+        db.execute("UPDATE worker_native_stop_reports SET lease_sha256=? WHERE worker_id=?",
+                   ("0" * 64 if lease_digest != "0" * 64 else "1" * 64, WORKER))
+    assert_blocked("native STOP report")
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_native_stop_reports SET lease_sha256=? WHERE worker_id=?",
+                   (lease_digest, WORKER))
+        old_json = db.execute("SELECT job_json FROM worker_inference_assignments WHERE worker_id=?",
+                              (WORKER,)).fetchone()[0]
+        changed = dict(job, lease_token="f" * 64 if job["lease_token"] != "f" * 64 else "e" * 64)
+        import json
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (json.dumps(changed), WORKER))
+    assert_blocked("stale or missing lease")
+    with sqlite3.connect(path) as db:
+        legacy = dict(job, version=2)
+        legacy.pop("lease_token")
+        legacy.pop("variant")
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (json.dumps(legacy), WORKER))
+    assert_blocked("stale or missing lease")
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?",
+                   (old_json, WORKER))
+    final = WorkerUpdatePause(path).finalize_verified_pause(WORKER, job_id, request_id, **params)
+    assert pause.read_resume_checkpoint(WORKER)["sha256"] == final["sha256"]
+    assert pause.jobs.validate_update_hold(WORKER, params["hold_token"])
+    pause.jobs.release_update_hold(WORKER, params["hold_token"])
+    with pytest.raises(ValueError, match="fresh lease"):
+        pause.reconcile_resume(
+            WORKER, job_id, request_id, checkpoint_sha256=final["sha256"],
+            timeout_seconds=60, worker_ready_verified=True,
+            resume_accepted_verified=True, checkpoint_verifier=lambda _: True,
+        )
+    with pytest.raises(ValueError, match="Fenced pause"):
+        pause.clear(WORKER, request_id)
+    assert pause.read_resume_checkpoint(WORKER)["sha256"] == final["sha256"]
+    assert pause.pending(WORKER)["phase"] == "acknowledged"
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+                          (WORKER,)).fetchone() == ("unknown", None)
+    assert tournament_checkpoint.load(path, SANDBOX_TOURNAMENT_ID) == original
+
+
+def test_stop_poll_works_before_inference_schema_exists(sandbox, tmp_path, monkeypatch):
+    from remote_worker_jobs import DurableWorkerJobs
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    _, _, post = sandbox
+    legacy_db = tmp_path / "legacy.sqlite3"
+    token = WorkerTokenStore(legacy_db).issue(WORKER, ttl_seconds=600)
+    monkeypatch.setattr(server, "DB", legacy_db)
+    who = auth(token)
+    code, reply = post("update-pause-poll", who)
+    assert code == 200
+    assert reply["instruction"] == {"action": "none"}
+
+    job_id = "legacy_job_123456"
+    DurableWorkerJobs(legacy_db).assign(WORKER, job_id, timeout_seconds=60)
+    pause = WorkerUpdatePause(legacy_db)
+    request_id = pause.request(WORKER, job_id)
+    code, reply = post("update-pause-poll", who)
+    assert code == 200
+    assert reply["instruction"] == {
+        "action": "stop_checkpoint", "job_id": job_id, "request_id": request_id,
+    }
+    assert reply["install_allowed"] is False
+    assert pause.pending(WORKER)["phase"] == "requested"
+    with sqlite3.connect(legacy_db) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name = 'worker_inference_assignments'"
+        ).fetchone() is None
+
+
+def test_coordinator_stop_retry_reuses_request_without_faking_ack(sandbox):
+    """Lost STOP response can be retried without minting a new STOP generation."""
+    from remote_worker_update_pause import WorkerUpdatePause
+
+    path, token, post = sandbox
+    who = auth(token)
+    assert post("ready", {**who, "model_sha256": MODEL_SHA})[1]["state"] == "ready"
+    job_id = arm_one_job(path, WORKER)
+    first = WorkerUpdatePause(path).request(WORKER, job_id)
+    # Independent coordinator instance simulates a restart after losing reply.
+    retry = WorkerUpdatePause(path)
+    assert retry.request(WORKER, job_id) == first
+    assert retry.request(WORKER, job_id) == first
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM worker_update_pause_requests WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone()[0] == 1
+        assert db.execute(
+            "SELECT phase,acknowledged_at FROM worker_update_pause_requests "
+            "WHERE worker_id=?", (WORKER,),
+        ).fetchone() == ("requested", None)
+        assert db.execute(
+            "SELECT state,job_id FROM worker_job_safety WHERE worker_id=?",
+            (WORKER,),
+        ).fetchone() == ("running", job_id)
+    for _ in range(2):
+        assert post("update-pause-poll", who)[1]["instruction"] == {
+            "action": "stop_checkpoint", "job_id": job_id, "request_id": first,
+        }
+    with pytest.raises(ValueError):
+        retry.request(WORKER, "another_job_123456")
+    retry.acknowledge(WORKER, job_id, first,
+                      worker_stopped=True, checkpoint_verified=True)
+    with pytest.raises(ValueError, match="another state"):
+        retry.request(WORKER, job_id)
+    assert post("job-poll", who)[1]["state"] == "blocked"
