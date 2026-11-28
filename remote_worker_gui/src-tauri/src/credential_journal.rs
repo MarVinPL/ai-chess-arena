@@ -4,7 +4,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-#[cfg(target_os = "android")]
 use std::sync::Mutex;
 
 #[cfg(target_os = "android")]
@@ -261,6 +260,45 @@ fn checked_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), Strin
     set_state(dir, State::Present)
 }
 
+// The STOP slot is write-once in #325. Only a joined STOP may create it.
+// Absence is not recovery evidence. Never adopt orphan ciphertext.
+#[derive(Debug, PartialEq, Eq)]
+enum StopWriteError { Conflict, Uncertain }
+impl From<String> for StopWriteError {
+    fn from(_: String) -> Self { Self::Uncertain }
+}
+fn stop_read(dir: &Path, store: &impl Store) -> Result<String, String> {
+    if state(dir)? != State::Present { return Err(ERROR.into()); }
+    let raw = checked_read(dir, store)?.ok_or_else(|| ERROR.to_owned())?;
+    sync_dir(dir)?;
+    Ok(raw)
+}
+fn stop_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), StopWriteError> {
+    match state(dir)? {
+        State::Present => {
+            if stop_read(dir, store)? != raw { return Err(StopWriteError::Conflict); }
+            return Ok(());
+        }
+        State::Uninitialized => {
+            if store.read()?.is_some() { return Err(StopWriteError::Uncertain); }
+        }
+        _ => return Err(StopWriteError::Uncertain),
+    }
+    set_state(dir, State::Uncertain)?;
+    store.insert(raw)?;
+    if store.read()?.as_deref() != Some(raw) { return Err(StopWriteError::Uncertain); }
+    set_state(dir, State::Present)?;
+    Ok(())
+}
+fn stop_locked(gate: &Mutex<bool>, operation: impl FnOnce() -> Result<(), StopWriteError>)
+    -> Result<(), StopWriteError> {
+    let mut guard = gate.lock().map_err(|_| StopWriteError::Uncertain)?;
+    if *guard { return Err(StopWriteError::Uncertain); }
+    let result = operation();
+    if result == Err(StopWriteError::Uncertain) { *guard = true; }
+    result
+}
+
 fn checked_delete(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
     if checked_read(dir, store)?.as_deref() != Some(raw) {
         return Err(ERROR.into());
@@ -293,6 +331,7 @@ mod android {
         root.join(match slot {
             Slot::PendingHold => "credential-pending-hold",
             Slot::PendingInstall => "credential-pending-install",
+            Slot::NativeStop => "native-stop-outbox-v2",
         })
     }
 
@@ -529,6 +568,49 @@ mod android {
         Ok(JournalInitCompletion { origin, worker_id: worker_id.into(), nonce: nonce.into(), pair_marker })
     }
 
+    struct NativeStop;
+    impl Store for NativeStop {
+        fn read(&self) -> Result<Option<String>, String> {
+            credential_vault::journals::stop_read()
+        }
+        fn insert(&self, _: &str) -> Result<(), String> {
+            // The raw Store interface must never write the native STOP slot.
+            Err(ERROR.into())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
+    struct JoinedStore<'a>(&'a crate::android_native_stop_outbox::JoinedStop);
+    impl Store for JoinedStore<'_> {
+        fn read(&self) -> Result<Option<String>, String> { NativeStop.read() }
+        fn insert(&self, raw: &str) -> Result<(), String> {
+            if self.0.encoded() != raw.as_bytes() { return Err(ERROR.into()); }
+            credential_vault::journals::stop_insert(self.0)
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
+    pub(crate) fn native_stop_read() -> Result<Option<String>, String> {
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard { return Err(ERROR.into()); }
+        let root = crate::android_worker_token_store::journal_root()?;
+        let path = dir(&root, Slot::NativeStop)?;
+        stop_read(&path, &NativeStop).map(Some)
+    }
+
+    pub(crate) fn native_stop_insert(proof: &crate::android_native_stop_outbox::JoinedStop)
+        -> Result<(), crate::android_native_stop_outbox::OutboxError> {
+        use crate::android_native_stop_outbox::OutboxError;
+        let bytes = proof.encoded();
+        let raw = std::str::from_utf8(&bytes).map_err(|_| OutboxError::Invalid)?;
+        stop_locked(&GATE, || {
+            let root = crate::android_worker_token_store::journal_root()?;
+            let path = dir(&root, Slot::NativeStop)?;
+            stop_insert(&path, &JoinedStore(proof), raw)
+        }).map_err(|e| match e {
+            StopWriteError::Conflict => OutboxError::Conflict,
+            StopWriteError::Uncertain => OutboxError::Storage,
+        })
+    }
+
     fn require_pair() -> Result<std::path::PathBuf, String> {
         let root = crate::android_worker_token_store::journal_root()?;
         available_pair(&root)?;
@@ -536,6 +618,7 @@ mod android {
     }
 
     pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -543,6 +626,7 @@ mod android {
         checked_read(&dir(&require_pair()?, slot)?, &Native(slot))
     }
     pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let mut guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -557,6 +641,7 @@ mod android {
         result
     }
     pub(crate) fn delete_expected(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let mut guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -574,6 +659,7 @@ mod android {
 #[cfg(target_os = "android")]
 pub(crate) use android::{
     check_registration_storage, completion, delete_expected, finish_reconciliation,
+    native_stop_read, native_stop_insert,
     initialize_authorized_pair, insert, needs_initialization, prepare_reconciliation, read, JournalBaseline,
 };
 
@@ -628,6 +714,143 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn native_stop_write_once_and_missing_ciphertext() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        assert!(checked_read(&d.0, &store).is_err());
+        stop_insert(&d.0, &store, "synthetic-stop").unwrap();
+        stop_insert(&d.0, &store, "synthetic-stop").unwrap();
+        assert!(stop_insert(&d.0, &store, "different").is_err());
+        assert_eq!(checked_read(&d.0, &store), Ok(Some("synthetic-stop".into())));
+        assert_eq!(fs::read(d.0.join("state.v1")).unwrap(), b"P");
+        *store.value.borrow_mut() = None;
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "different").is_err());
+    }
+
+    #[test]
+    fn native_stop_interrupted_commit_and_orphan_fail_closed() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        *store.value.borrow_mut() = Some("orphan".into());
+        assert!(stop_insert(&d.0, &store, "new").is_err());
+        *store.value.borrow_mut() = None;
+        store.fail.set(true);
+        assert!(stop_insert(&d.0, &store, "first").is_err());
+        assert_eq!(state(&d.0), Ok(State::Uncertain));
+        store.fail.set(false);
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "first").is_err());
+        assert_eq!(store.read(), Ok(Some("first".into())));
+    }
+
+    #[test]
+    fn native_stop_locked_concurrent_conflict_and_retry() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let gate = Mutex::new(false);
+        let store = Mutex::new(Fake::default());
+        let barrier = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let run = |raw: &str| {
+                barrier.wait();
+                stop_locked(&gate, || stop_insert(&d.0, &*store.lock().unwrap(), raw))
+            };
+            let a = scope.spawn(move || run("first"));
+            let b = scope.spawn(move || run("second"));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        let winner = if a.is_ok() {
+            assert_eq!(b, Err(StopWriteError::Conflict)); "first"
+        } else {
+            assert_eq!(a, Err(StopWriteError::Conflict)); assert!(b.is_ok()); "second"
+        };
+        assert!(!*gate.lock().unwrap());
+        assert_eq!(stop_read(&d.0, &*store.lock().unwrap()).unwrap(), winner);
+        assert!(stop_locked(&gate, || stop_insert(&d.0, &*store.lock().unwrap(), winner)).is_ok());
+    }
+    #[test]
+    fn native_stop_empty_and_uncertainty_are_blocked() {
+        let d = Temp::new();
+        let store = Fake::default();
+        assert!(stop_read(&d.0, &store).is_err());
+        let gate = Mutex::new(false);
+        assert_eq!(stop_locked(&gate, || stop_insert(&d.0, &store, "first")), Err(StopWriteError::Uncertain));
+        assert!(*gate.lock().unwrap());
+        assert_eq!(stop_locked(&gate, || panic!("fenced")), Err(StopWriteError::Uncertain));
+    }
+    // File-backed synthetic vault: exercises actual process death and durable
+    // markers, not Android Keystore cryptography or SharedPreferences internals.
+    struct CrashStore<'a> { root: &'a Path, boundary: &'a str }
+    impl Store for CrashStore<'_> {
+        fn read(&self) -> Result<Option<String>, String> {
+            match fs::read_to_string(self.root.join("fake-vault")) {
+                Ok(raw) => Ok(Some(raw)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(ERROR.into()),
+            }
+        }
+        fn insert(&self, raw: &str) -> Result<(), String> {
+            if self.boundary == "before-vault" { std::process::exit(73); }
+            let mut f = OpenOptions::new().create_new(true).write(true).mode(0o600)
+                .open(self.root.join("fake-vault")).map_err(|_| ERROR)?;
+            f.write_all(raw.as_bytes()).map_err(|_| ERROR)?;
+            f.sync_all().map_err(|_| ERROR)?;
+            sync_dir(self.root)?;
+            if self.boundary == "after-vault" { std::process::exit(73); }
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
+    #[test]
+    fn native_stop_crash_child() {
+        let Some(root) = std::env::var_os("ARENA_STOP_JOURNAL_CHILD") else { return; };
+        let root = std::path::PathBuf::from(root);
+        let boundary = std::env::var("ARENA_STOP_JOURNAL_BOUNDARY").unwrap();
+        let store = CrashStore { root: &root, boundary: &boundary };
+        stop_insert(&root, &store, "synthetic-only").unwrap();
+        std::process::exit(73);
+    }
+    #[test]
+    fn native_stop_process_exit_at_vault_boundaries() {
+        for boundary in ["before-vault", "after-vault", "committed"] {
+            let d = Temp::new();
+            fs::remove_file(d.0.join("state.v1")).unwrap();
+            let name = format!("{}::native_stop_crash_child",
+                module_path!().split_once("::").unwrap().1);
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name])
+                .env("ARENA_STOP_JOURNAL_CHILD", &d.0)
+                .env("ARENA_STOP_JOURNAL_BOUNDARY", boundary)
+                .output().unwrap().status;
+            assert_eq!(status.code(), Some(73));
+            let store = CrashStore { root: &d.0, boundary: "" };
+            if boundary == "committed" {
+                assert_eq!(checked_read(&d.0, &store), Ok(Some("synthetic-only".into())));
+                stop_insert(&d.0, &store, "synthetic-only").unwrap();
+            } else {
+                assert_eq!(state(&d.0), Ok(State::Uncertain));
+                assert!(checked_read(&d.0, &store).is_err());
+                assert!(stop_insert(&d.0, &store, "synthetic-only").is_err());
+            }
+            assert!(stop_insert(&d.0, &store, "other").is_err());
+        }
+    }
+    #[test]
+    fn native_stop_partial_marker_blocks_even_with_vault_value() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        stop_insert(&d.0, &store, "synthetic").unwrap();
+        OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(d.0.join("state.stage")).unwrap().sync_all().unwrap();
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "synthetic").is_err());
+    }
+
     const IDENTITY: &str = concat!("0123456789abcdef0123456789abcdef",
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     const PROVEN: BaselineEvidence = BaselineEvidence {

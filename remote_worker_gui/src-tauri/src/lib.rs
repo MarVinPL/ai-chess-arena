@@ -1,5 +1,8 @@
 #[cfg(any(target_os = "android", all(test, unix)))]
 #[allow(dead_code)]
+mod android_native_stop_outbox;
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[allow(dead_code)]
 mod credential_journal;
 // Native updater asset metadata gate; installation stays disabled until
 // verified APK bytes, signing certificate, package and coordinator idle checks.
