@@ -33,6 +33,9 @@ class DurableWorkerJobs:
                 worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL,
                 token_digest BLOB NOT NULL, created_at REAL NOT NULL)""")
 
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_origins (
+                worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL, origin TEXT NOT NULL)""")
+
             db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_completions (
                 worker_id TEXT NOT NULL, nonce TEXT NOT NULL, token_digest BLOB NOT NULL,
                 pair_marker TEXT NOT NULL, PRIMARY KEY (worker_id, nonce))""")
@@ -346,7 +349,7 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
-    def acquire_journal_init(self, worker_id, token, nonce, *, admit):
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None):
         """Durable non-expiring fence. No automatic release on timeout/restart."""
         from remote_worker_tokens import WorkerTokenStore
         if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
@@ -397,6 +400,8 @@ class DurableWorkerJobs:
                 'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
                 (worker_id, nonce, WorkerTokenStore._digest(token), now),
             )
+            if origin is not None:
+                db.execute('INSERT INTO worker_journal_init_origins VALUES (?,?,?)', (worker_id, nonce, origin))
         return {
             'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
             'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
@@ -425,7 +430,10 @@ class DurableWorkerJobs:
 
             fence = db.execute('SELECT nonce,token_digest FROM worker_journal_init_fences WHERE worker_id=?',
                                (worker_id,)).fetchone()
-            if fence and fence != (nonce, digest):
+            if fence and (fence != (nonce, digest) or db.execute(
+                'SELECT origin FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                (worker_id, nonce),
+            ).fetchone() != (origin,)):
                 raise ValueError('Journal initialization fence changed')
             receipt = db.execute(
                 'SELECT token_digest,pair_marker FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?',
@@ -456,6 +464,8 @@ class DurableWorkerJobs:
                 )
                 if deleted.rowcount != 1:
                     raise ValueError('Journal initialization fence changed')
+                db.execute('DELETE FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                           (worker_id, nonce))
         return {
             'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
             'worker_id': worker_id, 'nonce': nonce, 'completed': True,

@@ -666,7 +666,7 @@ def test_journal_init_completion_conflicts_and_idempotent_response(endpoint):
 
     db, token, post = endpoint
     journal_idle(db)
-    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+    assert post(request_data(token), route="journal-init-acquire", headers={"Host": "arena.example"})[0] == 200
     origin = "https://arena.example"
     marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
                                 sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
@@ -675,6 +675,10 @@ def test_journal_init_completion_conflicts_and_idempotent_response(endpoint):
         return post(body, route="journal-init-complete", headers={"Host": host})
 
     assert complete(payload, host="other.example")[0] == 400
+    other = "https://other.example"
+    other_marker = sha256(b"\0".join((other.encode(), WORKER_ID.encode(),
+                                      sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
+    assert complete(dict(payload, origin=other, pair_marker=other_marker), host="other.example")[0] == 409
     assert complete(dict(payload, pair_marker="a"*64))[0] == 409
     assert complete(dict(payload, nonce="b"*32))[0] == 409
     assert complete(dict(payload, token="c"*43))[0] == 401
@@ -703,7 +707,7 @@ def test_journal_init_completion_under_rotated_token_keeps_fence(endpoint):
 
     db, token, post = endpoint
     journal_idle(db)
-    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+    assert post(request_data(token), route="journal-init-acquire", headers={"Host": "arena.example"})[0] == 200
     rotated = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
     origin = "https://arena.example"
     marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
