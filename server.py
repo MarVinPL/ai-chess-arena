@@ -2076,6 +2076,28 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError) as exc:
                 self.send_json({'error': str(exc)}, 400)
             return
+        if path == '/api/remote-workers/journal-init-acquire':
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token', 'nonce'}:
+                    raise WorkerRequestError(400)
+                nonce = payload['nonce']
+                if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
+                    raise WorkerRequestError(400)
+                result = remote_worker_job_registry.WorkerJobRegistry(DB).acquire_journal_init(
+                    payload['worker_id'], payload['token'], nonce,
+                    admit=lambda worker_id: self._admit_worker_identity(path, worker_id))
+                if result is None:
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                else:
+                    self.send_json(result)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except ValueError:
+                self.send_json({'error': 'Inicjalizacja zablokowana'}, 409)
+            except Exception:
+                self.send_json({'error': 'Nie można potwierdzić blokady'}, 503)
+            return
         if path == '/api/remote-workers/update-journal-evidence':
             try:
                 payload = self._read_worker_request(path)

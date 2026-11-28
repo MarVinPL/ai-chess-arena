@@ -45,6 +45,8 @@ class BoundWorkerResults(WorkerResultJournal):
                 raise ValueError('Invalid inference token budget')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
+            if self._journal_init_fenced(db, worker_id):
+                raise ValueError('Worker journal initialization fenced')
             row = db.execute('SELECT payload_json,sha256 FROM tournament_checkpoints WHERE tournament_id=?', (tournament_id,)).fetchone()
             if not row or row[1] != expected_sha256 or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
                 raise ValueError('Checkpoint mismatch')
@@ -122,6 +124,8 @@ class BoundWorkerResults(WorkerResultJournal):
             raise ValueError('Independent operator and worker confirmation required')
         with self._db() as db:
             db.execute('BEGIN IMMEDIATE')
+            if self._journal_init_fenced(db, worker_id):
+                raise ValueError('Worker journal initialization fenced')
             row = db.execute('SELECT state,job_id FROM worker_job_safety WHERE worker_id=?', (worker_id,)).fetchone()
             if row is None or row[0] != 'unknown' or row[1] is not None:
                 raise ValueError('Worker not eligible for restart reconciliation')

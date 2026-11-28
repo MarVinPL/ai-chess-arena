@@ -435,6 +435,7 @@ def test_journal_evidence_blocks_each_unresolved_record(endpoint, table, values,
     assert data[flag] is True and data["state"] == "unknown"
     assert data["active_tasks"] is None and data["initialization_allowed"] is False
     assert "a"*64 not in json.dumps(data)
+    assert post(request_data(token), route="journal-init-acquire")[0] == 409
 
 
 def test_journal_evidence_missing_schema_and_stale_idle(endpoint):
@@ -522,3 +523,138 @@ def test_journal_evidence_rate_limit_and_running_state(endpoint):
         status, data = post(request_data(token), route="update-journal-evidence")
         assert status == 200 and data["state"] == "unknown"
     assert post(request_data(token), route="update-journal-evidence")[0] == 429
+
+
+def test_journal_init_token_that_expires_during_acquire_leaves_no_fence(endpoint):
+    db, token, _ = endpoint
+    journal_idle(db)
+    now = time.time()
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_tokens SET expires_at=?", (now + 1,))
+    times = iter((now, now + 2))
+    registry = remote_worker_job_registry.WorkerJobRegistry(db, clock=lambda: next(times))
+    assert registry.acquire_journal_init(WORKER_ID, token, NONCE, admit=lambda _: None) is None
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT * FROM worker_journal_init_fences").fetchall() == []
+        assert conn.execute("SELECT name FROM sqlite_schema WHERE type='trigger'").fetchall() == []
+
+
+def test_journal_init_blocks_readiness_reservation_and_restart(endpoint):
+    from remote_worker_inference_delivery import WorkerInferenceDelivery
+    from remote_worker_job_binding import BoundWorkerResults
+    from remote_worker_readiness import WorkerNotReady, assert_worker_eligible
+
+    db, token, post = endpoint
+    delivery = WorkerInferenceDelivery(db)
+    model = "a"*64
+    assert delivery.register_local_ready(WORKER_ID, model) == "ready"
+    assert delivery.find_ready_worker(model) == WORKER_ID
+    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+
+    registry = remote_worker_job_registry.WorkerJobRegistry(db)
+    assert delivery.find_ready_worker(model) is None
+    assert delivery.poll_assigned_job(WORKER_ID) == {"state": "blocked"}
+    assert post(request_data(token))[1]["state"] == "unknown"
+    assert post(request_data(token), route="update-journal-evidence")[1]["state"] == "unknown"
+    assert post(dict(request_data(token), model_sha256=model), route="ready")[0] == 400
+    assert post(dict(request_data(token), hold_token="b"*64), route="update-reserve")[0] == 409
+    with pytest.raises(WorkerNotReady, match="initialization fenced"):
+        assert_worker_eligible(db, WORKER_ID, liveness_verified=True)
+    bound = BoundWorkerResults(db)
+    with pytest.raises(ValueError, match="initialization fenced"):
+        bound.assign_bound(WORKER_ID, "job_12345678", tournament_id=1, pairing_id=1,
+                           expected_sha256="a"*64, timeout_seconds=30)
+    registry.recover_after_restart()
+    restarted = remote_worker_job_registry.WorkerJobRegistry(db, clock=lambda: time.time() + 86400)
+    assert restarted.state(WORKER_ID) == "unknown"
+    with pytest.raises(ValueError, match="initialization fenced"):
+        restarted.record_assignment(WORKER_ID, "job_12345678", deadline=restarted.clock() + 30)
+    with pytest.raises(ValueError, match="initialization fenced"):
+        bound.confirm_idle_after_restart(WORKER_ID, operator_confirmed=True, worker_reconnected=True)
+    assert post(request_data(token), route="journal-init-acquire")[0] == 409
+
+
+def test_journal_init_blocks_direct_sql_for_the_fenced_worker(endpoint):
+    db, token, post = endpoint
+    journal_idle(db)
+    assert post(request_data(token), route="journal-init-acquire")[0] == 200
+    with sqlite3.connect(db) as conn:
+        for statement, arguments in (
+            ("UPDATE worker_job_safety SET updated_at=? WHERE worker_id=?", (time.time(), WORKER_ID)),
+            ("INSERT OR REPLACE INTO worker_job_safety VALUES (?,?,'running',?,?)",
+             (WORKER_ID, "job_12345678", time.time() + 30, time.time())),
+            ("INSERT INTO worker_inference_assignments VALUES (?,?,?,?)",
+             (WORKER_ID, "job_12345678", "{}", 1)),
+            ("INSERT INTO worker_inference_capabilities VALUES (?,?,?,?)", (WORKER_ID, "a"*64, 1, 2)),
+            ("INSERT INTO worker_update_holds VALUES (?,?,?,?)", (WORKER_ID, "a"*64, 1, 2)),
+            ("INSERT INTO worker_update_pause_requests VALUES (?,?,?,?,?,?)",
+             (WORKER_ID, "job_12345678", "req_12345678", "requested", 1, None)),
+            ("INSERT INTO worker_update_resume VALUES (?,?,?,?,?,?)",
+             (WORKER_ID, "job_12345678", "req_12345678", "{}", "a"*64, 1)),
+            ("INSERT INTO worker_idle_update_recovery VALUES (?,?)", (WORKER_ID, 1)),
+        ):
+            with pytest.raises(sqlite3.IntegrityError, match="initialization fenced"):
+                conn.execute(statement, arguments)
+        other = "worker_87654321"
+        conn.execute("INSERT INTO worker_idle_update_recovery VALUES (?,?)", (other, 1))
+        with pytest.raises(sqlite3.IntegrityError, match="initialization fenced"):
+            conn.execute("UPDATE worker_idle_update_recovery SET worker_id=? WHERE worker_id=?",
+                         (WORKER_ID, other))
+
+
+def test_journal_init_blocks_unapplied_bound_result(endpoint):
+    from remote_worker_result_journal import WorkerResultJournal
+
+    db, token, post = endpoint
+    journal_idle(db)
+    WorkerResultJournal(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO worker_result_journal VALUES (?,?,?,?,?)",
+                     ("job_12345678", WORKER_ID, "{}", "pending_application", time.time()))
+    status, data = post(request_data(token), route="journal-init-acquire")
+    assert status == 409 and set(data) == {"error"}
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT 1 FROM worker_journal_init_fences").fetchone() is None
+
+
+def test_journal_init_http_acquire_requires_current_token_and_valid_nonce(endpoint):
+    db, token, post = endpoint
+    route = "journal-init-acquire"
+    assert post(request_data(token), route=route)[0] == 503
+    journal_idle(db)
+    for payload, expected in (
+        (request_data("x"*32), 401),
+        (dict(request_data(token), worker_id="worker_87654321"), 401),
+        (request_data(token, nonce="bad"), 400),
+        (dict(request_data(token), install_allowed=True), 400),
+    ):
+        status, data = post(payload, route=route)
+        assert status == expected and set(data) == {"error"}
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_job_safety SET updated_at=?", (time.time() - 31,))
+    assert post(request_data(token), route=route)[0] == 409
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE worker_job_safety SET updated_at=?", (time.time(),))
+        conn.execute("UPDATE worker_tokens SET expires_at=?", (time.time() - 1,))
+    assert post(request_data(token), route=route)[0] == 401
+
+    token = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
+    status, data = post(request_data(token), route=route)
+    assert status == 200
+    assert data == {
+        "contract_version": 1, "authenticated": True, "source": "coordinator",
+        "worker_id": WORKER_ID, "nonce": NONCE, "fenced": True,
+        "checked_at_unix_ms": data["checked_at_unix_ms"], "install_allowed": False,
+    }
+    assert abs(data["checked_at_unix_ms"] - int(time.time() * 1000)) < 5000
+    assert token not in json.dumps(data)
+    for nonce in (NONCE, "f"*32):
+        status, reply = post(request_data(token, nonce=nonce), route=route)
+        assert status == 409 and set(reply) == {"error"}
+
+    replacement = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
+    assert post(request_data(token), route=route)[0] == 401
+    assert post(request_data(replacement), route=route)[0] == 409
+    with sqlite3.connect(db) as conn:
+        fence = conn.execute("SELECT nonce,token_digest FROM worker_journal_init_fences").fetchone()
+    assert fence == (NONCE, remote_worker_tokens.WorkerTokenStore._digest(token))
