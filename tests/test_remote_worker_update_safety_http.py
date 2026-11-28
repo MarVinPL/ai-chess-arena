@@ -35,12 +35,12 @@ def endpoint(tmp_path, monkeypatch):
     thread = threading.Thread(target=http.serve_forever, daemon=True)
     thread.start()
     try:
-        def post(payload, *, route="update-safety"):
+        def post(payload, *, route="update-safety", headers=None):
             data = json.dumps(payload).encode("utf-8")
             request = urllib.request.Request(
                 f"http://127.0.0.1:{http.server_port}/api/remote-workers/{route}",
                 data=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **(headers or {})},
                 method="POST",
             )
             try:
@@ -658,3 +658,62 @@ def test_journal_init_http_acquire_requires_current_token_and_valid_nonce(endpoi
     with sqlite3.connect(db) as conn:
         fence = conn.execute("SELECT nonce,token_digest FROM worker_journal_init_fences").fetchone()
     assert fence == (NONCE, remote_worker_tokens.WorkerTokenStore._digest(token))
+
+
+
+def test_journal_init_completion_conflicts_and_idempotent_response(endpoint):
+    from hashlib import sha256
+
+    db, token, post = endpoint
+    journal_idle(db)
+    assert post(request_data(token), route="journal-init-acquire", headers={"Host": "arena.example"})[0] == 200
+    origin = "https://arena.example"
+    marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
+                                sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
+    payload = dict(request_data(token), pair_marker=marker, origin=origin)
+    def complete(body, host="arena.example"):
+        return post(body, route="journal-init-complete", headers={"Host": host})
+
+    assert complete(payload, host="other.example")[0] == 400
+    other = "https://other.example"
+    other_marker = sha256(b"\0".join((other.encode(), WORKER_ID.encode(),
+                                      sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
+    assert complete(dict(payload, origin=other, pair_marker=other_marker), host="other.example")[0] == 409
+    assert complete(dict(payload, pair_marker="a"*64))[0] == 409
+    assert complete(dict(payload, nonce="b"*32))[0] == 409
+    assert complete(dict(payload, token="c"*43))[0] == 401
+    registry = remote_worker_job_registry.WorkerJobRegistry(db)
+    with pytest.raises(ValueError, match="initialization fenced"):
+        registry.record_assignment(WORKER_ID, "job_12345678", deadline=time.time() + 30)
+
+    status, first = complete(payload)
+    assert status == 200 and first == {
+        "contract_version": 1, "authenticated": True, "source": "coordinator",
+        "worker_id": WORKER_ID, "nonce": NONCE, "completed": True,
+        "state": "unknown", "install_allowed": False,
+    }
+    registry.recover_after_restart()
+    assert complete(payload) == (200, first)
+    assert post(request_data(token), route="journal-init-acquire")[0] == 409
+    with pytest.raises(ValueError, match="unresolved job state"):
+        registry.record_assignment(WORKER_ID, "job_12345678", deadline=time.time() + 30)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT nonce,pair_marker FROM worker_journal_init_completions").fetchall() == [(NONCE, marker)]
+        assert conn.execute("SELECT 1 FROM worker_journal_init_fences").fetchone() is None
+
+
+def test_journal_init_completion_under_rotated_token_keeps_fence(endpoint):
+    from hashlib import sha256
+
+    db, token, post = endpoint
+    journal_idle(db)
+    assert post(request_data(token), route="journal-init-acquire", headers={"Host": "arena.example"})[0] == 200
+    rotated = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
+    origin = "https://arena.example"
+    marker = sha256(b"\0".join((origin.encode(), WORKER_ID.encode(),
+                                sha256(rotated.encode()).digest(), NONCE.encode()))).hexdigest()
+    payload = dict(request_data(rotated), pair_marker=marker, origin=origin)
+    assert post(payload, route="journal-init-complete", headers={"Host": "arena.example"})[0] == 409
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT nonce FROM worker_journal_init_fences").fetchall() == [(NONCE,)]
+        assert conn.execute("SELECT 1 FROM worker_journal_init_completions").fetchone() is None

@@ -125,7 +125,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "journal-init-acquire") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "journal-init-acquire" | "journal-init-complete") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -244,6 +244,35 @@ pub(crate) async fn acquire_journal_init(
     }
     let reply: JournalInitReply = crate::bounded_json_response(response, 4096).await?;
     reply.verify(endpoint, worker_id, machine_token, nonce, started_ms, system_unix_ms()?)
+}
+
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+pub(crate) async fn complete_journal_init(
+    base: &str, worker_id: &str,
+) -> Result<(), String> {
+    let endpoint = coordinator_endpoint(base, "journal-init-complete")?;
+    let token = crate::token_entry()?.get_password()?;
+    // This call holds the credential and journal gates only for local I/O.
+    let completion = crate::credential_journal::completion(base, worker_id, &token)?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": completion.worker_id, "token": token, "nonce": completion.nonce,
+            "pair_marker": completion.pair_marker, "origin": completion.origin,
+        }))
+        .send().await.map_err(|_| "Brak potwierdzenia koordynatora inicjalizacji")?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("Koordynator odmówił zatwierdzenia inicjalizacji".into());
+    }
+    let reply: Value = crate::bounded_json_response(response, 4096).await?;
+    if reply != serde_json::json!({
+        "contract_version": 1, "authenticated": true, "source": "coordinator",
+        "worker_id": worker_id, "nonce": completion.nonce, "completed": true,
+        "state": "unknown", "install_allowed": false,
+    }) {
+        return Err("Nieprawidłowe potwierdzenie inicjalizacji".into());
+    }
+    Ok(())
 }
 
 /// Authenticated, atomic coordinator reservation. A future installer must

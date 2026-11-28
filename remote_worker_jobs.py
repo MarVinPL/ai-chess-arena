@@ -3,6 +3,8 @@
 Only coordinator-validated transitions may modify this registry. Missing rows,
 expired leases and interrupted tasks fail closed. This is not a job scheduler.
 """
+import hashlib
+import hmac
 import re
 from contextlib import closing
 from pathlib import Path
@@ -30,6 +32,13 @@ class DurableWorkerJobs:
             db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_fences (
                 worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL,
                 token_digest BLOB NOT NULL, created_at REAL NOT NULL)""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_origins (
+                worker_id TEXT PRIMARY KEY, nonce TEXT NOT NULL, origin TEXT NOT NULL)""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_init_completions (
+                worker_id TEXT NOT NULL, nonce TEXT NOT NULL, token_digest BLOB NOT NULL,
+                pair_marker TEXT NOT NULL, PRIMARY KEY (worker_id, nonce))""")
 
             # Shared coordinator lock. Requests must block a racing new
             # assignment before a trusted STOP/checkpoint ACK is delivered.
@@ -340,7 +349,7 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
-    def acquire_journal_init(self, worker_id, token, nonce, *, admit):
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None):
         """Durable non-expiring fence. No automatic release on timeout/restart."""
         from remote_worker_tokens import WorkerTokenStore
         if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
@@ -353,6 +362,10 @@ class DurableWorkerJobs:
             admit(worker_id)
             if self._journal_init_fenced(db, worker_id):
                 raise ValueError('Initialization already fenced; reconciliation required')
+            if db.execute(
+                'SELECT 1 FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?', (worker_id, nonce),
+            ).fetchone():
+                raise ValueError('Initialization already completed')
             row = db.execute(
                 'SELECT state,job_id,deadline,updated_at FROM worker_job_safety WHERE worker_id=?',
                 (worker_id,),
@@ -387,10 +400,76 @@ class DurableWorkerJobs:
                 'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
                 (worker_id, nonce, WorkerTokenStore._digest(token), now),
             )
+            if origin is not None:
+                db.execute('INSERT INTO worker_journal_init_origins VALUES (?,?,?)', (worker_id, nonce, origin))
         return {
             'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
             'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
             'checked_at_unix_ms': int(now * 1000), 'install_allowed': False,
+        }
+
+    def complete_journal_init(self, worker_id, token, nonce, pair_marker, *, origin, admit):
+        """Acknowledge a durable pair, then require fresh independent idle reconciliation."""
+        from remote_worker_tokens import WorkerTokenStore
+
+        if (not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce)
+                or not isinstance(pair_marker, str) or not re.fullmatch(r'[0-9a-f]{64}', pair_marker)):
+            raise ValueError('Invalid journal initialization confirmation')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
+                return None
+            admit(worker_id)
+            digest = WorkerTokenStore._digest(token)
+            expected = hashlib.sha256(b'\0'.join(
+                (origin.encode('ascii'), worker_id.encode('ascii'), digest, nonce.encode('ascii'))
+            )).hexdigest()
+            if not hmac.compare_digest(expected, pair_marker):
+                raise ValueError('Journal confirmation identity mismatch')
+
+            fence = db.execute('SELECT nonce,token_digest FROM worker_journal_init_fences WHERE worker_id=?',
+                               (worker_id,)).fetchone()
+            if fence and (fence != (nonce, digest) or db.execute(
+                'SELECT origin FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                (worker_id, nonce),
+            ).fetchone() != (origin,)):
+                raise ValueError('Journal initialization fence changed')
+            receipt = db.execute(
+                'SELECT token_digest,pair_marker FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?',
+                (worker_id, nonce),
+            ).fetchone()
+            if receipt != (digest, pair_marker):
+                if receipt or not fence:
+                    raise ValueError('Missing or conflicting journal initialization fence')
+                state = db.execute(
+                    'SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?', (worker_id,),
+                ).fetchone()
+                if state not in (('idle_confirmed', None, None), ('unknown', None, None)):
+                    raise ValueError('Worker state changed during journal initialization')
+                now = self.clock()
+                if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
+                    return None
+                db.execute(
+                    """UPDATE worker_job_safety SET state='unknown',updated_at=?
+                    WHERE worker_id=? AND job_id IS NULL AND deadline IS NULL""", (now, worker_id),
+                )
+                db.execute(
+                    'INSERT INTO worker_journal_init_completions VALUES (?,?,?,?)',
+                    (worker_id, nonce, digest, pair_marker),
+                )
+                deleted = db.execute(
+                    'DELETE FROM worker_journal_init_fences WHERE worker_id=? AND nonce=? AND token_digest=?',
+                    (worker_id, nonce, digest),
+                )
+                if deleted.rowcount != 1:
+                    raise ValueError('Journal initialization fence changed')
+                db.execute('DELETE FROM worker_journal_init_origins WHERE worker_id=? AND nonce=?',
+                           (worker_id, nonce))
+        return {
+            'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
+            'worker_id': worker_id, 'nonce': nonce, 'completed': True,
+            'state': 'unknown', 'install_allowed': False,
         }
 
     @staticmethod

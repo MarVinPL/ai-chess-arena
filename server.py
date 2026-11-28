@@ -2084,8 +2084,11 @@ class Handler(BaseHTTPRequestHandler):
                 nonce = payload['nonce']
                 if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
                     raise WorkerRequestError(400)
+                hosts = self.headers.get_all('Host') or []
+                if len(hosts) != 1 or not hosts[0].isascii() or not re.fullmatch(r'[A-Za-z0-9.:[\]-]{1,255}', hosts[0]):
+                    raise WorkerRequestError(400)
                 result = remote_worker_job_registry.WorkerJobRegistry(DB).acquire_journal_init(
-                    payload['worker_id'], payload['token'], nonce,
+                    payload['worker_id'], payload['token'], nonce, origin=f'https://{hosts[0].lower()}',
                     admit=lambda worker_id: self._admit_worker_identity(path, worker_id))
                 if result is None:
                     self.send_json({'error': 'Brak autoryzacji'}, 401)
@@ -2097,6 +2100,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Inicjalizacja zablokowana'}, 409)
             except Exception:
                 self.send_json({'error': 'Nie można potwierdzić blokady'}, 503)
+            return
+        if path == '/api/remote-workers/journal-init-complete':
+            try:
+                payload = self._read_worker_request(path)
+                if set(payload) != {'worker_id', 'token', 'nonce', 'pair_marker', 'origin'}:
+                    raise WorkerRequestError(400)
+                origin = payload['origin']
+                nonce = payload['nonce']
+                marker = payload['pair_marker']
+                if (not isinstance(origin, str) or not origin.isascii() or origin != origin.lower()
+                        or not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce)
+                        or not isinstance(marker, str) or not re.fullmatch(r'[0-9a-f]{64}', marker)):
+                    raise WorkerRequestError(400)
+                # Bind the installation marker to the HTTPS authority used by
+                # the native client. Do not trust forwarding headers.
+                hosts = self.headers.get_all('Host') or []
+                if len(hosts) != 1 or origin.lower() != f'https://{hosts[0].lower()}':
+                    raise WorkerRequestError(400)
+                result = remote_worker_job_registry.WorkerJobRegistry(DB).complete_journal_init(
+                    payload['worker_id'], payload['token'], nonce, marker, origin=origin,
+                    admit=lambda worker_id: self._admit_worker_identity(path, worker_id))
+                if result is None:
+                    self.send_json({'error': 'Brak autoryzacji'}, 401)
+                else:
+                    self.send_json(result)
+            except WorkerRequestError as exc:
+                self._reject_worker_request(exc)
+            except ValueError:
+                self.send_json({'error': 'Zatwierdzenie inicjalizacji zablokowane'}, 409)
+            except Exception:
+                self.send_json({'error': 'Nie można zatwierdzić inicjalizacji'}, 503)
             return
         if path == '/api/remote-workers/update-journal-evidence':
             try:

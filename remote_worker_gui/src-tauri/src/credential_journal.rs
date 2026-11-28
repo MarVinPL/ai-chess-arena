@@ -134,7 +134,8 @@ fn initialize_empty(
 
 const PAIR_MARKER: &str = "credential-pair.v1";
 const PAIR_STAGE: &str = "credential-pair.stage";
-const PAIR_ID_LEN: usize = 64;
+const PAIR_ID_LEN: usize = 96;
+const NONCE_LEN: usize = 32;
 
 fn pair_id(root: &Path) -> Result<Option<String>, String> {
     match fs::symlink_metadata(root.join(PAIR_STAGE)) {
@@ -299,7 +300,8 @@ mod android {
             return Err(ERROR.into());
         }
 
-        let identity = authorization_marker(server, worker_id, &token, authorization.nonce())?;
+        let digest = authorization_marker(server, worker_id, &token, authorization.nonce())?;
+        let identity = format!("{}{digest}", authorization.nonce());
         let root = crate::android_worker_token_store::journal_root()?;
         let hold_dir = dir(&root, Slot::PendingHold)?;
         let install_dir = dir(&root, Slot::PendingInstall)?;
@@ -316,6 +318,38 @@ mod android {
             *guard = true;
         }
         result
+    }
+
+    pub(crate) struct JournalInitCompletion {
+        pub(crate) origin: String,
+        pub(crate) worker_id: String,
+        pub(crate) nonce: String,
+        pub(crate) pair_marker: String,
+    }
+
+    pub(crate) fn completion(
+        server: &str, worker_id: &str, machine_token: &str,
+    ) -> Result<JournalInitCompletion, String> {
+        let _credentials = crate::credential_change_gate()?;
+        if crate::token_entry()?.get_password()? != machine_token {
+            return Err(ERROR.into());
+        }
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
+        let root = crate::android_worker_token_store::journal_root()?;
+        let identity = pair_id(&root)?.ok_or(ERROR)?;
+        let (nonce, recorded_digest) = identity.split_at(NONCE_LEN);
+        let pair_marker = authorization_marker(server, worker_id, machine_token, nonce)?;
+        if recorded_digest != pair_marker
+            || checked_read(&dir(&root, Slot::PendingHold)?, &Native(Slot::PendingHold))?.is_some()
+            || checked_read(&dir(&root, Slot::PendingInstall)?, &Native(Slot::PendingInstall))?.is_some()
+        {
+            return Err(ERROR.into());
+        }
+        let origin = reqwest::Url::parse(server).map_err(|_| ERROR)?.origin().ascii_serialization();
+        Ok(JournalInitCompletion { origin, worker_id: worker_id.into(), nonce: nonce.into(), pair_marker })
     }
 
     fn require_pair() -> Result<std::path::PathBuf, String> {
@@ -361,7 +395,7 @@ mod android {
     }
 }
 #[cfg(target_os = "android")]
-pub(crate) use android::{delete_expected, initialize_authorized_pair, insert, read};
+pub(crate) use android::{completion, delete_expected, initialize_authorized_pair, insert, read};
 
 #[cfg(test)]
 mod tests {
@@ -414,7 +448,8 @@ mod tests {
             }
         }
     }
-    const IDENTITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const IDENTITY: &str = concat!("0123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     const PROVEN: BaselineEvidence = BaselineEvidence {
         authenticated_idle: true, installer_reconciled: true, identity_bound: true,
     };
@@ -451,7 +486,7 @@ mod tests {
             assert_eq!(checked_read(&hold, &hs), Ok(None));
             assert_eq!(checked_read(&install, &is), Ok(None));
         }
-        assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, &"a".repeat(64), PROVEN).is_err());
+        assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, &"a".repeat(PAIR_ID_LEN), PROVEN).is_err());
     }
 
     #[test]
