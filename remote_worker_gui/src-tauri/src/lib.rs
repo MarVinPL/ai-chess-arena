@@ -44,6 +44,10 @@ pub(crate) fn credential_change_gate() -> Result<std::sync::MutexGuard<'static, 
 // A pending coordinator hold requires the *original* machine token for
 // explicit authenticated release. Never let webview rotation/deletion orphan it.
 fn ensure_no_pending_update() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    if android_native_stop_outbox::StopOutbox.load().map_err(|_| "Dziennik STOP niedostępny")?.is_some() {
+        return Err("Nierozliczony raport STOP".into());
+    }
     if android_update_install_journal::load()?.is_some() { return Err("Nierozliczona instalacja".into()); }
     match android_update_recovery::load_pending() {
         Ok(None) => Ok(()),
@@ -800,6 +804,19 @@ async fn install_downloaded_worker_apk(
     }
 }
 
+// Caller holds the generation permit across this check and dispatch.
+#[cfg(target_os = "android")]
+async fn check_native_stop_recovery(server: &str, worker: &str, token: &str) -> Result<(), String> {
+    match android_native_stop_outbox::StopOutbox.load()
+        .map_err(|_| "Dziennik STOP niedostępny lub uszkodzony")? {
+        None => Ok(()), // Not proof of STOP; normal coordinator gates still apply.
+        Some(report) => {
+            android_update_coordinator::validate_pending_stop(server, worker, token, &report).await?;
+            Err("Raport STOP oczekuje na dostarczenie i uzgodnienie".into())
+        }
+    }
+}
+
 /// Inspect only the job that Arena has atomically assigned to this phone.
 /// This does not run inference, claim a lease or mutate Arena's chess state.
 #[tauri::command]
@@ -862,6 +879,7 @@ async fn execute_phone_inference_once(
             return Err("Trwa aktualizacja APK — inferencja zablokowana".into());
         }
         let token = token_entry()?.get_password()?;
+        check_native_stop_recovery(&server, &worker_id, &token).await?;
         let assignment = android_update_coordinator::fetch_my_inference_job(
             &server, &worker_id, &token,
         ).await?;
@@ -941,10 +959,9 @@ async fn reconcile_idle_phone_after_update(
             || android_update_install_journal::load()?.is_some() {
             return Err("Niezakończona instalacja APK blokuje wznowienie".into());
         }
-        if android_local_llama::generation_active() {
-            return Err("Telefon nadal wykonuje inferencję".into());
-        }
+        let _permit = android_local_llama::acquire_generation()?;
         let token = token_entry()?.get_password()?;
+        check_native_stop_recovery(&server, &worker_id, &token).await?;
         let resume = android_update_coordinator::fetch_resume_status(
             &server, &worker_id, &token,
         ).await?;

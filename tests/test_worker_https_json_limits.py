@@ -52,6 +52,13 @@ def test_worker_release_metadata_json_is_bounded():
 def test_all_native_coordinator_json_replies_are_bounded():
     coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
     assert not re.search(r"\.json\(\)\.await", coordinator)
-    assert coordinator.count("crate::bounded_json_response(") == 11
+    assert coordinator.count("crate::bounded_json_response(") == 12
     assert "crate::bounded_json_response(response, 32 * 1024).await" in coordinator
-    assert coordinator.count(", 4096).await") == 10
+    assert coordinator.count(", 4096).await") == 11
+
+def test_native_stop_recovery_reply_is_bounded():
+    coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
+    body = _function_body(coordinator, "validate_pending_stop")
+    assert 'coordinator_endpoint(base, "native-stop-recovery")' in body
+    assert "crate::bounded_json_response(response, 4096).await" in body
+    assert ".json().await" not in body

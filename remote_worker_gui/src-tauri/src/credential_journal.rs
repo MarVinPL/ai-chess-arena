@@ -273,6 +273,24 @@ fn stop_read(dir: &Path, store: &impl Store) -> Result<String, String> {
     sync_dir(dir)?;
     Ok(raw)
 }
+// A never-written slot is not STOP evidence. Orphan ciphertext and
+// interrupted publication must remain blocked.
+fn stop_recovery_read(dir: &Path, store: &impl Store) -> Result<Option<String>, String> {
+    match state(dir)? {
+        State::Uninitialized if store.read()?.is_none() => Ok(None),
+        State::Present => stop_read(dir, store).map(Some),
+        _ => Err(ERROR.into()),
+    }
+}
+fn stop_registration_clear(dir: &Path, store: &impl Store) -> Result<(), String> {
+    match fs::symlink_metadata(dir) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if store.read()?.is_none() { Ok(()) } else { Err(ERROR.into()) }
+        }
+        Ok(_) if stop_recovery_read(dir, store)?.is_none() => Ok(()),
+        _ => Err(ERROR.into()),
+    }
+}
 fn stop_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), StopWriteError> {
     match state(dir)? {
         State::Present => {
@@ -352,6 +370,7 @@ mod android {
         if *guard || read_intent(&root)?.is_some() || pair_id(&root)?.is_some() {
             return Err(ERROR.into());
         }
+        stop_registration_clear(&slot_path(&root, Slot::NativeStop), &NativeStop)?;
         for slot in [Slot::PendingHold, Slot::PendingInstall] {
             let path = slot_path(&root, slot);
             match fs::symlink_metadata(&path) {
@@ -593,7 +612,7 @@ mod android {
         if *guard { return Err(ERROR.into()); }
         let root = crate::android_worker_token_store::journal_root()?;
         let path = dir(&root, Slot::NativeStop)?;
-        stop_read(&path, &NativeStop).map(Some)
+        stop_recovery_read(&path, &NativeStop)
     }
 
     pub(crate) fn native_stop_insert(proof: &crate::android_native_stop_outbox::JoinedStop)
@@ -713,6 +732,36 @@ mod tests {
                 Ok(())
             }
         }
+    }
+    #[test]
+    fn registration_rejects_pending_or_uncertain_stop() {
+        let d = Temp::new();
+        let store = Fake::default();
+        let missing = d.0.join("missing");
+        assert!(stop_registration_clear(&missing, &store).is_ok());
+        *store.value.borrow_mut() = Some("orphan".into());
+        assert!(stop_registration_clear(&missing, &store).is_err());
+        *store.value.borrow_mut() = None;
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        assert!(stop_registration_clear(&d.0, &store).is_ok());
+        stop_insert(&d.0, &store, "pending").unwrap();
+        assert!(stop_registration_clear(&d.0, &store).is_err());
+        *store.value.borrow_mut() = None;
+        assert!(stop_registration_clear(&d.0, &store).is_err());
+        set_state(&d.0, State::Uncertain).unwrap();
+        assert!(stop_registration_clear(&d.0, &store).is_err());
+    }
+    #[test]
+    fn recovery_distinguishes_never_written_from_uncertainty() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        assert_eq!(stop_recovery_read(&d.0, &store), Ok(None));
+        *store.value.borrow_mut() = Some("orphan".into());
+        assert!(stop_recovery_read(&d.0, &store).is_err());
+        *store.value.borrow_mut() = None;
+        set_state(&d.0, State::Uncertain).unwrap();
+        assert!(stop_recovery_read(&d.0, &store).is_err());
     }
     #[test]
     fn native_stop_write_once_and_missing_ciphertext() {

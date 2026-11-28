@@ -125,7 +125,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "journal-init-acquire" | "journal-init-complete") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "journal-init-acquire" | "journal-init-complete" | "native-stop-recovery") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -139,6 +139,50 @@ fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String
         .map_err(|_| "Nieprawidłowy endpoint koordynatora".into())
 }
 
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub(crate) fn stop_recovery_origin(base: &str) -> Result<String, String> {
+    Ok(coordinator_endpoint(base, "native-stop-recovery")?.origin().ascii_serialization())
+}
+
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StopRecoveryReply {
+    authenticated: bool,
+    source: String,
+    worker_id: String,
+    nonce: String,
+    job_id: String,
+    request_id: String,
+    state: String,
+    install_allowed: bool,
+    dispatch_allowed: bool,
+}
+#[cfg(any(target_os = "android", all(test, unix)))]
+impl StopRecoveryReply {
+    fn matches(&self, worker: &str, nonce: &str, job: &str, request: &str) -> bool {
+        self.authenticated && self.source == "coordinator" && self.worker_id == worker
+            && self.nonce == nonce && self.job_id == job && self.request_id == request
+            && self.state == "stop_recovery_validated" && !self.install_allowed && !self.dispatch_allowed
+    }
+}
+#[cfg(target_os = "android")]
+pub(crate) async fn validate_pending_stop(
+    base: &str, worker: &str, token: &str, report: &crate::android_native_stop_outbox::StopReport,
+) -> Result<(), String> {
+    let (job, request, lease) = report.recovery_identity(base, worker)
+        .map_err(|_| "Niezgodna tożsamość raportu STOP")?;
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(coordinator_endpoint(base, "native-stop-recovery")?)
+        .json(&serde_json::json!({"worker_id":worker,"token":token,"nonce":nonce,
+            "job_id":job,"request_id":request,"lease_token":lease}))
+        .send().await.map_err(|_| "Koordynator STOP niedostępny")?;
+    if response.status() != reqwest::StatusCode::OK { return Err("Koordynator odrzucił recovery STOP".into()); }
+    let reply: StopRecoveryReply = crate::bounded_json_response(response, 4096).await
+        .map_err(|_| "Nieprawidłowa odpowiedź recovery STOP")?;
+    if !reply.matches(worker, &nonce, job, request) { return Err("Niezgodna odpowiedź recovery STOP".into()); }
+    Ok(())
+}
 #[allow(dead_code)]
 fn valid_worker_id(worker_id: &str) -> bool {
     (8..=96).contains(&worker_id.len()) && worker_id.bytes().all(|c|
@@ -1080,5 +1124,27 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn stop_recovery_reply_is_strictly_bound() {
+    let v = serde_json::json!({"authenticated":true,"source":"coordinator","worker_id":"worker_1234",
+        "nonce":"nonce","job_id":"job_12345678","request_id":"request",
+        "state":"stop_recovery_validated","install_allowed":false,"dispatch_allowed":false});
+    let reply: StopRecoveryReply = serde_json::from_value(v.clone()).unwrap();
+    assert!(reply.matches("worker_1234","nonce","job_12345678","request"));
+    for (field, wrong) in [
+        ("authenticated", serde_json::json!(false)), ("source", serde_json::json!("other")),
+        ("worker_id", serde_json::json!("other")), ("nonce", serde_json::json!("other")),
+        ("job_id", serde_json::json!("other")), ("request_id", serde_json::json!("other")),
+        ("state", serde_json::json!("other")), ("install_allowed", serde_json::json!(true)),
+        ("dispatch_allowed", serde_json::json!(true)),
+    ] {
+        let mut bad = v.clone();
+        bad[field] = wrong;
+        let reply: StopRecoveryReply = serde_json::from_value(bad).unwrap();
+        assert!(!reply.matches("worker_1234","nonce","job_12345678","request"));
     }
 }
