@@ -16,6 +16,7 @@ static SERIAL: AtomicU64 = AtomicU64::new(0);
 // Deliberately no Debug or Serialize: lease_token is a bearer secret.
 #[derive(PartialEq, Eq)]
 pub(crate) struct StopReport {
+    coordinator: Option<String>,
     worker_id: String,
     job_id: String,
     request_id: String,
@@ -51,20 +52,41 @@ impl StopReport {
         if !valid_id(worker_id) || !valid_id(job_id) || !hex(request_id, 32) || !hex(lease_token, 64) {
             return Err(OutboxError::Invalid);
         }
-        Ok(Self { worker_id: worker_id.into(), job_id: job_id.into(), request_id: request_id.into(), lease_token: lease_token.into() })
+        Ok(Self { coordinator: None, worker_id: worker_id.into(), job_id: job_id.into(), request_id: request_id.into(), lease_token: lease_token.into() })
+    }
+    pub(crate) fn bound(base: &str, worker: &str, job: &str, request: &str, lease: &str) -> Result<Self> {
+        let origin = crate::android_update_coordinator::stop_recovery_origin(base)
+            .map_err(|_| OutboxError::Invalid)?;
+        let mut report = Self::new(worker, job, request, lease)?;
+        report.coordinator = Some(origin);
+        if report.encode().len() > LIMIT { return Err(OutboxError::Invalid); }
+        Ok(report)
+    }
+    pub(crate) fn recovery_identity(&self, base: &str, worker: &str) -> Result<(&str, &str, &str)> {
+        let origin = crate::android_update_coordinator::stop_recovery_origin(base)
+            .map_err(|_| OutboxError::Invalid)?;
+        if self.coordinator.as_deref() != Some(origin.as_str()) || self.worker_id != worker {
+            return Err(OutboxError::Conflict);
+        }
+        Ok((&self.job_id, &self.request_id, &self.lease_token))
     }
     fn encode(&self) -> Vec<u8> {
-        let body = format!("STOP1\n{}\n{}\n{}\n{}\n", self.worker_id, self.job_id, self.request_id, self.lease_token);
+        let body = if let Some(origin) = &self.coordinator {
+            format!("STOP2\n{}\n{}\n{}\n{}\n{}\n", origin, self.worker_id, self.job_id, self.request_id, self.lease_token)
+        } else { format!("STOP1\n{}\n{}\n{}\n{}\n", self.worker_id, self.job_id, self.request_id, self.lease_token) };
         format!("{}{:08x}\n", body, crc32(body.as_bytes())).into_bytes()
     }
     fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > LIMIT { return Err(OutboxError::Corrupt); }
         let s = std::str::from_utf8(bytes).map_err(|_| OutboxError::Corrupt)?;
         let f: Vec<_> = s.split('\n').collect();
-        if f.len() != 7 || f[0] != "STOP1" || !hex(f[5], 8) || !f[6].is_empty() {
-            return Err(OutboxError::Corrupt);
-        }
-        let r = Self::new(f[1], f[2], f[3], f[4]).map_err(|_| OutboxError::Corrupt)?;
+        let r = match f.as_slice() {
+            ["STOP1", worker, job, request, lease, _, ""] =>
+                Self::new(worker, job, request, lease),
+            ["STOP2", origin, worker, job, request, lease, _, ""] =>
+                Self::bound(origin, worker, job, request, lease),
+            _ => Err(OutboxError::Corrupt),
+        }.map_err(|_| OutboxError::Corrupt)?;
         if r.encode() != bytes { return Err(OutboxError::Corrupt); }
         Ok(r)
     }
@@ -204,10 +226,10 @@ impl StopOutbox {
         engine: std::thread::JoinHandle<T>,
         signal: std::result::Result<(), String>,
         stop: std::result::Result<String, String>,
-        worker_id: &str, job_id: &str, lease_token: &str,
+        base: &str, worker_id: &str, job_id: &str, lease_token: &str,
     ) -> std::result::Result<String, String> {
         complete_joined_stop(engine, signal, stop, |request_id| {
-            let report = StopReport::new(worker_id, job_id, request_id, lease_token)?;
+            let report = StopReport::bound(base, worker_id, job_id, request_id, lease_token)?;
             let proof = JoinedStop(report);
             crate::credential_journal::native_stop_insert(&proof)
         })
@@ -229,6 +251,23 @@ mod tests {
     impl Drop for Temp { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
     fn report() -> StopReport { StopReport::new("worker_1234", "job_12345678", &"a".repeat(32), &"b".repeat(64)).unwrap() }
     fn other() -> StopReport { StopReport::new("worker_1234", "job_87654321", &"a".repeat(32), &"b".repeat(64)).unwrap() }
+
+    #[test]
+    fn bound_report_roundtrip_and_legacy_block() {
+        let t = Temp::new();
+        let q = StopOutbox::open(&t.0).unwrap();
+        let r = StopReport::bound("https://arena.example/", "worker_1234", "job_12345678",
+                                  &"a".repeat(32), &"b".repeat(64)).unwrap();
+        q.store(&r).unwrap();
+        let loaded = StopOutbox::open(&t.0).unwrap().load().unwrap().unwrap();
+        assert!(loaded == r);
+        assert!(loaded.recovery_identity("https://ARENA.example", "worker_1234").is_ok());
+        assert!(loaded.recovery_identity("https://other.example", "worker_1234").is_err());
+        assert!(loaded.recovery_identity("https://arena.example", "worker_other").is_err());
+        assert!(report().recovery_identity("https://arena.example", "worker_1234").is_err());
+        assert!(StopReport::bound("http://arena.example", "worker_1234", "job_12345678",
+                                  &"a".repeat(32), &"b".repeat(64)).is_err());
+    }
 
     #[test]
     fn roundtrip_and_repeat() {
