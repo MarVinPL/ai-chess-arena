@@ -161,6 +161,7 @@ pub(crate) struct JournalInitAuthorization {
     token_digest: [u8; 32],
     nonce: String,
     checked_at_unix_ms: u64,
+    baseline_version: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -173,6 +174,10 @@ impl JournalInitAuthorization {
             && self.worker_id == worker_id
             && self.token_digest == token_digest
             && journal_init_time_current(self.checked_at_unix_ms, now_ms)
+    }
+
+    pub(crate) fn baseline_version(&self) -> Option<u64> {
+        self.baseline_version
     }
 
     pub(crate) fn nonce(&self) -> &str {
@@ -191,6 +196,8 @@ struct JournalInitReply {
     fenced: bool,
     checked_at_unix_ms: u64,
     install_allowed: bool,
+    #[serde(default)]
+    baseline_version: Option<u64>,
 }
 
 fn journal_init_time_current(checked_at: u64, now_ms: u64) -> bool {
@@ -201,9 +208,9 @@ fn journal_init_time_current(checked_at: u64, now_ms: u64) -> bool {
 impl JournalInitReply {
     fn verify(
         self, server: reqwest::Url, worker_id: &str, machine_token: &str,
-        nonce: String, started_ms: u64, now_ms: u64,
+        nonce: String, started_ms: u64, now_ms: u64, baseline_version: Option<u64>,
     ) -> Result<JournalInitAuthorization, String> {
-        if self.contract_version != 1 || !self.authenticated || self.source != "coordinator"
+        if self.baseline_version != baseline_version || self.contract_version != 1 || !self.authenticated || self.source != "coordinator"
             || self.worker_id != worker_id || self.nonce != nonce
             || !self.fenced || self.install_allowed || now_ms < started_ms
             || self.checked_at_unix_ms < started_ms.saturating_sub(MAX_FUTURE_SKEW_MS)
@@ -217,6 +224,7 @@ impl JournalInitReply {
             token_digest: Sha256::digest(machine_token.as_bytes()).into(),
             nonce,
             checked_at_unix_ms: self.checked_at_unix_ms,
+            baseline_version: self.baseline_version,
         })
     }
 }
@@ -225,11 +233,11 @@ impl JournalInitReply {
 pub(crate) async fn acquire_journal_init(
     base: &str, worker_id: &str, machine_token: &str,
 ) -> Result<JournalInitAuthorization, String> {
-    request_journal_init(base, worker_id, machine_token, random_nonce()?, false).await
+    request_journal_init(base, worker_id, machine_token, random_nonce()?, false, None).await
 }
 
 pub(crate) async fn request_journal_init(
-    base: &str, worker_id: &str, machine_token: &str, nonce: String, retry: bool,
+    base: &str, worker_id: &str, machine_token: &str, nonce: String, retry: bool, baseline_version: Option<u64>,
 ) -> Result<JournalInitAuthorization, String> {
     if !valid_worker_id(worker_id)
         || !(24..=512).contains(&machine_token.len())
@@ -245,6 +253,9 @@ pub(crate) async fn request_journal_init(
     if retry {
         payload["retry"] = Value::Bool(true);
     }
+    if let Some(version) = baseline_version {
+        payload["baseline_version"] = version.into();
+    }
     let response = update_http_client()?.post(endpoint.clone())
         .json(&payload)
         .send().await.map_err(|_| "Brak odpowiedzi koordynatora inicjalizacji")?;
@@ -252,7 +263,7 @@ pub(crate) async fn request_journal_init(
         return Err("Koordynator odmówił blokady inicjalizacji".into());
     }
     let reply: JournalInitReply = crate::bounded_json_response(response, 4096).await?;
-    reply.verify(endpoint, worker_id, machine_token, nonce, started_ms, system_unix_ms()?)
+    reply.verify(endpoint, worker_id, machine_token, nonce, started_ms, system_unix_ms()?, baseline_version)
 }
 
 #[cfg(target_os = "android")]
@@ -307,13 +318,13 @@ impl Drop for JournalReconciliation {
     }
 }
 
-/// Internal restart-safe driver. The caller supplies trusted, locally retained
-/// installer evidence; UI integration and collection of that input are separate.
+/// Restart-safe driver for a native package observation and a coordinator
+/// baseline approval. The WebView supplies only the connection identity.
 #[cfg(target_os = "android")]
 #[allow(dead_code)]
 pub(crate) async fn reconcile_journal_initialization(
     base: &str, worker_id: &str,
-    expectation: &crate::android_update_install_journal::PendingInstall,
+    expectation: &crate::credential_journal::JournalBaseline,
 ) -> Result<(), String> {
     let _operation = JournalReconciliation::start()?;
     coordinator_endpoint(base, "journal-init-acquire")?;
@@ -321,7 +332,7 @@ pub(crate) async fn reconcile_journal_initialization(
     let (token, nonce, committed) =
         crate::credential_journal::prepare_reconciliation(base, worker_id, expectation)?;
     if !committed {
-        let authorization = request_journal_init(base, worker_id, &token, nonce, true).await?;
+        let authorization = request_journal_init(base, worker_id, &token, nonce, true, Some(expectation.version())).await?;
         crate::credential_journal::initialize_authorized_pair(base, worker_id, &authorization, expectation)?;
     }
     complete_journal_init(base, worker_id).await?;
@@ -840,8 +851,24 @@ mod tests {
             .map_err(|_| "Nieprawidłowa odpowiedź HTTPS")?;
         body.verify(
             coordinator_endpoint("https://arena.example", "journal-init-acquire")?,
-            "worker_12345678", &"a".repeat(43), NONCE.into(), started, now,
+            "worker_12345678", &"a".repeat(43), NONCE.into(), started, now, None,
         )
+    }
+
+    #[test]
+    fn baseline_request_rejects_legacy_reply_without_explicit_approval() {
+        for (version, accepted) in [(None, false), (Some(10), true), (Some(11), false)] {
+            let mut payload = journal_init_reply();
+            if let Some(version) = version {
+                payload["baseline_version"] = json!(version);
+            }
+            let reply: JournalInitReply = serde_json::from_value(payload).unwrap();
+            let proof = reply.verify(
+                coordinator_endpoint("https://arena.example", "journal-init-acquire").unwrap(),
+                "worker_12345678", &"a".repeat(43), NONCE.into(), 999_000, 1_000_001, Some(10),
+            );
+            assert_eq!(proof.is_ok(), accepted);
+        }
     }
 
     #[test]

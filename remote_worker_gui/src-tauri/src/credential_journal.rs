@@ -341,11 +341,32 @@ mod android {
         )))
     }
 
+    pub(crate) struct JournalBaseline(u64);
+
+    impl JournalBaseline {
+        pub(crate) fn inspect() -> Result<Self, String> {
+            let evidence = crate::android_update_install_evidence::collect(None)?;
+            let version = evidence.identity().long_version_code;
+            if !evidence.accepts_attested_baseline(version) {
+                return Err(ERROR.into());
+            }
+            Ok(Self(version))
+        }
+
+        pub(crate) fn version(&self) -> u64 { self.0 }
+    }
+
+    pub(crate) fn needs_initialization() -> Result<bool, String> {
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard { return Err(ERROR.into()); }
+        let root = crate::android_worker_token_store::journal_root()?;
+        Ok(read_intent(&root)?.is_some() || pair_id(&root)?.is_none())
+    }
+
     // Snapshot and persist the original nonce before contacting the coordinator.
-    // This function is also the restart entry point. The expectation is supplied
-    // by native code with a trusted pre-existing installer transaction.
+    // A restart must use the same native baseline version and identity.
     pub(crate) fn prepare_reconciliation(
-        server: &str, worker_id: &str, expectation: &crate::android_update_install_journal::PendingInstall,
+        server: &str, worker_id: &str, expectation: &JournalBaseline,
     ) -> Result<(String, String, bool), String> {
         let _credentials = crate::credential_change_gate()?;
         let token = crate::token_entry()?.get_password()?;
@@ -356,7 +377,7 @@ mod android {
         if let Some(intent) = read_intent(&root)? {
             let (nonce, digest) = intent[..PAIR_ID_LEN].split_at(NONCE_LEN);
             if digest != authorization_marker(server, worker_id, &token, nonce)?
-                || intent[PAIR_ID_LEN..] != expectation_digest(expectation)?
+                || intent[PAIR_ID_LEN..] != baseline_digest(expectation)
             {
                 return Err(ERROR.into());
             }
@@ -385,21 +406,21 @@ mod android {
         verify_installer(expectation)?;
         let nonce = crate::android_update_coordinator::random_nonce()?;
         let digest = authorization_marker(server, worker_id, &token, &nonce)?;
-        write_pair_record(&path, &format!("{nonce}{digest}{}", expectation_digest(expectation)?))?;
+        write_pair_record(&path, &format!("{nonce}{digest}{}", baseline_digest(expectation)))?;
         sync_dir(&root)?;
         Ok((token, nonce, false))
     }
 
-    fn expectation_digest(expectation: &crate::android_update_install_journal::PendingInstall) -> Result<String, String> {
+    fn baseline_digest(expectation: &JournalBaseline) -> String {
         use sha2::{Digest, Sha256};
-        let encoded = serde_json::to_vec(expectation).map_err(|_| ERROR)?;
-        Ok(format!("{:x}", Sha256::digest(encoded)))
+        let mut digest = Sha256::new();
+        digest.update(b"attested-baseline-v1");
+        digest.update(expectation.version().to_be_bytes());
+        format!("{:x}", digest.finalize())
     }
 
-    fn verify_installer(expectation: &crate::android_update_install_journal::PendingInstall) -> Result<(), String> {
-        use crate::android_update_install_evidence::{collect, Outcome};
-        let installer = collect(Some(expectation))?;
-        if !matches!(installer.outcome(), Outcome::InstalledCandidate | Outcome::FailedCandidate) {
+    fn verify_installer(expectation: &JournalBaseline) -> Result<(), String> {
+        if JournalBaseline::inspect()?.version() != expectation.version() {
             return Err(ERROR.into());
         }
         Ok(())
@@ -428,7 +449,7 @@ mod android {
         server: &str,
         worker_id: &str,
         authorization: &crate::android_update_coordinator::JournalInitAuthorization,
-        reconciled_install: &crate::android_update_install_journal::PendingInstall,
+        baseline: &JournalBaseline,
     ) -> Result<(), String> {
         use crate::android_update_coordinator;
 
@@ -438,13 +459,15 @@ mod android {
         if *guard {
             return Err(ERROR.into());
         }
-        if !authorization.matches(server, worker_id, &token, android_update_coordinator::system_unix_ms()?) {
+        if authorization.baseline_version() != Some(baseline.version())
+            || !authorization.matches(server, worker_id, &token, android_update_coordinator::system_unix_ms()?)
+        {
             return Err(ERROR.into());
         }
         // Require a matching terminal callback, trusted signer and exact
         // version from fresh native observations. Empty session inventory
         // is insufficient. The supplied expectation is native reconciliation data.
-        verify_installer(reconciled_install)?;
+        verify_installer(baseline)?;
         if !authorization.matches(server, worker_id, &token, android_update_coordinator::system_unix_ms()?)
         {
             return Err(ERROR.into());
@@ -453,7 +476,7 @@ mod android {
         let digest = authorization_marker(server, worker_id, &token, authorization.nonce())?;
         let identity = format!("{}{digest}", authorization.nonce());
         let root = crate::android_worker_token_store::journal_root()?;
-        let expected_intent = format!("{identity}{}", expectation_digest(reconciled_install)?);
+        let expected_intent = format!("{identity}{}", baseline_digest(baseline));
         if read_intent(&root)?.as_deref() != Some(expected_intent.as_str()) {
             return Err(ERROR.into());
         }
@@ -551,7 +574,7 @@ mod android {
 #[cfg(target_os = "android")]
 pub(crate) use android::{
     check_registration_storage, completion, delete_expected, finish_reconciliation,
-    initialize_authorized_pair, insert, prepare_reconciliation, read,
+    initialize_authorized_pair, insert, needs_initialization, prepare_reconciliation, read, JournalBaseline,
 };
 
 #[cfg(test)]
