@@ -169,7 +169,7 @@ def test_elimination_assignment_requires_explicit_v3_readiness(gateway, monkeypa
     assert delivery.find_ready_worker(SHA, 3) is None
     with pytest.raises(ValueError, match='protocol'):
         delivery.assign_from_arena(WORKER, job)
-    for invalid in (True, 4, '3', None):
+    for invalid in (True, 5, '3', None):
         assert post('ready', {**auth, 'model_sha256': SHA, 'protocol_version': invalid})[0] == 400
     assert post('ready', {**auth, 'model_sha256': SHA, 'protocol_version': 3})[0] == 200
     assert delivery.find_ready_worker(SHA, 3) == WORKER

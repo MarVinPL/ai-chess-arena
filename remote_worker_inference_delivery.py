@@ -5,6 +5,7 @@ checkpoints. This module gives an authenticated worker a read-only copy of a
 specifically assigned inference request; it never runs an LLM or moves pieces.
 """
 import json
+import secrets
 import sqlite3
 import time
 
@@ -58,7 +59,7 @@ class WorkerInferenceDelivery:
             c in "0123456789abcdef" for c in model_sha256
         ):
             raise ValueError("Invalid model digest")
-        if type(protocol_version) is not int or protocol_version not in (2, 3):
+        if type(protocol_version) is not int or protocol_version not in (2, 3, 4):
             raise ValueError("Unsupported Worker protocol")
         now = self.clock()
         with self.jobs._db() as db:
@@ -160,6 +161,10 @@ class WorkerInferenceDelivery:
         guarded by all of the existing update/pause/resume barriers.
         """
         self.jobs._id(worker_id)
+        if isinstance(job, dict) and job.get("version") == 4:
+            if "lease_token" in job:
+                raise ValueError("Arena generates the fencing token at assignment")
+            job = dict(job, lease_token=secrets.token_hex(32))
         validated = validate_job(job)
         encoded = json.dumps(validated, separators=(",", ":"), sort_keys=True,
                              ensure_ascii=True, allow_nan=False)
@@ -259,6 +264,12 @@ class WorkerInferenceDelivery:
         self.jobs._id(worker_id)
         self.jobs._id(job_id)
         with self.jobs._db() as db:
+            db.execute("BEGIN")
+            blocked = any(db.execute(
+                f"SELECT 1 FROM {table} WHERE worker_id=?", (worker_id,),
+            ).fetchone() for table in (
+                "worker_update_holds", "worker_update_pause_requests", "worker_update_resume",
+            ))
             row = db.execute(
                 "SELECT job_json FROM worker_inference_assignments WHERE worker_id=? AND job_id=?",
                 (worker_id, job_id),
@@ -271,6 +282,8 @@ class WorkerInferenceDelivery:
                 "SELECT state,job_id,deadline FROM worker_job_safety WHERE worker_id=?",
                 (worker_id,),
             ).fetchone()
+        if blocked:
+            raise ValueError("Worker result fenced by STOP or update reconciliation")
         if row is None or not lease or lease[0] != "running" or lease[1] != job_id:
             raise ValueError("Worker job lease is not active")
         if lease[2] is None or lease[2] <= self.clock():
@@ -440,8 +453,11 @@ class WorkerInferenceDelivery:
             if job["job_id"] != row[0]:
                 raise ValueError("Inference job was changed")
             move = validate_result(result, job, board_for_variant(job["fen"], job.get("variant", "standard")))
+            receipt = {"version": 1, "job_id": job["job_id"], "uci": move.uci()}
+            if job["version"] == 4:
+                receipt.update(version=2, lease_token=job["lease_token"])
             canonical = json.dumps(
-                {"version": 1, "job_id": job["job_id"], "uci": move.uci()},
+                receipt,
                 sort_keys=True, separators=(",", ":"), allow_nan=False,
             )
             existing = db.execute(
