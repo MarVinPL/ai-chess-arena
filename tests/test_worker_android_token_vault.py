@@ -92,7 +92,7 @@ def test_android_upgrade_keeps_original_server_token_and_never_claims_migration(
 
 def test_vault_serializes_and_guards_mutations():
     for method, mutation in (("set_password", "self.backend.write"), ("delete_credential", "self.backend.delete")):
-        section = VAULT.split("pub(crate) fn " + method, 1)[1]
+        section = "".join(VAULT.split("pub(crate) fn " + method, 1)[1].split())
         assert section.index("self.operations.lock()") < section.index("check()?") < section.index(mutation)
     assert "tauri::command" not in VAULT
     assert "tauri::command" not in ADAPTER

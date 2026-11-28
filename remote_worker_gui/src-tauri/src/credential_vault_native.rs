@@ -9,20 +9,27 @@ pub(crate) type NativeBackend = keyring::Entry;
 
 #[cfg(target_os = "android")]
 impl Backend for NativeBackend {
-    fn read(&self) -> Result<String, String> { self.get_password() }
-    fn write(&self, value: &str) -> Result<(), String> { self.set_password(value) }
+    fn read(&self) -> Result<String, String> {
+        self.get_password()
+    }
+    fn write(&self, value: &str) -> Result<(), String> {
+        self.set_password(value)
+    }
     fn delete(&self) -> Result<(), String> {
-        self.delete_credential().map_err(|_| "Nie udało się usunąć tokenu z Android Keystore".into())
+        self.delete_credential()
+            .map_err(|_| "Nie udało się usunąć tokenu z Android Keystore".into())
     }
 }
 
 #[cfg(not(target_os = "android"))]
 impl Backend for NativeBackend {
     fn read(&self) -> Result<String, String> {
-        self.get_password().map_err(|_| "Brak zapisanego tokenu".into())
+        self.get_password()
+            .map_err(|_| "Brak zapisanego tokenu".into())
     }
     fn write(&self, value: &str) -> Result<(), String> {
-        self.set_password(value).map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".into())
+        self.set_password(value)
+            .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".into())
     }
     fn delete(&self) -> Result<(), String> {
         match self.delete_credential() {
@@ -41,4 +48,3 @@ pub(crate) fn native() -> Result<CredentialVault<NativeBackend>, String> {
         .map_err(|_| "Systemowy magazyn poświadczeń jest niedostępny".to_string())?;
     Ok(CredentialVault::new(backend))
 }
-
