@@ -23,6 +23,26 @@ mod android_update_package_installer;
 mod android_update_coordinator;
 mod android_update_recovery;
 mod android_update_install_journal;
+#[allow(dead_code)]
+mod android_embedded_llama;
+#[allow(dead_code)]
+mod android_model_cache;
+#[allow(dead_code)]
+mod android_model_download;
+#[allow(dead_code)]
+mod android_model_lifecycle;
+#[allow(dead_code)]
+mod android_model_preflight;
+#[allow(dead_code)]
+mod android_model_source;
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+mod android_model_quic;
+#[allow(dead_code)]
+mod android_model_runtime_guard;
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+mod android_llama_runtime;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
@@ -144,7 +164,7 @@ async fn poll_worker_update_pause(server: String, worker_id: String) -> Result<&
         &server, &worker_id, &token,
     ).await? {
         StopInstruction::None => Ok("none"),
-        StopInstruction::StopCheckpoint { .. } => Ok("stop_checkpoint"),
+        StopInstruction::StopCheckpoint { .. } | StopInstruction::NativeStopCheckpoint { .. } => Ok("stop_checkpoint"),
         StopInstruction::AwaitReconciliation => Ok("await_reconciliation"),
         StopInstruction::Blocked => Ok("blocked"),
     }
@@ -261,6 +281,50 @@ async fn inspect_phone_local_model() -> serde_json::Value {
     {
         serde_json::json!({"state": "unsupported"})
     }
+}
+
+#[tauri::command]
+async fn inspect_phone_model_storage() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            let root = android_model_quic::android_gguf_cache_root()?;
+            let inventory = android_model_cache::inspect_model_cache(&root)?;
+            let free = android_model_cache::android_private_free_bytes()?;
+            let reserve = android_model_cache::DEFAULT_FREE_RESERVE_BYTES;
+            Ok(serde_json::json!({"free_bytes": free, "reserve_bytes": reserve,
+                "available_for_models_bytes": free.saturating_sub(reserve),
+                "cached_models": inventory.model_count, "cached_bytes": inventory.occupied_bytes}))
+        }).await.map_err(|_| "Diagnostyka pamięci przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
+}
+
+#[tauri::command]
+async fn inspect_embedded_llama_engine() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            android_embedded_llama::probe_embedded_llama_library()?;
+            Ok(serde_json::json!({"abi_available": true,
+                "native_dispatch_enabled": false,
+                "legacy_generation_active": android_local_llama::generation_active()}))
+        }).await.map_err(|_| "Diagnostyka silnika przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
+}
+
+#[tauri::command]
+async fn inspect_phone_quic_protocol() -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(android_model_quic::probe_protocol)
+            .await.map_err(|_| "Diagnostyka QUIC przerwana")?
+    }
+    #[cfg(not(target_os = "android"))]
+    Err("Diagnostyka dostępna tylko na Androidzie".into())
 }
 
 // The desktop app connects outbound only. Never pass the token into JS or a URL.
@@ -749,6 +813,7 @@ async fn install_downloaded_worker_apk(
         if android_local_llama::generation_active() {
             return Err("Telefon aktualnie oblicza ruch — instalacja APK zablokowana".into());
         }
+        let _gguf_gate = android_model_runtime_guard::begin_exclusive_update()?;
         // Never turn a failed/unknown coordinator response into an idle state.
         // The server's reserve transaction rechecks state atomically.
         let state = check_update_safety(server.clone(), worker_id.clone()).await?;
@@ -849,7 +914,7 @@ async fn check_phone_stop_gate(
                 Err("Arena zażądała STOP. Telefon nie wyśle ruchu; wymagane uzgodnienie checkpointu przez Arenę".into())
             }
         }
-        StopInstruction::AwaitReconciliation | StopInstruction::Blocked => {
+        StopInstruction::NativeStopCheckpoint { .. } | StopInstruction::AwaitReconciliation | StopInstruction::Blocked => {
             Err("Arena blokuje inferencję do uzgodnienia zatrzymania".into())
         }
     }
@@ -1271,7 +1336,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, worker_token_state, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, initialize_update_journals, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_model_storage, inspect_embedded_llama_engine, inspect_phone_quic_protocol, inspect_phone_local_model, store_worker_token, has_saved_worker_token, worker_token_state, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, initialize_update_journals, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

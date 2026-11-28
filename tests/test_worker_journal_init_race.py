@@ -66,3 +66,31 @@ def test_assignment_and_journal_fence_cannot_both_commit(tmp_path, assignment):
     assert state == (('idle_confirmed', None) if won_fence else ('running', JOB))
     assert bindings == ([(JOB,)] if assignment == 'bound' and won_assignment else [])
     assert inference_jobs == ([(JOB,)] if assignment == 'inference' and won_assignment else [])
+
+
+def test_journal_and_model_maintenance_are_mutually_exclusive(tmp_path):
+    path, _, _, _ = setup_game(tmp_path)
+    clock = lambda: 100
+    token = WorkerTokenStore(path, clock=clock).issue(WORKER)
+    delivery = WorkerInferenceDelivery(path, clock=clock)
+    assert delivery.register_local_ready(WORKER, MODEL) == 'ready'
+    jobs = delivery.jobs
+    barrier = Barrier(2)
+
+    def run(operation):
+        barrier.wait(timeout=5)
+        try:
+            operation()
+        except ValueError:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(run, lambda: jobs.acquire_journal_init(
+            WORKER, token, NONCE, admit=lambda _: None))
+        b = pool.submit(run, lambda: jobs.reserve_model_maintenance(WORKER))
+        assert a.result(timeout=15) != b.result(timeout=15)
+    with sqlite3.connect(path) as db:
+        assert sum(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                   for table in ('worker_journal_init_fences',
+                                 'worker_model_maintenance_holds')) == 1

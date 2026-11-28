@@ -146,15 +146,15 @@ jobs:
         run: |
           set -euo pipefail
           # Install SDK packages directly using the official Android CLI.
-          # Only Android 16 API 36 and the pinned NDK are needed for ARM64.
+          # Only Android 17 API 37.0 and the pinned NDK are needed for ARM64.
           android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"
           # Android CLI prompts when a new Android SDK license must be accepted.
           # Exit status must come from the installer, not the yes process.
           set +o pipefail
           yes | "$android" --sdk="$ANDROID_HOME" sdk install \
-            platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018
+            platform-tools platforms/android-37.0 build-tools/36.0.0 ndk/27.2.12479018
           set -o pipefail
-          test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -s "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
@@ -173,6 +173,12 @@ jobs:
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
+          python3 android/force_extracted_native_libs.py
+      - name: Build and bundle pinned embedded llama.cpp for ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash android/build_embedded_llama.sh
       - name: Fingerprint generated Gradle dependency inputs
         id: modules
         working-directory: .
@@ -228,6 +234,10 @@ jobs:
           set -euo pipefail
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           test -s "$apk"
+          entries="$(unzip -Z1 "$apk")"
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
+            grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
+          done
           python3 android/verify_apk_backup.py "$ANDROID_HOME/build-tools/36.0.0/aapt" "$apk"
           signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           test -x "$signer"

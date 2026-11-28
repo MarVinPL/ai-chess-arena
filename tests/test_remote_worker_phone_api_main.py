@@ -34,11 +34,11 @@ def gateway(tmp_path, monkeypatch):
     thread = threading.Thread(target=http.serve_forever, daemon=True)
     thread.start()
 
-    def post(route, data, *, content_type="application/json"):
+    def post(route, data, *, content_type="application/json", headers=None):
         req = request.Request(
             f"http://127.0.0.1:{http.server_port}/api/remote-workers/{route}",
             json.dumps(data).encode(),
-            {"Content-Type": content_type}, method="POST"
+            {"Content-Type": content_type, **(headers or {})}, method="POST"
         )
         try:
             with request.urlopen(req, timeout=4) as resp:
@@ -59,7 +59,7 @@ def credentials(token):
 
 def test_disabled_by_default_never_uses_web_login(gateway):
     _, token, post = gateway
-    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll"):
+    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll", "model-source"):
         code, body = post(route, credentials(token))
         assert code == 503
         assert "login_url" not in body
@@ -69,7 +69,7 @@ def test_disabled_by_default_never_uses_web_login(gateway):
 def test_bad_machine_auth_and_nonce_never_leak_state(gateway, monkeypatch):
     _, token, post = gateway
     monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
-    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll"):
+    for route in ("ready", "job-poll", "job-result", "board-view", "update-pause-poll", "model-source"):
         body = credentials("definitely-wrong-token-000000000000000000000000")
         if route == "ready":
             body["model_sha256"] = SHA
@@ -179,3 +179,50 @@ def test_elimination_assignment_requires_explicit_v3_readiness(gateway, monkeypa
     assert {'e2e7', 'e2e8'} <= set(body['job']['legal_moves'])
     code, body = post('job-result', {**auth, 'result': {'version': 1, 'job_id': job['job_id'], 'uci': 'e2e7'}})
     assert code == 200 and body['state'] == 'received_not_applied'
+
+def test_model_source_auth_assignment_and_rate_limit(gateway, monkeypatch):
+    path, token, post = gateway
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    auth = credentials(token)
+    assert post("model-source", {**auth, "sha256": SHA})[0] == 400
+    assert post("model-source", auth)[0] == 409
+    delivery = WorkerInferenceDelivery(path)
+    delivery.register_local_ready(WORKER, SHA, 4)
+    job = dict(version=4, job_id="game_test_12345678", fen=chess.STARTING_FEN,
+               model_sha256=SHA, legal_moves=sorted(m.uci() for m in chess.Board().legal_moves),
+               variant="standard", max_tokens=32, timeout_seconds=90)
+    delivery.assign_from_arena(WORKER, job)
+    approved = dict(model_id=1, version_id=2, sha256=SHA, size_bytes=4096,
+                    source_url="https://huggingface.co/a/b/resolve/"+"1"*40+"/model.gguf")
+    import remote_worker_model_registry
+    monkeypatch.setattr(remote_worker_model_registry, "resolve_approved_worker_gguf",
+                        lambda db, digest: approved if digest == SHA else None)
+    code, body = post("model-source", auth)
+    assert code == 200 and body["model"] == approved
+    assert body["nonce"] == NONCE and body["state"] == "approved_metadata_only"
+    assert "lease_token" not in body
+    for _ in range(10):
+        assert post("model-source", auth)[0] == 200
+    assert post("model-source", auth)[0] == 429
+
+def test_machine_authentication_has_one_route_and_no_browser_session_fallback(gateway, monkeypatch):
+    from pathlib import Path
+    source = Path(server.__file__).read_text()
+    dispatch = source.split("    def do_POST(self):", 1)[1]
+    auth_route = "if path == '/api/remote-workers/authenticate':"
+    assert dispatch.count(auth_route) == 1
+    assert dispatch.index(auth_route) < dispatch.index("if path == '/api/auth/login':")
+    _, token, post = gateway
+    # Even a successfully authenticated browser session must not authorize
+    # machine-only routes. The machine token remains independently mandatory.
+    monkeypatch.setattr(server.Handler, "authenticated_user", lambda self: "admin")
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    browser = {"Cookie": "arena_session=admin"}
+    code, body = post("authenticate", {"worker_id": WORKER, "token": "wrong-token-" + "x"*40}, headers=browser)
+    assert code == 401 and body == {"authenticated": False}
+    code, body = post("authenticate", {"worker_id": WORKER, "token": token}, headers=browser)
+    assert code == 200 and body == {"authenticated": True, "worker_id": WORKER}
+    code, body = post("model-source", credentials("wrong-token-" + "x"*40), headers=browser)
+    assert code == 401 and "model" not in body and "nonce" not in body
+    code, body = post("model-source", credentials(token), headers=browser)
+    assert code == 409 and "model" not in body

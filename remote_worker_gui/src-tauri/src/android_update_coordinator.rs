@@ -125,7 +125,7 @@ pub(crate) fn verify_release_reply(
 /// Never follow cross-origin/HTTP redirects with the machine credential.
 #[allow(dead_code)]
 fn coordinator_endpoint(base: &str, action: &str) -> Result<reqwest::Url, String> {
-    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "journal-init-acquire" | "journal-init-complete" | "native-stop-recovery") {
+    if !matches!(action, "update-reserve" | "update-release" | "update-hold-status" | "update-pause-poll" | "update-resume-status" | "board-view" | "job-poll" | "job-result" | "ready" | "model-source" | "native-stop-report" | "native-stop-recovery" | "journal-init-acquire" | "journal-init-complete") {
         return Err("Nieznana operacja koordynatora".into());
     }
     let url = reqwest::Url::parse(base).map_err(|_| "Nieprawidłowy adres HTTPS")?;
@@ -536,6 +536,7 @@ pub(crate) async fn release_update(
 pub(crate) enum StopInstruction {
     None,
     StopCheckpoint { job_id: String, request_id: String },
+    NativeStopCheckpoint { job_id: String, request_id: String, lease_token_sha256: String },
     AwaitReconciliation,
     Blocked,
 }
@@ -561,7 +562,7 @@ pub(crate) fn verify_pause_poll_reply(
         Some("await_reconciliation") if instruction.len() == 1 =>
             Ok(StopInstruction::AwaitReconciliation),
         Some("blocked") if instruction.len() == 1 => Ok(StopInstruction::Blocked),
-        Some("stop_checkpoint") if instruction.len() == 3 => {
+        Some("stop_checkpoint") if matches!(instruction.len(), 3 | 4) => {
             let job_id = instruction.get("job_id")
                 .and_then(Value::as_str).ok_or("Brak zadania do przerwania")?;
             let request_id = instruction.get("request_id")
@@ -570,6 +571,15 @@ pub(crate) fn verify_pause_poll_reply(
                 || !request_id.bytes().all(|b|
                     b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
                 return Err("Nieprawidłowe polecenie pauzy".into());
+            }
+            if instruction.len() == 4 {
+                let digest = instruction.get("lease_token_sha256").and_then(Value::as_str)
+                    .filter(|s| crate::android_model_cache::valid_digest(s))
+                    .ok_or("Nieprawidłowy skrót dzierżawy STOP")?;
+                return Ok(StopInstruction::NativeStopCheckpoint {
+                    job_id: job_id.to_owned(), request_id: request_id.to_owned(),
+                    lease_token_sha256: digest.to_owned(),
+                });
             }
             Ok(StopInstruction::StopCheckpoint {
                 job_id: job_id.to_owned(), request_id: request_id.to_owned(),
@@ -668,6 +678,16 @@ pub(crate) async fn submit_my_inference_move(
 pub(crate) async fn fetch_my_inference_job(
     base: &str, worker_id: &str, machine_token: &str,
 ) -> Result<Value, String> {
+    let reply = fetch_native_inference_job(base, worker_id, machine_token).await?;
+    if reply.get("job").and_then(|j| j.get("version")).and_then(Value::as_u64) == Some(4) {
+        return Ok(serde_json::json!({"state": "blocked"}));
+    }
+    Ok(reply)
+}
+
+async fn fetch_native_inference_job(
+    base: &str, worker_id: &str, machine_token: &str,
+) -> Result<Value, String> {
     if !valid_worker_id(worker_id) || machine_token.is_empty() {
         return Err("Brak zaufanej tożsamości Workera".into());
     }
@@ -703,7 +723,7 @@ pub(crate) async fn fetch_my_inference_job(
                 .ok_or("Brak zatwierdzonego zadania".to_owned())?;
             let version = job.get("version").and_then(Value::as_u64)
                 .ok_or("Brak wersji protokołu".to_owned())?;
-            if !matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8)) {
+            if !matches!((version, job.len()), (1, 6) | (2, 7) | (3, 8) | (4, 9)) {
                 return Err("Niezgodny format zadania".into());
             }
             let job_id = job.get("job_id").and_then(Value::as_str)
@@ -726,8 +746,12 @@ pub(crate) async fn fetch_my_inference_job(
                 || !(1..=600).contains(&timeout) {
                 return Err("Arena przysłała nieprawidłowe zadanie".into());
             }
-            if version == 3 && !matches!(job.get("variant").and_then(Value::as_str), Some("standard" | "elimination")) {
+            if version >= 3 && !matches!(job.get("variant").and_then(Value::as_str), Some("standard" | "elimination")) {
                 return Err("Nieznany wariant szachów".into());
+            }
+            if version == 4 && !job.get("lease_token").and_then(Value::as_str)
+                .is_some_and(crate::android_model_cache::valid_digest) {
+                return Err("Nieprawidłowy token dzierżawy v4".into());
             }
             if version >= 2 {
                 let legal = job.get("legal_moves").and_then(Value::as_array)
@@ -759,6 +783,77 @@ pub(crate) async fn fetch_my_inference_job(
         }
         _ => Err("Nieznany stan zadania".into()),
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn verify_assigned_model_source_reply(
+    body: &Value, worker_id: &str, nonce: &str, assigned_digest: &str,
+) -> Result<crate::android_model_source::ApprovedGguf, String> {
+    if nonce.len() != 32 || !nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce)
+        || body.get("state").and_then(Value::as_str) != Some("approved_metadata_only") {
+        return Err("Niezaufana odpowiedź rejestru GGUF".into());
+    }
+    let model = body.get("model").and_then(Value::as_object)
+        .ok_or("Brak zatwierdzonych metadanych modelu")?;
+    if model.len() != 5
+        || !["model_id", "version_id", "sha256", "size_bytes", "source_url"]
+            .iter().all(|field| model.contains_key(*field))
+        || model.get("model_id").and_then(Value::as_u64).filter(|v| *v > 0).is_none()
+        || model.get("version_id").and_then(Value::as_u64).filter(|v| *v > 0).is_none() {
+        return Err("Nieprawidłowy format wpisu GGUF".into());
+    }
+    let approved = crate::android_model_source::ApprovedGguf {
+        sha256: model.get("sha256").and_then(Value::as_str)
+            .ok_or("Brak SHA-256 wpisu GGUF")?.to_owned(),
+        size_bytes: model.get("size_bytes").and_then(Value::as_u64)
+            .ok_or("Brak rozmiaru GGUF")?,
+        source_url: model.get("source_url").and_then(Value::as_str)
+            .ok_or("Brak adresu źródła GGUF")?.to_owned(),
+    };
+    crate::android_model_source::bind_approved_model_to_job(assigned_digest, &approved)?;
+    Ok(approved)
+}
+
+/// Obtain a registry entry ONLY for the currently authenticated, leased job.
+/// A before/after poll detects revoked or changed assignments. This transport
+/// does not invoke the Android downloader or return any secret to JavaScript.
+#[allow(dead_code)]
+pub(crate) async fn fetch_my_approved_gguf(
+    base: &str, worker_id: &str, machine_token: &str,
+    expected_job: &Value,
+) -> Result<crate::android_model_source::ApprovedGguf, String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak zaufanej tożsamości Workera".into());
+    }
+    let previous = fetch_native_inference_job(base, worker_id, machine_token).await?;
+    let assigned_digest = previous.get("job")
+        .filter(|_| previous.get("state").and_then(Value::as_str) == Some("assigned"))
+        .filter(|job| *job == expected_job)
+        .and_then(|job| job.get("model_sha256")).and_then(Value::as_str)
+        .ok_or("Brak aktywnego przydziału modelu")?;
+    let nonce = random_nonce()?;
+    let endpoint = coordinator_endpoint(base, "model-source")?;
+    let response = update_http_client()?.post(endpoint)
+        .json(&serde_json::json!({
+            "worker_id": worker_id, "token": machine_token, "nonce": nonce
+        }))
+        .send().await.map_err(|_| "Brak połączenia z rejestrem Areny")?;
+    if !response.status().is_success() {
+        return Err("Arena odmówiła udostępnienia metadanych modelu".into());
+    }
+    let body: Value = crate::bounded_json_response(response, 4096).await
+        .map_err(|_| "Nieprawidłowa odpowiedź rejestru GGUF".to_owned())?;
+    let approved = verify_assigned_model_source_reply(
+        &body, worker_id, &nonce, assigned_digest)?;
+    let current = fetch_native_inference_job(base, worker_id, machine_token).await?;
+    if current != previous || current.get("state").and_then(Value::as_str) != Some("assigned") {
+        return Err("Przydział modelu zmienił się podczas odczytu rejestru".into());
+    }
+    Ok(approved)
 }
 
 /// The Arena owns chess state. Return the FEN only when the authenticated
@@ -890,11 +985,84 @@ pub(crate) async fn poll_pause_instruction(
     verify_pause_poll_reply(&body, worker_id, &nonce)
 }
 
+/// Match a native STOP to the exact execution generation. No token reaches JS.
+fn native_stop_binding(instruction: &StopInstruction, job: &Value) -> Result<(String, String, String), String> {
+    use sha2::{Digest, Sha256};
+    let StopInstruction::NativeStopCheckpoint { job_id, request_id, lease_token_sha256 } = instruction else {
+        return Err("Brak powiązanego STOP v4".into());
+    };
+    let token = job.get("lease_token").and_then(Value::as_str)
+        .filter(|s| crate::android_model_cache::valid_digest(s)).ok_or("Brak dzierżawy v4")?;
+    if job.get("version").and_then(Value::as_u64) != Some(4)
+        || job.get("job_id").and_then(Value::as_str) != Some(job_id.as_str())
+        || format!("{:x}", Sha256::digest(token.as_bytes())) != *lease_token_sha256 {
+        return Err("STOP nie należy do tej dzierżawy".into());
+    }
+    Ok((job_id.clone(), request_id.clone(), token.to_owned()))
+}
+
+/// Internal native-only report. Caller must hold the actual executor ownership
+/// fence and prove its threads/model have been stopped and joined; a local
+/// quiescence check alone cannot establish that ownership. No caller wired.
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+pub(crate) async fn report_native_stop(
+    base: &str, worker_id: &str, machine_token: &str, job: &Value,
+    prove_joined_executor: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !valid_worker_id(worker_id) || machine_token.is_empty() {
+        return Err("Brak tożsamości Workera".into());
+    }
+    let instruction = poll_pause_instruction(base, worker_id, machine_token).await?;
+    let (job_id, request_id, lease_token) = native_stop_binding(&instruction, job)?;
+    prove_joined_executor()?;
+    let _gate = crate::android_model_runtime_guard::begin_exclusive_update()?;
+    if !crate::android_llama_runtime::embedded_inference_quiesced()? {
+        return Err("Silnik nadal pracuje".into());
+    }
+    if poll_pause_instruction(base, worker_id, machine_token).await? != instruction {
+        return Err("Polecenie STOP uległo zmianie".into());
+    }
+    let nonce = random_nonce()?;
+    let response = update_http_client()?.post(coordinator_endpoint(base, "native-stop-report")?)
+        .json(&serde_json::json!({"worker_id": worker_id, "token": machine_token,
+            "nonce": nonce, "job_id": job_id, "request_id": request_id, "lease_token": lease_token}))
+        .send().await.map_err(|_| "Nie można przesłać raportu STOP")?;
+    if !response.status().is_success() { return Err("Arena odrzuciła raport STOP".into()); }
+    let body: Value = crate::bounded_json_response(response, 4096).await?;
+    if body.get("authenticated").and_then(Value::as_bool) != Some(true)
+        || body.get("source").and_then(Value::as_str) != Some("coordinator")
+        || body.get("worker_id").and_then(Value::as_str) != Some(worker_id)
+        || body.get("nonce").and_then(Value::as_str) != Some(nonce.as_str())
+        || body.get("state").and_then(Value::as_str) != Some("stop_report_received")
+        || body.get("install_allowed").and_then(Value::as_bool) != Some(false) {
+        return Err("Nieprawidłowe potwierdzenie raportu STOP".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     const NONCE: &str = "00112233445566778899aabbccddeeff";
+    #[test]
+    fn native_stop_is_bound_to_exact_v4_generation() {
+        use sha2::{Digest, Sha256};
+        let token = "a".repeat(64);
+        let job = json!({"version":4,"job_id":"game_12345678","lease_token":token});
+        let instruction = StopInstruction::NativeStopCheckpoint {
+            job_id:"game_12345678".into(), request_id:"b".repeat(32),
+            lease_token_sha256:format!("{:x}", Sha256::digest(token.as_bytes())),
+        };
+        assert!(native_stop_binding(&instruction, &job).is_ok());
+        let mut changed = job.clone(); changed["lease_token"] = json!("c".repeat(64));
+        assert!(native_stop_binding(&instruction, &changed).is_err());
+        changed = job.clone(); changed["version"] = json!(3);
+        assert!(native_stop_binding(&instruction, &changed).is_err());
+        assert!(native_stop_binding(&StopInstruction::None, &job).is_err());
+    }
+
 
     #[test]
     fn journal_reconciliation_rejects_concurrent_attempts_until_cancelled() {

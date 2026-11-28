@@ -19,6 +19,7 @@ ROUTES = frozenset({
     "/api/remote-workers/native-stop-report",
     "/api/remote-workers/native-stop-recovery",
     "/api/remote-workers/board-view",
+    "/api/remote-workers/model-source",
 })
 
 
@@ -92,6 +93,17 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
         if path.endswith("/job-poll"):
             from remote_worker_inference_delivery import WorkerInferenceDelivery
             response.update(WorkerInferenceDelivery(db).poll_assigned_job(worker_id))
+        elif path.endswith("/model-source"):
+            from remote_worker_inference_delivery import WorkerInferenceDelivery
+            from remote_worker_model_registry import resolve_approved_worker_gguf
+            delivery = WorkerInferenceDelivery(db)
+            assignment = delivery.poll_assigned_job(worker_id)
+            if assignment.get("state") != "assigned":
+                raise ValueError("No active assignment")
+            approved = resolve_approved_worker_gguf(db, assignment["job"]["model_sha256"])
+            if delivery.poll_assigned_job(worker_id) != assignment:
+                raise ValueError("Assignment changed")
+            response.update(state="approved_metadata_only", model=approved)
         elif path.endswith("/ready"):
             from remote_worker_inference_delivery import WorkerInferenceDelivery
             response["state"] = WorkerInferenceDelivery(db).register_local_ready(
@@ -118,7 +130,7 @@ def handle_phone_request(handler, path, db, live, *, payload, admit_identity):
         handler.send_json(response)
     except (ValueError, TypeError, json.JSONDecodeError):
         # A stale/invalid result is a conflict; no lease or checkpoint changed.
-        code = 409 if path.endswith(("/job-result", "/native-stop-report")) else 400
+        code = 409 if path.endswith(("/job-result", "/native-stop-report", "/model-source")) else 400
         handler.send_json({"error": "Niedozwolony lub nieaktualny stan Workera"}, code)
     except Exception:
         # Never disclose secrets, private paths, database schemas or tracebacks.
