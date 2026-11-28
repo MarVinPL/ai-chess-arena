@@ -113,3 +113,68 @@ impl AndroidTokenEntry {
         })
     }
 }
+
+pub(crate) fn journal_root() -> Result<std::path::PathBuf, String> {
+    with_vault(|env, class, context| {
+        let value = env
+            .call_static_method(
+                class,
+                "journalRoot",
+                "(Landroid/content/Context;)Ljava/lang/String;",
+                &[JValue::Object(context)],
+            )
+            .map_err(java_failure)?
+            .l()
+            .map_err(java_failure)?;
+        let path = env
+            .get_string(&JString::from(value))
+            .map_err(java_failure)?
+            .to_string_lossy()
+            .into_owned();
+        Ok(std::path::PathBuf::from(path))
+    })
+}
+
+pub(crate) fn journal_read(slot: &str) -> Result<Option<String>, String> {
+    with_vault(|env, class, context| {
+        let name = env.new_string(slot).map_err(java_failure)?;
+        let value = env
+            .call_static_method(
+                class,
+                "journalLoad",
+                "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(context), JValue::Object(name.as_ref())],
+            )
+            .map_err(java_failure)?
+            .l()
+            .map_err(java_failure)?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let raw = env
+            .get_string(&JString::from(value))
+            .map_err(java_failure)?
+            .to_string_lossy()
+            .into_owned();
+        Ok(Some(raw))
+    })
+}
+
+pub(crate) fn journal_mutate(method: &str, slot: &str, raw: &str) -> Result<(), String> {
+    with_vault(|env, class, context| {
+        let name = env.new_string(slot).map_err(java_failure)?;
+        let value = env.new_string(raw).map_err(java_failure)?;
+        env.call_static_method(
+            class,
+            method,
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+            &[
+                JValue::Object(context),
+                JValue::Object(name.as_ref()),
+                JValue::Object(value.as_ref()),
+            ],
+        )
+        .map_err(java_failure)?;
+        Ok(())
+    })
+}

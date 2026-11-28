@@ -1,3 +1,6 @@
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+mod credential_journal;
 // Native updater asset metadata gate; installation stays disabled until
 // verified APK bytes, signing certificate, package and coordinator idle checks.
 #[allow(dead_code)]
@@ -27,9 +30,16 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 
+// Lock order: change gate -> token vault -> journal gate. Never across await.
+static CREDENTIAL_CHANGE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) fn credential_change_gate() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    CREDENTIAL_CHANGE_GATE.lock().map_err(|_| "Blokada poświadczeń niedostępna".into())
+}
+
 // A pending coordinator hold requires the *original* machine token for
 // explicit authenticated release. Never let webview rotation/deletion orphan it.
 fn ensure_no_pending_update() -> Result<(), String> {
+    if android_update_install_journal::load()?.is_some() { return Err("Nierozliczona instalacja".into()); }
     match android_update_recovery::load_pending() {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(
@@ -52,6 +62,15 @@ struct UpdateRecoveryStatus {
 /// Rust. Corrupt/unavailable keyring is displayed as BLOCKED, not empty.
 #[tauri::command]
 fn update_recovery_status() -> UpdateRecoveryStatus {
+    let _guard = match credential_change_gate() {
+        Ok(guard) => guard,
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan aktualizacji niedostępny." },
+    };
+    match android_update_install_journal::load() {
+        Ok(None) => (),
+        Ok(Some(_)) => return UpdateRecoveryStatus { pending: true, blocked: true, message: "Nierozliczona instalacja APK." },
+        Err(_) => return UpdateRecoveryStatus { pending: false, blocked: true, message: "Stan instalacji niedostępny lub uszkodzony." },
+    }
     match android_update_recovery::load_pending() {
         Ok(None) => UpdateRecoveryStatus {
             pending: false, blocked: false,
@@ -135,6 +154,7 @@ fn token_entry() -> Result<credential_vault::CredentialVault<credential_vault_na
 
 #[tauri::command]
 fn store_worker_token(token: String) -> Result<(), String> {
+    let _credential_guard = credential_change_gate()?;
     token_entry()?.set_password(&token, ensure_no_pending_update)
 }
 
@@ -155,6 +175,7 @@ fn worker_token_state() -> &'static str {
 
 #[tauri::command]
 fn forget_worker_token() -> Result<(), String> {
+    let _credential_guard = credential_change_gate()?;
     token_entry()?.delete_credential(ensure_no_pending_update)
 }
 
