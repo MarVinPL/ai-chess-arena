@@ -807,14 +807,11 @@ async fn install_downloaded_worker_apk(
 // Caller holds the generation permit across this check and dispatch.
 #[cfg(target_os = "android")]
 async fn check_native_stop_recovery(server: &str, worker: &str, token: &str) -> Result<(), String> {
-    match android_native_stop_outbox::StopOutbox.load()
-        .map_err(|_| "Dziennik STOP niedostępny lub uszkodzony")? {
-        None => Ok(()), // Not proof of STOP; normal coordinator gates still apply.
-        Some(report) => {
-            android_update_coordinator::validate_pending_stop(server, worker, token, &report).await?;
-            Err("Raport STOP oczekuje na dostarczenie i uzgodnienie".into())
-        }
-    }
+    let report = android_native_stop_outbox::StopOutbox.load()
+        .map_err(|_| "Dziennik STOP niedostępny lub uszkodzony")?;
+    android_update_coordinator::pending_stop_dispatch_gate(report, |report| async move {
+        android_update_coordinator::validate_pending_stop(server, worker, token, &report).await
+    }).await
 }
 
 /// Inspect only the job that Arena has atomically assigned to this phone.

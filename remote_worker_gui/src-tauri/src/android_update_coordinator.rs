@@ -166,22 +166,44 @@ impl StopRecoveryReply {
             && self.state == "stop_recovery_validated" && !self.install_allowed && !self.dispatch_allowed
     }
 }
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", all(test, unix)))]
 pub(crate) async fn validate_pending_stop(
     base: &str, worker: &str, token: &str, report: &crate::android_native_stop_outbox::StopReport,
 ) -> Result<(), String> {
     let (job, request, lease) = report.recovery_identity(base, worker)
         .map_err(|_| "Niezgodna tożsamość raportu STOP")?;
     let nonce = random_nonce()?;
-    let response = update_http_client()?.post(coordinator_endpoint(base, "native-stop-recovery")?)
+    let endpoint = coordinator_endpoint(base, "native-stop-recovery")?;
+    validate_pending_stop_at(endpoint, worker, token, job, request, lease, &nonce, update_http_client()?).await
+}
+
+#[cfg(any(target_os = "android", all(test, unix)))]
+async fn validate_pending_stop_at(
+    endpoint: reqwest::Url, worker: &str, token: &str, job: &str, request: &str,
+    lease: &str, nonce: &str, client: reqwest::Client,
+) -> Result<(), String> {
+    let response = client.post(endpoint)
         .json(&serde_json::json!({"worker_id":worker,"token":token,"nonce":nonce,
             "job_id":job,"request_id":request,"lease_token":lease}))
         .send().await.map_err(|_| "Koordynator STOP niedostępny")?;
     if response.status() != reqwest::StatusCode::OK { return Err("Koordynator odrzucił recovery STOP".into()); }
     let reply: StopRecoveryReply = crate::bounded_json_response(response, 4096).await
         .map_err(|_| "Nieprawidłowa odpowiedź recovery STOP")?;
-    if !reply.matches(worker, &nonce, job, request) { return Err("Niezgodna odpowiedź recovery STOP".into()); }
+    if !reply.matches(worker, nonce, job, request) { return Err("Niezgodna odpowiedź recovery STOP".into()); }
     Ok(())
+}
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub(crate) async fn pending_stop_dispatch_gate<F: std::future::Future<Output = Result<(), String>>>(
+    report: Option<crate::android_native_stop_outbox::StopReport>,
+    validate: impl FnOnce(crate::android_native_stop_outbox::StopReport) -> F,
+) -> Result<(), String> {
+    match report {
+        None => Ok(()),
+        Some(report) => {
+            validate(report).await?;
+            Err("Raport STOP oczekuje na dostarczenie i uzgodnienie".into())
+        }
+    }
 }
 #[allow(dead_code)]
 fn valid_worker_id(worker_id: &str) -> bool {
@@ -1147,4 +1169,36 @@ fn stop_recovery_reply_is_strictly_bound() {
         let reply: StopRecoveryReply = serde_json::from_value(bad).unwrap();
         assert!(!reply.matches("worker_1234","nonce","job_12345678","request"));
     }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) async fn test_unavailable_stop_transport(
+    report: crate::android_native_stop_outbox::StopReport,
+) -> Result<(), String> {
+    let (job, request, lease) = report.recovery_identity("https://127.0.0.1", "worker_1234")
+        .map_err(|_| "Unexpected test report identity")?;
+    // Reserve a loopback port and drop the connection immediately: deterministic
+    // real TLS transport failure, no DNS, external network or production token.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let peer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => { drop(stream); return true; }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(5)),
+                _ => return false,
+            }
+        }
+    });
+    let endpoint = reqwest::Url::parse(&format!("https://{address}/api/remote-workers/native-stop-recovery")).unwrap();
+    let client = reqwest::Client::builder().no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(4)).build().unwrap();
+    let result = validate_pending_stop_at(endpoint, "worker_1234", "synthetic-token",
+        job, request, lease, &random_nonce().unwrap(), client).await;
+    assert!(peer.join().unwrap(), "test must reach the loopback transport");
+    result
 }
