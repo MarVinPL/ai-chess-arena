@@ -812,9 +812,27 @@ def test_native_stop_recovery_read_only(sandbox):
     with pytest.raises(PermissionError):
         WorkerUpdatePause.validate_native_stop(*args, clock=lambda: pause.clock()+601)
     assert snapshot() == before
-    assert post("native-stop-report", report)[0] == 200
+    receipt = dict(expected, state="stop_report_received",
+                   lease_sha256=hashlib.sha256(report["lease_token"].encode()).hexdigest())
+    # Inject a write failure: neither the live evidence nor the receipt may survive.
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TRIGGER fail_receipt BEFORE INSERT ON worker_native_stop_receipts
+                   BEGIN SELECT RAISE(ABORT, 'test failure'); END""")
+    failed = snapshot()
+    assert post("native-stop-report", report)[0] == 500
+    assert snapshot() == failed
+    with sqlite3.connect(path) as db:
+        db.execute("DROP TRIGGER fail_receipt")
+    # Concurrent identical reports all get the same committed evidence.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(lambda _: post("native-stop-report", report), range(4))) == [(200, receipt)] * 4
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM worker_native_stop_receipts").fetchone() == (1,)
+        assert db.execute("SELECT phase FROM worker_update_pause_requests").fetchone() == ("requested",)
+    WorkerUpdatePause(path)
     after = snapshot()
-    assert post(route, report) == (200, expected)
+    assert post(route, report) == (200, receipt)
+    assert post("native-stop-report", dict(report, nonce="b"*32)) == (200, dict(receipt, nonce="b"*32))
     assert snapshot() == after
     # Change the authoritative generation, not merely the submitted token.
     with sqlite3.connect(path) as db:
@@ -822,13 +840,15 @@ def test_native_stop_recovery_read_only(sandbox):
         changed = dict(json.loads(raw), lease_token="e"*64)
         db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?", (json.dumps(changed), WORKER))
     changed_snapshot = snapshot()
-    assert post(route, report)[0] == 409
+    assert post(route, report) == (200, receipt)
+    assert post(route, dict(report, lease_token="e"*64))[0] == 409
     assert snapshot() == changed_snapshot
     with sqlite3.connect(path) as db:
         db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?", (raw, WORKER))
         db.execute("DELETE FROM worker_update_pause_requests WHERE worker_id=?", (WORKER,))
     missing = snapshot()
-    assert post(route, report)[0] == 409
+    assert post(route, report) == (200, receipt)
+    assert post("native-stop-report", report) == (200, receipt)
     assert snapshot() == missing
     # Restore a valid STOP request so expiry is independently exercised.
     report["request_id"] = pause.request(WORKER, job_id)
@@ -837,6 +857,7 @@ def test_native_stop_recovery_read_only(sandbox):
         db.execute("UPDATE worker_job_safety SET deadline=0 WHERE worker_id=?", (WORKER,))
     expired = snapshot()
     assert post(route, report)[0] == 409
+    assert post("native-stop-report", report)[0] == 409
     assert snapshot() == expired
 
 def test_native_stop_recovery_missing_database_never_creates_it(tmp_path):

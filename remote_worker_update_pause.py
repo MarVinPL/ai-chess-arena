@@ -37,15 +37,21 @@ class WorkerUpdatePause:
                 worker_id TEXT PRIMARY KEY, job_id TEXT NOT NULL,
                 request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL, received_at REAL NOT NULL
             )""")
+            # Keep historical receipts for the lifetime of the coordinator database.
+            # Import legacy evidence once; later live-row changes are not new receipts.
+            migrate_receipts = not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_native_stop_receipts'"
+            ).fetchone()
             db.execute("""CREATE TABLE IF NOT EXISTS worker_native_stop_receipts (
                 worker_id TEXT NOT NULL, job_id TEXT NOT NULL,
                 request_id TEXT NOT NULL, lease_sha256 TEXT NOT NULL,
                 received_at REAL NOT NULL,
                 PRIMARY KEY (worker_id, job_id, request_id, lease_sha256)
             )""")
-            db.execute("""INSERT OR IGNORE INTO worker_native_stop_receipts
-                SELECT worker_id, job_id, request_id, lease_sha256, received_at
-                FROM worker_native_stop_reports""")
+            if migrate_receipts:
+                db.execute("""INSERT INTO worker_native_stop_receipts
+                    SELECT worker_id, job_id, request_id, lease_sha256, received_at
+                    FROM worker_native_stop_reports""")
             db.execute("""CREATE TABLE IF NOT EXISTS worker_update_resume (
                 worker_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
