@@ -13,3 +13,8 @@ Weryfikacja na hoście używa pełnych zestawów `python -m pytest -q tests`
 oraz `cargo test --locked --lib` w `remote_worker_gui/src-tauri`. Workflow
 `Worker selective builds` kompiluje APK Android ARM64 dla PR. Testy na urządzeniu
 i włączenie ścieżki migracji należą do odrębnych zadań EPIC #406.
+
+Na lokalnym zestawie integracyjnym potwierdzono 1455 zaliczonych testów Python,
+138 zaliczonych podtestów i jedno pominięcie. Pełny zestaw Rust zaliczył 74 testy.
+`cargo check --locked --lib --target aarch64-linux-android` również zakończyło
+się pomyślnie. Weryfikacja pakietu APK odbywa się w CI PR #424.
