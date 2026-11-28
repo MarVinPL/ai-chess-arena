@@ -14,3 +14,7 @@ A new token cannot decrypt an old envelope. Pending update reconciliation remain
 The old boolean IPC remains compatible; the new status IPC returns only saved/missing/unavailable.
 Local synthetic tests do not establish physical persistence or Android JNI runtime behavior;
 ARM64 CI and device tests (#311/#408) are required.
+
+A failed SharedPreferences commit blocks further credential access in the current process:
+the in-memory value may differ from durable storage. Restart and recheck the store; this
+is not proof of coordinator reconciliation or of the previous commit's outcome.

@@ -75,8 +75,7 @@ async fn inspect_update_hold() -> Result<String, String> {
     if android_update_recovery::load_pending()?.is_none() {
         return Err("Brak oczekującej rezerwacji".into());
     }
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak oryginalnego tokenu Workera".to_string())?;
+    let machine_token = token_entry()?.get_password()?;
     let status = android_update_coordinator::inspect_pending_update(&machine_token).await?;
     Ok(status.to_owned())
 }
@@ -90,8 +89,7 @@ async fn poll_worker_update_pause(server: String, worker_id: String) -> Result<&
     if android_update_recovery::load_pending()?.is_some() {
         return Err("Trwa uzgadnianie poprzedniej aktualizacji".into());
     }
-    let token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_string())?;
+    let token = token_entry()?.get_password()?;
     use android_update_coordinator::StopInstruction;
     match android_update_coordinator::poll_pause_instruction(
         &server, &worker_id, &token,
@@ -692,8 +690,7 @@ async fn install_downloaded_worker_apk(
         if !android_update_package_manager::can_request_package_installation()? {
             return Err("Zezwól Android Workerowi na instalowanie aplikacji w ustawieniach systemu".into());
         }
-        let machine_token = token_entry()?.get_password()
-            .map_err(|_| "Brak tokenu Workera".to_string())?;
+        let machine_token = token_entry()?.get_password()?;
         // reserve_update journals the random hold before any network request.
         // The coordinator rejects running jobs and blocks further assignments.
         android_update_coordinator::reserve_update(&server, &worker_id, &machine_token).await?;
@@ -724,8 +721,7 @@ async fn poll_my_inference_job(
         || android_update_install_journal::load()?.is_some() {
         return Ok(serde_json::json!({"state": "blocked"}));
     }
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    let machine_token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_my_inference_job(
         &server, &worker_id, &machine_token,
     ).await
@@ -776,8 +772,7 @@ async fn execute_phone_inference_once(
             || android_update_install_journal::load()?.is_some() {
             return Err("Trwa aktualizacja APK — inferencja zablokowana".into());
         }
-        let token = token_entry()?.get_password()
-            .map_err(|_| "Brak oryginalnego tokenu Workera".to_owned())?;
+        let token = token_entry()?.get_password()?;
         let assignment = android_update_coordinator::fetch_my_inference_job(
             &server, &worker_id, &token,
         ).await?;
@@ -832,8 +827,7 @@ async fn execute_phone_inference_once(
 async fn get_my_worker_board(
     server: String, worker_id: String,
 ) -> Result<serde_json::Value, String> {
-    let machine_token = token_entry()?.get_password()
-        .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+    let machine_token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_worker_board_view(
         &server, &worker_id, &machine_token,
     ).await
@@ -861,8 +855,7 @@ async fn reconcile_idle_phone_after_update(
         if android_local_llama::generation_active() {
             return Err("Telefon nadal wykonuje inferencję".into());
         }
-        let token = token_entry()?.get_password()
-            .map_err(|_| "Brak zapisanego tokenu Workera".to_owned())?;
+        let token = token_entry()?.get_password()?;
         let resume = android_update_coordinator::fetch_resume_status(
             &server, &worker_id, &token,
         ).await?;
@@ -899,8 +892,7 @@ async fn inspect_worker_resume_readiness(
         || android_update_install_journal::load()?.is_some() {
         return Ok("waiting_update_reconciliation");
     }
-    let token = token_entry()?.get_password()
-        .map_err(|_| "Brak tokenu Workera".to_owned())?;
+    let token = token_entry()?.get_password()?;
     android_update_coordinator::fetch_resume_status(&server, &worker_id, &token).await
 }
 
@@ -963,16 +955,14 @@ async fn reconcile_installed_worker_update() -> Result<&'static str, String> {
             if !old_app_intact || !status.is_some_and(|code| code > 0) {
                 return Ok("not_confirmed");
             }
-            let machine_token = token_entry()?.get_password()
-                .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+            let machine_token = token_entry()?.get_password()?;
             android_update_coordinator::release_update(
                 &pending.server, &pending.worker_id, &machine_token,
             ).await?;
             android_update_install_journal::clear_confirmed(&journal)?;
             return Ok("installation_cancelled");
         }
-        let machine_token = token_entry()?.get_password()
-            .map_err(|_| "Brak poprzedniego tokenu Workera".to_string())?;
+        let machine_token = token_entry()?.get_password()?;
         android_update_coordinator::release_update(
             &pending.server, &pending.worker_id, &machine_token,
         ).await?;

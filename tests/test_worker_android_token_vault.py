@@ -117,3 +117,12 @@ def test_token_state_ipc_distinguishes_absence_and_failure():
     html = (GUI / 'public/index.html').read_text()
     assert "invoke('worker_token_state')" in html
     assert "if(state!=='saved')" in html
+
+
+def test_failed_commit_blocks_access_and_stale_status_is_ignored():
+    assert 'check(!uncertain)' in KOTLIN
+    for method in ('save', 'clear'):
+        section = KOTLIN.split('fun ' + method + '(', 1)[1].split('@JvmStatic', 1)[0]
+        assert section.index('uncertain = true') < section.index('.commit()') < section.index('uncertain = false')
+    html = (GUI / 'public/index.html').read_text()
+    assert 'if(revision!==tokenStateRevision)return;' in html

@@ -33,6 +33,10 @@ impl<B: Backend> CredentialVault<B> {
             .operations
             .lock()
             .map_err(|_| "Magazyn poświadczeń niedostępny")?;
+        self.checked_read()
+    }
+
+    fn checked_read(&self) -> Result<Option<String>, String> {
         let value = self.backend.read()?;
         if value.as_ref().is_some_and(|v| !valid(v)) {
             return Err("Nieprawidłowe dane magazynu poświadczeń".into());
@@ -58,6 +62,7 @@ impl<B: Backend> CredentialVault<B> {
         if !valid(value) {
             return Err("Nieprawidłowy format tokenu".into());
         }
+        self.checked_read()?;
         self.backend
             .write(value)
             .map_err(|_| "Nie udało się zapisać tokenu w systemowym magazynie".into())
@@ -72,6 +77,7 @@ impl<B: Backend> CredentialVault<B> {
             .lock()
             .map_err(|_| "Magazyn poświadczeń niedostępny")?;
         check()?;
+        self.checked_read()?;
         self.backend.delete()
     }
 }
@@ -103,6 +109,9 @@ mod tests {
         assert_eq!(v.read_optional(), Ok(None));
         *v.backend.0.lock().unwrap() = Some("invalid".into());
         assert!(v.read_optional().is_err());
+        assert!(v.set_password(&"a".repeat(32), || Ok(())).is_err());
+        assert!(v.delete_credential(|| Ok(())).is_err());
+        assert_eq!(v.backend.0.lock().unwrap().as_deref(), Some("invalid"));
         struct Broken;
         impl Backend for Broken {
             fn read(&self) -> Result<Option<String>, String> {

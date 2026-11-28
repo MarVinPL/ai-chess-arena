@@ -736,19 +736,23 @@ function invalidateJobPreview(){
 for(const field of ['server','workerId']){
  document.getElementById(field).addEventListener('input',invalidateJobPreview);
 }
+let tokenStateRevision=0;
 async function refreshTokenState(){
+  const revision=++tokenStateRevision;
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke)return;
   try {
     const state=await invoke('worker_token_state');
+    if(revision!==tokenStateRevision)return;
     tokenMessage.textContent=state==='saved'?'Token zapisany w systemowym magazynie poświadczeń.':state==='missing'?'Brak zapisanego tokenu.':'Magazyn poświadczeń niedostępny lub uszkodzony. Nie resetuj danych aplikacji.';
-  }catch(_error){tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
+  }catch(_error){if(revision===tokenStateRevision)tokenMessage.textContent='Nie udało się sprawdzić tokenu.';}
 }
 document.getElementById('saveToken').addEventListener('click',async()=>{
   const field=document.getElementById('code');
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke){tokenMessage.textContent='Zapis tokenu wymaga aplikacji desktopowej.';return;}
   if(!document.getElementById('rememberToken').checked){tokenMessage.textContent='Zaznacz zapamiętywanie tokenu, aby go zapisać.';return;}
+  ++tokenStateRevision;
   invalidateJobPreview(); // Invalidate any pending HTTPS verification before changing the secret.
   try {
     await invoke('store_worker_token',{token:field.value});
@@ -760,6 +764,7 @@ document.getElementById('saveToken').addEventListener('click',async()=>{
 document.getElementById('forgetToken').addEventListener('click',async()=>{
   const invoke=window.__TAURI__?.core?.invoke;
   if(!invoke){tokenMessage.textContent='Usuwanie tokenu wymaga aplikacji desktopowej.';return;}
+  ++tokenStateRevision;
   invalidateJobPreview(); // Pending HTTPS checks must never restore an authenticated preview.
   try{
     await invoke('forget_worker_token');

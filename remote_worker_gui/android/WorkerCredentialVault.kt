@@ -26,6 +26,12 @@ object WorkerCredentialVault {
     private const val FORMAT: Byte = 1
     private const val TAG_BITS = 128
     private const val GCM_IV_LENGTH = 12
+    // SharedPreferences can update memory even when disk commit fails.
+    private var uncertain = false
+
+    private fun requireCertain() {
+        check(!uncertain) { "Credential commit outcome uncertain; restart and reconcile" }
+    }
 
     private fun key(allowCreate: Boolean): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore")
@@ -54,6 +60,7 @@ object WorkerCredentialVault {
     @JvmStatic
     @Synchronized
     fun save(context: Context, token: String) {
+        requireCertain()
         require(token.length in 24..512 && token.all {
             it.isLetterOrDigit() && it.code < 128 || it == '_' || it == '-'
         }) { "Invalid worker token" }
@@ -64,23 +71,27 @@ object WorkerCredentialVault {
         cipher.init(Cipher.ENCRYPT_MODE, key(!prefs.contains(PREF_TOKEN)))
         val iv = cipher.iv
         require(iv.size == GCM_IV_LENGTH) { "Unexpected GCM IV" }
-        val encrypted = cipher.doFinal(token.toByteArray(StandardCharsets.US_ASCII))
+        val raw = token.toByteArray(StandardCharsets.US_ASCII)
+        val encrypted = try { cipher.doFinal(raw) } finally { raw.fill(0) }
         val data = byteArrayOf(FORMAT) + iv + encrypted
         val encoded = Base64.encodeToString(data, Base64.NO_WRAP)
-        if (!context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-                .edit().putString(PREF_TOKEN, encoded).commit()) {
+        uncertain = true
+        if (!prefs.edit().putString(PREF_TOKEN, encoded).commit()) {
             throw IllegalStateException("Android failed to persist token")
         }
+        uncertain = false
     }
 
     @JvmStatic
     @Synchronized
     fun load(context: Context): String? {
-        val encoded = context.applicationContext
-            .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .getString(PREF_TOKEN, null) ?: return null
+        requireCertain()
+        val prefs = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (!prefs.contains(PREF_TOKEN)) return null
+        val encoded = checkNotNull(prefs.getString(PREF_TOKEN, null))
+        require(encoded.length <= 724) { "Corrupted token envelope" }
         val data = Base64.decode(encoded, Base64.NO_WRAP)
-        require(data.size >= 1 + GCM_IV_LENGTH + TAG_BITS / 8 + 1
+        require(data.size in (1 + GCM_IV_LENGTH + TAG_BITS / 8 + 24)..(1 + GCM_IV_LENGTH + TAG_BITS / 8 + 512)
                 && data[0] == FORMAT) { "Corrupted token envelope" }
         val iv = data.copyOfRange(1, 1 + GCM_IV_LENGTH)
         val ciphertext = data.copyOfRange(1 + GCM_IV_LENGTH, data.size)
@@ -88,12 +99,11 @@ object WorkerCredentialVault {
         cipher.init(Cipher.DECRYPT_MODE, key(false), GCMParameterSpec(TAG_BITS, iv))
         // A wrong key, tampered data or restored ciphertext MUST fail closed.
         val bytes = cipher.doFinal(ciphertext)
-        val plaintext = String(bytes, StandardCharsets.US_ASCII)
+        val plaintext = try { String(bytes, StandardCharsets.US_ASCII) } finally { bytes.fill(0) }
         require(plaintext.length in 24..512 && plaintext.all {
             (it in 'a'..'z') || (it in 'A'..'Z') ||
                 (it in '0'..'9') || it == '_' || it == '-'
         }) { "Corrupted token after decryption" }
-        bytes.fill(0)
         return plaintext
     }
 
@@ -101,10 +111,12 @@ object WorkerCredentialVault {
     @Synchronized
     fun clear(context: Context) {
         // Do not discard an unreadable credential via normal UI operations.
-        load(context)
+        if (load(context) == null) return
+        uncertain = true
         if (!context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
                 .edit().remove(PREF_TOKEN).commit()) {
             throw IllegalStateException("Android failed to remove token")
         }
+        uncertain = false
     }
 }
