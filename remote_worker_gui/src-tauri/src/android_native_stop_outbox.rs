@@ -253,6 +253,24 @@ mod tests {
     fn other() -> StopReport { StopReport::new("worker_1234", "job_87654321", &"a".repeat(32), &"b".repeat(64)).unwrap() }
 
     #[test]
+    fn unavailable_coordinator_keeps_persisted_stop_and_blocks_dispatch() {
+        let t = Temp::new();
+        let q = StopOutbox::open(&t.0).unwrap();
+        let r = StopReport::bound("https://127.0.0.1", "worker_1234", "job_12345678",
+                                  &"a".repeat(32), &"b".repeat(64)).unwrap();
+        q.store(&r).unwrap();
+        let before = fs::read(q.dir.join(PENDING)).unwrap();
+        // Reopen storage to simulate recovery after restart.
+        let loaded = StopOutbox::open(&t.0).unwrap().load().unwrap();
+        let result = tauri::async_runtime::block_on(
+            crate::android_update_coordinator::pending_stop_dispatch_gate(
+                loaded, crate::android_update_coordinator::test_unavailable_stop_transport));
+        assert_eq!(result, Err("Koordynator STOP niedostępny".into()));
+        assert!(q.load().unwrap().as_ref() == Some(&r));
+        assert_eq!(fs::read(q.dir.join(PENDING)).unwrap(), before);
+    }
+
+    #[test]
     fn bound_report_roundtrip_and_legacy_block() {
         let t = Temp::new();
         let q = StopOutbox::open(&t.0).unwrap();

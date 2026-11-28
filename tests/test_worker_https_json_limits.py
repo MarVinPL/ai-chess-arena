@@ -60,5 +60,7 @@ def test_native_stop_recovery_reply_is_bounded():
     coordinator = (SOURCE.parent / "android_update_coordinator.rs").read_text()
     body = _function_body(coordinator, "validate_pending_stop")
     assert 'coordinator_endpoint(base, "native-stop-recovery")' in body
-    assert "crate::bounded_json_response(response, 4096).await" in body
-    assert ".json().await" not in body
+    transport = _function_body(coordinator, "validate_pending_stop_at")
+    assert "validate_pending_stop_at(" in body
+    assert "crate::bounded_json_response(response, 4096).await" in transport
+    assert ".json().await" not in transport
