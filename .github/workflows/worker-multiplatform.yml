@@ -19,6 +19,7 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
   pull_request:
     branches: [main]
     paths:
@@ -35,6 +36,7 @@ on:
       - 'remote_worker_gui/src-tauri/tauri.conf.json'
       - 'remote_worker_gui/src-tauri/gen/android/**'
       - 'remote_worker_gui/src-tauri/android/**'
+      - 'remote_worker_gui/android/**'
 
 permissions:
   contents: read
@@ -92,6 +94,7 @@ jobs:
             android:
               - 'remote_worker_gui/src-tauri/gen/android/**'
               - 'remote_worker_gui/src-tauri/android/**'
+              - 'remote_worker_gui/android/**'
               - 'remote_worker_gui/src-tauri/icons/android-pawn.svg'
       - name: Select only changed platforms
         id: select

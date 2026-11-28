@@ -15,6 +15,8 @@ mod android_update_package_installer;
 mod android_update_coordinator;
 mod android_update_recovery;
 mod android_update_install_journal;
+#[allow(dead_code)]
+mod android_embedded_llama;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;

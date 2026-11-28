@@ -173,6 +173,12 @@ jobs:
           # Generated Android sources are recreated on CI; install the
           # version-controlled PackageInstaller receiver before compiling.
           python3 android/inject_package_installer.py
+          python3 android/force_extracted_native_libs.py
+      - name: Build and bundle pinned embedded llama.cpp for ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash android/build_embedded_llama.sh
       - name: Fingerprint generated Gradle dependency inputs
         id: modules
         working-directory: .
@@ -228,6 +234,10 @@ jobs:
           set -euo pipefail
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           test -s "$apk"
+          entries="$(unzip -Z1 "$apk")"
+          for name in llama ggml ggml-base ggml-cpu arena_llama_bridge; do
+            grep -Fxq "lib/arm64-v8a/lib${name}.so" <<< "$entries"
+          done
           signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           test -x "$signer"
           "$signer" verify --verbose "$apk"
