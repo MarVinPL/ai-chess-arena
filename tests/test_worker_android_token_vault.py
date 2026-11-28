@@ -126,3 +126,29 @@ def test_failed_commit_blocks_access_and_stale_status_is_ignored():
         assert section.index('uncertain = true') < section.index('.commit()') < section.index('uncertain = false')
     html = (GUI / 'public/index.html').read_text()
     assert 'if(revision!==tokenStateRevision)return;' in html
+
+
+def test_credential_regression_preserves_legacy_identity_and_no_migration_dependency():
+    import tomllib
+    manifest = tomllib.loads((GUI / 'src-tauri/Cargo.toml').read_text())
+    lock = tomllib.loads((GUI / 'src-tauri/Cargo.lock').read_text())
+    assert not {'tauri-plugin-keyring-store', 'android-native-keyring-store'} & {p['name'] for p in lock['package']}
+    assert 'patch' not in manifest or 'android-native-keyring-store' not in manifest['patch'].get('crates-io', {})
+    assert '"worker_machine_credential_v1"' in KOTLIN
+    assert '"worker_token_aes_gcm"' in KOTLIN
+    assert '"worker_update_journals_v1"' in KOTLIN
+    assert 'noBackupFilesDir' in KOTLIN
+    assert 'mod credential_migration;' not in LIB
+
+
+def test_android_registration_and_deletion_keep_change_gate_and_journal_checks():
+    registration = LIB.split('async fn store_worker_token(', 1)[1].split('#[tauri::command]', 1)[0]
+    android = registration.split('#[cfg(target_os = "android")]', 1)[1]
+    assert android.index('authenticate_registration') < android.index('.await?') < android.index('credential_change_gate()?') < android.index('insert_registration_token')
+    assert 'credential_journal::check_registration_storage' in android
+    deletion = LIB.split('fn forget_worker_token()', 1)[1].split('#[tauri::command]', 1)[0]
+    assert deletion.index('credential_change_gate()?') < deletion.index('delete_credential(ensure_no_pending_update)')
+    guard = LIB.split('fn ensure_no_pending_update()', 1)[1].split('#[derive', 1)[0]
+    assert 'android_update_install_journal::load()?' in guard
+    assert 'android_update_recovery::load_pending()' in guard
+    assert 'Err(_) => Err(' in guard
