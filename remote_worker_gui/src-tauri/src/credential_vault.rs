@@ -303,6 +303,7 @@ mod tests {
 pub(crate) enum Slot {
     PendingHold,
     PendingInstall,
+    NativeStop,
 }
 
 #[cfg(target_os = "android")]
@@ -311,6 +312,7 @@ impl Slot {
         match self {
             Self::PendingHold => "pending-hold-v1",
             Self::PendingInstall => "pending-install-v1",
+            Self::NativeStop => "native-stop-v1",
         }
     }
 }

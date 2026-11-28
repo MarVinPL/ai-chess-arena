@@ -261,6 +261,27 @@ fn checked_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), Strin
     set_state(dir, State::Present)
 }
 
+// The STOP slot is write-once in #325. Only a joined STOP may create it.
+// Absence is not recovery evidence. Never adopt orphan ciphertext.
+fn stop_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
+    match state(dir)? {
+        State::Present => {
+            if checked_read(dir, store)?.as_deref() != Some(raw) {
+                return Err(ERROR.into());
+            }
+            return sync_dir(dir);
+        }
+        State::Uninitialized => {
+            if store.read()?.is_some() { return Err(ERROR.into()); }
+        }
+        _ => return Err(ERROR.into()),
+    }
+    set_state(dir, State::Uncertain)?;
+    store.insert(raw)?;
+    if store.read()?.as_deref() != Some(raw) { return Err(ERROR.into()); }
+    set_state(dir, State::Present)
+}
+
 fn checked_delete(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
     if checked_read(dir, store)?.as_deref() != Some(raw) {
         return Err(ERROR.into());
@@ -293,6 +314,7 @@ mod android {
         root.join(match slot {
             Slot::PendingHold => "credential-pending-hold",
             Slot::PendingInstall => "credential-pending-install",
+            Slot::NativeStop => "native-stop-outbox-v2",
         })
     }
 
@@ -529,6 +551,24 @@ mod android {
         Ok(JournalInitCompletion { origin, worker_id: worker_id.into(), nonce: nonce.into(), pair_marker })
     }
 
+    pub(crate) fn native_stop_read() -> Result<Option<String>, String> {
+        let guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard { return Err(ERROR.into()); }
+        let root = crate::android_worker_token_store::journal_root()?;
+        let path = dir(&root, Slot::NativeStop)?;
+        checked_read(&path, &Native(Slot::NativeStop))
+    }
+
+    pub(crate) fn native_stop_insert(raw: &str) -> Result<(), String> {
+        let mut guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard { return Err(ERROR.into()); }
+        let root = crate::android_worker_token_store::journal_root()?;
+        let path = dir(&root, Slot::NativeStop)?;
+        let result = stop_insert(&path, &Native(Slot::NativeStop), raw);
+        if result.is_err() { *guard = true; }
+        result
+    }
+
     fn require_pair() -> Result<std::path::PathBuf, String> {
         let root = crate::android_worker_token_store::journal_root()?;
         available_pair(&root)?;
@@ -574,6 +614,7 @@ mod android {
 #[cfg(target_os = "android")]
 pub(crate) use android::{
     check_registration_storage, completion, delete_expected, finish_reconciliation,
+    native_stop_read, native_stop_insert,
     initialize_authorized_pair, insert, needs_initialization, prepare_reconciliation, read, JournalBaseline,
 };
 
@@ -628,6 +669,39 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn native_stop_write_once_and_missing_ciphertext() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        assert!(checked_read(&d.0, &store).is_err());
+        stop_insert(&d.0, &store, "synthetic-stop").unwrap();
+        stop_insert(&d.0, &store, "synthetic-stop").unwrap();
+        assert!(stop_insert(&d.0, &store, "different").is_err());
+        assert_eq!(checked_read(&d.0, &store), Ok(Some("synthetic-stop".into())));
+        assert_eq!(fs::read(d.0.join("state.v1")).unwrap(), b"P");
+        *store.value.borrow_mut() = None;
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "different").is_err());
+    }
+
+    #[test]
+    fn native_stop_interrupted_commit_and_orphan_fail_closed() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        *store.value.borrow_mut() = Some("orphan".into());
+        assert!(stop_insert(&d.0, &store, "new").is_err());
+        *store.value.borrow_mut() = None;
+        store.fail.set(true);
+        assert!(stop_insert(&d.0, &store, "first").is_err());
+        assert_eq!(state(&d.0), Ok(State::Uncertain));
+        store.fail.set(false);
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "first").is_err());
+        assert_eq!(store.read(), Ok(Some("first".into())));
+    }
+
     const IDENTITY: &str = concat!("0123456789abcdef0123456789abcdef",
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     const PROVEN: BaselineEvidence = BaselineEvidence {

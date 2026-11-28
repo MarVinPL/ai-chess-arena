@@ -70,6 +70,7 @@ impl StopReport {
     }
 }
 
+#[cfg(all(test, not(target_os = "android")))]
 pub(crate) struct StopOutbox { dir: PathBuf }
 fn storage(_: io::Error) -> OutboxError { OutboxError::Storage }
 fn sync_dir(path: &Path) -> Result<()> { File::open(path).and_then(|f| f.sync_all()).map_err(storage) }
@@ -84,6 +85,7 @@ enum PublishStep { Staged, FileSynced, Published, DirectorySynced, Finished }
 struct Stage(PathBuf);
 impl Drop for Stage { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
 
+#[cfg(all(test, not(target_os = "android")))]
 impl StopOutbox {
     /// Caller supplies a trusted app-private, existing no-backup directory.
     pub(crate) fn open(root: &Path) -> Result<Self> {
@@ -177,51 +179,39 @@ pub(crate) fn complete_joined_stop<T>(
 }
 
 #[cfg(target_os = "android")]
+pub(crate) struct StopOutbox;
+
+#[cfg(target_os = "android")]
 impl StopOutbox {
-    /// Resolve Android's private, explicitly excluded-from-backup directory.
-    /// The caller cannot supply a path through a WebView or remote message.
-    /// No JNI exception details or lease contents are returned.
-    pub(crate) fn open_android() -> Result<Self> {
-        use jni::objects::{JObject, JString};
-        use jni::JavaVM;
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|_| OutboxError::Storage)?;
-        let mut env = vm.attach_current_thread().map_err(|_| OutboxError::Storage)?;
-        let context = unsafe { JObject::from_raw(ctx.context().cast()) };
-        let root = (|| {
-            let files = env.call_method(&context, "getNoBackupFilesDir", "()Ljava/io/File;", &[])
-                .map_err(|_| OutboxError::Storage)?
-                .l().map_err(|_| OutboxError::Storage)?;
-            if files.is_null() { return Err(OutboxError::Storage); }
-            let path = env.call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])
-                .map_err(|_| OutboxError::Storage)?
-                .l().map_err(|_| OutboxError::Storage)?;
-            if path.is_null() { return Err(OutboxError::Storage); }
-            let path: String = env.get_string(&JString::from(path))
-                .map_err(|_| OutboxError::Storage)?.into();
-            if !Path::new(&path).is_absolute() { return Err(OutboxError::Storage); }
-            Ok(PathBuf::from(path))
-        })();
-        // Do not leave an exception pending on the attached worker thread.
-        if env.exception_check().map_err(|_| OutboxError::Storage)? {
-            env.exception_clear().map_err(|_| OutboxError::Storage)?;
-            return Err(OutboxError::Storage);
-        }
-        Self::open(&root?)
+    pub(crate) fn load(&self) -> Result<Option<StopReport>> {
+        crate::credential_journal::native_stop_read()
+            .map_err(|_| OutboxError::Storage)?
+            .map(|raw| StopReport::decode(raw.as_bytes())).transpose()
     }
 
-    /// Internal call site: only after the actual engine join succeeded and
-    /// the coordinator's STOP identity matched. Does not send or clear STOP.
-    pub(crate) fn persist_after_join(
-        worker_id: &str, job_id: &str, request_id: &str, lease_token: &str,
-    ) -> Result<()> {
-        let report = StopReport::new(worker_id, job_id, request_id, lease_token)?;
-        Self::open_android()?.store(&report)
+    fn store(&self, report: &StopReport) -> Result<()> {
+        let bytes = report.encode();
+        let raw = std::str::from_utf8(&bytes).map_err(|_| OutboxError::Invalid)?;
+        crate::credential_journal::native_stop_insert(raw)
+            .map_err(|_| OutboxError::Storage)
+    }
+
+    // Keep join and durable persistence in one blocking operation. The caller
+    // must retain its generation permit, and validate STOP identity beforehand.
+    pub(crate) fn persist_after_join<T>(
+        engine: std::thread::JoinHandle<T>,
+        signal: std::result::Result<(), String>,
+        stop: std::result::Result<String, String>,
+        worker_id: &str, job_id: &str, lease_token: &str,
+    ) -> std::result::Result<String, String> {
+        complete_joined_stop(engine, signal, stop, |request_id| {
+            let report = StopReport::new(worker_id, job_id, request_id, lease_token)?;
+            Self.store(&report)
+        })
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android")))]
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
