@@ -225,6 +225,12 @@ impl JournalInitReply {
 pub(crate) async fn acquire_journal_init(
     base: &str, worker_id: &str, machine_token: &str,
 ) -> Result<JournalInitAuthorization, String> {
+    request_journal_init(base, worker_id, machine_token, random_nonce()?, false).await
+}
+
+pub(crate) async fn request_journal_init(
+    base: &str, worker_id: &str, machine_token: &str, nonce: String, retry: bool,
+) -> Result<JournalInitAuthorization, String> {
     if !valid_worker_id(worker_id)
         || !(24..=512).contains(&machine_token.len())
         || !machine_token.is_ascii()
@@ -232,12 +238,15 @@ pub(crate) async fn acquire_journal_init(
         return Err("Brak zaufanej tożsamości Workera".into());
     }
     let endpoint = coordinator_endpoint(base, "journal-init-acquire")?;
-    let nonce = random_nonce()?;
     let started_ms = system_unix_ms()?;
+    let mut payload = serde_json::json!({
+        "worker_id": worker_id, "token": machine_token, "nonce": nonce
+    });
+    if retry {
+        payload["retry"] = Value::Bool(true);
+    }
     let response = update_http_client()?.post(endpoint.clone())
-        .json(&serde_json::json!({
-            "worker_id": worker_id, "token": machine_token, "nonce": nonce
-        }))
+        .json(&payload)
         .send().await.map_err(|_| "Brak odpowiedzi koordynatora inicjalizacji")?;
     if response.status() != reqwest::StatusCode::OK {
         return Err("Koordynator odmówił blokady inicjalizacji".into());
@@ -273,6 +282,50 @@ pub(crate) async fn complete_journal_init(
         return Err("Nieprawidłowe potwierdzenie inicjalizacji".into());
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "android", test))]
+struct JournalReconciliation;
+
+#[cfg(any(target_os = "android", test))]
+static RECONCILING_JOURNALS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(any(target_os = "android", test))]
+impl JournalReconciliation {
+    fn start() -> Result<Self, String> {
+        use std::sync::atomic::Ordering;
+        RECONCILING_JOURNALS.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map(|_| Self).map_err(|_| "Trwa już uzgadnianie dzienników".into())
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+impl Drop for JournalReconciliation {
+    fn drop(&mut self) {
+        RECONCILING_JOURNALS.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Internal restart-safe driver. The caller supplies trusted, locally retained
+/// installer evidence; UI integration and collection of that input are separate.
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+pub(crate) async fn reconcile_journal_initialization(
+    base: &str, worker_id: &str,
+    expectation: &crate::android_update_install_journal::PendingInstall,
+) -> Result<(), String> {
+    let _operation = JournalReconciliation::start()?;
+    coordinator_endpoint(base, "journal-init-acquire")?;
+    if !valid_worker_id(worker_id) { return Err("Nieprawidłowy identyfikator Workera".into()); }
+    let (token, nonce, committed) =
+        crate::credential_journal::prepare_reconciliation(base, worker_id, expectation)?;
+    if !committed {
+        let authorization = request_journal_init(base, worker_id, &token, nonce, true).await?;
+        crate::credential_journal::initialize_authorized_pair(base, worker_id, &authorization, expectation)?;
+    }
+    complete_journal_init(base, worker_id).await?;
+    crate::credential_journal::finish_reconciliation(base, worker_id, &token)
 }
 
 /// Authenticated, atomic coordinator reservation. A future installer must
@@ -765,6 +818,14 @@ mod tests {
     use super::*;
     use serde_json::json;
     const NONCE: &str = "00112233445566778899aabbccddeeff";
+
+    #[test]
+    fn journal_reconciliation_rejects_concurrent_attempts_until_cancelled() {
+        let current = JournalReconciliation::start().unwrap();
+        assert!(std::thread::spawn(|| JournalReconciliation::start().is_err()).join().unwrap());
+        drop(current);
+        assert!(JournalReconciliation::start().is_ok());
+    }
 
     fn journal_init_reply() -> Value {
         json!({

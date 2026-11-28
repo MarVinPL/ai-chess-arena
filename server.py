@@ -2079,7 +2079,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/remote-workers/journal-init-acquire':
             try:
                 payload = self._read_worker_request(path)
-                if set(payload) != {'worker_id', 'token', 'nonce'}:
+                if set(payload) not in ({'worker_id', 'token', 'nonce'}, {'worker_id', 'token', 'nonce', 'retry'}):
+                    raise WorkerRequestError(400)
+                if 'retry' in payload and payload['retry'] is not True:
                     raise WorkerRequestError(400)
                 nonce = payload['nonce']
                 if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
@@ -2089,6 +2091,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise WorkerRequestError(400)
                 result = remote_worker_job_registry.WorkerJobRegistry(DB).acquire_journal_init(
                     payload['worker_id'], payload['token'], nonce, origin=f'https://{hosts[0].lower()}',
+                    retry=payload.get('retry', False),
                     admit=lambda worker_id: self._admit_worker_identity(path, worker_id))
                 if result is None:
                     self.send_json({'error': 'Brak autoryzacji'}, 401)

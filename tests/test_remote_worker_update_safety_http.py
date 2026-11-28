@@ -743,3 +743,26 @@ def test_journal_init_completion_storage_failure_rolls_back(endpoint):
         assert conn.execute("SELECT state FROM worker_job_safety").fetchone() == ("idle_confirmed",)
         conn.execute("DROP TRIGGER fail_test_fence_delete")
     assert post(payload, route="journal-init-complete", headers={"Host": "arena.example"})[0] == 200
+
+
+
+def test_journal_init_reconciles_lost_acquire_reply_after_coordinator_restart(endpoint):
+    db, token, post = endpoint
+    journal_idle(db)
+    route = "journal-init-acquire"
+    retry = dict(request_data(token), retry=True)
+    assert post(retry, route=route)[0] == 200
+    registry = remote_worker_job_registry.WorkerJobRegistry(db)
+    registry.recover_after_restart()
+    assert post(request_data(token), route=route)[0] == 409
+    assert post(retry, route=route, headers={"Host": "other.example"})[0] == 409
+    assert post(dict(retry, nonce="b"*32), route=route)[0] == 409
+    assert post(dict(retry, retry=1), route=route)[0] == 400
+    status, response = post(retry, route=route)
+    assert status == 200 and response["nonce"] == NONCE and response["install_allowed"] is False
+    with pytest.raises(ValueError, match="initialization fenced"):
+        registry.record_assignment(WORKER_ID, "job_12345678", deadline=time.time() + 30)
+    rotated = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
+    assert post(dict(retry, token=rotated), route=route)[0] == 409
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT nonce FROM worker_journal_init_fences").fetchall() == [(NONCE,)]

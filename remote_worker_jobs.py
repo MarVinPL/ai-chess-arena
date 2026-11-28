@@ -349,7 +349,7 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
-    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None):
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None, retry=False):
         """Durable non-expiring fence. No automatic release on timeout/restart."""
         from remote_worker_tokens import WorkerTokenStore
         if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
@@ -360,8 +360,15 @@ class DurableWorkerJobs:
             if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
                 return None
             admit(worker_id)
-            if self._journal_init_fenced(db, worker_id):
-                raise ValueError('Initialization already fenced; reconciliation required')
+            existing = self._journal_init_fenced(db, worker_id)
+            if existing:
+                binding = db.execute(
+                    """SELECT f.nonce,f.token_digest,o.origin FROM worker_journal_init_fences f
+                    JOIN worker_journal_init_origins o USING (worker_id,nonce)
+                    WHERE f.worker_id=?""", (worker_id,),
+                ).fetchone()
+                if not retry or origin is None or binding != (nonce, WorkerTokenStore._digest(token), origin):
+                    raise ValueError('Initialization already fenced; reconciliation required')
             if db.execute(
                 'SELECT 1 FROM worker_journal_init_completions WHERE worker_id=? AND nonce=?', (worker_id, nonce),
             ).fetchone():
@@ -394,14 +401,18 @@ class DurableWorkerJobs:
             if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=lambda: now):
                 db.rollback()
                 return None
-            if not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
-                raise ValueError('Worker not freshly idle')
-            db.execute(
-                'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
-                (worker_id, nonce, WorkerTokenStore._digest(token), now),
-            )
-            if origin is not None:
-                db.execute('INSERT INTO worker_journal_init_origins VALUES (?,?,?)', (worker_id, nonce, origin))
+            if existing:
+                if not row or row[:3] not in (('idle_confirmed', None, None), ('unknown', None, None)):
+                    raise ValueError('Worker state changed during initialization')
+            else:
+                if not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
+                    raise ValueError('Worker not freshly idle')
+                db.execute(
+                    'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
+                    (worker_id, nonce, WorkerTokenStore._digest(token), now),
+                )
+                if origin is not None:
+                    db.execute('INSERT INTO worker_journal_init_origins VALUES (?,?,?)', (worker_id, nonce, origin))
         return {
             'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
             'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
