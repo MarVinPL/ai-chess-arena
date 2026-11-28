@@ -34,11 +34,11 @@ def gateway(tmp_path, monkeypatch):
     thread = threading.Thread(target=http.serve_forever, daemon=True)
     thread.start()
 
-    def post(route, data, *, content_type="application/json"):
+    def post(route, data, *, content_type="application/json", headers=None):
         req = request.Request(
             f"http://127.0.0.1:{http.server_port}/api/remote-workers/{route}",
             json.dumps(data).encode(),
-            {"Content-Type": content_type}, method="POST"
+            {"Content-Type": content_type, **(headers or {})}, method="POST"
         )
         try:
             with request.urlopen(req, timeout=4) as resp:
@@ -204,3 +204,25 @@ def test_model_source_auth_assignment_and_rate_limit(gateway, monkeypatch):
     for _ in range(10):
         assert post("model-source", auth)[0] == 200
     assert post("model-source", auth)[0] == 429
+
+def test_machine_authentication_has_one_route_and_no_browser_session_fallback(gateway, monkeypatch):
+    from pathlib import Path
+    source = Path(server.__file__).read_text()
+    dispatch = source.split("    def do_POST(self):", 1)[1]
+    auth_route = "if path == '/api/remote-workers/authenticate':"
+    assert dispatch.count(auth_route) == 1
+    assert dispatch.index(auth_route) < dispatch.index("if path == '/api/auth/login':")
+    _, token, post = gateway
+    # Even a successfully authenticated browser session must not authorize
+    # machine-only routes. The machine token remains independently mandatory.
+    monkeypatch.setattr(server.Handler, "authenticated_user", lambda self: "admin")
+    monkeypatch.setenv("ARENA_PHONE_WORKER_API_ENABLED", "1")
+    browser = {"Cookie": "arena_session=admin"}
+    code, body = post("authenticate", {"worker_id": WORKER, "token": "wrong-token-" + "x"*40}, headers=browser)
+    assert code == 401 and body == {"authenticated": False}
+    code, body = post("authenticate", {"worker_id": WORKER, "token": token}, headers=browser)
+    assert code == 200 and body == {"authenticated": True, "worker_id": WORKER}
+    code, body = post("model-source", credentials("wrong-token-" + "x"*40), headers=browser)
+    assert code == 401 and "model" not in body and "nonce" not in body
+    code, body = post("model-source", credentials(token), headers=browser)
+    assert code == 409 and "model" not in body
