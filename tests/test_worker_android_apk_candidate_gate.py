@@ -316,8 +316,8 @@ def test_update_recovery_status_never_exposes_hold_and_prevents_token_rotation()
     assert "Ok(Some(_)) => Err(" in guard
     assert "Err(_) => Err(" in guard
     assert "hold_token" not in guard
-    assert "fn store_worker_token(token: String) -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
-    assert "fn forget_worker_token() -> Result<(), String> {\n    ensure_no_pending_update()?;" in lib
+    assert "token_entry()?.set_password(&token, ensure_no_pending_update)" in lib
+    assert "token_entry()?.delete_credential(ensure_no_pending_update)" in lib
     status = lib.split("fn update_recovery_status()", 1)[1].split("fn token_entry()", 1)[0]
     assert "Ok(Some(_)) => UpdateRecoveryStatus" in status
     assert "Err(_) => UpdateRecoveryStatus" in status
