@@ -214,6 +214,63 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_first_registration_never_overwrites_winner() {
+        use std::sync::{Arc, Barrier};
+        let vault = Arc::new(vault());
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = ['a', 'b'].into_iter().map(|ch| {
+            let vault = Arc::clone(&vault);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let token = ch.to_string().repeat(43);
+                barrier.wait();
+                let result = vault.insert_registration_token(&token, || Ok(()));
+                (token, result)
+            })
+        }).collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|(_, r)| r.is_ok()).count(), 1);
+        let winner = results.iter().find(|(_, r)| r.is_ok()).unwrap();
+        assert_eq!(vault.get_password().unwrap(), winner.0);
+    }
+
+    #[test]
+    fn mutation_failure_is_not_reported_as_success_or_absence() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Faulty {
+            value: Mutex<Option<String>>,
+            unavailable: AtomicBool,
+        }
+        impl Backend for Faulty {
+            fn read(&self) -> Result<Option<String>, String> {
+                if self.unavailable.load(Ordering::SeqCst) { return Err("uncertain".into()); }
+                Ok(self.value.lock().unwrap().clone())
+            }
+            fn write(&self, _: &str) -> Result<(), String> {
+                self.unavailable.store(true, Ordering::SeqCst);
+                Err("commit failed".into())
+            }
+            fn delete(&self) -> Result<(), String> {
+                self.unavailable.store(true, Ordering::SeqCst);
+                Err("commit failed".into())
+            }
+        }
+        for delete in [false, true] {
+            let original = "a".repeat(43);
+            let vault = CredentialVault::new(Faulty {
+                value: Mutex::new(Some(original.clone())),
+                unavailable: AtomicBool::new(false),
+            });
+            let result = if delete { vault.delete_credential(|| Ok(())) }
+                else { vault.set_password(&"b".repeat(43), || Ok(())) };
+            assert!(result.is_err());
+            assert!(vault.read_optional().is_err());
+            assert!(vault.insert_registration_token(&original, || Ok(())).is_err());
+            assert_eq!(vault.backend.value.lock().unwrap().as_ref(), Some(&original));
+        }
+    }
+
+    #[test]
     fn lifecycle_and_rotation() {
         let v = vault();
         assert!(v.get_password().is_err());
