@@ -116,6 +116,7 @@ jobs:
           tools="$ANDROID_HOME/build-tools/36.0.0"
           apk=src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
           test -s "$apk" && test ! -L "$apk"
+          python3 android/verify_apk_backup.py "$tools/aapt" "$apk"
           "$tools/apksigner" verify --verbose "$apk"
           "$tools/zipalign" -c -p 4 "$apk"
           badging="$("$tools/aapt" dump badging "$apk")"
