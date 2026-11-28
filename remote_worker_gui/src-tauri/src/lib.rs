@@ -1,4 +1,4 @@
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", all(test, unix)))]
 #[allow(dead_code)]
 mod credential_journal;
 // Native updater asset metadata gate; installation stays disabled until
