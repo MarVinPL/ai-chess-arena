@@ -42,8 +42,11 @@ def test_failed_marker_commit_fences_process_and_install_status():
     assert "Mutex<bool>" in journal
     assert journal.count("*guard = true") == 4
     stop = journal.split("fn native_stop_insert(", 1)[1].split("fn require_pair(", 1)[0]
-    assert "stop_insert(&path, &Native(Slot::NativeStop), raw)" in stop
-    assert "if result.is_err() { *guard = true; }" in stop
+    assert "stop_insert(&path, &JoinedStore(proof), raw)" in stop
+    assert "JoinedStop" in stop
+    assert "stop_locked(&GATE" in stop
+    assert "if result == Err(StopWriteError::Uncertain) { *guard = true; }" in journal
+    assert "if state(dir)? != State::Present" in journal
     assert journal.count("dir(&require_pair()?, slot)") == 3
     stage = journal.split("fn set_state(", 1)[1].split("trait Store", 1)[0]
     assert stage.index("f.sync_all()") < stage.index("File::open(dir)") < stage.index("fs::rename")

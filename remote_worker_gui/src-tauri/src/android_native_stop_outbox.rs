@@ -178,6 +178,14 @@ pub(crate) fn complete_joined_stop<T>(
     Ok(request_id)
 }
 
+// Private constructor: only the joined-engine path can mint this proof.
+#[cfg(target_os = "android")]
+pub(crate) struct JoinedStop(StopReport);
+#[cfg(target_os = "android")]
+impl JoinedStop {
+    pub(crate) fn encoded(&self) -> Vec<u8> { self.0.encode() }
+}
+
 #[cfg(target_os = "android")]
 pub(crate) struct StopOutbox;
 
@@ -189,12 +197,6 @@ impl StopOutbox {
             .map(|raw| StopReport::decode(raw.as_bytes())).transpose()
     }
 
-    fn store(&self, report: &StopReport) -> Result<()> {
-        let bytes = report.encode();
-        let raw = std::str::from_utf8(&bytes).map_err(|_| OutboxError::Invalid)?;
-        crate::credential_journal::native_stop_insert(raw)
-            .map_err(|_| OutboxError::Storage)
-    }
 
     // Keep join and durable persistence in one blocking operation. The caller
     // must retain its generation permit, and validate STOP identity beforehand.
@@ -206,7 +208,8 @@ impl StopOutbox {
     ) -> std::result::Result<String, String> {
         complete_joined_stop(engine, signal, stop, |request_id| {
             let report = StopReport::new(worker_id, job_id, request_id, lease_token)?;
-            Self.store(&report)
+            let proof = JoinedStop(report);
+            crate::credential_journal::native_stop_insert(&proof)
         })
     }
 }

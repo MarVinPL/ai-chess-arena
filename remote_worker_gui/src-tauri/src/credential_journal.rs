@@ -4,7 +4,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-#[cfg(target_os = "android")]
 use std::sync::Mutex;
 
 #[cfg(target_os = "android")]
@@ -263,23 +262,41 @@ fn checked_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), Strin
 
 // The STOP slot is write-once in #325. Only a joined STOP may create it.
 // Absence is not recovery evidence. Never adopt orphan ciphertext.
-fn stop_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
+#[derive(Debug, PartialEq, Eq)]
+enum StopWriteError { Conflict, Uncertain }
+impl From<String> for StopWriteError {
+    fn from(_: String) -> Self { Self::Uncertain }
+}
+fn stop_read(dir: &Path, store: &impl Store) -> Result<String, String> {
+    if state(dir)? != State::Present { return Err(ERROR.into()); }
+    let raw = checked_read(dir, store)?.ok_or_else(|| ERROR.to_owned())?;
+    sync_dir(dir)?;
+    Ok(raw)
+}
+fn stop_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), StopWriteError> {
     match state(dir)? {
         State::Present => {
-            if checked_read(dir, store)?.as_deref() != Some(raw) {
-                return Err(ERROR.into());
-            }
-            return sync_dir(dir);
+            if stop_read(dir, store)? != raw { return Err(StopWriteError::Conflict); }
+            return Ok(());
         }
         State::Uninitialized => {
-            if store.read()?.is_some() { return Err(ERROR.into()); }
+            if store.read()?.is_some() { return Err(StopWriteError::Uncertain); }
         }
-        _ => return Err(ERROR.into()),
+        _ => return Err(StopWriteError::Uncertain),
     }
     set_state(dir, State::Uncertain)?;
     store.insert(raw)?;
-    if store.read()?.as_deref() != Some(raw) { return Err(ERROR.into()); }
-    set_state(dir, State::Present)
+    if store.read()?.as_deref() != Some(raw) { return Err(StopWriteError::Uncertain); }
+    set_state(dir, State::Present)?;
+    Ok(())
+}
+fn stop_locked(gate: &Mutex<bool>, operation: impl FnOnce() -> Result<(), StopWriteError>)
+    -> Result<(), StopWriteError> {
+    let mut guard = gate.lock().map_err(|_| StopWriteError::Uncertain)?;
+    if *guard { return Err(StopWriteError::Uncertain); }
+    let result = operation();
+    if result == Err(StopWriteError::Uncertain) { *guard = true; }
+    result
 }
 
 fn checked_delete(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
@@ -551,24 +568,47 @@ mod android {
         Ok(JournalInitCompletion { origin, worker_id: worker_id.into(), nonce: nonce.into(), pair_marker })
     }
 
+    struct NativeStop;
+    impl Store for NativeStop {
+        fn read(&self) -> Result<Option<String>, String> {
+            credential_vault::journals::stop_read()
+        }
+        fn insert(&self, _: &str) -> Result<(), String> {
+            // The raw Store interface must never write the native STOP slot.
+            Err(ERROR.into())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
+    struct JoinedStore<'a>(&'a crate::android_native_stop_outbox::JoinedStop);
+    impl Store for JoinedStore<'_> {
+        fn read(&self) -> Result<Option<String>, String> { NativeStop.read() }
+        fn insert(&self, raw: &str) -> Result<(), String> {
+            if self.0.encoded() != raw.as_bytes() { return Err(ERROR.into()); }
+            credential_vault::journals::stop_insert(self.0)
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
     pub(crate) fn native_stop_read() -> Result<Option<String>, String> {
         let guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard { return Err(ERROR.into()); }
         let root = crate::android_worker_token_store::journal_root()?;
         let path = dir(&root, Slot::NativeStop)?;
-        let value = checked_read(&path, &Native(Slot::NativeStop))?;
-        sync_dir(&path)?;
-        Ok(value)
+        stop_read(&path, &NativeStop).map(Some)
     }
 
-    pub(crate) fn native_stop_insert(raw: &str) -> Result<(), String> {
-        let mut guard = GATE.lock().map_err(|_| ERROR)?;
-        if *guard { return Err(ERROR.into()); }
-        let root = crate::android_worker_token_store::journal_root()?;
-        let path = dir(&root, Slot::NativeStop)?;
-        let result = stop_insert(&path, &Native(Slot::NativeStop), raw);
-        if result.is_err() { *guard = true; }
-        result
+    pub(crate) fn native_stop_insert(proof: &crate::android_native_stop_outbox::JoinedStop)
+        -> Result<(), crate::android_native_stop_outbox::OutboxError> {
+        use crate::android_native_stop_outbox::OutboxError;
+        let bytes = proof.encoded();
+        let raw = std::str::from_utf8(&bytes).map_err(|_| OutboxError::Invalid)?;
+        stop_locked(&GATE, || {
+            let root = crate::android_worker_token_store::journal_root()?;
+            let path = dir(&root, Slot::NativeStop)?;
+            stop_insert(&path, &JoinedStore(proof), raw)
+        }).map_err(|e| match e {
+            StopWriteError::Conflict => OutboxError::Conflict,
+            StopWriteError::Uncertain => OutboxError::Storage,
+        })
     }
 
     fn require_pair() -> Result<std::path::PathBuf, String> {
@@ -578,6 +618,7 @@ mod android {
     }
 
     pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -585,6 +626,7 @@ mod android {
         checked_read(&dir(&require_pair()?, slot)?, &Native(slot))
     }
     pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let mut guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -599,6 +641,7 @@ mod android {
         result
     }
     pub(crate) fn delete_expected(slot: Slot, raw: &str) -> Result<(), String> {
+        if matches!(slot, Slot::NativeStop) { return Err(ERROR.into()); }
         let mut guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
@@ -704,6 +747,41 @@ mod tests {
         assert_eq!(store.read(), Ok(Some("first".into())));
     }
 
+    #[test]
+    fn native_stop_locked_concurrent_conflict_and_retry() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let gate = Mutex::new(false);
+        let store = Mutex::new(Fake::default());
+        let barrier = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let run = |raw: &str| {
+                barrier.wait();
+                stop_locked(&gate, || stop_insert(&d.0, &*store.lock().unwrap(), raw))
+            };
+            let a = scope.spawn(move || run("first"));
+            let b = scope.spawn(move || run("second"));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        let winner = if a.is_ok() {
+            assert_eq!(b, Err(StopWriteError::Conflict)); "first"
+        } else {
+            assert_eq!(a, Err(StopWriteError::Conflict)); assert!(b.is_ok()); "second"
+        };
+        assert!(!*gate.lock().unwrap());
+        assert_eq!(stop_read(&d.0, &*store.lock().unwrap()).unwrap(), winner);
+        assert!(stop_locked(&gate, || stop_insert(&d.0, &*store.lock().unwrap(), winner)).is_ok());
+    }
+    #[test]
+    fn native_stop_empty_and_uncertainty_are_blocked() {
+        let d = Temp::new();
+        let store = Fake::default();
+        assert!(stop_read(&d.0, &store).is_err());
+        let gate = Mutex::new(false);
+        assert_eq!(stop_locked(&gate, || stop_insert(&d.0, &store, "first")), Err(StopWriteError::Uncertain));
+        assert!(*gate.lock().unwrap());
+        assert_eq!(stop_locked(&gate, || panic!("fenced")), Err(StopWriteError::Uncertain));
+    }
     // File-backed synthetic vault: exercises actual process death and durable
     // markers, not Android Keystore cryptography or SharedPreferences internals.
     struct CrashStore<'a> { root: &'a Path, boundary: &'a str }

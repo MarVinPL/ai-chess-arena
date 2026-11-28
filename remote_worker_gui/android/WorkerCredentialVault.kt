@@ -188,6 +188,7 @@ object WorkerCredentialVault {
     @JvmStatic
     @Synchronized
     fun journalDelete(context: Context, slot: String, expected: String) {
+        require(slot != "native-stop-v1")
         val name = journalSlot(slot)
         check(journalLoad(context, name) == expected)
         uncertain = true
