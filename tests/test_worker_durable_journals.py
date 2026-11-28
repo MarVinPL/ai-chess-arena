@@ -23,6 +23,10 @@ def test_change_gate_fences_reservation_and_token_mutations():
     for name in ("store_worker_token", "forget_worker_token"):
         section = lib.split("fn " + name, 1)[1].split("#[tauri::command]", 1)[0]
         assert section.index("credential_change_gate()?") < section.index("token_entry()?")
+        if name == "store_worker_token":
+            android = section.split('#[cfg(target_os = "android")]', 1)[1]
+            assert android.index("authenticate_registration") < android.index(".await?") < android.index("credential_change_gate()?")
+            assert android.index("credential_change_gate()?") < android.index("insert_registration_token")
     guard = lib.split("fn ensure_no_pending_update()", 1)[1].split("#[derive", 1)[0]
     assert "android_update_install_journal::load()?" in guard
     coordinator = (SRC / "android_update_coordinator.rs").read_text().split("async fn reserve_update", 1)[1]
