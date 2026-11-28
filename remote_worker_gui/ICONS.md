@@ -4,6 +4,8 @@ Desktop icons preserve the original 64 × 64 two-color artwork from main
 (2e098d3), using nearest-neighbor resampling without changing its RGBA palette.
 Android retains the separately approved Arena pawn design.
 
+**Glyph provenance:** the vector pawn outline uses the open DejaVu Sans U+265F glyph (DejaVu/Bitstream Vera open font licence, © 2003 Bitstream, Inc.; DejaVu changes in the public domain; <https://dejavu-fonts.github.io/>). No font file is included. The heading symbol and the Android icon therefore share the same Unicode chess-piece identity.
+
 | File (src-tauri/icons/) | Dimensions | Purpose |
 | --- | --- | --- |
 | icon.png | 512 × 512 | Shared desktop master |

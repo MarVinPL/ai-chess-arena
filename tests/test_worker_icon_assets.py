@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import hashlib
+import xml.etree.ElementTree as ET
 import struct
 import zlib
 
@@ -133,7 +134,12 @@ def test_android_icons_generated_after_android_init_and_before_build():
     compile_index = workflow.index("tauri android build --apk")
     assert init < generate < compile_index
     assert "npx tauri icon src-tauri/icons/icon.png" not in workflow
-    assert "cmp " in workflow
+    assert "source_dir=src-tauri/icons/android-generated/android" in workflow
+    assert "resource_dir=src-tauri/gen/android/app/src/main/res" in workflow
+    assert 'install -D -m 644 "$file" "$resource_dir/$relative"' in workflow
+    for resource in ("mipmap-mdpi/ic_launcher.png",
+                     "mipmap-xxxhdpi/ic_launcher_foreground.png"):
+        assert f'cmp "$source_dir/{resource}" "$resource_dir/{resource}"' in workflow
     assert (ICONS / "android-pawn.svg").is_file()
     assert "mipmap-mdpi/ic_launcher.png" in workflow
     assert "mipmap-xxxhdpi/ic_launcher_foreground.png" in workflow
@@ -149,3 +155,29 @@ def test_platform_filters_rebuild_only_affected_icons():
     assert "'remote_worker_gui/src-tauri/icons/128x128.png'" in workflow
     assert "'remote_worker_gui/src-tauri/icons/128x128@2x.png'" in workflow
     assert not any(line.strip() == "workflow_dispatch:" for line in workflow.splitlines())
+
+
+def test_android_launcher_uses_the_web_panel_pawn_without_external_assets():
+    """Exact U+265F symbol from index.html, rendered as standalone vector for Android."""
+    index = (ROOT / "index.html").read_text(encoding="utf-8")
+    assert "<h1>♟ Local AI Chess Arena</h1>" in index
+    svg_path = ICONS / "android-pawn.svg"
+    svg = svg_path.read_text(encoding="utf-8")
+    root = ET.fromstring(svg)
+    assert root.tag == "{http://www.w3.org/2000/svg}svg"
+    assert root.get("viewBox") == "0 0 512 512"
+    assert (root.get("width"), root.get("height")) == ("512", "512")
+    ns = "{http://www.w3.org/2000/svg}"
+    assert [child.tag for child in root] == [ns+"title", ns+"desc", ns+"rect", ns+"path"]
+    rect = root.find(ns+"rect")
+    assert rect is not None
+    assert tuple(rect.get(k) for k in ("x", "y", "width", "height", "fill")) == (
+        "0", "0", "512", "512", "#10151d")
+    assert all(not any(k.endswith("href") for k in node.attrib) for node in root.iter())
+    assert "U+265F" in svg
+    assert "#10151d" in svg and "#e8edf5" in svg
+    shapes = root.findall("{http://www.w3.org/2000/svg}path")
+    assert len(shapes) == 1 and len(shapes[0].get("d", "")) > 200
+    assert shapes[0].get("fill") == "#e8edf5"
+    assert not any(token in svg for token in ("https://", "@font-face", "<image", "xlink:href", "<text"))
+    assert svg.count("http://") == 1  # The SVG namespace URI only.
