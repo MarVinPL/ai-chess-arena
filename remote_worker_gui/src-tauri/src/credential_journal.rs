@@ -556,7 +556,9 @@ mod android {
         if *guard { return Err(ERROR.into()); }
         let root = crate::android_worker_token_store::journal_root()?;
         let path = dir(&root, Slot::NativeStop)?;
-        checked_read(&path, &Native(Slot::NativeStop))
+        let value = checked_read(&path, &Native(Slot::NativeStop))?;
+        sync_dir(&path)?;
+        Ok(value)
     }
 
     pub(crate) fn native_stop_insert(raw: &str) -> Result<(), String> {
@@ -700,6 +702,75 @@ mod tests {
         assert!(checked_read(&d.0, &store).is_err());
         assert!(stop_insert(&d.0, &store, "first").is_err());
         assert_eq!(store.read(), Ok(Some("first".into())));
+    }
+
+    // File-backed synthetic vault: exercises actual process death and durable
+    // markers, not Android Keystore cryptography or SharedPreferences internals.
+    struct CrashStore<'a> { root: &'a Path, boundary: &'a str }
+    impl Store for CrashStore<'_> {
+        fn read(&self) -> Result<Option<String>, String> {
+            match fs::read_to_string(self.root.join("fake-vault")) {
+                Ok(raw) => Ok(Some(raw)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(ERROR.into()),
+            }
+        }
+        fn insert(&self, raw: &str) -> Result<(), String> {
+            if self.boundary == "before-vault" { std::process::exit(73); }
+            let mut f = OpenOptions::new().create_new(true).write(true).mode(0o600)
+                .open(self.root.join("fake-vault")).map_err(|_| ERROR)?;
+            f.write_all(raw.as_bytes()).map_err(|_| ERROR)?;
+            f.sync_all().map_err(|_| ERROR)?;
+            sync_dir(self.root)?;
+            if self.boundary == "after-vault" { std::process::exit(73); }
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> { Err(ERROR.into()) }
+    }
+    #[test]
+    fn native_stop_crash_child() {
+        let Some(root) = std::env::var_os("ARENA_STOP_JOURNAL_CHILD") else { return; };
+        let root = std::path::PathBuf::from(root);
+        let boundary = std::env::var("ARENA_STOP_JOURNAL_BOUNDARY").unwrap();
+        let store = CrashStore { root: &root, boundary: &boundary };
+        stop_insert(&root, &store, "synthetic-only").unwrap();
+        std::process::exit(73);
+    }
+    #[test]
+    fn native_stop_process_exit_at_vault_boundaries() {
+        for boundary in ["before-vault", "after-vault", "committed"] {
+            let d = Temp::new();
+            fs::remove_file(d.0.join("state.v1")).unwrap();
+            let name = format!("{}::native_stop_crash_child",
+                module_path!().split_once("::").unwrap().1);
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name])
+                .env("ARENA_STOP_JOURNAL_CHILD", &d.0)
+                .env("ARENA_STOP_JOURNAL_BOUNDARY", boundary)
+                .output().unwrap().status;
+            assert_eq!(status.code(), Some(73));
+            let store = CrashStore { root: &d.0, boundary: "" };
+            if boundary == "committed" {
+                assert_eq!(checked_read(&d.0, &store), Ok(Some("synthetic-only".into())));
+                stop_insert(&d.0, &store, "synthetic-only").unwrap();
+            } else {
+                assert_eq!(state(&d.0), Ok(State::Uncertain));
+                assert!(checked_read(&d.0, &store).is_err());
+                assert!(stop_insert(&d.0, &store, "synthetic-only").is_err());
+            }
+            assert!(stop_insert(&d.0, &store, "other").is_err());
+        }
+    }
+    #[test]
+    fn native_stop_partial_marker_blocks_even_with_vault_value() {
+        let d = Temp::new();
+        fs::remove_file(d.0.join("state.v1")).unwrap();
+        let store = Fake::default();
+        stop_insert(&d.0, &store, "synthetic").unwrap();
+        OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(d.0.join("state.stage")).unwrap().sync_all().unwrap();
+        assert!(checked_read(&d.0, &store).is_err());
+        assert!(stop_insert(&d.0, &store, "synthetic").is_err());
     }
 
     const IDENTITY: &str = concat!("0123456789abcdef0123456789abcdef",
