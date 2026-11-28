@@ -185,10 +185,7 @@ class WorkerUpdatePause:
         ):
             raise ValueError("Invalid execution lease")
         digest = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
-        if DurableWorkerJobs._journal_init_fenced(db, worker_id) or db.execute(
-            "SELECT 1 FROM worker_update_holds WHERE worker_id=?", (worker_id,),
-        ).fetchone():
-            raise ValueError("Worker fenced")
+        DurableWorkerJobs._reject_update_hold(db, worker_id)
         pending = db.execute(
             "SELECT p.stop_lease_sha256 FROM worker_update_pause_requests p JOIN worker_job_safety j "
             "ON j.worker_id=p.worker_id AND j.job_id=p.job_id "

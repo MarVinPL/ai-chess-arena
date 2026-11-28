@@ -816,8 +816,32 @@ def test_native_stop_recovery_read_only(sandbox):
     after = snapshot()
     assert post(route, report) == (200, expected)
     assert snapshot() == after
+    # Change the authoritative generation, not merely the submitted token.
+    with sqlite3.connect(path) as db:
+        raw = db.execute("SELECT job_json FROM worker_inference_assignments WHERE worker_id=?", (WORKER,)).fetchone()[0]
+        changed = dict(json.loads(raw), lease_token="e"*64)
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?", (json.dumps(changed), WORKER))
+    changed_snapshot = snapshot()
+    assert post(route, report)[0] == 409
+    assert snapshot() == changed_snapshot
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE worker_inference_assignments SET job_json=? WHERE worker_id=?", (raw, WORKER))
+        db.execute("DELETE FROM worker_update_pause_requests WHERE worker_id=?", (WORKER,))
+    missing = snapshot()
+    assert post(route, report)[0] == 409
+    assert snapshot() == missing
+    # Restore a valid STOP request so expiry is independently exercised.
+    report["request_id"] = pause.request(WORKER, job_id)
+    assert post(route, report)[0] == 200
     with sqlite3.connect(path) as db:
         db.execute("UPDATE worker_job_safety SET deadline=0 WHERE worker_id=?", (WORKER,))
     expired = snapshot()
     assert post(route, report)[0] == 409
     assert snapshot() == expired
+
+def test_native_stop_recovery_missing_database_never_creates_it(tmp_path):
+    from remote_worker_update_pause import WorkerUpdatePause
+    path = tmp_path / "missing.sqlite3"
+    with pytest.raises(sqlite3.OperationalError):
+        WorkerUpdatePause.validate_native_stop(path, WORKER, "job_12345678", "a"*32, "b"*64, "x"*32)
+    assert not path.exists()
