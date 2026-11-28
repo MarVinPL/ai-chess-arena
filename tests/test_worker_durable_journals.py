@@ -49,3 +49,20 @@ def test_failed_marker_commit_fences_process_and_install_status():
     assert "blocked: true" in status
     save = (SRC / "android_update_install_journal.rs").read_text().split("pub(crate) fn save(", 1)[1].split("pub(crate) fn clear_confirmed", 1)[0]
     assert "android_update_recovery::load_pending()?.is_none()" in save
+
+
+def test_android_initialization_ui_leaves_native_proof_and_secrets_in_rust():
+    ui = (ROOT / "public/index.html").read_text()
+    lib = (SRC / "lib.rs").read_text()
+    handler = ui.split("initializeUpdateJournals.addEventListener('click'", 1)[1]
+    handler = handler.split("document.getElementById('inspectUpdateHold')", 1)[0]
+    assert "invoke('initialize_update_journals',{server:target.server,workerId:target.workerId})" in handler
+    assert handler.index("connectionIsCurrent(target)") < handler.index("Dzienniki są już zainicjalizowane")
+    assert "refreshUpdateRecoveryStatus()" in handler
+    native = lib.split("async fn initialize_update_journals(", 1)[1].split("// Recovery is read-only", 1)[0]
+    assert "server: String, worker_id: String" in native
+    assert '#[cfg(not(target_os = "android"))]' in native
+    assert native.index("generation_active()") < native.index("JournalBaseline::inspect()")
+    assert native.index("JournalBaseline::inspect()") < native.index("reconcile_journal_initialization")
+    assert "release_update(" not in native
+    assert "initialize_update_journals" in lib.split("tauri::generate_handler![", 1)[1]

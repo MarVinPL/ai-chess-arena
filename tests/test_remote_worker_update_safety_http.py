@@ -766,3 +766,65 @@ def test_journal_init_reconciles_lost_acquire_reply_after_coordinator_restart(en
     assert post(dict(retry, token=rotated), route=route)[0] == 409
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT nonce FROM worker_journal_init_fences").fetchall() == [(NONCE,)]
+
+
+@pytest.mark.parametrize("existing_worker", [False, True])
+def test_attested_journal_baseline_only_fences_the_approved_installation(endpoint, existing_worker):
+    from hashlib import sha256
+
+    from remote_worker_inference_delivery import WorkerInferenceDelivery
+
+    db, token, post = endpoint
+    if existing_worker:
+        journal_idle(db)
+    else:
+        WorkerInferenceDelivery(db)
+    route = "journal-init-acquire"
+    headers = {"Host": "arena.example"}
+    payload = dict(request_data(token), retry=True, baseline_version=1002)
+    assert post(payload, route=route, headers=headers)[0] == 409
+    registry = remote_worker_job_registry.WorkerJobRegistry(db)
+    registry.approve_journal_baseline(WORKER_ID, "https://arena.example", 1002)
+    assert post(dict(payload, baseline_version=1003), route=route, headers=headers)[0] == 409
+    assert post(payload, route=route, headers={"Host": "other.example"})[0] == 409
+
+    if existing_worker:
+        with sqlite3.connect(db) as conn:
+            conn.execute("INSERT INTO worker_update_holds VALUES (?,?,?,?)", (WORKER_ID, "a"*64, 1, 2))
+        assert post(payload, route=route, headers=headers)[0] == 409
+        with sqlite3.connect(db) as conn:
+            conn.execute("DELETE FROM worker_update_holds WHERE worker_id=?", (WORKER_ID,))
+
+    status, response = post(payload, route=route, headers=headers)
+    assert status == 200 and response["baseline_version"] == 1002
+    assert response["install_allowed"] is False
+    registry.recover_after_restart()
+    assert post(payload, route=route, headers=headers)[0] == 200
+    assert post(dict(request_data(token), retry=True), route=route, headers=headers)[0] == 409
+    assert post(dict(payload, nonce="b"*32), route=route, headers=headers)[0] == 409
+    origin = "https://arena.example"
+    marker = sha256(b"\x00".join((origin.encode(), WORKER_ID.encode(),
+                                  sha256(token.encode()).digest(), NONCE.encode()))).hexdigest()
+    done = dict(request_data(token), pair_marker=marker, origin=origin)
+    assert post(done, route="journal-init-complete", headers=headers)[0] == 200
+    assert post(dict(payload, nonce="b"*32), route=route, headers=headers)[0] == 409
+    assert registry.state(WORKER_ID) == "unknown"
+
+
+
+def test_attested_journal_baseline_does_not_follow_token_rotation(endpoint):
+    from remote_worker_inference_delivery import WorkerInferenceDelivery
+
+    db, token, post = endpoint
+    WorkerInferenceDelivery(db)
+    registry = remote_worker_job_registry.WorkerJobRegistry(db)
+    registry.approve_journal_baseline(WORKER_ID, "https://arena.example", 1002)
+    replacement = remote_worker_tokens.WorkerTokenStore(db).issue(WORKER_ID)
+    headers = {"Host": "arena.example"}
+    route = "journal-init-acquire"
+    assert post(dict(request_data(token), baseline_version=1002), route=route, headers=headers)[0] == 401
+    assert post(dict(request_data(replacement), baseline_version=1002), route=route, headers=headers)[0] == 409
+    with pytest.raises(ValueError, match="already has a baseline approval"):
+        registry.approve_journal_baseline(WORKER_ID, "https://arena.example", 1002)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT 1 FROM worker_journal_init_fences").fetchone() is None

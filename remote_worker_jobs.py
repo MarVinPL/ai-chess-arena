@@ -40,6 +40,10 @@ class DurableWorkerJobs:
                 worker_id TEXT NOT NULL, nonce TEXT NOT NULL, token_digest BLOB NOT NULL,
                 pair_marker TEXT NOT NULL, PRIMARY KEY (worker_id, nonce))""")
 
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_journal_baselines (
+                worker_id TEXT PRIMARY KEY, token_digest BLOB NOT NULL, origin TEXT NOT NULL,
+                version_code INTEGER NOT NULL, nonce TEXT)""")
+
             # Shared coordinator lock. Requests must block a racing new
             # assignment before a trusted STOP/checkpoint ACK is delivered.
             db.execute('''CREATE TABLE IF NOT EXISTS worker_update_pause_requests (
@@ -349,8 +353,46 @@ class DurableWorkerJobs:
             return 'idle_confirmed', 0
         return 'unknown', None
 
-    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None, retry=False):
+    def approve_journal_baseline(self, worker_id, origin, version_code):
+        """Offline operator attestation of the device's reconciled baseline."""
+        from urllib.parse import urlsplit
+
+        from remote_worker_tokens import WorkerTokenStore
+
+        WorkerTokenStore._worker(worker_id)
+
+        parsed = urlsplit(origin)
+        host = parsed.hostname
+        if (
+            not host or origin != f'https://{host}' or len(host) > 253
+            or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                   for label in host.split('.'))
+        ):
+            raise ValueError('Expected canonical HTTPS origin')
+        if type(version_code) is not int or not 0 < version_code < 2**63:
+            raise ValueError('Invalid installed version code')
+        with closing(self._db()) as db, db:
+            db.execute('PRAGMA synchronous=FULL')
+            db.execute('BEGIN IMMEDIATE')
+            credential = db.execute(
+                'SELECT token_digest FROM worker_tokens WHERE worker_id=? AND revoked_at IS NULL AND expires_at>?',
+                (worker_id, self.clock()),
+            ).fetchone()
+            if not credential or self._journal_init_fenced(db, worker_id):
+                raise ValueError('Worker credential or journal state prevents approval')
+            # Approval is a separate offline action. Preserve its original
+            # binding if the Worker already has an approval or rotates tokens.
+            result = db.execute(
+                'INSERT INTO worker_journal_baselines VALUES (?,?,?,?,NULL) ON CONFLICT(worker_id) DO NOTHING',
+                (worker_id, credential[0], origin, version_code),
+            )
+            if result.rowcount != 1:
+                raise ValueError('Worker already has a baseline approval')
+
+    def acquire_journal_init(self, worker_id, token, nonce, *, admit, origin=None, retry=False, baseline_version=None):
         """Durable non-expiring fence. No automatic release on timeout/restart."""
+        if baseline_version is not None and (type(baseline_version) is not int or not 0 < baseline_version < 2**63):
+            raise ValueError('Invalid installed version code')
         from remote_worker_tokens import WorkerTokenStore
         if not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{32}', nonce):
             raise ValueError('Invalid nonce')
@@ -360,6 +402,16 @@ class DurableWorkerJobs:
             if not WorkerTokenStore.authenticate_in_snapshot(db, worker_id, token, clock=self.clock):
                 return None
             admit(worker_id)
+            approval = db.execute(
+                'SELECT token_digest,origin,version_code,nonce FROM worker_journal_baselines WHERE worker_id=?',
+                (worker_id,),
+            ).fetchone()
+            if baseline_version is not None:
+                if (not approval or approval[:3] != (WorkerTokenStore._digest(token), origin, baseline_version)
+                        or approval[3] not in (None, nonce)):
+                    raise ValueError('Missing or conflicting baseline approval')
+            elif approval and approval[3] == nonce:
+                raise ValueError('Baseline version required for this retry')
             existing = self._journal_init_fenced(db, worker_id)
             if existing:
                 binding = db.execute(
@@ -402,11 +454,19 @@ class DurableWorkerJobs:
                 db.rollback()
                 return None
             if existing:
+                if baseline_version is not None and approval[3] != nonce:
+                    raise ValueError('Baseline approval is not bound to this fence')
                 if not row or row[:3] not in (('idle_confirmed', None, None), ('unknown', None, None)):
                     raise ValueError('Worker state changed during initialization')
             else:
-                if not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
+                if baseline_version is not None and approval[3] is not None:
+                    raise ValueError('Baseline approval has already been used')
+                if baseline_version is not None and row is None:
+                    db.execute("INSERT INTO worker_job_safety VALUES (?,NULL,'unknown',NULL,?)", (worker_id, now))
+                elif not row or row[:3] != ('idle_confirmed', None, None) or not 0 <= now - row[3] <= 30:
                     raise ValueError('Worker not freshly idle')
+                if baseline_version is not None:
+                    db.execute('UPDATE worker_journal_baselines SET nonce=? WHERE worker_id=?', (nonce, worker_id))
                 db.execute(
                     'INSERT INTO worker_journal_init_fences (worker_id,nonce,token_digest,created_at) VALUES (?,?,?,?)',
                     (worker_id, nonce, WorkerTokenStore._digest(token), now),
@@ -417,6 +477,7 @@ class DurableWorkerJobs:
             'contract_version': 1, 'authenticated': True, 'source': 'coordinator',
             'worker_id': worker_id, 'nonce': nonce, 'fenced': True,
             'checked_at_unix_ms': int(now * 1000), 'install_allowed': False,
+            **({'baseline_version': baseline_version} if baseline_version is not None else {}),
         }
 
     def complete_journal_init(self, worker_id, token, nonce, pair_marker, *, origin, admit):

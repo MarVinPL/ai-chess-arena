@@ -31,6 +31,13 @@ impl InstallEvidence {
     pub(crate) fn identity(&self) -> &PlatformApkIdentity { &self.identity }
     pub(crate) fn history(&self) -> InstallHistory { self.history }
     pub(crate) fn outcome(&self) -> Outcome { self.outcome }
+    pub(crate) fn accepts_attested_baseline(&self, version: u64) -> bool {
+        self.identity.long_version_code == version
+            && matches!(self.history, InstallHistory::FirstInstallHint | InstallHistory::Updated)
+            && self.session == Session::NoneVisible
+            && self.callback.is_none()
+            && self.expected.is_none()
+    }
     pub(crate) fn expected(&self) -> Option<ExpectedInstall> { self.expected }
 }
 
@@ -103,6 +110,22 @@ mod tests {
             current_signer_count: 1 }
     }
     const E: ExpectedInstall = ExpectedInstall { session_id: 7, previous: 10, target: 11 };
+    #[test]
+    fn baseline_observations_require_trusted_version_and_no_installer_conflict() {
+        for (times, session, callback, accepted) in [
+            ((1, 1), Session::NoneVisible, None, true),
+            ((1, 2), Session::NoneVisible, None, true),
+            ((0, 0), Session::NoneVisible, None, false),
+            ((1, 2), Session::NoneVisible, Some((7, 0)), false),
+            ((1, 1), Session::Active(7), None, false),
+            ((1, 1), Session::Ambiguous, None, false),
+        ] {
+            let observation = evaluate(identity(10), times, session, callback, None).unwrap();
+            assert_eq!(observation.accepts_attested_baseline(10), accepted);
+            assert!(!observation.accepts_attested_baseline(11));
+        }
+    }
+
     #[test]
     fn history_never_proves_clean_store() {
         for (times, history) in [((1,1), InstallHistory::FirstInstallHint),
