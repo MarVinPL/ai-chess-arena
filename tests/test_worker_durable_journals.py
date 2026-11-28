@@ -36,7 +36,8 @@ def test_change_gate_fences_reservation_and_token_mutations():
 def test_failed_marker_commit_fences_process_and_install_status():
     journal = (SRC / "credential_journal.rs").read_text()
     assert "Mutex<bool>" in journal
-    assert journal.count("*guard = true") == 2
+    assert journal.count("*guard = true") == 3
+    assert journal.count("dir(&require_pair()?, slot)") == 3
     stage = journal.split("fn set_state(", 1)[1].split("trait Store", 1)[0]
     assert stage.index("f.sync_all()") < stage.index("File::open(dir)") < stage.index("fs::rename")
     status = (SRC / "lib.rs").read_text().split("fn update_recovery_status()", 1)[1].split("#[tauri::command]", 1)[0]

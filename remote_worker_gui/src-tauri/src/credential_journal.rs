@@ -132,6 +132,76 @@ fn initialize_empty(
     }
 }
 
+const PAIR_MARKER: &str = "credential-pair.v1";
+const PAIR_STAGE: &str = "credential-pair.stage";
+const PAIR_ID_LEN: usize = 64;
+
+fn pair_id(root: &Path) -> Result<Option<String>, String> {
+    match fs::symlink_metadata(root.join(PAIR_STAGE)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        _ => return Err(ERROR.into()),
+    }
+    let path = root.join(PAIR_MARKER);
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(meta) if meta.is_file() && meta.len() == PAIR_ID_LEN as u64
+            && meta.permissions().mode() & 0o077 == 0 => (),
+        _ => return Err(ERROR.into()),
+    }
+    let mut bytes = Vec::new();
+    File::open(path).map_err(|_| ERROR)?.take((PAIR_ID_LEN + 1) as u64)
+        .read_to_end(&mut bytes).map_err(|_| ERROR)?;
+    if !valid_pair_id(&bytes) {
+        return Err(ERROR.into());
+    }
+    // A previous process may have died at the final directory sync.
+    // Re-establish durability before making either slot available.
+    sync_dir(root)?;
+    String::from_utf8(bytes).map(Some).map_err(|_| ERROR.into())
+}
+
+fn valid_pair_id(bytes: &[u8]) -> bool {
+    bytes.len() == PAIR_ID_LEN
+        && bytes.iter().all(|&b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn sync_dir(dir: &Path) -> Result<(), String> {
+    File::open(dir).and_then(|file| file.sync_all()).map_err(|_| ERROR.into())
+}
+
+fn initialize_pair(
+    root: &Path, hold_dir: &Path, install_dir: &Path,
+    hold: &impl Store, install: &impl Store, identity: &str, evidence: BaselineEvidence,
+) -> Result<(), String> {
+    if !evidence.authenticated_idle || !evidence.installer_reconciled
+        || !evidence.identity_bound || !valid_pair_id(identity.as_bytes())
+    {
+        return Err(ERROR.into());
+    }
+    if let Some(committed) = pair_id(root)? {
+        return if committed == identity && checked_read(hold_dir, hold)?.is_none()
+            && checked_read(install_dir, install)?.is_none() { Ok(()) } else { Err(ERROR.into()) };
+    }
+    if state(hold_dir)? != State::Uninitialized || state(install_dir)? != State::Uninitialized
+        || hold.read()?.is_some() || install.read()?.is_some()
+    {
+        return Err(ERROR.into());
+    }
+    let stage = root.join(PAIR_STAGE);
+    let mut marker = OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&stage).map_err(|_| ERROR)?;
+    marker.write_all(identity.as_bytes()).map_err(|_| ERROR)?;
+    marker.sync_all().map_err(|_| ERROR)?;
+    sync_dir(root)?;
+    initialize_empty(hold_dir, hold, evidence)?;
+    initialize_empty(install_dir, install, evidence)?;
+    if checked_read(hold_dir, hold)?.is_some() || checked_read(install_dir, install)?.is_some() {
+        return Err(ERROR.into());
+    }
+    fs::rename(stage, root.join(PAIR_MARKER)).map_err(|_| ERROR)?;
+    sync_dir(root)
+}
+
 fn checked_insert(dir: &Path, store: &impl Store, raw: &str) -> Result<(), String> {
     if checked_read(dir, store)?.is_some() {
         return Err(ERROR.into());
@@ -172,37 +242,101 @@ mod android {
             credential_vault::journals::delete_expected(self.0, raw).map_err(|_| ERROR.into())
         }
     }
-    fn dir(slot: Slot) -> Result<std::path::PathBuf, String> {
+    fn dir(root: &Path, slot: Slot) -> Result<std::path::PathBuf, String> {
         let name = match slot {
             Slot::PendingHold => "credential-pending-hold",
             Slot::PendingInstall => "credential-pending-install",
         };
         use std::os::unix::fs::DirBuilderExt;
-        let root = crate::android_worker_token_store::journal_root()?;
         let path = root.join(name);
         match fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => (),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(_) => return Err(ERROR.into()),
         }
-        File::open(&root)
-            .and_then(|f| f.sync_all())
-            .map_err(|_| ERROR)?;
+        sync_dir(root)?;
         Ok(path)
     }
+    fn authorization_marker(
+        server: &str, worker_id: &str, token: &str, nonce: &str,
+    ) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+
+        let origin = reqwest::Url::parse(server).map_err(|_| ERROR)?.origin().ascii_serialization();
+        // Canonical HTTPS origin, Worker identity, token digest and coordinator
+        // nonce form one durable binding. No machine token goes to disk.
+        Ok(format!("{:x}", Sha256::digest(
+            [origin.as_bytes(), worker_id.as_bytes(), &Sha256::digest(token.as_bytes()), nonce.as_bytes()]
+                .join(&0),
+        )))
+    }
+
+    pub(crate) fn initialize_authorized_pair(
+        server: &str,
+        worker_id: &str,
+        authorization: &crate::android_update_coordinator::JournalInitAuthorization,
+        reconciled_install: &crate::android_update_install_journal::PendingInstall,
+    ) -> Result<(), String> {
+        use crate::{android_update_coordinator, android_update_install_evidence};
+        use android_update_install_evidence::Outcome;
+
+        let _credentials = crate::credential_change_gate()?;
+        let token = crate::token_entry()?.get_password()?;
+        let mut guard = GATE.lock().map_err(|_| ERROR)?;
+        if *guard {
+            return Err(ERROR.into());
+        }
+        if !authorization.matches(server, worker_id, &token, android_update_coordinator::system_unix_ms()?) {
+            return Err(ERROR.into());
+        }
+        // Require a matching terminal callback, trusted signer and exact
+        // version from fresh native observations. Empty session inventory
+        // is insufficient. The supplied expectation is native reconciliation data.
+        let installer = android_update_install_evidence::collect(Some(reconciled_install))?;
+        if !matches!(installer.outcome(), Outcome::InstalledCandidate | Outcome::FailedCandidate)
+            || !authorization.matches(server, worker_id, &token, android_update_coordinator::system_unix_ms()?)
+        {
+            return Err(ERROR.into());
+        }
+
+        let identity = authorization_marker(server, worker_id, &token, authorization.nonce())?;
+        let root = crate::android_worker_token_store::journal_root()?;
+        let hold_dir = dir(&root, Slot::PendingHold)?;
+        let install_dir = dir(&root, Slot::PendingInstall)?;
+        let result = initialize_pair(
+            &root, &hold_dir, &install_dir, &Native(Slot::PendingHold),
+            &Native(Slot::PendingInstall), &identity,
+            BaselineEvidence {
+                authenticated_idle: true,
+                installer_reconciled: true,
+                identity_bound: true,
+            },
+        );
+        if result.is_err() {
+            *guard = true;
+        }
+        result
+    }
+
+    fn require_pair() -> Result<std::path::PathBuf, String> {
+        let root = crate::android_worker_token_store::journal_root()?;
+        pair_id(&root)?.ok_or(ERROR)?;
+        Ok(root)
+    }
+
     pub(crate) fn read(slot: Slot) -> Result<Option<String>, String> {
         let guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
         }
-        checked_read(&dir(slot)?, &Native(slot))
+        checked_read(&dir(&require_pair()?, slot)?, &Native(slot))
     }
     pub(crate) fn insert(slot: Slot, raw: &str) -> Result<(), String> {
         let mut guard = GATE.lock().map_err(|_| ERROR)?;
         if *guard {
             return Err(ERROR.into());
         }
-        let path = dir(slot)?;
+        let path = dir(&require_pair()?, slot)?;
         // A failed final directory sync can leave a visible but not durable marker.
         // Fence the process on any failed mutation until restart/reconciliation.
         let result = checked_insert(&path, &Native(slot), raw);
@@ -216,7 +350,7 @@ mod android {
         if *guard {
             return Err(ERROR.into());
         }
-        let path = dir(slot)?;
+        let path = dir(&require_pair()?, slot)?;
         // A failed final directory sync can leave a visible but not durable marker.
         // Fence the process on any failed mutation until restart/reconciliation.
         let result = checked_delete(&path, &Native(slot), raw);
@@ -227,7 +361,7 @@ mod android {
     }
 }
 #[cfg(target_os = "android")]
-pub(crate) use android::{delete_expected, insert, read};
+pub(crate) use android::{delete_expected, initialize_authorized_pair, insert, read};
 
 #[cfg(test)]
 mod tests {
@@ -280,6 +414,75 @@ mod tests {
             }
         }
     }
+    const IDENTITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const PROVEN: BaselineEvidence = BaselineEvidence {
+        authenticated_idle: true, installer_reconciled: true, identity_bound: true,
+    };
+
+    fn empty_paths(root: &Temp) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::DirBuilderExt;
+        let hold = root.0.join("hold");
+        let install = root.0.join("install");
+        fs::DirBuilder::new().mode(0o700).create(&hold).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&install).unwrap();
+        (hold, install)
+    }
+
+    #[test]
+    fn pair_requires_all_evidence_then_commits_both_and_retries_same_identity() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+        let hs = Fake::default();
+        let is = Fake::default();
+        for bits in 0..7 {
+            let evidence = BaselineEvidence {
+                authenticated_idle: bits & 1 != 0,
+                installer_reconciled: bits & 2 != 0,
+                identity_bound: bits & 4 != 0,
+            };
+            assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, IDENTITY, evidence).is_err());
+            assert_eq!(state(&hold), Ok(State::Uninitialized));
+            assert_eq!(state(&install), Ok(State::Uninitialized));
+            assert_eq!(pair_id(&root.0), Ok(None));
+        }
+        for _ in 0..2 {
+            initialize_pair(&root.0, &hold, &install, &hs, &is, IDENTITY, PROVEN).unwrap();
+            assert_eq!(pair_id(&root.0), Ok(Some(IDENTITY.into())));
+            assert_eq!(checked_read(&hold, &hs), Ok(None));
+            assert_eq!(checked_read(&install, &is), Ok(None));
+        }
+        assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, &"a".repeat(64), PROVEN).is_err());
+    }
+
+    #[test]
+    fn partially_staged_pair_stays_blocked_after_reopen() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+        OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(root.0.join(PAIR_STAGE)).unwrap().write_all(IDENTITY.as_bytes()).unwrap();
+        set_state(&hold, State::Empty).unwrap();
+        assert!(pair_id(&root.0).is_err());
+        assert!(initialize_pair(
+            &root.0, &hold, &install, &Fake::default(), &Fake::default(), IDENTITY, PROVEN,
+        ).is_err());
+        assert_eq!(state(&install), Ok(State::Uninitialized));
+    }
+
+    #[test]
+    fn pair_does_not_adopt_existing_slot_or_secret() {
+        let root = Temp::new();
+        let (hold, install) = empty_paths(&root);
+        let hs = Fake::default();
+        let is = Fake::default();
+        *is.value.borrow_mut() = Some("existing record".into());
+        assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, IDENTITY, PROVEN).is_err());
+        assert_eq!(is.read(), Ok(Some("existing record".into())));
+        *is.value.borrow_mut() = None;
+        set_state(&hold, State::Empty).unwrap();
+        assert!(initialize_pair(&root.0, &hold, &install, &hs, &is, IDENTITY, PROVEN).is_err());
+        assert_eq!(pair_id(&root.0), Ok(None));
+    }
+
     #[test]
     fn roundtrip_and_conflict() {
         let d = Temp::new();
