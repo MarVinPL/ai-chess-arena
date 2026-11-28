@@ -1,4 +1,4 @@
-"""Ensure Android Worker CI asks for a published stable SDK platform."""
+"""Ensure Android Worker CI installs stable SDK through the verified Android CLI."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6,7 +6,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_android_sdk_installer_uses_available_api_36_platform():
     workflow = (ROOT / ".github/workflows/android-worker-apk.yml").read_text(encoding="utf-8")
-    assert 'sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"' in workflow
+    assert "sdkmanager" not in workflow
+    assert 'android="$ANDROID_HOME/cmdline-tools/22.0/bin/android"' in workflow
+    assert 'platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.2.12479018' in workflow
+    assert 'sha256sum --check -' in workflow
+    assert 'sdk install' in workflow
+
     assert 'test -s "$ANDROID_HOME/platforms/android-36/android.jar"' in workflow
     assert 'test -d "$ANDROID_HOME/ndk/27.2.12479018"' in workflow
     assert '"platforms;android-37"' not in workflow

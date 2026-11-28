@@ -31,20 +31,24 @@ class ModelSearchTests(unittest.TestCase):
         self.assertEqual(candidate['draft_models'][0]['filename'],draft)
         self.assertEqual(candidate['draft_models'][0]['sha256'],'b'*64)
 
-    def test_random_model_search_uses_multiple_model_families_and_returns_one_candidate(self):
-        candidates = [{'name': 'Qwen/model', 'files': []}, {'name': 'SmolLM/model', 'files': []}]
-        with patch.object(server, 'search_hf_models', side_effect=[[], candidates]) as search:
-            result = server.random_hf_model()
-        self.assertEqual(len(result), 1)
-        self.assertIn(result[0], candidates)
-        self.assertEqual(search.call_count, 2)
-        self.assertNotEqual(search.call_args_list[0].args[0], search.call_args_list[1].args[0])
+    def test_random_model_search_removed(self):
+        from pathlib import Path
+        root = Path(server.__file__).parent
+        self.assertFalse(hasattr(server, 'random_hf_model'))
+        for path in ('server.py', 'index.html', 'web/js/arena.js'):
+            content = (root / path).read_text()
+            self.assertNotIn('/api/models/random', content)
+            self.assertNotIn('model-random-button', content)
+        self.assertIn('/api/models/search?q=', (root / 'web/js/arena.js').read_text())
 
-    def test_random_model_search_returns_empty_when_no_gguf_candidates_exist(self):
-        with patch.object(server, 'search_hf_models', return_value=[]) as search:
-            result = server.random_hf_model()
-        self.assertEqual(result, [])
-        self.assertGreater(search.call_count, 1)
+    def test_automatic_catalog_discovery_retired(self):
+        from pathlib import Path
+        root = Path(server.__file__).parent
+        for path in ('huggingface_catalog_sync.py', 'scripts/sync_huggingface_catalog.py',
+                     '.github/workflows/huggingface-candidate-catalog-sync.yml'):
+            self.assertFalse((root / path).exists(), path)
+        workflow = (root / '.github/workflows/huggingface-model-catalog-sync.yml').read_text()
+        self.assertIn('python existing_model_metadata_check.py', workflow)
 
     def test_license_evidence_fetches_revision_pinned_readme_and_license_text_without_approving(self):
         import json

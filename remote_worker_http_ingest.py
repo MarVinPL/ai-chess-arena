@@ -10,13 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
 MAX_PEERS = 1024
-READ_TIMEOUT = 5
+from remote_worker_http_validation import READ_TIMEOUT, MAX_BODY, WorkerRequestError, read_worker_json
 
 from remote_worker_authenticated_ingest import AuthenticatedResultIngest
 from remote_worker_job_delivery import AuthenticatedJobDelivery
 from remote_worker_heartbeat import WorkerHeartbeatStore
 
-MAX_BODY = 2048
 
 
 class RateLimiter:
@@ -60,36 +59,30 @@ def make_handler(db_path, *, limiter=None):
 
         def do_POST(self):
             if self.path not in ('/internal/remote-worker/result', '/internal/remote-worker/job',
+                                  '/internal/remote-worker/inference-job',
                                   '/internal/remote-worker/heartbeat'):
                 return self.reply(404)
             peer = self.client_address[0]
             if not limiter.allow(peer):
                 return self.reply(429)
-            length_header = self.headers.get('Content-Length')
-            if self.headers.get('Transfer-Encoding') or not length_header or not length_header.isascii() or not length_header.isdecimal():
-                return self.reply(400)
-            length = int(length_header)
-            if not 0 < length <= MAX_BODY:
-                return self.reply(413)
-            if self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json':
-                return self.reply(415)
             try:
-                body = json.loads(self.rfile.read(length).decode('utf-8'))
-                if not isinstance(body, dict):
-                    raise ValueError('Invalid payload')
+                body = read_worker_json(self, self.path)
                 if self.path == '/internal/remote-worker/heartbeat':
                     if set(body) != {'worker_id', 'token'}:
                         raise ValueError('Invalid payload')
                     heartbeats.record(body['worker_id'], body['token'])
                     return self.reply(202)
-                if self.path == '/internal/remote-worker/job':
+                if self.path in ('/internal/remote-worker/job', '/internal/remote-worker/inference-job'):
                     if set(body) != {'worker_id', 'token'}:
                         raise ValueError('Invalid payload')
-                    job = delivery.retrieve(body['worker_id'], body['token'])
+                    job = delivery.retrieve(body['worker_id'], body['token'],
+                        require_inference_manifest=(self.path == '/internal/remote-worker/inference-job'))
                     return self.reply(200, {'job': job})
                 if set(body) != {'worker_id', 'token', 'result'}:
                     raise ValueError('Invalid payload')
                 ingest.accept(body['worker_id'], body['token'], body['result'])
+            except WorkerRequestError as exc:
+                return self.reply(exc.status)
             except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
                 # Never disclose worker existence, token validity, job IDs or FEN.
                 return self.reply(401)

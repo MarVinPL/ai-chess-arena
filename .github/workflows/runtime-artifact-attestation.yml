@@ -1,0 +1,162 @@
+name: Runtime artifact provenance
+
+# Main-only attestation after merge. The repository Actions allowlist must
+# explicitly permit actions/checkout@v7, actions/setup-python@v7 and
+# actions/attest@v4; changing this file never bypasses that policy.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-artifact-attestation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-candidates:
+    name: Build and publish candidate digests for review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.digests.outputs.source_commit }}
+      worker_sha256: ${{ steps.digests.outputs.worker_sha256 }}
+      supervisor_sha256: ${{ steps.digests.outputs.supervisor_sha256 }}
+    steps:
+      - name: Checkout protected source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Build candidate artifacts and expose exact digests
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runtime-artifacts"
+          python tools/build_runtime_worker_bundle.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/runtime-artifacts/runtime_worker"
+          python tools/build_runtime_supervisor_bundle.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/runtime-artifacts/runtime_supervisor.pyz"
+          worker_sha256=$(sha256sum "$RUNNER_TEMP/runtime-artifacts/runtime_worker" | cut -d ' ' -f 1)
+          supervisor_sha256=$(sha256sum "$RUNNER_TEMP/runtime-artifacts/runtime_supervisor.pyz" | cut -d ' ' -f 1)
+          {
+            echo "source_commit=$GITHUB_SHA"
+            echo "worker_sha256=$worker_sha256"
+            echo "supervisor_sha256=$supervisor_sha256"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '## Runtime release candidate digests'
+            echo "- Source commit: `$GITHUB_SHA`"
+            echo "- Worker SHA-256: `$worker_sha256`"
+            echo "- Supervisor SHA-256: `$supervisor_sha256`"
+            echo '- Scope: build provenance only; no installation or inference authorization'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  attest:
+    name: Approve and attest exact runtime digests
+    needs: build-candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The reviewer can inspect the candidate digests above before approving this job.
+    # Approval in the protected environment authorizes provenance only,
+    # never installation of runtime binaries or model inference.
+    environment:
+      name: runtime-release
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout the exact candidate source commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build-candidates.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Rebuild and verify the approved candidate digests
+        shell: bash
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ needs.build-candidates.outputs.source_commit }}
+          EXPECTED_WORKER_SHA256: ${{ needs.build-candidates.outputs.worker_sha256 }}
+          EXPECTED_SUPERVISOR_SHA256: ${{ needs.build-candidates.outputs.supervisor_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_COMMIT"
+          mkdir -p "$RUNNER_TEMP/runtime-artifacts"
+          python tools/build_runtime_worker_bundle.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/runtime-artifacts/runtime_worker"
+          python tools/build_runtime_supervisor_bundle.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/runtime-artifacts/runtime_supervisor.pyz"
+          actual_worker=$(sha256sum "$RUNNER_TEMP/runtime-artifacts/runtime_worker" | cut -d ' ' -f 1)
+          actual_supervisor=$(sha256sum "$RUNNER_TEMP/runtime-artifacts/runtime_supervisor.pyz" | cut -d ' ' -f 1)
+          test "$actual_worker" = "$EXPECTED_WORKER_SHA256"
+          test "$actual_supervisor" = "$EXPECTED_SUPERVISOR_SHA256"
+          printf '%s  %s\n' "$actual_worker" runtime_worker "$actual_supervisor" runtime_supervisor.pyz \
+            > "$RUNNER_TEMP/runtime-artifacts/SHA256SUMS"
+
+      - name: Create exact-digest release approval statement
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ needs.build-candidates.outputs.source_commit }}
+          WORKER_SHA256: ${{ needs.build-candidates.outputs.worker_sha256 }}
+          SUPERVISOR_SHA256: ${{ needs.build-candidates.outputs.supervisor_sha256 }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          statement = {
+              "schema": "https://in-toto.io/Statement/v1",
+              "_type": "https://in-toto.io/Statement/v1",
+              "repository": "MarVinPL/ai-chess-arena",
+              "source_ref": "refs/heads/main",
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "workflow": ".github/workflows/runtime-artifact-attestation.yml",
+              "environment": "runtime-release",
+              "required_reviewer": "MarVinPL",
+              "approval_scope": "build-provenance-only; no runtime installation or model inference authorization",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "artifacts": {
+                  "runtime_worker": {"sha256": os.environ["WORKER_SHA256"]},
+                  "runtime_supervisor.pyz": {"sha256": os.environ["SUPERVISOR_SHA256"]},
+              },
+          }
+          Path(os.environ["RUNNER_TEMP"], "runtime-artifacts", "release-approval.json").write_text(
+              json.dumps(statement, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+      - name: Attest runtime worker
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/runtime-artifacts/runtime_worker
+
+      - name: Attest runtime supervisor
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/runtime-artifacts/runtime_supervisor.pyz
+
+      - name: Attest exact-digest release approval statement
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/runtime-artifacts/release-approval.json

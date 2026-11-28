@@ -1,0 +1,72 @@
+{
+  "observed_at": "2026-11-18T21:37:37Z",
+  "authorization": "Owner explicitly approved this exact candidate for quarantine preparation in the current conversation before reconciliation.",
+  "candidate": {
+    "catalog_id": "hf:360ZhiNao/Light-R1-14B-DS-GGUF",
+    "repository": "360ZhiNao/Light-R1-14B-DS-GGUF",
+    "revision": "0d4531e58894e0019d4a9a6aa775eb32098213cb",
+    "filename": "Light-R1-14B-Q4_0.gguf",
+    "size_bytes": 8517725312,
+    "upstream_lfs_sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa"
+  },
+  "discovery": {
+    "state": "pre_existing_file_found_before_any_transfer_in_this_approval",
+    "path": "/var/lib/ai-chess-arena/hf-candidate-downloads/e81293fe0425410eadb2a72fc4ee4bd3/d7330e8c69__Light-R1-14B-Q4_0.gguf.quarantine",
+    "mtime_utc": "2026-11-16T19:31:59.999409+00:00",
+    "ctime_utc": "2026-11-16T19:32:00.083409+00:00",
+    "owner_uid": 1000,
+    "mode": "0600",
+    "regular_file": true,
+    "symlink": false,
+    "gguf_magic": "GGUF"
+  },
+  "integrity": {
+    "local_sha256_recomputed": true,
+    "local_sha256": "d9fb85f0d6582ef0ac061dcf54e1236aff2d4583a83c0aebff281c5fb3764afa",
+    "size_matches_upstream": true,
+    "sha256_matches_upstream_lfs": true
+  },
+  "provenance": {
+    "download_job_record_found": false,
+    "download_event_record_found": false,
+    "original_transfer_actor_and_time": "unknown; filesystem timestamps are not sufficient to establish the transfer actor or source",
+    "reconciliation": "Existing file reconciled into hf_download_verified_artifacts at 2026-11-18T21:37:32Z; no new network transfer was performed in response to the current approval."
+  },
+  "preflight": {
+    "checked_at": "2026-11-18T21:37:37Z",
+    "status": "skipped_blocked",
+    "blockers": [
+      "No manual candidate review record for the pinned revision in the runtime review subsystem.",
+      "RAM requirement approximately 14.90 GiB; available RAM approximately 1.63 GiB."
+    ],
+    "available_disk_gib": 8.45,
+    "runtime_enabled": false,
+    "runtime_active": 0
+  },
+  "authorization_state": {
+    "license_owner_acceptance": "accepted_with_dataset_caveat",
+    "verified_permissive": false,
+    "test_only_grant_active": false,
+    "runtime_handoff_authorized": false,
+    "inference_authorized": false,
+    "tournament_admission": false,
+    "production_deployment_authorized": false
+  },
+  "actions_not_performed": [
+    "No new model download",
+    "No model load or execution",
+    "No inference",
+    "No TEST_ONLY grant",
+    "No tournament roster or admission change",
+    "No runtime installation or deployment"
+  ],
+  "correction": "Earlier Issue #157 notes that stated no quarantine file existed were based on the verified-artifact registry and were incomplete. A pre-existing matching file was found outside that registry. The file content is now hash-verified and indexed; its original transfer provenance remains unknown.",
+  "current_disposition": {
+    "status": "removed_by_owner_request",
+    "removed_at": "2026-11-18T22:10:00Z",
+    "file_present": false,
+    "registry_entry_present": false,
+    "reason": "Owner requested removal of Light-R1 from the candidate list and quarantine.",
+    "no_inference": true
+  }
+}

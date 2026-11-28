@@ -77,6 +77,11 @@ class PasskeyTestTests(unittest.TestCase):
         self.assertTrue(captured['payload']['chat_template_kwargs']['enable_thinking'])
         self.assertEqual(captured['payload']['temperature'],0.25)
         self.assertEqual(captured['payload']['max_tokens'],1800)
+        messages=captured['payload']['messages']
+        self.assertEqual(messages[0]['role'],'system')
+        self.assertIn('prostym, precyzyjnym językiem',messages[0]['content'])
+        self.assertIn('Nie wymyślaj',messages[0]['content'])
+        self.assertEqual(messages[1],{'role':'user','content':'Pytanie'})
 
     def test_default_mode_keeps_thinking_disabled(self):
         runtime=FakeRuntime()
@@ -88,6 +93,20 @@ class PasskeyTestTests(unittest.TestCase):
             passkey_test.ask_passkey_question(runtime,'/tmp/model.gguf','Pytanie')
         self.assertFalse(captured['payload']['chat_template_kwargs']['enable_thinking'])
         self.assertEqual(captured['payload']['max_tokens'],900)
+
+    def test_passkey_system_prompt_is_default_and_can_be_disabled_for_ab_comparison(self):
+        runtime=FakeRuntime()
+        captured=[]
+        def fake_open(request, timeout=None):
+            captured.append(json.loads(request.data.decode()))
+            return FakeResponse()
+        with patch.object(passkey_test.urllib.request,'urlopen',side_effect=fake_open):
+            passkey_test.ask_passkey_question(runtime,'/tmp/model.gguf','Pytanie')
+            passkey_test.ask_passkey_question(runtime,'/tmp/model.gguf','Pytanie',system_prompt='')
+        self.assertEqual(captured[0]['messages'][0]['role'],'system')
+        self.assertEqual(captured[0]['messages'][0]['content'],passkey_test.PASSKEY_SYSTEM_PROMPT)
+        self.assertEqual(captured[0]['messages'][1],{'role':'user','content':'Pytanie'})
+        self.assertEqual(captured[1]['messages'],[{'role':'user','content':'Pytanie'}])
 
     def test_stop_does_not_submit_question(self):
         event=threading.Event(); event.set(); runtime=FakeRuntime()

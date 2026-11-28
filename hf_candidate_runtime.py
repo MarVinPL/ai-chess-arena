@@ -12,19 +12,13 @@ import hf_candidate_downloads
 import hf_candidate_queue
 import hf_candidate_reviews
 
-# Conservative CPU-memory estimate: mapped weights + runtime overhead/context.
-MEMORY_MULTIPLIER = 1.5
-MEMORY_RESERVE_BYTES = 1536 * 1024**2
-DISK_RESERVE_BYTES = 512 * 1024**2
+# Shared resource policy keeps preflight, supervisor and cgroup budgets aligned.
+from runtime_resource_policy import DISK_RESERVE_BYTES, required_host_available_bytes
 REFRESH_SECONDS = 15 * 60
 
 # Separate from the download allowlist. This adds a candidate to the runtime
 # review/preflight workflow only; it does not authorize downloading or execution.
-RUNTIME_CANDIDATES = {
-    ('hf:360ZhiNao/Light-R1-14B-DS-GGUF',
-     '0d4531e58894e0019d4a9a6aa775eb32098213cb',
-     'Light-R1-14B-Q4_0.gguf'),
-}
+RUNTIME_CANDIDATES = set()  # No model candidate is currently selected for runtime review.
 
 
 def _now(): return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -173,7 +167,7 @@ def refresh_preflight():
         repo_item=next((x for x in hf_candidate_downloads.audit.load_catalog() if x['catalog_id']==catalog_id),None)
         repo_id=repo_item.get('repo_id','') if repo_item else ''
         expected_key=(catalog_id,revision,filename)
-        estimated=int(item['size_bytes']*MEMORY_MULTIPLIER)+MEMORY_RESERVE_BYTES
+        estimated=required_host_available_bytes(int(item['size_bytes']))
         blockers=[]
         if expected_key not in approved and expected_key not in RUNTIME_CANDIDATES:
             blockers.append('Artefakt nie znajduje się na jawnej allowliście runtime ani liście kandydatów do przeglądu.')

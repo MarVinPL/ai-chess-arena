@@ -16,11 +16,11 @@ def test_complete_chess_game_with_durable_remote_bridge_and_restart(tmp_path):
         db.execute('CREATE TABLE tournaments (id INTEGER PRIMARY KEY)')
         db.execute('INSERT INTO tournaments VALUES (1)')
     tournament_checkpoint.ensure_schema(path)
-    original = {'schema_version': 1, 'tournament_id': 1, 'phase': 'game',
+    original = {'schema_version': 1, 'variant': 'elimination', 'tournament_id': 1, 'phase': 'game',
                 'pairing': {'id': 7}, 'moves': [], 'move_times': [],
                 'fen': chess.Board().fen(), 'side_to_move': 'white'}
     tournament_checkpoint.save(path, 1, original)
-    moves = iter(['f2f3', 'e7e5', 'g2g4', 'd8h4'])
+    moves = iter(['f2f3', 'e7e5', 'g2g4', 'd8h4', 'a2a3', 'h4e1'])
 
     def infer(job, board, player):
         return {'version': 1, 'job_id': job['job_id'], 'uci': next(moves)}
@@ -55,7 +55,7 @@ def test_complete_chess_game_with_durable_remote_bridge_and_restart(tmp_path):
         resume_move_times=saved['move_times'], progress=resumed_bridge.publish)
     assert result['result'] == '0-1'
     final = tournament_checkpoint.load(path, 1)
-    assert [m['uci'] for m in final['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4']
+    assert [m['uci'] for m in final['moves']] == ['f2f3', 'e7e5', 'g2g4', 'd8h4', 'a2a3', 'h4e1']
     assert len(resumed_bridge.journal.pending()) == 0
 
 

@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-18",
+  "host": "vps-678a1be0",
+  "container": {
+    "machine": "arena-test",
+    "rootfs": "/var/lib/machines/arena-test",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "network": "private",
+    "repository_mount": "read-only",
+    "python_venv_mount": "read-only",
+    "new_image_created": false,
+    "test_root_removed": true,
+    "machine_powered_off": true,
+    "existing_image_retained": true
+  },
+  "test_root": "/var/tmp/arena-crash-recovery-20261118-02",
+  "deployment_profile": "test-recovery",
+  "execution_enabled": false,
+  "supervisor_bundle_sha256": "0264f8659824c0a4eacd18287336c5340f03faa97aa05f8e260165e1dbc8ebef",
+  "fault_injection": {
+    "api_sigkill": "PASS",
+    "in_process_lease_broker_crash": "PASS",
+    "supervisor_sigkill": "PASS",
+    "stale_socket_restart_failure_reproduced_before_fix": true
+  },
+  "remediation": {
+    "safe_stale_socket_recovery": "PASS",
+    "requirements": [
+      "socket file, not symlink or regular file",
+      "exact expected UID/GID/mode",
+      "connect probe returns ECONNREFUSED",
+      "device/inode unchanged immediately before unlink",
+      "ambiguous/live listener states fail closed"
+    ],
+    "supervisor_unlinks_only_bound_inode": true,
+    "listener_lifetime_flock": "PASS",
+    "lock_files": {
+      "broker": {
+        "owner": "debian:debian",
+        "mode": "0600"
+      },
+      "supervisor": {
+        "owner": "root:root",
+        "mode": "0600"
+      }
+    }
+  },
+  "post_fix_repeat": {
+    "api_restart": "PASS",
+    "broker_restart": "PASS",
+    "supervisor_type_notify_restart": "PASS",
+    "api_http_readiness": 200,
+    "synthetic_unit": "ai-chess-arena-runtime-test-910000105.service",
+    "synthetic_unit_recovered": "PASS",
+    "lease_state": "stopped",
+    "synthetic_job_state": "failed",
+    "cgroup_empty": true,
+    "sqlite_integrity": "ok",
+    "foreign_key_violations": 0,
+    "ipc_start_blocked": true,
+    "concurrent_start_lock": "PASS"
+  },
+  "worker_model_inference": {
+    "worker_start": "blocked by recovery-only profile",
+    "worker_processes": 0,
+    "model_processes": 0,
+    "inference_executed": false,
+    "unclean_worker_exit": "NOT VERIFIED"
+  },
+  "full_test_suite": {
+    "passed": 767,
+    "skipped": 1,
+    "subtests_passed": 43,
+    "duration_seconds": 26.9
+  },
+  "focused_ipc_broker_tests": {
+    "passed": 24
+  },
+  "production": {
+    "api_active": true,
+    "api_main_pid": 3417317,
+    "supervisor_load_state": "not-found",
+    "supervisor_active": false,
+    "production_db_changed": false,
+    "production_services_restarted": false
+  }
+}

@@ -31,7 +31,7 @@ def test_main_build_restores_keystore_only_after_android_init():
     workflow = CALLED.read_text(encoding="utf-8")
     assert workflow.index("npx tauri android init --ci") < workflow.index(
         "Restore original Android test signing key"
-    ) < workflow.index("npx tauri android build --apk")
+    ) < workflow.index("python3 ../scripts/retry_http_429.py npx --no-install tauri android build --apk")
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert 'printf \'%s\' "$WORKER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"' in workflow
     assert 'chmod 600 "$HOME/.android/debug.keystore"' in workflow
@@ -44,7 +44,7 @@ def test_apk_certificate_checked_before_upload():
     workflow = CALLED.read_text(encoding="utf-8")
     assert workflow.index('"$signer" verify --verbose "$apk"') < workflow.index(
         'test "$signed_cert" = ' + FINGERPRINT
-    ) < workflow.index("actions/upload-artifact@v6")
+    ) < workflow.index("actions/upload-artifact@v7")
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert "if-no-files-found: error" in workflow
     assert "workflow_dispatch:" in workflow  # only in a comment, not a trigger
