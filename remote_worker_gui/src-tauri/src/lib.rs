@@ -17,6 +17,16 @@ mod android_update_recovery;
 mod android_update_install_journal;
 #[allow(dead_code)]
 mod android_embedded_llama;
+#[allow(dead_code)]
+mod android_model_cache;
+#[allow(dead_code)]
+mod android_model_download;
+#[allow(dead_code)]
+mod android_model_lifecycle;
+#[allow(dead_code)]
+mod android_model_preflight;
+#[allow(dead_code)]
+mod android_model_source;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
