@@ -1,0 +1,18 @@
+{
+  "dataset_id": "uci-format-only-v1",
+  "generator": "scripts/build_uci_format_dataset.py",
+  "license": "CC0-1.0",
+  "model_weights_downloaded": false,
+  "network_access": false,
+  "purpose": "UCI response formatting only; not chess strategy, Elo, or passkey behavior",
+  "rows": 600,
+  "schema_version": 1,
+  "sha256": "34f5ca0eccacd8fb7c137605e2171ce225c14248772ce05c8ba5c3e73150c621",
+  "split_counts": {
+    "test": 50,
+    "train": 500,
+    "validation": 50
+  },
+  "split_policy": "independent seeded games per split and global exact-FEN de-duplication",
+  "validator": "python-chess 1.11.2"
+}
