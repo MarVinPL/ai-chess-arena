@@ -108,3 +108,32 @@ def test_recover_stale_partial_only_after_trusted_stop_and_without_js_ipc():
     assert 'remove_dir_all' not in recovery
     assert 'std::process::Command' not in recovery
     assert 'reconcile_partial_after_restart(' not in LIB
+
+
+def test_quic_bridge_is_private_and_packaged():
+    bridge = (BASE / "remote_worker_gui/android/WorkerQuicTransport.kt").read_text()
+    injector = (BASE / "remote_worker_gui/android/inject_package_installer.py").read_text()
+    rust = (BASE / "remote_worker_gui/src-tauri/src/android_model_quic.rs").read_text()
+    assert ".setEnableQuic(true)" in bridge
+    assert ".setEnableHttp2(true)" in bridge
+    assert 'setOf("h3", "h2", "http/1.1")' in bridge
+    assert "WorkerQuicTransport.kt" in injector
+    assert "shutil.copyfile(QUIC_SOURCE" in injector
+    assert "getClassLoader" in rust and "loadClass" in rust
+    assert "verify_model(&mut file, approved.size_bytes, &approved.sha256)" in rust
+    assert "download_verified_gguf_via_http3(" not in LIB
+    assert "#[tauri::command]" not in rust
+
+
+def test_quic_publication_follows_successful_callback_and_reserve_check():
+    bridge = (BASE / "remote_worker_gui/android/WorkerQuicTransport.kt").read_text()
+    transfer = bridge.split("fun downloadApproved(", 1)[1]
+    callback = transfer.split("override fun onSucceeded", 1)[1].split("override fun onFailed", 1)[0]
+    assert "check(actual == sha256)" in callback
+    assert "stream.fd.sync()" in callback
+    assert "Files.move" not in callback
+    assert transfer.index("done.await(2, TimeUnit.HOURS)") < transfer.index("Files.move")
+    assert transfer.index("check(error == null)") < transfer.index("Files.move")
+    assert "expectedBytes - received + count.toLong()" in transfer
+    assert "StandardCopyOption.ATOMIC_MOVE" in transfer
+    assert "LinkOption.NOFOLLOW_LINKS" in transfer

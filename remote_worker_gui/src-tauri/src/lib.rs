@@ -27,6 +27,9 @@ mod android_model_lifecycle;
 mod android_model_preflight;
 #[allow(dead_code)]
 mod android_model_source;
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+mod android_model_quic;
 mod android_local_llama;
 #[cfg(target_os = "android")]
 mod android_worker_token_store;
