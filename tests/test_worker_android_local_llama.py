@@ -98,3 +98,34 @@ def test_real_phone_inference_checks_authenticated_stop_at_both_boundaries():
     )[0]
     assert 'generation_active()' in install
     assert 'Telefon aktualnie oblicza ruch' in install
+
+
+def test_android_diagnostic_is_bounded_and_read_only():
+    probe = LOCAL.split('async fn inspect_model_alias()', 1)[1].split('fn parse_model_alias(', 1)[0]
+    assert '.no_proxy()' in probe
+    assert '.redirect(reqwest::redirect::Policy::none())' in probe
+    assert 'response.chunk().await' in probe
+    assert 'chunk.len() > LIMIT - body.len()' in probe
+    assert 'response.bytes()' not in probe
+    section = LIB.split('async fn inspect_phone_local_model()', 1)[1].split(
+        '// The desktop app connects outbound only', 1)[0]
+    assert 'diagnostic_model_status().await' in section
+    assert 'announce_phone_ready' not in section
+    assert 'inspect_phone_local_model,' in LIB
+    assert 'LOCAL_OPERATION_ACTIVE' in LOCAL
+    assert 'diagnostic_and_generation_exclude_each_other_without_false_running' in LOCAL
+
+
+def test_android_diagnostic_foreground_and_distinct_statuses():
+    section = UI.split('async function checkPhoneLocalModel(', 1)[1].split(
+        'const phoneStartButton', 1)[0]
+    assert 'document.hidden' in section
+    assert 'phoneWorkerEnabled' in section
+    assert "invoke('phone_inference_supported')" in section
+    assert "invoke('inspect_phone_local_model')" in section
+    assert 'Date.now()-localModelLastCheck<30000' in section
+    assert "result?.state==='incompatible'" in section
+    assert "result?.state==='busy'" in section
+    assert 'result.alias.slice(0,12)' in section
+    assert 'activatePhoneJobPolling' not in section
+    assert 'nie potwierdza integralności pliku GGUF' in UI

@@ -209,6 +209,18 @@ fn phone_inference_supported() -> bool {
     cfg!(target_os = "android")
 }
 
+#[tauri::command]
+async fn inspect_phone_local_model() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    {
+        android_local_llama::diagnostic_model_status().await
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        serde_json::json!({"state": "unsupported"})
+    }
+}
+
 // The desktop app connects outbound only. Never pass the token into JS or a URL.
 // HTTPS is mandatory; redirect following is disabled to avoid credential leakage.
 #[tauri::command]
@@ -1186,7 +1198,7 @@ mod version_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![worker_version, worker_status, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
+        .invoke_handler(tauri::generate_handler![worker_version, worker_status, inspect_phone_local_model, store_worker_token, has_saved_worker_token, forget_worker_token, verify_worker_connection, preview_worker_job, check_worker_release, download_worker_apk, verify_downloaded_worker_apk, check_update_safety, update_recovery_status, inspect_update_hold, inspect_android_install_sessions, poll_worker_update_pause, update_installation_readiness, install_downloaded_worker_apk, reconcile_installed_worker_update, inspect_android_install_result, inspect_worker_resume_readiness, get_my_worker_board, poll_my_inference_job, execute_phone_inference_once, phone_inference_supported, reconcile_idle_phone_after_update])
         .run(tauri::generate_context!())
         .expect("failed to run remote worker GUI");
 }

@@ -70,8 +70,9 @@ function setup() {
  const elements = new Map(), pending=[], calls=[], boards=[];
  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,dataset:{},events:{},addEventListener(name,fn){this.events[name]=fn;}});return elements.get(id);};
  get('server').value='https://old.example';get('workerId').value='android_old_01';
- const context=vm.createContext({document:{getElementById:get,hidden:false},window:{__TAURI__:{core:{invoke:(name,args)=>{calls.push({name,args});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}}},renderWorkerArenaBoard:view=>boards.push(view)});
+ const context=vm.createContext({document:{getElementById:get,hidden:true,addEventListener(){}},window:{__TAURI__:{core:{invoke:(name,args)=>{calls.push({name,args});return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}}},renderWorkerArenaBoard:view=>boards.push(view)});
  vm.runInContext(source,context);
+ context.document.hidden=false; // Foreground after startup; isolate identity race from initial diagnostics.
  const run=s=>vm.runInContext(s,context);
  const change=kind=>{if(kind==='id')get('workerId').value='android_new_01';if(kind==='server')get('server').value='https://new.example';run('invalidateJobPreview()');};
  run('phonePaired=true;phoneSupported=true;phoneWorkerEnabled=true;resumeReadinessState="no_checkpoint"');

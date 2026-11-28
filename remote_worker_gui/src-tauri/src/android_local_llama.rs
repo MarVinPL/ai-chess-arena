@@ -13,19 +13,22 @@ use serde_json::{json, Value};
 
 const LOCAL_SERVER: &str = "http://127.0.0.1:8088";
 static GENERATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LOCAL_OPERATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct LocalGenerationPermit;
 
 impl Drop for LocalGenerationPermit {
     fn drop(&mut self) {
         GENERATION_ACTIVE.store(false, Ordering::SeqCst);
+        LOCAL_OPERATION_ACTIVE.store(false, Ordering::SeqCst);
     }
 }
 
 pub(crate) fn acquire_generation() -> Result<LocalGenerationPermit, String> {
-    GENERATION_ACTIVE
+    LOCAL_OPERATION_ACTIVE
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| "Telefon wykonuje już obliczenia dla tego Workera".to_owned())?;
+    GENERATION_ACTIVE.store(true, Ordering::SeqCst);
     Ok(LocalGenerationPermit)
 }
 
@@ -53,35 +56,76 @@ fn model_alias_matches(models: &Value, expected: &str) -> bool {
 /// Advertise local readiness only if one llama.cpp model has a strict SHA
 /// alias. The alias is not a cryptographic hash attestation of GGUF bytes.
 pub(crate) async fn probe_local_model_alias() -> Result<String, String> {
+    inspect_model_alias().await.map_err(|(message, _)| message.to_owned())
+}
+
+// The diagnostic and readiness probe share a bounded, loopback-only reader.
+async fn inspect_model_alias() -> Result<String, (&'static str, &'static str)> {
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(5))
-        .build().map_err(|_| "Brak klienta lokalnego modelu".to_owned())?;
-    let response = client.get(format!("{LOCAL_SERVER}/v1/models"))
-        .send().await.map_err(|_| "Uruchom llama.cpp na telefonie (127.0.0.1:8088)")?;
+        .build().map_err(|_| ("Brak klienta lokalnego modelu", "unavailable"))?;
+    let mut response = client.get(format!("{LOCAL_SERVER}/v1/models"))
+        .send().await.map_err(|_| ("Uruchom llama.cpp na telefonie (127.0.0.1:8088)", "unavailable"))?;
     if !response.status().is_success() {
-        return Err("Lokalny model na telefonie nie jest dostępny".into());
+        return Err(("Lokalny model na telefonie nie jest dostępny", "unavailable"));
     }
-    let body = response.bytes().await
-        .map_err(|_| "Nie można odczytać modelu telefonu".to_owned())?;
-    if body.len() > 64 * 1024 {
-        return Err("Zbyt duża lista modeli llama.cpp".into());
+    const LIMIT: usize = 64 * 1024;
+    if response.content_length().is_some_and(|n| n > LIMIT as u64) {
+        return Err(("Zbyt duża lista modeli llama.cpp", "incompatible"));
     }
-    let models: Value = serde_json::from_slice(&body)
-        .map_err(|_| "Nieprawidłowa lista modeli llama.cpp".to_owned())?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await
+        .map_err(|_| ("Nie można odczytać modelu telefonu", "unavailable"))? {
+        if chunk.len() > LIMIT - body.len() {
+            return Err(("Zbyt duża lista modeli llama.cpp", "incompatible"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    parse_model_alias(&body).map_err(|message| (message, "incompatible"))
+}
+
+fn parse_model_alias(body: &[u8]) -> Result<String, &'static str> {
+    let models: Value = serde_json::from_slice(body)
+        .map_err(|_| "Nieprawidłowa lista modeli llama.cpp")?;
     let items = models.get("data").and_then(Value::as_array)
         .ok_or("Lokalny serwer nie podał listy modeli")?;
     if items.len() != 1 {
-        return Err("Wymagany dokładnie jeden lokalnie uruchomiony model".into());
+        return Err("Wymagany dokładnie jeden lokalnie uruchomiony model");
     }
     let id = items[0].get("id").and_then(Value::as_str)
         .ok_or("Lokalny model nie ma aliasu SHA-256")?;
     let alias = id.strip_prefix("sha256:").unwrap_or(id);
     if !valid_hex_sha256(alias) {
-        return Err("Uruchom llama-server z aliasem SHA-256 modelu".into());
+        return Err("Uruchom llama-server z aliasem SHA-256 modelu");
     }
     Ok(alias.to_owned())
+}
+
+struct LocalDiagnosticPermit;
+impl Drop for LocalDiagnosticPermit {
+    fn drop(&mut self) {
+        LOCAL_OPERATION_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+fn acquire_diagnostic() -> Option<LocalDiagnosticPermit> {
+    LOCAL_OPERATION_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .ok().map(|_| LocalDiagnosticPermit)
+}
+
+#[cfg(target_os = "android")]
+pub(crate) async fn diagnostic_model_status() -> Value {
+    // Share the native generation permit, so concurrent IPC cannot start a
+    // diagnostic during inference. Never acquire a server lease or send ready.
+    let Some(_permit) = acquire_diagnostic() else {
+        return json!({"state": "busy"});
+    };
+    match inspect_model_alias().await {
+        Ok(alias) => json!({"state": "available", "alias": alias}),
+        Err((_, state)) => json!({"state": state}),
+    }
 }
 
 pub(crate) fn parse_exact_uci_answer(content: &str) -> Result<String, String> {
@@ -201,8 +245,36 @@ pub(crate) async fn infer_local_uci(job: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{model_alias_matches, parse_exact_uci_answer};
+    use super::{model_alias_matches, parse_exact_uci_answer, parse_model_alias, acquire_diagnostic, acquire_generation, generation_active};
     use serde_json::json;
+
+    #[test]
+    fn diagnostic_and_generation_exclude_each_other_without_false_running() {
+        let diagnostic = acquire_diagnostic().unwrap();
+        assert!(!generation_active());
+        assert!(acquire_diagnostic().is_none());
+        assert!(acquire_generation().is_err());
+        drop(diagnostic);
+        let generation = acquire_generation().unwrap();
+        assert!(generation_active());
+        assert!(acquire_diagnostic().is_none());
+        drop(generation);
+        assert!(acquire_diagnostic().is_some());
+        assert!(!generation_active());
+    }
+
+    #[test]
+    fn diagnostic_alias_parser_rejects_ambiguous_or_malformed_models() {
+        let sha = "a".repeat(64);
+        for id in [sha.clone(), format!("sha256:{sha}")] {
+            assert_eq!(parse_model_alias(json!({"data":[{"id":id}]}).to_string().as_bytes()).unwrap(), sha);
+        }
+        for bad in [json!({"data":[]}), json!({"data":[{"id":"wrong"}]}),
+                    json!({"data":[{"id":sha},{"id":"other"}]}), json!({"data":[{}]})] {
+            assert!(parse_model_alias(bad.to_string().as_bytes()).is_err());
+        }
+        assert!(parse_model_alias(b"not json").is_err());
+    }
 
     #[test]
     fn only_exact_uci_is_accepted() {
